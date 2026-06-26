@@ -64,6 +64,9 @@ DEFAULT_MAX_COMPLETION_TOKENS = 1000
 DEFAULT_SUBPROCESS_TIMEOUT = 15.0
 DEFAULT_COST_SIGNIFICANT_DIGITS = 6
 PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER = 1000.0
+ANALYSIS_TOTAL_LABEL = "Total"
+TABLE_ROW_STYLES = ("", "on grey7")
+TABLE_TOTAL_ROW_STYLE = "bold black on green3"
 MAX_TRACE_SIZE = 10_000
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
@@ -1487,10 +1490,53 @@ def format_cost(value: float | None) -> str:
     return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
 
 
+def format_cost_column(values: Sequence[float | None]) -> list[str]:
+    formatted_values = [format_cost(value) for value in values]
+    split_values = [
+        formatted_value.partition(".")
+        for formatted_value in formatted_values
+        if formatted_value
+    ]
+    integer_width = max(
+        (len(integer) for integer, _, _ in split_values), default=0
+    )
+    fractional_width = max(
+        (len(fractional) for _, _, fractional in split_values),
+        default=0,
+    )
+
+    aligned_values = []
+    for formatted_value in formatted_values:
+        if not formatted_value:
+            aligned_values.append("")
+            continue
+        integer, separator, fractional = formatted_value.partition(".")
+        aligned_integer = integer.rjust(integer_width)
+        if not separator:
+            if fractional_width == 0:
+                aligned_values.append(aligned_integer)
+                continue
+            aligned_values.append(
+                f"{aligned_integer}.{''.ljust(fractional_width, '0')}"
+            )
+            continue
+        aligned_values.append(
+            f"{aligned_integer}.{fractional.ljust(fractional_width, '0')}"
+        )
+    return aligned_values
+
+
 def price_per_thousand_samples(value: float | None) -> float | None:
     if value is None:
         return None
     return value * PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER
+
+
+def sum_present_float(values: Sequence[float | None]) -> float | None:
+    present_values = [value for value in values if value is not None]
+    if not present_values:
+        return None
+    return sum(present_values)
 
 
 def operator_timestamp(now: datetime | None = None) -> str:
@@ -1521,7 +1567,26 @@ def analysis_markdown(
         "Avg Price/1k Samples | Avg Perf | Price Var | Perf Var | Rep Var |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for summary in summaries:
+    total_price_values = [summary.total_price for summary in summaries]
+    total_price_sum = sum_present_float(total_price_values)
+    total_prices = format_cost_column(
+        [*total_price_values, total_price_sum]
+        if summaries
+        else total_price_values
+    )
+    row_total_prices = total_prices[: len(summaries)]
+    prices_per_thousand_samples = format_cost_column(
+        [
+            price_per_thousand_samples(summary.avg_price_per_sample)
+            for summary in summaries
+        ]
+    )
+    for summary, total_price, price_per_thousand in zip(
+        summaries,
+        row_total_prices,
+        prices_per_thousand_samples,
+        strict=True,
+    ):
         lines.append(
             "| {model} | {temperature} | {sample_count} | {scored_count} | "
             "{total_price} | {avg_price_per_sample} | {avg_performance} | "
@@ -1531,12 +1596,8 @@ def analysis_markdown(
                 temperature=format_float(summary.temperature),
                 sample_count=summary.sample_count,
                 scored_count=summary.scored_count,
-                total_price=format_cost(summary.total_price),
-                avg_price_per_sample=format_cost(
-                    price_per_thousand_samples(
-                        summary.avg_price_per_sample
-                    )
-                ),
+                total_price=total_price,
+                avg_price_per_sample=price_per_thousand,
                 avg_performance=format_float(summary.avg_performance),
                 price_variance=format_float(summary.price_variance),
                 performance_variance=format_float(
@@ -1545,6 +1606,20 @@ def analysis_markdown(
                 avg_repetition_variance=format_float(
                     summary.avg_repetition_variance
                 ),
+            )
+        )
+    if summaries:
+        lines.append(
+            "| {model} |  | {sample_count} | {scored_count} | "
+            "{total_price} |  |  |  |  |  |".format(
+                model=ANALYSIS_TOTAL_LABEL,
+                sample_count=sum(
+                    summary.sample_count for summary in summaries
+                ),
+                scored_count=sum(
+                    summary.scored_count for summary in summaries
+                ),
+                total_price=total_prices[-1],
             )
         )
     return "\n".join(lines) + "\n"
@@ -1557,6 +1632,7 @@ def analysis_table(
         title=f"Eval Analysis: {experiment_name}",
         box=box.SIMPLE_HEAVY,
         show_lines=False,
+        row_styles=TABLE_ROW_STYLES,
     )
     performance_table.add_column("Model", min_width=28, overflow="fold")
     performance_table.add_column("Temp", justify="right")
@@ -1568,6 +1644,7 @@ def analysis_table(
         title="Cost",
         box=box.SIMPLE_HEAVY,
         show_lines=False,
+        row_styles=TABLE_ROW_STYLES,
     )
     cost_table.add_column("Model", min_width=28, overflow="fold")
     cost_table.add_column("Temp", justify="right")
@@ -1578,6 +1655,7 @@ def analysis_table(
         title="Variance",
         box=box.SIMPLE_HEAVY,
         show_lines=False,
+        row_styles=TABLE_ROW_STYLES,
     )
     variance_table.add_column("Model", min_width=28, overflow="fold")
     variance_table.add_column("Temp", justify="right")
@@ -1585,7 +1663,27 @@ def analysis_table(
     variance_table.add_column("Perf Var", justify="right")
     variance_table.add_column("Rep Var", justify="right")
 
-    for summary in summaries:
+    total_price_values = [summary.total_price for summary in summaries]
+    total_price_sum = sum_present_float(total_price_values)
+    total_prices = format_cost_column(
+        [*total_price_values, total_price_sum]
+        if summaries
+        else total_price_values
+    )
+    row_total_prices = total_prices[: len(summaries)]
+    prices_per_thousand_samples = format_cost_column(
+        [
+            price_per_thousand_samples(summary.avg_price_per_sample)
+            for summary in summaries
+        ]
+    )
+
+    for summary, total_price, price_per_thousand in zip(
+        summaries,
+        row_total_prices,
+        prices_per_thousand_samples,
+        strict=True,
+    ):
         performance_table.add_row(
             summary.model,
             format_float(summary.temperature),
@@ -1596,10 +1694,8 @@ def analysis_table(
         cost_table.add_row(
             summary.model,
             format_float(summary.temperature),
-            format_cost(summary.total_price),
-            format_cost(
-                price_per_thousand_samples(summary.avg_price_per_sample)
-            ),
+            total_price,
+            price_per_thousand,
         )
         variance_table.add_row(
             summary.model,
@@ -1607,6 +1703,22 @@ def analysis_table(
             format_float(summary.price_variance),
             format_float(summary.performance_variance),
             format_float(summary.avg_repetition_variance),
+        )
+    if summaries:
+        performance_table.add_row(
+            ANALYSIS_TOTAL_LABEL,
+            "",
+            str(sum(summary.sample_count for summary in summaries)),
+            str(sum(summary.scored_count for summary in summaries)),
+            "",
+            style=TABLE_TOTAL_ROW_STYLE,
+        )
+        cost_table.add_row(
+            ANALYSIS_TOTAL_LABEL,
+            "",
+            total_prices[-1],
+            "",
+            style=TABLE_TOTAL_ROW_STYLE,
         )
     return Group(performance_table, cost_table, variance_table)
 
@@ -1958,7 +2070,12 @@ def status_counts_table(
     title = "Eval Status"
     if experiment_name is not None:
         title = f"Eval Status: {experiment_name}"
-    table = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+    table = Table(
+        title=title,
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+        row_styles=TABLE_ROW_STYLES,
+    )
     if experiment_name is None:
         table.add_column("Experiment", overflow="fold")
     table.add_column("Model", overflow="fold")

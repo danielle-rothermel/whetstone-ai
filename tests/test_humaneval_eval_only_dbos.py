@@ -733,6 +733,7 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
     assert "0.06" in markdown
     assert "20" in markdown
     assert "0.666667" in markdown
+    assert "| Total |  | 2 | 3 | 0.06 |  |  |  |  |  |" in markdown
     csv_text = csv_path.read_text()
     assert "model,temperature,sample_count" in csv_text
     assert "model/a" in csv_text
@@ -744,6 +745,28 @@ def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
     assert eval_dbos_harness.format_cost(47.12) == "47.12"
     assert eval_dbos_harness.format_cost(0.0) == "0"
     assert eval_dbos_harness.format_cost(None) == ""
+    assert eval_dbos_harness.format_cost_column(
+        [5.0862e-05, 0.0007023, 0.00011185, 5.492e-05, 4.712e-05]
+    ) == [
+        "0.000050862",
+        "0.000702300",
+        "0.000111850",
+        "0.000054920",
+        "0.000047120",
+    ]
+    assert eval_dbos_harness.format_cost_column(
+        [0.050862, 0.7023, 0.11185, 0.05492, 0.04712]
+    ) == [
+        "0.050862",
+        "0.702300",
+        "0.111850",
+        "0.054920",
+        "0.047120",
+    ]
+    assert eval_dbos_harness.format_cost_column([0.0, 0.1]) == [
+        "0.0",
+        "0.1",
+    ]
     assert eval_dbos_harness.price_per_thousand_samples(
         5.0862e-05
     ) == pytest.approx(0.050862)
@@ -777,19 +800,68 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
                 avg_performance=1.0,
                 performance_variance=None,
                 avg_repetition_variance=None,
-            )
+            ),
+            eval_dbos_harness.AnalysisSummary(
+                model="model/b",
+                temperature=0.0,
+                sample_count=2,
+                scored_count=2,
+                total_price=5.0862e-05,
+                avg_price_per_sample=5.0862e-05,
+                price_variance=None,
+                avg_performance=1.0,
+                performance_variance=None,
+                avg_repetition_variance=None,
+            ),
+            eval_dbos_harness.AnalysisSummary(
+                model="model/c",
+                temperature=0.0,
+                sample_count=2,
+                scored_count=2,
+                total_price=0.0007023,
+                avg_price_per_sample=0.0007023,
+                price_variance=None,
+                avg_performance=1.0,
+                performance_variance=None,
+                avg_repetition_variance=None,
+            ),
         ],
     )
     console = Console(record=True, width=120)
     console.print(status_table)
     console.print(analysis_table)
     text = console.export_text()
+    performance_table, cost_table, variance_table = analysis_table.renderables
 
     assert "Eval Status: exp" in text
     assert "Generation" in text
     assert "Scoring" in text
+    assert status_table.row_styles == list(
+        eval_dbos_harness.TABLE_ROW_STYLES
+    )
     assert "Eval Analysis: exp" in text
     assert "Avg $/1k Samples" in text
+    assert performance_table.row_styles == list(
+        eval_dbos_harness.TABLE_ROW_STYLES
+    )
+    assert cost_table.row_styles == list(eval_dbos_harness.TABLE_ROW_STYLES)
+    assert variance_table.row_styles == list(
+        eval_dbos_harness.TABLE_ROW_STYLES
+    )
+    assert (
+        performance_table.rows[-1].style
+        == eval_dbos_harness.TABLE_TOTAL_ROW_STYLE
+    )
+    assert (
+        cost_table.rows[-1].style
+        == eval_dbos_harness.TABLE_TOTAL_ROW_STYLE
+    )
+    assert "0.000050862" in text
+    assert "0.000702300" in text
+    assert "0.050862" in text
+    assert "0.702300" in text
+    assert "Total" in text
+    assert "0.000753162" in text
     assert "Variance" in text
 
 
