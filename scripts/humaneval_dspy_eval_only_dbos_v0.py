@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import resource
 import statistics
 import threading
 import time
@@ -27,6 +28,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
@@ -55,6 +57,9 @@ EXPERIMENT_QUEUE_HASH_LENGTH = 8
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
+DEFAULT_REPAIR_GENERATION_LIMIT = 1000
+DEFAULT_REPAIR_SCORING_LIMIT = 1000
+DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
 DEFAULT_SEED = 0
@@ -200,6 +205,11 @@ DBOS_FAILED_WORKFLOW_STATUSES = (
     DbosWorkflowStatus.CANCELLED.value,
     DbosWorkflowStatus.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
 )
+MISSING_DBOS_WORKFLOW_STATUS = "MISSING"
+GENERATION_REPAIR_ERROR = "Reconciled from DBOS failed generation workflow."
+SCORING_REPAIR_ERROR = (
+    "Reconciled from missing or failed DBOS scoring workflow."
+)
 
 
 class EvalDbosConfig(BaseModel):
@@ -250,6 +260,17 @@ class WorkerMonitorConfig(BaseModel):
     queue_names: tuple[StrictStr, ...]
     interval_seconds: StrictFloat
     summary_interval_seconds: StrictFloat
+
+
+class OpenFileLimitResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requested: StrictInt
+    original_soft: StrictInt
+    original_hard: StrictInt
+    active_soft: StrictInt
+    active_hard: StrictInt
+    changed: StrictBool
 
 
 class EvalQueueNames(BaseModel):
@@ -319,6 +340,62 @@ class GenerationResult(BaseModel):
     response_metadata: dict[str, Any] = Field(default_factory=dict)
     usage_metadata: dict[str, Any] = Field(default_factory=dict)
     provider_cost: float | None = None
+
+
+class GenerationRepairCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    model: StrictStr
+    temperature: float
+    task_id: StrictStr
+    sample_index: StrictInt
+    repetition_seed: StrictInt
+    dbos_status: StrictStr
+
+
+class ScoringRepairCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    model: StrictStr
+    temperature: float
+    task_id: StrictStr
+    sample_index: StrictInt
+    repetition_seed: StrictInt
+    scoring_status: StrictStr
+    dbos_status: StrictStr
+
+
+class RepairPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stranded_generations: list[GenerationRepairCandidate] = Field(
+        default_factory=list
+    )
+    generation_retry_jobs: list[PredictionJob] = Field(default_factory=list)
+    pending_scoring_prediction_ids: list[StrictStr] = Field(
+        default_factory=list
+    )
+    stranded_scoring: list[ScoringRepairCandidate] = Field(
+        default_factory=list
+    )
+    scoring_retry_prediction_ids: list[StrictStr] = Field(
+        default_factory=list
+    )
+
+
+class RepairApplyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    repair_token: StrictStr
+    stranded_generations_marked: StrictInt
+    generation_retries_enqueued: StrictInt
+    generation_retries_reset: StrictInt
+    stranded_scoring_marked: StrictInt
+    pending_scoring_enqueued: StrictInt
+    scoring_retries_enqueued: StrictInt
+    scoring_retries_marked_queued: StrictInt
 
 
 class ScoringTarget(BaseModel):
@@ -455,6 +532,62 @@ def create_eval_schema(database_url: str) -> None:
                 cur.execute(statement)
 
 
+def is_unlimited_resource_limit(value: int) -> bool:
+    return value == resource.RLIM_INFINITY
+
+
+def target_open_file_soft_limit(requested: int, hard_limit: int) -> int:
+    if is_unlimited_resource_limit(hard_limit):
+        return requested
+    return min(requested, hard_limit)
+
+
+def raise_open_file_limit(requested: int) -> OpenFileLimitResult:
+    original_soft, original_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target_soft = target_open_file_soft_limit(requested, original_hard)
+    changed = False
+
+    if original_soft < target_soft:
+        resource.setrlimit(
+            resource.RLIMIT_NOFILE,
+            (target_soft, original_hard),
+        )
+        changed = True
+
+    active_soft, active_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    return OpenFileLimitResult(
+        requested=requested,
+        original_soft=original_soft,
+        original_hard=original_hard,
+        active_soft=active_soft,
+        active_hard=active_hard,
+        changed=changed,
+    )
+
+
+def format_resource_limit(value: int) -> str:
+    if is_unlimited_resource_limit(value):
+        return "unlimited"
+    return str(value)
+
+
+def open_file_limit_line(result: OpenFileLimitResult) -> str:
+    changed = "yes" if result.changed else "no"
+    return (
+        f"{'Open Files':<14} | "
+        f"requested={result.requested:>5} | "
+        f"soft={format_resource_limit(result.active_soft):>9} | "
+        f"hard={format_resource_limit(result.active_hard):>9} | "
+        f"changed={changed}"
+    )
+
+
+def open_file_limit_style(result: OpenFileLimitResult) -> str:
+    if result.active_soft < result.requested:
+        return "yellow"
+    return "green"
+
+
 def experiment_hash(experiment_name: str) -> str:
     return hashlib.sha256(experiment_name.encode("utf-8")).hexdigest()[
         :EXPERIMENT_QUEUE_HASH_LENGTH
@@ -476,10 +609,61 @@ def register_eval_queues(
     DBOS.register_queue(
         queue_names.generation,
         worker_concurrency=config.generation_concurrency,
+        on_conflict="always_update",
     )
     DBOS.register_queue(
         queue_names.scoring,
         worker_concurrency=config.scoring_concurrency,
+        on_conflict="always_update",
+    )
+
+
+def eval_queue_concurrency_by_name(
+    config: EvalDbosConfig, *, experiment_name: str
+) -> dict[str, int]:
+    queue_names = eval_queue_names(experiment_name)
+    return {
+        queue_names.generation: config.generation_concurrency,
+        queue_names.scoring: config.scoring_concurrency,
+    }
+
+
+def sync_existing_dbos_queue_concurrency(
+    config: EvalDbosConfig, *, experiment_name: str
+) -> int:
+    updated_count = 0
+    try:
+        with psycopg.connect(config.dbos_system_database_url) as conn:
+            with conn.cursor() as cur:
+                for queue_name, worker_concurrency in (
+                    eval_queue_concurrency_by_name(
+                        config, experiment_name=experiment_name
+                    ).items()
+                ):
+                    cur.execute(
+                        """
+                        UPDATE dbos.queues
+                        SET
+                            worker_concurrency = %s,
+                            updated_at = (
+                                EXTRACT(epoch FROM now()) * 1000.0
+                            )::bigint
+                        WHERE name = %s
+                        """,
+                        (worker_concurrency, queue_name),
+                    )
+                    updated_count += cur.rowcount or 0
+    except (psycopg.errors.UndefinedTable, psycopg.errors.InvalidSchemaName):
+        return 0
+    return updated_count
+
+
+def queue_config_line(config: EvalDbosConfig, *, experiment_name: str) -> str:
+    return (
+        f"{'Queue Config':<14} | "
+        f"generation={config.generation_concurrency} | "
+        f"scoring={config.scoring_concurrency} | "
+        f"experiment={experiment_name}"
     )
 
 
@@ -645,12 +829,16 @@ def configure_dbos_runtime(
     consume_queues: bool = True,
 ) -> None:
     DBOS(config=build_dbos_config(config))
+    sync_existing_dbos_queue_concurrency(
+        config, experiment_name=experiment_name
+    )
     if queue is not None:
         listen_to_selected_queue(queue, experiment_name=experiment_name)
     elif not consume_queues:
         DBOS.listen_queues([])
     DBOS.launch()
     register_eval_queues(config, experiment_name=experiment_name)
+    operator_log(queue_config_line(config, experiment_name=experiment_name))
 
 
 def stable_json(data: Any) -> str:
@@ -1071,11 +1259,373 @@ def fetch_scoreable_prediction_ids(
     return [row[0] for row in rows]
 
 
+def fetch_pending_scoring_prediction_ids(
+    database_url: str,
+    *,
+    experiment_name: str,
+    limit: int,
+) -> list[str]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT prediction_id
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'generated'
+                    AND scoring_status = 'pending'
+                ORDER BY model, temperature, sample_index, repetition_seed
+                LIMIT %s
+                """,
+                (experiment_name, limit),
+            )
+            rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def fetch_score_error_prediction_ids(
+    database_url: str,
+    *,
+    experiment_name: str,
+    limit: int,
+) -> list[str]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT prediction_id
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'generated'
+                    AND scoring_status = 'score_error'
+                ORDER BY model, temperature, sample_index, repetition_seed
+                LIMIT %s
+                """,
+                (experiment_name, limit),
+            )
+            rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def fetch_generation_error_prediction_jobs(
+    database_url: str,
+    *,
+    experiment_name: str,
+    limit: int,
+) -> list[PredictionJob]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    experiment_name,
+                    script_kind,
+                    submission_id,
+                    task_id,
+                    sample_index,
+                    model,
+                    temperature,
+                    repetition_seed,
+                    prompt,
+                    test,
+                    entry_point,
+                    reasoning
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'generation_error'
+                ORDER BY model, temperature, sample_index, repetition_seed
+                LIMIT %s
+                """,
+                (experiment_name, limit),
+            )
+            rows = cur.fetchall()
+    return [
+        PredictionJob(
+            prediction_id=row[0],
+            experiment_name=row[1],
+            script_kind=row[2],
+            submission_id=row[3],
+            task_id=row[4],
+            sample_index=row[5],
+            model=row[6],
+            temperature=row[7],
+            repetition_seed=row[8],
+            prompt=row[9],
+            test=row[10],
+            entry_point=row[11],
+            reasoning=dict(row[12] or {}),
+        )
+        for row in rows
+    ]
+
+
+def reset_generation_errors_for_retry(
+    database_url: str,
+    *,
+    prediction_ids: Sequence[str],
+) -> int:
+    if not prediction_ids:
+        return 0
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    generation_status = 'pending',
+                    generation_error = NULL,
+                    raw_code = NULL,
+                    response_metadata = '{}'::jsonb,
+                    usage_metadata = '{}'::jsonb,
+                    provider_cost = NULL,
+                    generated_at = NULL,
+                    scoring_status = 'pending',
+                    scoring_error = NULL,
+                    score = NULL,
+                    scored_at = NULL,
+                    updated_at = now()
+                WHERE
+                    prediction_id = ANY(%s)
+                    AND generation_status = 'generation_error'
+                """,
+                (list(prediction_ids),),
+            )
+            return cur.rowcount if cur.rowcount is not None else 0
+
+
+def fetch_started_generation_repair_candidates(
+    database_url: str,
+    *,
+    dbos_system_database_url: str,
+    experiment_name: str,
+) -> list[GenerationRepairCandidate]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    model,
+                    temperature,
+                    task_id,
+                    sample_index,
+                    repetition_seed
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'started'
+                ORDER BY model, temperature, sample_index, repetition_seed
+                """,
+                (experiment_name,),
+            )
+            app_rows = cur.fetchall()
+
+    if not app_rows:
+        return []
+
+    prediction_ids = [row[0] for row in app_rows]
+    workflow_ids = [
+        generation_workflow_id(prediction_id)
+        for prediction_id in prediction_ids
+    ]
+    with psycopg.connect(dbos_system_database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT workflow_uuid, status
+                FROM dbos.workflow_status
+                WHERE
+                    workflow_uuid = ANY(%s)
+                    AND status = ANY(%s)
+                """,
+                (workflow_ids, list(DBOS_FAILED_WORKFLOW_STATUSES)),
+            )
+            dbos_rows = cur.fetchall()
+
+    dbos_status_by_prediction_id = {
+        workflow_uuid.removeprefix("generate:"): status
+        for workflow_uuid, status in dbos_rows
+    }
+    return [
+        GenerationRepairCandidate(
+            prediction_id=row[0],
+            model=row[1],
+            temperature=row[2],
+            task_id=row[3],
+            sample_index=row[4],
+            repetition_seed=row[5],
+            dbos_status=dbos_status_by_prediction_id[row[0]],
+        )
+        for row in app_rows
+        if row[0] in dbos_status_by_prediction_id
+    ]
+
+
+def mark_started_generations_as_repaired_errors(
+    database_url: str,
+    *,
+    prediction_ids: Sequence[str],
+) -> int:
+    if not prediction_ids:
+        return 0
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    generation_status = 'generation_error',
+                    generation_error = %s,
+                    updated_at = now()
+                WHERE
+                    prediction_id = ANY(%s)
+                    AND generation_status = 'started'
+                """,
+                (
+                    GENERATION_REPAIR_ERROR,
+                    list(prediction_ids),
+                ),
+            )
+            return cur.rowcount if cur.rowcount is not None else 0
+
+
+def score_workflow_id(
+    prediction_id: str, *, retry_token: str | None = None
+) -> str:
+    if retry_token is None:
+        return f"score:{prediction_id}"
+    return f"score-retry:{retry_token}:{prediction_id}"
+
+
+def fetch_stranded_scoring_repair_candidates(
+    database_url: str,
+    *,
+    dbos_system_database_url: str,
+    experiment_name: str,
+    limit: int,
+) -> list[ScoringRepairCandidate]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    model,
+                    temperature,
+                    task_id,
+                    sample_index,
+                    repetition_seed,
+                    scoring_status
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'generated'
+                    AND scoring_status IN ('started', 'queued')
+                ORDER BY model, temperature, sample_index, repetition_seed
+                LIMIT %s
+                """,
+                (experiment_name, limit),
+            )
+            app_rows = cur.fetchall()
+
+    if not app_rows:
+        return []
+
+    prediction_ids = [row[0] for row in app_rows]
+    stable_workflow_ids = [
+        score_workflow_id(prediction_id) for prediction_id in prediction_ids
+    ]
+    retry_workflow_suffixes = [
+        f":{prediction_id}" for prediction_id in prediction_ids
+    ]
+    with psycopg.connect(dbos_system_database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT workflow_uuid, status
+                FROM dbos.workflow_status
+                WHERE
+                    workflow_uuid = ANY(%s)
+                    OR workflow_uuid LIKE ANY(%s)
+                """,
+                (
+                    stable_workflow_ids,
+                    [
+                        f"score-retry:%{suffix}"
+                        for suffix in retry_workflow_suffixes
+                    ],
+                ),
+            )
+            dbos_rows = cur.fetchall()
+
+    active_prediction_ids: set[str] = set()
+    failed_status_by_prediction_id: dict[str, str] = {}
+    seen_prediction_ids: set[str] = set()
+    for workflow_uuid, status in dbos_rows:
+        prediction_id = workflow_uuid.rsplit(":", 1)[-1]
+        seen_prediction_ids.add(prediction_id)
+        if status in DBOS_ACTIVE_WORKFLOW_STATUSES:
+            active_prediction_ids.add(prediction_id)
+        if status in DBOS_FAILED_WORKFLOW_STATUSES:
+            failed_status_by_prediction_id[prediction_id] = status
+
+    candidates: list[ScoringRepairCandidate] = []
+    for row in app_rows:
+        prediction_id = row[0]
+        if prediction_id in active_prediction_ids:
+            continue
+        dbos_status = failed_status_by_prediction_id.get(prediction_id)
+        if dbos_status is None and prediction_id in seen_prediction_ids:
+            continue
+        candidates.append(
+            ScoringRepairCandidate(
+                prediction_id=prediction_id,
+                model=row[1],
+                temperature=row[2],
+                task_id=row[3],
+                sample_index=row[4],
+                repetition_seed=row[5],
+                scoring_status=row[6],
+                dbos_status=dbos_status or MISSING_DBOS_WORKFLOW_STATUS,
+            )
+        )
+    return candidates
+
+
+def mark_stranded_scoring_as_errors(
+    database_url: str,
+    *,
+    prediction_ids: Sequence[str],
+) -> int:
+    if not prediction_ids:
+        return 0
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    scoring_status = 'score_error',
+                    scoring_error = %s,
+                    updated_at = now()
+                WHERE
+                    prediction_id = ANY(%s)
+                    AND scoring_status IN ('started', 'queued')
+                """,
+                (SCORING_REPAIR_ERROR, list(prediction_ids)),
+            )
+            return cur.rowcount if cur.rowcount is not None else 0
+
+
 def mark_scoring_queued(
     database_url: str, prediction_ids: Sequence[str]
-) -> None:
+) -> int:
     if not prediction_ids:
-        return
+        return 0
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -1090,6 +1640,7 @@ def mark_scoring_queued(
                 """,
                 (list(prediction_ids),),
             )
+            return cur.rowcount if cur.rowcount is not None else 0
 
 
 def mark_scoring_started(database_url: str, prediction_id: str) -> None:
@@ -1407,15 +1958,26 @@ def record_generation_error_step(
     record_generation_error(database_url, prediction_id, error)
 
 
+def generation_workflow_id(
+    prediction_id: str, *, retry_token: str | None = None
+) -> str:
+    if retry_token is None:
+        return f"generate:{prediction_id}"
+    return f"generate-retry:{retry_token}:{prediction_id}"
+
+
 def enqueue_generation_jobs(
     database_url: str,
     jobs: Sequence[PredictionJob],
     *,
     use_mock_lm: bool,
     score_timeout: float,
+    retry_token: str | None = None,
 ) -> None:
     for job in jobs:
-        workflow_id = f"generate:{job.prediction_id}"
+        workflow_id = generation_workflow_id(
+            job.prediction_id, retry_token=retry_token
+        )
         queue_names = eval_queue_names(job.experiment_name)
         with SetWorkflowID(workflow_id):
             DBOS.enqueue_workflow(
@@ -1435,8 +1997,11 @@ def enqueue_score_job(
     *,
     experiment_name: str,
     timeout: float,
+    retry_token: str | None = None,
 ) -> None:
-    workflow_id = f"score:{prediction_id}"
+    workflow_id = score_workflow_id(
+        prediction_id, retry_token=retry_token
+    )
     queue_names = eval_queue_names(experiment_name)
     with SetWorkflowID(workflow_id):
         DBOS.enqueue_workflow(
@@ -1454,6 +2019,7 @@ def enqueue_score_jobs(
     *,
     experiment_name: str,
     timeout: float,
+    retry_token: str | None = None,
 ) -> None:
     for prediction_id in prediction_ids:
         enqueue_score_job(
@@ -1461,7 +2027,149 @@ def enqueue_score_jobs(
             prediction_id,
             experiment_name=experiment_name,
             timeout=timeout,
+            retry_token=retry_token,
         )
+
+
+def build_repair_plan(
+    database_url: str,
+    *,
+    dbos_system_database_url: str,
+    experiment_name: str,
+    generation_limit: int,
+    scoring_limit: int,
+) -> RepairPlan:
+    return RepairPlan(
+        stranded_generations=fetch_started_generation_repair_candidates(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            experiment_name=experiment_name,
+        ),
+        generation_retry_jobs=fetch_generation_error_prediction_jobs(
+            database_url,
+            experiment_name=experiment_name,
+            limit=generation_limit,
+        ),
+        pending_scoring_prediction_ids=fetch_pending_scoring_prediction_ids(
+            database_url,
+            experiment_name=experiment_name,
+            limit=scoring_limit,
+        ),
+        stranded_scoring=fetch_stranded_scoring_repair_candidates(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            experiment_name=experiment_name,
+            limit=scoring_limit,
+        ),
+        scoring_retry_prediction_ids=fetch_score_error_prediction_ids(
+            database_url,
+            experiment_name=experiment_name,
+            limit=scoring_limit,
+        ),
+    )
+
+
+def apply_repair(
+    config: EvalDbosConfig,
+    *,
+    experiment_name: str,
+    generation_limit: int,
+    scoring_limit: int,
+    score_timeout: float,
+    mock_generation: bool,
+    repair_token: str | None = None,
+) -> RepairApplyResult:
+    resolved_repair_token = repair_token or uuid.uuid4().hex
+
+    stranded_generations = fetch_started_generation_repair_candidates(
+        config.database_url,
+        dbos_system_database_url=config.dbos_system_database_url,
+        experiment_name=experiment_name,
+    )
+    stranded_generations_marked = (
+        mark_started_generations_as_repaired_errors(
+            config.database_url,
+            prediction_ids=[
+                candidate.prediction_id
+                for candidate in stranded_generations
+            ],
+        )
+    )
+
+    generation_retry_jobs = fetch_generation_error_prediction_jobs(
+        config.database_url,
+        experiment_name=experiment_name,
+        limit=generation_limit,
+    )
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
+    enqueue_generation_jobs(
+        config.database_url,
+        generation_retry_jobs,
+        use_mock_lm=mock_generation,
+        score_timeout=score_timeout,
+        retry_token=resolved_repair_token,
+    )
+    generation_retries_reset = reset_generation_errors_for_retry(
+        config.database_url,
+        prediction_ids=[job.prediction_id for job in generation_retry_jobs],
+    )
+
+    stranded_scoring = fetch_stranded_scoring_repair_candidates(
+        config.database_url,
+        dbos_system_database_url=config.dbos_system_database_url,
+        experiment_name=experiment_name,
+        limit=scoring_limit,
+    )
+    stranded_scoring_marked = mark_stranded_scoring_as_errors(
+        config.database_url,
+        prediction_ids=[
+            candidate.prediction_id for candidate in stranded_scoring
+        ],
+    )
+
+    pending_scoring_prediction_ids = fetch_pending_scoring_prediction_ids(
+        config.database_url,
+        experiment_name=experiment_name,
+        limit=scoring_limit,
+    )
+    enqueue_score_jobs(
+        config.database_url,
+        pending_scoring_prediction_ids,
+        experiment_name=experiment_name,
+        timeout=score_timeout,
+    )
+    pending_scoring_enqueued = mark_scoring_queued(
+        config.database_url, pending_scoring_prediction_ids
+    )
+
+    scoring_retry_prediction_ids = fetch_score_error_prediction_ids(
+        config.database_url,
+        experiment_name=experiment_name,
+        limit=scoring_limit,
+    )
+    enqueue_score_jobs(
+        config.database_url,
+        scoring_retry_prediction_ids,
+        experiment_name=experiment_name,
+        timeout=score_timeout,
+        retry_token=resolved_repair_token,
+    )
+    scoring_retries_marked_queued = mark_scoring_queued(
+        config.database_url, scoring_retry_prediction_ids
+    )
+
+    return RepairApplyResult(
+        repair_token=resolved_repair_token,
+        stranded_generations_marked=stranded_generations_marked,
+        generation_retries_enqueued=len(generation_retry_jobs),
+        generation_retries_reset=generation_retries_reset,
+        stranded_scoring_marked=stranded_scoring_marked,
+        pending_scoring_enqueued=pending_scoring_enqueued,
+        scoring_retries_enqueued=len(scoring_retry_prediction_ids),
+        scoring_retries_marked_queued=scoring_retries_marked_queued,
+    )
 
 
 def fetch_analysis_records(
@@ -2057,6 +2765,109 @@ def enqueue_scores_style(selected_count: int) -> str:
     return "green"
 
 
+def repair_generation_started_line(
+    *,
+    experiment_name: str,
+    selected_count: int,
+    applied_count: int | None,
+) -> str:
+    applied = "-" if applied_count is None else str(applied_count)
+    return (
+        f"{'Repair Gen':<14} | "
+        f"selected={selected_count:>5} | "
+        f"applied={applied:>5} | "
+        f"experiment={experiment_name}"
+    )
+
+
+def repair_generation_started_style(
+    *, selected_count: int, applied_count: int | None
+) -> str:
+    if selected_count == 0:
+        return "yellow"
+    if applied_count is None:
+        return "cyan"
+    return "green"
+
+
+def retry_generation_errors_line(
+    *,
+    experiment_name: str,
+    selected_count: int,
+    reset_count: int | None,
+    limit: int,
+    retry_token: str | None,
+) -> str:
+    reset = "-" if reset_count is None else str(reset_count)
+    token = "-" if retry_token is None else retry_token
+    return (
+        f"{'Retry Gen':<14} | "
+        f"selected={selected_count:>5} | "
+        f"reset={reset:>5} | "
+        f"limit={limit:>5} | "
+        f"token={token} | "
+        f"experiment={experiment_name}"
+    )
+
+
+def retry_generation_errors_style(
+    *, selected_count: int, reset_count: int | None
+) -> str:
+    if selected_count == 0:
+        return "yellow"
+    if reset_count is None:
+        return "cyan"
+    return "green"
+
+
+def repair_plan_line(
+    *,
+    experiment_name: str,
+    plan: RepairPlan,
+    apply: bool,
+) -> str:
+    mode = "apply" if apply else "dry-run"
+    return (
+        f"{'Repair Plan':<14} | "
+        f"gen_stranded={len(plan.stranded_generations):>5} | "
+        f"gen_errors={len(plan.generation_retry_jobs):>5} | "
+        f"score_pending={len(plan.pending_scoring_prediction_ids):>5} | "
+        f"score_stranded={len(plan.stranded_scoring):>5} | "
+        f"score_errors={len(plan.scoring_retry_prediction_ids):>5} | "
+        f"mode={mode} | "
+        f"experiment={experiment_name}"
+    )
+
+
+def repair_apply_line(
+    *, experiment_name: str, result: RepairApplyResult
+) -> str:
+    return (
+        f"{'Repair Apply':<14} | "
+        f"gen_marked={result.stranded_generations_marked:>5} | "
+        f"gen_retry={result.generation_retries_enqueued:>5} | "
+        f"score_marked={result.stranded_scoring_marked:>5} | "
+        f"score_pending={result.pending_scoring_enqueued:>5} | "
+        f"score_retry={result.scoring_retries_enqueued:>5} | "
+        f"token={result.repair_token} | "
+        f"experiment={experiment_name}"
+    )
+
+
+def repair_plan_style(plan: RepairPlan, *, apply: bool) -> str:
+    if apply:
+        return "green"
+    if (
+        plan.stranded_generations
+        or plan.generation_retry_jobs
+        or plan.pending_scoring_prediction_ids
+        or plan.stranded_scoring
+        or plan.scoring_retry_prediction_ids
+    ):
+        return "cyan"
+    return "yellow"
+
+
 def run_worker_monitor(
     config: WorkerMonitorConfig, stop_event: threading.Event
 ) -> None:
@@ -2472,6 +3283,110 @@ def enqueue_scores_command(
     )
 
 
+@app.command("repair")
+def repair_command(
+    experiment_name: Annotated[
+        str,
+        typer.Option("--experiment-name", help="Experiment to repair."),
+    ],
+    apply: Annotated[
+        bool,
+        typer.Option(
+            "--apply",
+            help=(
+                "Apply repair actions. Without this flag, only reports "
+                "repairable rows."
+            ),
+        ),
+    ] = False,
+    generation_limit: Annotated[
+        int, typer.Option("--generation-limit", min=1)
+    ] = DEFAULT_REPAIR_GENERATION_LIMIT,
+    scoring_limit: Annotated[
+        int, typer.Option("--scoring-limit", min=1)
+    ] = DEFAULT_REPAIR_SCORING_LIMIT,
+    score_timeout: Annotated[
+        float, typer.Option("--score-timeout", min=0.1)
+    ] = DEFAULT_SUBPROCESS_TIMEOUT,
+    mock_generation: Annotated[
+        bool,
+        typer.Option(
+            "--mock-generation",
+            help="Retry generation with the deterministic mock LM.",
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help=(
+                "DBOS system database URL; defaults to "
+                f"{DBOS_SYSTEM_DATABASE_URL_ENV} or DATABASE_URL."
+            ),
+        ),
+    ] = None,
+    generation_concurrency: Annotated[
+        int, typer.Option("--generation-concurrency")
+    ] = DEFAULT_GENERATION_CONCURRENCY,
+    scoring_concurrency: Annotated[
+        int, typer.Option("--scoring-concurrency")
+    ] = DEFAULT_SCORING_CONCURRENCY,
+) -> None:
+    config = common_config(
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        generation_concurrency=generation_concurrency,
+        scoring_concurrency=scoring_concurrency,
+    )
+    plan = build_repair_plan(
+        config.database_url,
+        dbos_system_database_url=config.dbos_system_database_url,
+        experiment_name=experiment_name,
+        generation_limit=generation_limit,
+        scoring_limit=scoring_limit,
+    )
+    operator_log(
+        repair_plan_line(
+            experiment_name=experiment_name,
+            plan=plan,
+            apply=apply,
+        ),
+        style=repair_plan_style(plan, apply=apply),
+    )
+    if apply:
+        result = apply_repair(
+            config,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+            score_timeout=score_timeout,
+            mock_generation=mock_generation,
+        )
+        operator_log(
+            repair_apply_line(experiment_name=experiment_name, result=result),
+            style="green",
+        ),
+    elif (
+        plan.stranded_generations
+        or plan.generation_retry_jobs
+        or plan.pending_scoring_prediction_ids
+        or plan.stranded_scoring
+        or plan.scoring_retry_prediction_ids
+    ):
+        operator_log(
+            "dry run only; rerun with --apply to reconcile statuses and "
+            "enqueue fresh retry workflows",
+            style="yellow",
+        )
+
+
 @app.command()
 def analyze(
     experiment_name: Annotated[
@@ -2686,6 +3601,17 @@ def worker(
     scoring_concurrency: Annotated[
         int, typer.Option("--scoring-concurrency")
     ] = DEFAULT_SCORING_CONCURRENCY,
+    open_file_limit: Annotated[
+        int,
+        typer.Option(
+            "--open-file-limit",
+            min=1,
+            help=(
+                "Requested worker soft open-file limit. The process can "
+                "raise this only up to the OS hard limit."
+            ),
+        ),
+    ] = DEFAULT_WORKER_OPEN_FILE_LIMIT,
     log_file: Annotated[
         Path | None,
         typer.Option(
@@ -2709,6 +3635,11 @@ def worker(
         typer.Option("--monitor-summary-interval", min=1.0),
     ] = DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS,
 ) -> None:
+    file_limit = raise_open_file_limit(open_file_limit)
+    operator_log(
+        open_file_limit_line(file_limit),
+        style=open_file_limit_style(file_limit),
+    )
     config = common_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,

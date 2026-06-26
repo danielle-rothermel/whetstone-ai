@@ -4,13 +4,15 @@ from datetime import datetime
 from typing import Any
 
 import pytest
-from dspy.utils.dummies import dotdict  # type: ignore[attr-defined]
 from rich.console import Console
+
+from dspy.utils.dummies import dotdict  # type: ignore[attr-defined]
 
 
 class FakeCursor:
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.params: Any = None
         self.rowcount = 0
 
     def __enter__(self) -> FakeCursor:
@@ -19,10 +21,10 @@ class FakeCursor:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def execute(self, statement: str, params: object = None) -> None:
+    def execute(self, statement: str, params: Any = None) -> None:
         self.statements.append(statement)
 
-    def executemany(self, statement: str, params: object) -> None:
+    def executemany(self, statement: str, params: Any) -> None:
         self.statements.append(statement)
         self.rowcount = len(list(params))
 
@@ -42,7 +44,9 @@ class FakeConnection:
 
 
 class FakeCompletions:
-    def __init__(self, *, reject_temperatures: set[float] | None = None) -> None:
+    def __init__(
+        self, *, reject_temperatures: set[float] | None = None
+    ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.reject_temperatures = reject_temperatures or set()
 
@@ -69,7 +73,9 @@ class FakeCompletions:
 
 
 class FakeClient:
-    def __init__(self, *, reject_temperatures: set[float] | None = None) -> None:
+    def __init__(
+        self, *, reject_temperatures: set[float] | None = None
+    ) -> None:
         self.chat = dotdict(
             completions=FakeCompletions(
                 reject_temperatures=reject_temperatures
@@ -136,6 +142,76 @@ def test_create_eval_schema_executes_expected_statements(
     assert statements[2:] == list(eval_dbos_harness.PREDICTION_INDEX_SQL)
 
 
+def test_raise_open_file_limit_raises_soft_limit(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class FakeResource:
+        RLIMIT_NOFILE = 7
+        RLIM_INFINITY = -1
+
+        def __init__(self) -> None:
+            self.limit = (256, 8192)
+            self.set_calls: list[tuple[int, tuple[int, int]]] = []
+
+        def getrlimit(self, limit: int) -> tuple[int, int]:
+            assert limit == self.RLIMIT_NOFILE
+            return self.limit
+
+        def setrlimit(self, limit: int, value: tuple[int, int]) -> None:
+            assert limit == self.RLIMIT_NOFILE
+            self.set_calls.append((limit, value))
+            self.limit = value
+
+    fake_resource = FakeResource()
+    monkeypatch.setattr(eval_dbos_harness, "resource", fake_resource)
+
+    result = eval_dbos_harness.raise_open_file_limit(8192)
+
+    assert result.requested == 8192
+    assert result.original_soft == 256
+    assert result.original_hard == 8192
+    assert result.active_soft == 8192
+    assert result.active_hard == 8192
+    assert result.changed is True
+    assert fake_resource.set_calls == [(7, (8192, 8192))]
+
+
+def test_raise_open_file_limit_clamps_to_hard_limit(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class FakeResource:
+        RLIMIT_NOFILE = 7
+        RLIM_INFINITY = -1
+
+        def __init__(self) -> None:
+            self.limit = (256, 1024)
+
+        def getrlimit(self, limit: int) -> tuple[int, int]:
+            assert limit == self.RLIMIT_NOFILE
+            return self.limit
+
+        def setrlimit(self, limit: int, value: tuple[int, int]) -> None:
+            assert limit == self.RLIMIT_NOFILE
+            self.limit = value
+
+    fake_resource = FakeResource()
+    monkeypatch.setattr(eval_dbos_harness, "resource", fake_resource)
+
+    result = eval_dbos_harness.raise_open_file_limit(8192)
+
+    assert result.requested == 8192
+    assert result.active_soft == 1024
+    assert result.active_hard == 1024
+    assert result.changed is True
+    assert eval_dbos_harness.open_file_limit_style(result) == "yellow"
+    assert eval_dbos_harness.open_file_limit_line(result) == (
+        "Open Files     | requested= 8192 | soft=     1024 | "
+        "hard=     1024 | changed=yes"
+    )
+
+
 def test_register_and_listen_to_eval_queues(
     eval_dbos_harness,
     monkeypatch,
@@ -172,10 +248,12 @@ def test_register_and_listen_to_eval_queues(
         {
             "name": queue_names.generation,
             "worker_concurrency": 11,
+            "on_conflict": "always_update",
         },
         {
             "name": queue_names.scoring,
             "worker_concurrency": 5,
+            "on_conflict": "always_update",
         },
     ]
     assert listened == [[queue_names.generation, queue_names.scoring]]
@@ -206,6 +284,83 @@ def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
         / eval_dbos_harness.hashed_experiment_log_name(experiment_name)
         / "20260102-030405-generation-pid123.log"
     )
+
+
+def test_sync_existing_dbos_queue_concurrency_updates_existing_rows(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class QueueCursor(FakeCursor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.params: list[object] = []
+
+        def execute(self, statement: str, params: object = None) -> None:
+            super().execute(statement, params)
+            self.params.append(params)
+            self.rowcount = 1
+
+    class QueueConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = QueueCursor()
+
+    fake_conn = QueueConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+
+    rowcount = eval_dbos_harness.sync_existing_dbos_queue_concurrency(
+        config, experiment_name="exp"
+    )
+
+    queue_names = eval_dbos_harness.eval_queue_names("exp")
+    assert rowcount == 2
+    assert fake_conn.cursor_instance.params == [
+        (11, queue_names.generation),
+        (5, queue_names.scoring),
+    ]
+    assert "UPDATE dbos.queues" in fake_conn.cursor_instance.statements[0]
+
+
+def test_sync_existing_dbos_queue_concurrency_skips_missing_dbos_table(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class MissingQueueCursor(FakeCursor):
+        def execute(self, statement: str, params: object = None) -> None:
+            raise eval_dbos_harness.psycopg.errors.UndefinedTable(
+                "missing dbos.queues"
+            )
+
+    class MissingQueueConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = MissingQueueCursor()
+
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: MissingQueueConnection(),
+    )
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+
+    rowcount = eval_dbos_harness.sync_existing_dbos_queue_concurrency(
+        config, experiment_name="exp"
+    )
+
+    assert rowcount == 0
 
 
 def test_worker_monitor_phase_counts_filter_experiment(
@@ -332,6 +487,312 @@ def test_enqueue_scores_line_is_fixed_width(eval_dbos_harness) -> None:
     assert eval_dbos_harness.enqueue_scores_style(10) == "green"
 
 
+def test_fetch_started_generation_repair_candidates(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class RepairCursor:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.rows = rows
+            self.statement: str | None = None
+            self.params: object = None
+
+        def __enter__(self) -> RepairCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, statement: str, params: object = None) -> None:
+            self.statement = statement
+            self.params = params
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self.rows
+
+    class RepairConnection:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.cursor_instance = RepairCursor(rows)
+
+        def __enter__(self) -> RepairConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> RepairCursor:
+            return self.cursor_instance
+
+    app_conn = RepairConnection(
+        [
+            ("pred-1", "model/a", 0.1, "HumanEval/1", 0, 0),
+            ("pred-2", "model/b", 0.2, "HumanEval/2", 1, 0),
+        ]
+    )
+    dbos_conn = RepairConnection([("generate:pred-2", "ERROR")])
+
+    def fake_connect(database_url: str) -> RepairConnection:
+        if database_url == "postgresql:///app":
+            return app_conn
+        if database_url == "postgresql:///dbos":
+            return dbos_conn
+        raise AssertionError(f"unexpected database_url: {database_url}")
+
+    monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
+
+    candidates = eval_dbos_harness.fetch_started_generation_repair_candidates(
+        "postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        experiment_name="exp",
+    )
+
+    assert [candidate.prediction_id for candidate in candidates] == ["pred-2"]
+    assert candidates[0].dbos_status == "ERROR"
+    assert app_conn.cursor_instance.params == ("exp",)
+    assert dbos_conn.cursor_instance.params == (
+        ["generate:pred-1", "generate:pred-2"],
+        list(eval_dbos_harness.DBOS_FAILED_WORKFLOW_STATUSES),
+    )
+
+
+def test_mark_started_generations_as_repaired_errors(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class RepairCursor(FakeCursor):
+        def execute(self, statement: str, params: object = None) -> None:
+            super().execute(statement, params)
+            self.params = params
+            self.rowcount = 2
+
+    class RepairConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = RepairCursor()
+
+    fake_conn = RepairConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+
+    rowcount = eval_dbos_harness.mark_started_generations_as_repaired_errors(
+        "postgresql:///unit",
+        prediction_ids=["pred-1", "pred-2"],
+    )
+
+    assert rowcount == 2
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "generation_status = 'generation_error'" in statement
+    assert "AND generation_status = 'started'" in statement
+    assert fake_conn.cursor_instance.params == (
+        eval_dbos_harness.GENERATION_REPAIR_ERROR,
+        ["pred-1", "pred-2"],
+    )
+
+
+def test_fetch_stranded_scoring_repair_candidates_finds_failed_and_missing(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class RepairCursor:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.rows = rows
+            self.statement: str | None = None
+            self.params: object = None
+
+        def __enter__(self) -> RepairCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, statement: str, params: object = None) -> None:
+            self.statement = statement
+            self.params = params
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self.rows
+
+    class RepairConnection:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.cursor_instance = RepairCursor(rows)
+
+        def __enter__(self) -> RepairConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> RepairCursor:
+            return self.cursor_instance
+
+    app_conn = RepairConnection(
+        [
+            ("pred-1", "model/a", 0.1, "HumanEval/1", 0, 0, "queued"),
+            ("pred-2", "model/b", 0.2, "HumanEval/2", 1, 0, "started"),
+            ("pred-3", "model/c", 0.3, "HumanEval/3", 2, 0, "queued"),
+        ]
+    )
+    dbos_conn = RepairConnection(
+        [
+            ("score:pred-1", "ERROR"),
+            ("score:pred-2", "ENQUEUED"),
+        ]
+    )
+
+    def fake_connect(database_url: str) -> RepairConnection:
+        if database_url == "postgresql:///app":
+            return app_conn
+        if database_url == "postgresql:///dbos":
+            return dbos_conn
+        raise AssertionError(f"unexpected database_url: {database_url}")
+
+    monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
+
+    candidates = eval_dbos_harness.fetch_stranded_scoring_repair_candidates(
+        "postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        experiment_name="exp",
+        limit=1000,
+    )
+
+    assert [candidate.prediction_id for candidate in candidates] == [
+        "pred-1",
+        "pred-3",
+    ]
+    assert [candidate.dbos_status for candidate in candidates] == [
+        "ERROR",
+        eval_dbos_harness.MISSING_DBOS_WORKFLOW_STATUS,
+    ]
+
+
+def test_mark_stranded_scoring_as_errors(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class RepairCursor(FakeCursor):
+        def execute(self, statement: str, params: object = None) -> None:
+            super().execute(statement, params)
+            self.params = params
+            self.rowcount = 2
+
+    class RepairConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = RepairCursor()
+
+    fake_conn = RepairConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+
+    rowcount = eval_dbos_harness.mark_stranded_scoring_as_errors(
+        "postgresql:///unit",
+        prediction_ids=["pred-1", "pred-2"],
+    )
+
+    assert rowcount == 2
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "scoring_status = 'score_error'" in statement
+    assert "AND scoring_status IN ('started', 'queued')" in statement
+    assert fake_conn.cursor_instance.params == (
+        eval_dbos_harness.SCORING_REPAIR_ERROR,
+        ["pred-1", "pred-2"],
+    )
+
+
+def test_reset_generation_errors_for_retry(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class RetryCursor(FakeCursor):
+        def execute(self, statement: str, params: object = None) -> None:
+            super().execute(statement, params)
+            self.params = params
+            self.rowcount = 2
+
+    class RetryConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = RetryCursor()
+
+    fake_conn = RetryConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+
+    rowcount = eval_dbos_harness.reset_generation_errors_for_retry(
+        "postgresql:///unit",
+        prediction_ids=["pred-1", "pred-2"],
+    )
+
+    assert rowcount == 2
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "generation_status = 'pending'" in statement
+    assert "scoring_status = 'pending'" in statement
+    assert "AND generation_status = 'generation_error'" in statement
+    assert fake_conn.cursor_instance.params == (["pred-1", "pred-2"],)
+
+
+def test_repair_generation_started_line_is_fixed_width(
+    eval_dbos_harness,
+) -> None:
+    line = eval_dbos_harness.repair_generation_started_line(
+        experiment_name="temp-sweep-002",
+        selected_count=7,
+        applied_count=None,
+    )
+
+    assert line == (
+        "Repair Gen     | selected=    7 | applied=    - | "
+        "experiment=temp-sweep-002"
+    )
+    assert (
+        eval_dbos_harness.repair_generation_started_style(
+            selected_count=7, applied_count=None
+        )
+        == "cyan"
+    )
+    assert (
+        eval_dbos_harness.repair_generation_started_style(
+            selected_count=7, applied_count=7
+        )
+        == "green"
+    )
+
+
+def test_retry_generation_errors_line_is_fixed_width(
+    eval_dbos_harness,
+) -> None:
+    line = eval_dbos_harness.retry_generation_errors_line(
+        experiment_name="temp-sweep-002",
+        selected_count=12,
+        reset_count=None,
+        limit=1000,
+        retry_token=None,
+    )
+
+    assert line == (
+        "Retry Gen      | selected=   12 | reset=    - | "
+        "limit= 1000 | token=- | experiment=temp-sweep-002"
+    )
+    assert (
+        eval_dbos_harness.retry_generation_errors_style(
+            selected_count=12, reset_count=None
+        )
+        == "cyan"
+    )
+    assert (
+        eval_dbos_harness.retry_generation_errors_style(
+            selected_count=12, reset_count=12
+        )
+        == "green"
+    )
+
+
 def test_worker_detail_log_writes_prediction_context(
     eval_dbos_harness, tmp_path
 ) -> None:
@@ -362,28 +823,41 @@ def test_worker_detail_log_writes_prediction_context(
     assert '"use_mock_lm":true' in text
 
 
-def test_configure_dbos_runtime_launches_before_registering_queues(
+def test_configure_dbos_runtime_syncs_before_launch_and_registers_after(
     eval_dbos_harness,
     monkeypatch,
 ) -> None:
     calls: list[str] = []
 
-    def fake_dbos(*_args: object, **_kwargs: object) -> None:
-        calls.append("init")
+    class FakeDBOS:
+        def __call__(self, *_args: object, **_kwargs: object) -> None:
+            calls.append("init")
 
-    def fake_listen_queues(_queues: list[str]) -> None:
-        calls.append("listen")
+        def listen_queues(self, _queues: list[str]) -> None:
+            calls.append("listen")
 
-    def fake_launch() -> None:
-        calls.append("launch")
+        def launch(self) -> None:
+            calls.append("launch")
 
-    def fake_register_queue(_name: str, **_kwargs: object) -> None:
-        calls.append("register")
+        def register_queue(self, _name: str, **_kwargs: object) -> None:
+            calls.append("register")
 
-    monkeypatch.setattr(eval_dbos_harness, "DBOS", fake_dbos)
-    fake_dbos.listen_queues = fake_listen_queues  # type: ignore[attr-defined]
-    fake_dbos.launch = fake_launch  # type: ignore[attr-defined]
-    fake_dbos.register_queue = fake_register_queue  # type: ignore[attr-defined]
+    def fake_sync_existing_dbos_queue_concurrency(
+        _config: object, *, experiment_name: str
+    ) -> int:
+        assert experiment_name == "exp"
+        calls.append("sync")
+        return 2
+
+    monkeypatch.setattr(eval_dbos_harness, "DBOS", FakeDBOS())
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "sync_existing_dbos_queue_concurrency",
+        fake_sync_existing_dbos_queue_concurrency,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness, "operator_log", lambda *_args, **_kwargs: None
+    )
 
     config = eval_dbos_harness.EvalDbosConfig(
         database_url="postgresql:///app",
@@ -396,10 +870,19 @@ def test_configure_dbos_runtime_launches_before_registering_queues(
         config, experiment_name="exp", consume_queues=False
     )
 
-    assert calls == ["init", "listen", "launch", "register", "register"]
+    assert calls == [
+        "init",
+        "sync",
+        "listen",
+        "launch",
+        "register",
+        "register",
+    ]
 
 
-def test_build_humaneval_samples_from_rows_is_seeded(eval_dbos_harness) -> None:
+def test_build_humaneval_samples_from_rows_is_seeded(
+    eval_dbos_harness,
+) -> None:
     rows = [
         {
             "task_id": f"task/{index}",
@@ -587,6 +1070,55 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
             "score_timeout": 7.0,
         }
     ]
+
+
+def test_enqueue_generation_jobs_can_use_retry_workflow_ids(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    workflow_ids: list[str] = []
+
+    class FakeSetWorkflowID:
+        def __init__(self, workflow_id: str) -> None:
+            self.workflow_id = workflow_id
+
+        def __enter__(self) -> None:
+            workflow_ids.append(self.workflow_id)
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_enqueue_workflow(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(eval_dbos_harness, "SetWorkflowID", FakeSetWorkflowID)
+    monkeypatch.setattr(
+        eval_dbos_harness.DBOS, "enqueue_workflow", fake_enqueue_workflow
+    )
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="abc",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="model/a",
+        temperature=0.0,
+        repetition_seed=0,
+        prompt="def add(a, b): pass",
+        test="def check(candidate): pass",
+        entry_point="add",
+    )
+
+    eval_dbos_harness.enqueue_generation_jobs(
+        "postgresql:///unit",
+        [job],
+        use_mock_lm=True,
+        score_timeout=7.0,
+        retry_token="retry-1",
+    )
+
+    assert workflow_ids == ["generate-retry:retry-1:abc"]
+    assert eval_dbos_harness.generation_workflow_id("abc") == "generate:abc"
 
 
 def test_generation_workflow_enqueues_scoring_after_success(
@@ -965,6 +1497,244 @@ def test_enqueue_score_jobs_uses_stable_workflow_ids(
             "timeout": 7.0,
         }
     ]
+
+
+def test_enqueue_score_jobs_can_use_retry_workflow_ids(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    workflow_ids: list[str] = []
+
+    class FakeSetWorkflowID:
+        def __init__(self, workflow_id: str) -> None:
+            self.workflow_id = workflow_id
+
+        def __enter__(self) -> None:
+            workflow_ids.append(self.workflow_id)
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_enqueue_workflow(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(eval_dbos_harness, "SetWorkflowID", FakeSetWorkflowID)
+    monkeypatch.setattr(
+        eval_dbos_harness.DBOS, "enqueue_workflow", fake_enqueue_workflow
+    )
+
+    eval_dbos_harness.enqueue_score_jobs(
+        "postgresql:///unit",
+        ["abc"],
+        experiment_name="exp",
+        timeout=7.0,
+        retry_token="repair-1",
+    )
+
+    assert workflow_ids == ["score-retry:repair-1:abc"]
+    assert eval_dbos_harness.score_workflow_id("abc") == "score:abc"
+
+
+def test_apply_repair_reconciles_before_selecting_retries(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="gen-1",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="model/a",
+        temperature=0.0,
+        repetition_seed=0,
+        prompt="def add(a, b): pass",
+        test="def check(candidate): pass",
+        entry_point="add",
+    )
+
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "fetch_started_generation_repair_candidates",
+        lambda *_args, **_kwargs: [
+            eval_dbos_harness.GenerationRepairCandidate(
+                prediction_id="gen-1",
+                model="model/a",
+                temperature=0.0,
+                task_id="task/add",
+                sample_index=0,
+                repetition_seed=0,
+                dbos_status="ERROR",
+            )
+        ],
+    )
+
+    def fake_mark_started_generations_as_repaired_errors(
+        *_args: object, **_kwargs: object
+    ) -> int:
+        calls.append("mark_generation")
+        return 1
+
+    def fake_fetch_generation_error_prediction_jobs(
+        *_args: object, **_kwargs: object
+    ) -> list[Any]:
+        assert calls == ["mark_generation"]
+        calls.append("fetch_generation_errors")
+        return [job]
+
+    def fake_configure_dbos_runtime(*_args: object, **_kwargs: object) -> None:
+        calls.append("configure")
+
+    def fake_enqueue_generation_jobs(
+        *_args: object, retry_token: str | None = None, **_kwargs: object
+    ) -> None:
+        assert retry_token == "repair-token"
+        calls.append("enqueue_generation_retry")
+
+    def fake_reset_generation_errors_for_retry(
+        *_args: object, **_kwargs: object
+    ) -> int:
+        calls.append("reset_generation")
+        return 1
+
+    def fake_fetch_stranded_scoring_repair_candidates(
+        *_args: object, **_kwargs: object
+    ) -> list[Any]:
+        assert "reset_generation" in calls
+        calls.append("fetch_stranded_scoring")
+        return [
+            eval_dbos_harness.ScoringRepairCandidate(
+                prediction_id="score-1",
+                model="model/a",
+                temperature=0.0,
+                task_id="task/add",
+                sample_index=0,
+                repetition_seed=0,
+                scoring_status="queued",
+                dbos_status="ERROR",
+            )
+        ]
+
+    def fake_mark_stranded_scoring_as_errors(
+        *_args: object, **_kwargs: object
+    ) -> int:
+        calls.append("mark_scoring")
+        return 1
+
+    def fake_fetch_pending_scoring_prediction_ids(
+        *_args: object, **_kwargs: object
+    ) -> list[str]:
+        assert calls[-1] == "mark_scoring"
+        calls.append("fetch_pending_scoring")
+        return ["score-2"]
+
+    def fake_enqueue_score_jobs(
+        *_args: object, retry_token: str | None = None, **_kwargs: object
+    ) -> None:
+        calls.append(
+            "enqueue_scoring_retry"
+            if retry_token == "repair-token"
+            else "enqueue_pending_scoring"
+        )
+
+    def fake_mark_scoring_queued(*_args: object, **_kwargs: object) -> int:
+        calls.append("mark_scoring_queued")
+        return 1
+
+    def fake_fetch_score_error_prediction_ids(
+        *_args: object, **_kwargs: object
+    ) -> list[str]:
+        assert "mark_scoring" in calls
+        calls.append("fetch_score_errors")
+        return ["score-1"]
+
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "mark_started_generations_as_repaired_errors",
+        fake_mark_started_generations_as_repaired_errors,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "fetch_generation_error_prediction_jobs",
+        fake_fetch_generation_error_prediction_jobs,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "configure_dbos_runtime",
+        fake_configure_dbos_runtime,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "enqueue_generation_jobs",
+        fake_enqueue_generation_jobs,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "reset_generation_errors_for_retry",
+        fake_reset_generation_errors_for_retry,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "fetch_stranded_scoring_repair_candidates",
+        fake_fetch_stranded_scoring_repair_candidates,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "mark_stranded_scoring_as_errors",
+        fake_mark_stranded_scoring_as_errors,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "fetch_pending_scoring_prediction_ids",
+        fake_fetch_pending_scoring_prediction_ids,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness, "enqueue_score_jobs", fake_enqueue_score_jobs
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness, "mark_scoring_queued", fake_mark_scoring_queued
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "fetch_score_error_prediction_ids",
+        fake_fetch_score_error_prediction_ids,
+    )
+
+    result = eval_dbos_harness.apply_repair(
+        config,
+        experiment_name="exp",
+        generation_limit=1000,
+        scoring_limit=1000,
+        score_timeout=7.0,
+        mock_generation=True,
+        repair_token="repair-token",
+    )
+
+    assert calls == [
+        "mark_generation",
+        "fetch_generation_errors",
+        "configure",
+        "enqueue_generation_retry",
+        "reset_generation",
+        "fetch_stranded_scoring",
+        "mark_scoring",
+        "fetch_pending_scoring",
+        "enqueue_pending_scoring",
+        "mark_scoring_queued",
+        "fetch_score_errors",
+        "enqueue_scoring_retry",
+        "mark_scoring_queued",
+    ]
+    assert result.repair_token == "repair-token"
+    assert result.generation_retries_enqueued == 1
+    assert result.scoring_retries_enqueued == 1
 
 
 def test_mark_scoring_queued_only_updates_waiting_predictions(
