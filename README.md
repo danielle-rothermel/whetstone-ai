@@ -76,24 +76,62 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
   --queue generation \
-  --run-name smoke-db-queue
+  --experiment-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py enqueue-scores \
   --experiment-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
   --queue scoring \
-  --run-name smoke-db-queue
+  --experiment-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
   --experiment-name smoke-db-queue
 ```
 
+Use `status` for a compact database summary while or after workers run:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py status \
+  --experiment-name smoke-db-queue
+```
+
+Use `repair` when app rows and DBOS workflow state drift apart, or when failed
+generation/scoring rows need fresh workflow IDs. It is a dry run by default and
+reports stranded generation rows, retryable generation errors, pending scoring
+work, stranded scoring rows, and retryable scoring errors:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py repair \
+  --experiment-name smoke-db-queue
+```
+
+Apply the repair after checking the dry-run counts:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py repair \
+  --experiment-name smoke-db-queue \
+  --apply
+```
+
+`repair --apply` uses one repair token for the run. It reconciles stranded app
+statuses, enqueues generation retries as
+`generate-retry:<repair-token>:<prediction-id>`, enqueues missing scoring work,
+and enqueues scoring retries as `score-retry:<repair-token>:<prediction-id>`.
+Run the relevant worker after applying repair; for scoring-only repairs:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
+  --experiment-name smoke-db-queue \
+  --queue scoring
+```
+
 Workers print compact queue state changes to stdout: when selected queues have
 active work, and when they become empty and wait for more jobs. Detailed
-per-job logs go to `logs/<run-name>/<timestamp>-<queue>-pid<PID>.log` by
-default; pass `--log-file` to choose an exact file, or `--no-monitor` to disable
-the stdout monitor.
+per-job logs go to
+`logs/<experiment-name>-<hash>/<timestamp>-<queue>-pid<PID>.log` by default;
+pass `--log-file` to choose an exact file, or `--no-monitor` to disable the
+stdout monitor.
 
 `temperature-probe` is the only command that intentionally makes immediate
 OpenRouter calls. It refuses to run unless `--confirm-live` is passed.

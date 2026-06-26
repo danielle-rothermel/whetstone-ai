@@ -97,20 +97,88 @@ DEFAULT_MODEL_CONFIGS: tuple[dict[str, Any], ...] = (
         "reasoning": {"enabled": False},
     },
     {
-        "model": "openai/gpt-oss-20b",
-        "reasoning": {"effort": "low"},
-    },
-    {
         "model": "openai/gpt-oss-120b",
         "reasoning": {"effort": "low"},
     },
     {
         "model": "openai/gpt-5-nano",
-        "reasoning": {"effort": "minimal", "exclude": False},
+        "reasoning": {"effort": "low"},
+    },
+    {
+        "model": "openai/gpt-5.4-nano",
+        "reasoning": {"effort": "none"},
+    },
+    {
+        "model": "openai/gpt-5.1-codex-mini",
+        "reasoning": {},
     },
     {
         "model": "deepseek/deepseek-v4-flash",
         "reasoning": {"enabled": False},
+    },
+    {
+        "model": "qwen/qwen3-coder-next",
+        "reasoning": {},
+    },
+    {
+        "model": "deepseek/deepseek-chat-v3.1",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "mistralai/codestral-2508",
+        "reasoning": {},
+    },
+    {
+        "model": "deepseek/deepseek-v4-pro",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "deepseek/deepseek-v3.1-terminus",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "qwen/qwen3-coder-flash",
+        "reasoning": {},
+    },
+    {
+        "model": "kwaipilot/kat-coder-pro-v2",
+        "reasoning": {},
+    },
+    {
+        "model": "mistralai/mistral-large-2512",
+        "reasoning": {},
+    },
+    {
+        "model": "deepcogito/cogito-v2.1-671b",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "qwen/qwen3-coder",
+        "reasoning": {},
+    },
+    {
+        "model": "z-ai/glm-4.7",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "qwen/qwen3-235b-a22b",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "z-ai/glm-5",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "mistralai/devstral-2512",
+        "reasoning": {},
+    },
+    {
+        "model": "moonshotai/kimi-k2",
+        "reasoning": {},
+    },
+    {
+        "model": "moonshotai/kimi-k2-0905",
+        "reasoning": {},
     },
 )
 
