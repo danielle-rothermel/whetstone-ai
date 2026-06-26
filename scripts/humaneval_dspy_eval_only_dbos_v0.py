@@ -2660,8 +2660,7 @@ def format_cost(value: float | None) -> str:
     return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
 
 
-def format_cost_column(values: Sequence[float | None]) -> list[str]:
-    formatted_values = [format_cost(value) for value in values]
+def align_decimal_column(formatted_values: Sequence[str]) -> list[str]:
     split_values = [
         formatted_value.partition(".")
         for formatted_value in formatted_values
@@ -2686,6 +2685,11 @@ def format_cost_column(values: Sequence[float | None]) -> list[str]:
             if fractional_width == 0:
                 aligned_values.append(aligned_integer)
                 continue
+            if "e" in integer.lower():
+                aligned_values.append(
+                    aligned_integer + "".ljust(fractional_width + 1)
+                )
+                continue
             aligned_values.append(
                 f"{aligned_integer}.{''.ljust(fractional_width, '0')}"
             )
@@ -2694,6 +2698,14 @@ def format_cost_column(values: Sequence[float | None]) -> list[str]:
             f"{aligned_integer}.{fractional.ljust(fractional_width, '0')}"
         )
     return aligned_values
+
+
+def format_float_column(values: Sequence[float | None]) -> list[str]:
+    return align_decimal_column([format_float(value) for value in values])
+
+
+def format_cost_column(values: Sequence[float | None]) -> list[str]:
+    return align_decimal_column([format_cost(value) for value in values])
 
 
 def price_per_thousand_samples(value: float | None) -> float | None:
@@ -2860,6 +2872,12 @@ def analysis_table(
 
     total_price_values = [summary.total_price for summary in summaries]
     total_price_sum = sum_present_float(total_price_values)
+    temperatures = format_float_column(
+        [summary.temperature for summary in summaries]
+    )
+    avg_performances = format_float_column(
+        [summary.avg_performance for summary in summaries]
+    )
     total_prices = format_cost_column(
         [*total_price_values, total_price_sum]
         if summaries
@@ -2872,35 +2890,58 @@ def analysis_table(
             for summary in summaries
         ]
     )
+    price_variances = format_float_column(
+        [summary.price_variance for summary in summaries]
+    )
+    performance_variances = format_float_column(
+        [summary.performance_variance for summary in summaries]
+    )
+    repetition_variances = format_float_column(
+        [summary.avg_repetition_variance for summary in summaries]
+    )
 
-    for summary, total_price, price_per_thousand in zip(
+    for (
+        summary,
+        temperature,
+        avg_performance,
+        total_price,
+        price_per_thousand,
+        price_variance,
+        performance_variance,
+        repetition_variance,
+    ) in zip(
         summaries,
+        temperatures,
+        avg_performances,
         row_total_prices,
         prices_per_thousand_samples,
+        price_variances,
+        performance_variances,
+        repetition_variances,
         strict=True,
     ):
         performance_table.add_row(
             summary.model,
-            format_float(summary.temperature),
+            temperature,
             str(summary.sample_count),
             str(summary.scored_count),
-            format_float(summary.avg_performance),
+            avg_performance,
             str(summary.raw_compile_pass_count),
             str(summary.extracted_compile_pass_count),
             str(summary.extraction_lift),
         )
         cost_table.add_row(
             summary.model,
-            format_float(summary.temperature),
+            temperature,
             total_price,
             price_per_thousand,
         )
         variance_table.add_row(
             summary.model,
-            format_float(summary.temperature),
-            format_float(summary.price_variance),
-            format_float(summary.performance_variance),
-            format_float(summary.avg_repetition_variance),
+            temperature,
+            price_variance,
+            performance_variance,
+            repetition_variance,
         )
     if summaries:
         performance_table.add_row(

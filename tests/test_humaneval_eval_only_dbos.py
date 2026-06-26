@@ -2147,6 +2147,12 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
 
 
 def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
+    assert eval_dbos_harness.format_float_column(
+        [1.0, 2 / 3, 0.0, None]
+    ) == ["1.000000", "0.666667", "0.000000", ""]
+    assert eval_dbos_harness.format_float_column(
+        [4.50062e-08, 0.333333, 5e-08]
+    ) == ["    4.50062e-08", "    0.333333000", "5e-08          "]
     assert eval_dbos_harness.format_cost(5.0862e-05) == "0.000050862"
     assert eval_dbos_harness.format_cost(0.0007023) == "0.0007023"
     assert eval_dbos_harness.format_cost(47.12) == "47.12"
@@ -2233,9 +2239,9 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
                 scored_count=2,
                 total_price=0.0007023,
                 avg_price_per_sample=0.0007023,
-                price_variance=None,
-                avg_performance=1.0,
-                performance_variance=None,
+                price_variance=4.50062e-08,
+                avg_performance=2 / 3,
+                performance_variance=1 / 3,
                 avg_repetition_variance=None,
                 raw_compile_pass_count=0,
                 extracted_compile_pass_count=2,
@@ -2276,6 +2282,10 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
     assert "0.000702300" in text
     assert "0.050862" in text
     assert "0.702300" in text
+    assert "1.000000" in text
+    assert "0.666667" in text
+    assert "4.50062e-08" in text
+    assert "0.333333" in text
     assert "Total" in text
     assert "0.000753162" in text
     assert "Variance" in text
