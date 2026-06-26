@@ -18,6 +18,11 @@ MOCK_HARNESS_PATH = (
     / "mocks"
     / "humaneval_dspy_harness_bootstrap_v0_mock.py"
 )
+EVAL_DBOS_HARNESS_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "humaneval_dspy_eval_only_dbos_v0.py"
+)
 
 
 def _load_script_module(name: str, path: Path) -> ModuleType:
@@ -51,3 +56,11 @@ def humaneval_mock_harness() -> ModuleType:
         )
     finally:
         sys.path.remove(str(HARNESS_PATH.parent))
+
+
+@pytest.fixture(scope="session")
+def eval_dbos_harness() -> ModuleType:
+    return _load_script_module(
+        "humaneval_dspy_eval_only_dbos_v0",
+        EVAL_DBOS_HARNESS_PATH,
+    )
