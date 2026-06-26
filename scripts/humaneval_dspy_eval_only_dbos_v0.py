@@ -30,6 +30,9 @@ from pydantic import (
     StrictInt,
     StrictStr,
 )
+from rich import box
+from rich.console import Console, Group
+from rich.table import Table
 
 import dspy
 from dr_dspy.code_eval import extract_dspy_code, run_python_check
@@ -62,6 +65,8 @@ MAX_TRACE_SIZE = 10_000
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
 DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_eval_only_worker"
+CONSOLE = Console(soft_wrap=True)
+OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
 SOLVE_NAME = "Solve"
@@ -1465,6 +1470,24 @@ def format_float(value: float | None) -> str:
     return f"{value:.6g}"
 
 
+def operator_timestamp(now: datetime | None = None) -> str:
+    resolved_now = now or datetime.now()
+    return resolved_now.strftime(OPERATOR_TIMESTAMP_FORMAT)
+
+
+def timestamped_line(line: str, *, now: datetime | None = None) -> str:
+    return f"{operator_timestamp(now)} | {line}"
+
+
+def operator_log(
+    line: str,
+    *,
+    style: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    CONSOLE.print(timestamped_line(line, now=now), style=style)
+
+
 def analysis_markdown(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> str:
@@ -1500,6 +1523,65 @@ def analysis_markdown(
             )
         )
     return "\n".join(lines) + "\n"
+
+
+def analysis_table(
+    *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+) -> Group:
+    performance_table = Table(
+        title=f"Eval Analysis: {experiment_name}",
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+    )
+    performance_table.add_column("Model", min_width=28, overflow="fold")
+    performance_table.add_column("Temp", justify="right")
+    performance_table.add_column("Samples", justify="right")
+    performance_table.add_column("Scored", justify="right")
+    performance_table.add_column("Avg Perf", justify="right")
+
+    cost_table = Table(
+        title="Cost",
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+    )
+    cost_table.add_column("Model", min_width=28, overflow="fold")
+    cost_table.add_column("Temp", justify="right")
+    cost_table.add_column("Total $", justify="right")
+    cost_table.add_column("Avg $/Sample", justify="right")
+
+    variance_table = Table(
+        title="Variance",
+        box=box.SIMPLE_HEAVY,
+        show_lines=False,
+    )
+    variance_table.add_column("Model", min_width=28, overflow="fold")
+    variance_table.add_column("Temp", justify="right")
+    variance_table.add_column("Price Var", justify="right")
+    variance_table.add_column("Perf Var", justify="right")
+    variance_table.add_column("Rep Var", justify="right")
+
+    for summary in summaries:
+        performance_table.add_row(
+            summary.model,
+            format_float(summary.temperature),
+            str(summary.sample_count),
+            str(summary.scored_count),
+            format_float(summary.avg_performance),
+        )
+        cost_table.add_row(
+            summary.model,
+            format_float(summary.temperature),
+            format_float(summary.total_price),
+            format_float(summary.avg_price_per_sample),
+        )
+        variance_table.add_row(
+            summary.model,
+            format_float(summary.temperature),
+            format_float(summary.price_variance),
+            format_float(summary.performance_variance),
+            format_float(summary.avg_repetition_variance),
+        )
+    return Group(performance_table, cost_table, variance_table)
 
 
 def write_analysis_csv(
@@ -1587,29 +1669,76 @@ def fetch_worker_queue_snapshot(
     )
 
 
-def format_count_map(counts: Mapping[str, int]) -> str:
+def count_for_status(counts: Mapping[str, int], status: str) -> int:
+    return int(counts.get(status, 0))
+
+
+def worker_monitor_counts(
+    snapshot: WorkerQueueSnapshot,
+    *,
+    completed_since_start: int,
+    failures_since_start: int,
+) -> dict[str, int]:
+    counts = {
+        "active": snapshot.active_total,
+        "enqueued": count_for_status(
+            snapshot.dbos_status_counts,
+            DbosWorkflowStatus.ENQUEUED.value,
+        ),
+        "pending": count_for_status(
+            snapshot.dbos_status_counts,
+            DbosWorkflowStatus.PENDING.value,
+        ),
+        "delayed": count_for_status(
+            snapshot.dbos_status_counts,
+            DbosWorkflowStatus.DELAYED.value,
+        ),
+        "completed": completed_since_start,
+        "errors": failures_since_start,
+        "gen_pending": count_for_phase_status(
+            snapshot.generation_status_counts, "pending"
+        ),
+        "gen_started": count_for_phase_status(
+            snapshot.generation_status_counts, "started"
+        ),
+        "gen_done": count_for_phase_status(
+            snapshot.generation_status_counts, "generated"
+        ),
+        "gen_errors": count_for_phase_status(
+            snapshot.generation_status_counts, "generation_error"
+        ),
+        "score_pending": count_for_phase_status(
+            snapshot.scoring_status_counts, "pending"
+        ),
+        "score_queued": count_for_phase_status(
+            snapshot.scoring_status_counts, "queued"
+        ),
+        "score_started": count_for_phase_status(
+            snapshot.scoring_status_counts, "started"
+        ),
+        "score_done": count_for_phase_status(
+            snapshot.scoring_status_counts, "scored"
+        ),
+        "score_errors": count_for_phase_status(
+            snapshot.scoring_status_counts, "score_error"
+        ),
+    }
+    return counts
+
+
+def count_for_phase_status(counts: Mapping[str, int], status: str) -> int:
     if not counts:
-        return "none"
-    return ", ".join(
-        f"{key}={counts[key]}" for key in sorted(counts.keys())
-    )
+        return -1
+    return int(counts.get(status, 0))
 
 
-def format_prediction_phase_counts(snapshot: WorkerQueueSnapshot) -> str:
-    parts: list[str] = []
-    if snapshot.generation_status_counts:
-        parts.append(
-            "generation="
-            f"{format_count_map(snapshot.generation_status_counts)}"
-        )
-    if snapshot.scoring_status_counts:
-        parts.append(
-            f"scoring={format_count_map(snapshot.scoring_status_counts)}"
-        )
-    return "; ".join(parts) if parts else "predictions=none"
+def format_worker_count(value: int, *, width: int) -> str:
+    if value < 0:
+        return f"{'-':>{width}}"
+    return f"{value:>{width}}"
 
 
-def format_worker_monitor_message(
+def worker_monitor_line(
     snapshot: WorkerQueueSnapshot,
     *,
     was_active: bool | None,
@@ -1630,22 +1759,60 @@ def format_worker_monitor_message(
         snapshot.failure_total - initial_failure_total,
         0,
     )
-    prediction_counts = format_prediction_phase_counts(snapshot)
-    if is_active:
-        return (
-            "queue active: "
-            f"active={snapshot.active_total} "
-            f"({format_count_map(snapshot.dbos_status_counts)}); "
-            f"completed_since_start={completed_since_start}; "
-            f"errors_since_start={failures_since_start}; "
-            f"{prediction_counts}"
-        )
-    return (
-        "queue empty; waiting for more items. "
-        f"completed_since_start={completed_since_start}; "
-        f"errors_since_start={failures_since_start}; "
-        f"{prediction_counts}"
+    counts = worker_monitor_counts(
+        snapshot,
+        completed_since_start=completed_since_start,
+        failures_since_start=failures_since_start,
     )
+    state = "Queue Active" if is_active else "Queue Empty"
+    return (
+        f"{state:<12} | "
+        f"active={format_worker_count(counts['active'], width=4)} | "
+        f"enqueued={format_worker_count(counts['enqueued'], width=4)} | "
+        f"pending={format_worker_count(counts['pending'], width=4)} | "
+        f"delayed={format_worker_count(counts['delayed'], width=4)} | "
+        f"completed={format_worker_count(counts['completed'], width=4)} | "
+        f"errors={format_worker_count(counts['errors'], width=4)} | "
+        "gen "
+        f"pend={format_worker_count(counts['gen_pending'], width=4)} "
+        f"start={format_worker_count(counts['gen_started'], width=4)} "
+        f"done={format_worker_count(counts['gen_done'], width=4)} "
+        f"err={format_worker_count(counts['gen_errors'], width=4)} | "
+        "score "
+        f"pend={format_worker_count(counts['score_pending'], width=4)} "
+        f"queue={format_worker_count(counts['score_queued'], width=4)} "
+        f"start={format_worker_count(counts['score_started'], width=4)} "
+        f"done={format_worker_count(counts['score_done'], width=4)} "
+        f"err={format_worker_count(counts['score_errors'], width=4)}"
+    )
+
+
+def worker_monitor_style(snapshot: WorkerQueueSnapshot) -> str:
+    if snapshot.active_total > 0:
+        return "green"
+    return "yellow"
+
+
+def enqueue_scores_line(
+    *,
+    experiment_name: str,
+    selected_count: int,
+    limit: int,
+    timeout: float,
+) -> str:
+    return (
+        f"{'Enqueue Scores':<14} | "
+        f"selected={selected_count:>5} | "
+        f"limit={limit:>5} | "
+        f"timeout={timeout:>6.1f}s | "
+        f"experiment={experiment_name}"
+    )
+
+
+def enqueue_scores_style(selected_count: int) -> str:
+    if selected_count == 0:
+        return "yellow"
+    return "green"
 
 
 def run_worker_monitor(
@@ -1667,15 +1834,15 @@ def run_worker_monitor(
                 and time.monotonic() - last_summary_at
                 >= config.summary_interval_seconds
             )
-            message = format_worker_monitor_message(
+            line = worker_monitor_line(
                 snapshot,
                 was_active=was_active,
                 initial_success_total=initial_success_total,
                 initial_failure_total=initial_failure_total or 0,
                 force_summary=force_summary,
             )
-            if message is not None:
-                typer.echo(message)
+            if line is not None:
+                operator_log(line, style=worker_monitor_style(snapshot))
                 last_summary_at = time.monotonic()
             was_active = snapshot.active_total > 0
             last_error = None
@@ -1686,7 +1853,10 @@ def run_worker_monitor(
                 {"error": error},
             )
             if error != last_error:
-                typer.echo(f"worker monitor error: {error}; retrying")
+                operator_log(
+                    f"worker monitor error: {error}; retrying",
+                    style="red",
+                )
                 last_error = error
         stop_event.wait(config.interval_seconds)
 
@@ -1753,6 +1923,39 @@ def fetch_status_counts(
     ]
 
 
+def status_counts_table(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    experiment_name: str | None,
+) -> Table:
+    title = "Eval Status"
+    if experiment_name is not None:
+        title = f"Eval Status: {experiment_name}"
+    table = Table(title=title, box=box.SIMPLE_HEAVY, show_lines=False)
+    if experiment_name is None:
+        table.add_column("Experiment", overflow="fold")
+    table.add_column("Model", overflow="fold")
+    table.add_column("Temp", justify="right")
+    table.add_column("Generation", justify="center")
+    table.add_column("Scoring", justify="center")
+    table.add_column("Count", justify="right")
+    for row in rows:
+        values = []
+        if experiment_name is None:
+            values.append(str(row["experiment_name"]))
+        values.extend(
+            [
+                str(row["model"]),
+                format_float(row["temperature"]),
+                str(row["generation_status"]),
+                str(row["scoring_status"]),
+                str(row["count"]),
+            ]
+        )
+        table.add_row(*values)
+    return table
+
+
 app = typer.Typer(no_args_is_help=True)
 
 
@@ -1789,7 +1992,7 @@ def init_db(
         scoring_concurrency=DEFAULT_SCORING_CONCURRENCY,
     )
     create_eval_schema(config.database_url)
-    typer.echo("initialized dr-dspy eval tables")
+    operator_log("initialized dr-dspy eval tables", style="green")
 
 
 @app.command()
@@ -1869,13 +2072,18 @@ def submit(
         temperatures=parsed_temperatures,
         repetitions=repetitions,
     )
-    typer.echo(
+    operator_log(
         f"planned {len(jobs)} jobs: samples={len(samples)}, "
         f"models={len(model_configs)}, "
         f"temperatures={len(parsed_temperatures)}, "
-        f"repetitions={repetitions}"
+        f"repetitions={repetitions}",
+        style="cyan",
     )
     if dry_run:
+        operator_log(
+            "dry run only; no rows written and no workflows enqueued",
+            style="yellow",
+        )
         return
 
     create_eval_schema(config.database_url)
@@ -1898,8 +2106,14 @@ def submit(
     enqueue_generation_jobs(
         config.database_url, jobs, use_mock_lm=mock_generation
     )
-    typer.echo(f"inserted {inserted} new prediction rows")
-    typer.echo(f"enqueued {len(jobs)} generation workflows")
+    operator_log(
+        f"inserted {inserted} new prediction rows",
+        style="green" if inserted else "yellow",
+    )
+    operator_log(
+        f"enqueued {len(jobs)} generation workflows",
+        style="green" if jobs else "yellow",
+    )
 
 
 @app.command()
@@ -1929,14 +2143,11 @@ def status(
         config.database_url, experiment_name=experiment_name
     )
     if not rows:
-        typer.echo("no prediction rows found")
+        operator_log("no prediction rows found", style="yellow")
         return
-    for row in rows:
-        typer.echo(
-            "{experiment_name} | {model} | temp={temperature} | "
-            "generation={generation_status} | scoring={scoring_status} | "
-            "count={count}".format(**row)
-        )
+    CONSOLE.print(
+        status_counts_table(rows, experiment_name=experiment_name)
+    )
 
 
 @app.command("enqueue-scores")
@@ -1992,7 +2203,15 @@ def enqueue_scores_command(
         prediction_ids,
         timeout=timeout,
     )
-    typer.echo(f"enqueued {len(prediction_ids)} scoring workflows")
+    operator_log(
+        enqueue_scores_line(
+            experiment_name=experiment_name,
+            selected_count=len(prediction_ids),
+            limit=limit,
+            timeout=timeout,
+        ),
+        style=enqueue_scores_style(len(prediction_ids)),
+    )
 
 
 @app.command()
@@ -2012,6 +2231,13 @@ def analyze(
             help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
         ),
     ] = None,
+    markdown: Annotated[
+        bool,
+        typer.Option(
+            "--markdown",
+            help="Print the analysis table as Markdown.",
+        ),
+    ] = False,
 ) -> None:
     config = common_config(
         database_url=database_url,
@@ -2023,15 +2249,22 @@ def analyze(
         config.database_url, experiment_name=experiment_name
     )
     summaries = summarize_analysis_records(records)
-    typer.echo(
-        analysis_markdown(
-            experiment_name=experiment_name, summaries=summaries
-        ),
-        nl=False,
-    )
+    if markdown:
+        typer.echo(
+            analysis_markdown(
+                experiment_name=experiment_name, summaries=summaries
+            ),
+            nl=False,
+        )
+    else:
+        CONSOLE.print(
+            analysis_table(
+                experiment_name=experiment_name, summaries=summaries
+            )
+        )
     if csv_path is not None:
         write_analysis_csv(summaries, csv_path=csv_path)
-        typer.echo(f"wrote {csv_path}")
+        operator_log(f"wrote {csv_path}", style="green")
 
 
 @app.command("temperature-probe")
@@ -2232,11 +2465,12 @@ def worker(
     configure_worker_file_logging(resolved_log_file)
     configure_dbos_runtime(config, queue=queue)
     selected_queue_names = queue_names_for_selection(queue)
-    typer.echo(
+    operator_log(
         f"worker listening on {queue.value} queue(s): "
-        f"{', '.join(selected_queue_names)}"
+        f"{', '.join(selected_queue_names)}",
+        style="cyan",
     )
-    typer.echo(f"detailed worker log: {resolved_log_file}")
+    operator_log(f"detailed worker log: {resolved_log_file}", style="cyan")
 
     stop_event = threading.Event()
     monitor_thread: threading.Thread | None = None
@@ -2250,15 +2484,16 @@ def worker(
             summary_interval_seconds=monitor_summary_interval,
         )
         monitor_thread = start_worker_monitor(monitor_config, stop_event)
-        typer.echo(
+        operator_log(
             "worker monitor enabled: "
             f"interval={monitor_interval}s, "
-            f"summary_interval={monitor_summary_interval}s"
+            f"summary_interval={monitor_summary_interval}s",
+            style="cyan",
         )
     try:
         threading.Event().wait()
     except KeyboardInterrupt:
-        typer.echo("worker stopping")
+        operator_log("worker stopping", style="cyan")
     finally:
         stop_event.set()
         if monitor_thread is not None:

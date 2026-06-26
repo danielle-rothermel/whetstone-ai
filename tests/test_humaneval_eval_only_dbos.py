@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from dspy.utils.dummies import dotdict  # type: ignore[attr-defined]
+from rich.console import Console
 
 
 class FakeCursor:
@@ -212,66 +213,52 @@ def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
     )
 
 
-def test_worker_monitor_message_reports_active_and_idle(
+def test_worker_monitor_line_has_aligned_metrics(
     eval_dbos_harness,
 ) -> None:
-    active = eval_dbos_harness.WorkerQueueSnapshot(
+    snapshot = eval_dbos_harness.WorkerQueueSnapshot(
         dbos_status_counts={"ENQUEUED": 3, "SUCCESS": 2},
         generation_status_counts={"generated": 2, "started": 3},
     )
-
-    active_message = eval_dbos_harness.format_worker_monitor_message(
-        active,
+    line = eval_dbos_harness.worker_monitor_line(
+        snapshot,
         was_active=None,
         initial_success_total=2,
         initial_failure_total=0,
         force_summary=False,
     )
+    assert line is not None
 
-    assert active_message is not None
-    assert "queue active: active=3" in active_message
-    assert "ENQUEUED=3" in active_message
-    assert "generation=generated=2, started=3" in active_message
+    assert line.startswith("Queue Active | active=   3 | enqueued=   3")
+    assert "completed=   0" in line
+    assert "gen pend=   0 start=   3 done=   2 err=   0" in line
+    assert "score pend=   -" in line
 
-    assert (
-        eval_dbos_harness.format_worker_monitor_message(
-            active,
-            was_active=True,
-            initial_success_total=2,
-            initial_failure_total=0,
-            force_summary=False,
-        )
-        is None
+
+def test_timestamped_operator_lines(eval_dbos_harness) -> None:
+    line = eval_dbos_harness.timestamped_line(
+        "Queue Empty  | active=   0",
+        now=datetime(2026, 1, 2, 3, 4, 5),
     )
 
-    summary_message = eval_dbos_harness.format_worker_monitor_message(
-        active,
-        was_active=True,
-        initial_success_total=2,
-        initial_failure_total=0,
-        force_summary=True,
+    assert line == "03:04:05 | Queue Empty  | active=   0"
+
+
+def test_enqueue_scores_line_is_fixed_width(eval_dbos_harness) -> None:
+    line = eval_dbos_harness.enqueue_scores_line(
+        experiment_name="local-mock-dbos-smoke",
+        selected_count=10,
+        limit=1000,
+        timeout=15.0,
     )
 
-    assert summary_message is not None
-    assert "queue active" in summary_message
-
-    idle = eval_dbos_harness.WorkerQueueSnapshot(
-        dbos_status_counts={"SUCCESS": 5, "ERROR": 1},
-        scoring_status_counts={"scored": 5, "score_error": 1},
+    assert line.startswith(
+        "Enqueue Scores | selected=   10 | limit= 1000 | "
+        "timeout=  15.0s |"
     )
-
-    idle_message = eval_dbos_harness.format_worker_monitor_message(
-        idle,
-        was_active=True,
-        initial_success_total=2,
-        initial_failure_total=0,
-        force_summary=False,
-    )
-
-    assert idle_message is not None
-    assert "queue empty; waiting for more items" in idle_message
-    assert "completed_since_start=3" in idle_message
-    assert "errors_since_start=1" in idle_message
+    assert line.endswith("experiment=local-mock-dbos-smoke")
+    assert eval_dbos_harness.enqueue_scores_style(0) == "yellow"
+    assert eval_dbos_harness.enqueue_scores_style(10) == "green"
 
 
 def test_worker_detail_log_writes_prediction_context(
@@ -746,6 +733,50 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
     csv_text = csv_path.read_text()
     assert "model,temperature,sample_count" in csv_text
     assert "model/a" in csv_text
+
+
+def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
+    status_table = eval_dbos_harness.status_counts_table(
+        [
+            {
+                "experiment_name": "exp",
+                "model": "model/a",
+                "temperature": 0.0,
+                "generation_status": "generated",
+                "scoring_status": "scored",
+                "count": 2,
+            }
+        ],
+        experiment_name="exp",
+    )
+    analysis_table = eval_dbos_harness.analysis_table(
+        experiment_name="exp",
+        summaries=[
+            eval_dbos_harness.AnalysisSummary(
+                model="model/a",
+                temperature=0.0,
+                sample_count=2,
+                scored_count=2,
+                total_price=None,
+                avg_price_per_sample=None,
+                price_variance=None,
+                avg_performance=1.0,
+                performance_variance=None,
+                avg_repetition_variance=None,
+            )
+        ],
+    )
+    console = Console(record=True, width=120)
+    console.print(status_table)
+    console.print(analysis_table)
+    text = console.export_text()
+
+    assert "Eval Status: exp" in text
+    assert "Generation" in text
+    assert "Scoring" in text
+    assert "Eval Analysis: exp" in text
+    assert "Avg $/Sample" in text
+    assert "Variance" in text
 
 
 def test_run_temperature_probe_records_accept_and_reject(
