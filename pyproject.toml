@@ -6,13 +6,18 @@ readme = "README.md"
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
-requires-python = ">=3.10, <3.15"
+requires-python = ">=3.12, <3.15"
 dependencies = [
+    "datasets>=3.6.0",
+    "dbos>=2.25.0",
     "dspy",
     "marimo[recommended]>=0.23.11",
+    "pre-commit>=4.6.0",
     "psycopg>=3.3.4",
+    "psycopg-pool>=3.3.1",
     "pytest>=8.4.2",
     "python-dotenv>=1.1.0",
+    "rich>=13.9.4",
     "ruff>=0.15.10",
     "ty>=0.0.54",
     "typer>=0.26.7",
@@ -30,7 +35,7 @@ include = ["src/**/*.py", "scripts/**/*.py"]
 exclude = ["tests/**/*.py"]
 force-exclude = true
 line-length = 79
-target-version = "py310"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]

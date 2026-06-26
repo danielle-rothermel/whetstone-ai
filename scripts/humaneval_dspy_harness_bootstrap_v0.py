@@ -8,7 +8,7 @@ import sys
 import traceback
 import uuid
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
@@ -83,7 +83,7 @@ DISPLAY_TABLE_ROWS = 10
 ZERO_DEMO_EXIT_CODE = 3
 
 
-class FlowStages(str, Enum):
+class FlowStages(StrEnum):
     EVAL_BASELINE = "eval_baseline"
     OPTIMIZE = "optimize"
     EVAL_OPTIMIZED = "eval_optimized"
