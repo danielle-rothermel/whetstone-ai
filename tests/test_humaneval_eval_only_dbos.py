@@ -8,6 +8,7 @@ import pytest
 class FakeCursor:
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.rowcount = 0
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -17,6 +18,10 @@ class FakeCursor:
 
     def execute(self, statement: str, params: object = None) -> None:
         self.statements.append(statement)
+
+    def executemany(self, statement: str, params: object) -> None:
+        self.statements.append(statement)
+        self.rowcount = len(list(params))
 
 
 class FakeConnection:
@@ -138,4 +143,175 @@ def test_register_and_listen_to_eval_queues(
             eval_dbos_harness.GENERATION_QUEUE_NAME,
             eval_dbos_harness.SCORING_QUEUE_NAME,
         ]
+    ]
+
+
+def test_build_humaneval_samples_from_rows_is_seeded(eval_dbos_harness) -> None:
+    rows = [
+        {
+            "task_id": f"task/{index}",
+            "prompt": f"def f_{index}(): pass",
+            "test": "def check(candidate): pass",
+            "entry_point": f"f_{index}",
+        }
+        for index in range(6)
+    ]
+
+    first = eval_dbos_harness.build_humaneval_samples_from_rows(
+        rows, seed=3, sample_count=4
+    )
+    second = eval_dbos_harness.build_humaneval_samples_from_rows(
+        rows, seed=3, sample_count=4
+    )
+    different = eval_dbos_harness.build_humaneval_samples_from_rows(
+        rows, seed=4, sample_count=4
+    )
+
+    assert [sample.task_id for sample in first] == [
+        sample.task_id for sample in second
+    ]
+    assert [sample.task_id for sample in first] != [
+        sample.task_id for sample in different
+    ]
+    assert [sample.sample_index for sample in first] == [0, 1, 2, 3]
+
+
+def test_build_prediction_jobs_uses_stable_ids(eval_dbos_harness) -> None:
+    samples = [
+        eval_dbos_harness.HumanEvalSample(
+            task_id="task/add",
+            sample_index=0,
+            prompt="def add(a, b): pass",
+            test="def check(candidate): pass",
+            entry_point="add",
+        )
+    ]
+    models = [
+        eval_dbos_harness.ModelConfig(
+            model="model/a", reasoning={"enabled": False}
+        ),
+        eval_dbos_harness.ModelConfig(
+            model="model/b", reasoning={"effort": "low"}
+        ),
+    ]
+
+    first = eval_dbos_harness.build_prediction_jobs(
+        experiment_name="exp",
+        submission_id="sub-1",
+        samples=samples,
+        model_configs=models,
+        temperatures=[0.0, 0.2],
+        repetitions=2,
+    )
+    second = eval_dbos_harness.build_prediction_jobs(
+        experiment_name="exp",
+        submission_id="sub-2",
+        samples=samples,
+        model_configs=models,
+        temperatures=[0.0, 0.2],
+        repetitions=2,
+    )
+
+    assert len(first) == 8
+    assert {job.prediction_id for job in first} == {
+        job.prediction_id for job in second
+    }
+    assert first[0].submission_id == "sub-1"
+    assert second[0].submission_id == "sub-2"
+
+
+def test_insert_prediction_jobs_does_not_overwrite_existing_rows(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    fake_conn = FakeConnection()
+
+    def fake_connect(database_url: str) -> FakeConnection:
+        assert database_url == "postgresql:///unit"
+        return fake_conn
+
+    monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
+
+    jobs = eval_dbos_harness.build_prediction_jobs(
+        experiment_name="exp",
+        submission_id="sub",
+        samples=[
+            eval_dbos_harness.HumanEvalSample(
+                task_id="task/add",
+                sample_index=0,
+                prompt="def add(a, b): pass",
+                test="def check(candidate): pass",
+                entry_point="add",
+            )
+        ],
+        model_configs=[
+            eval_dbos_harness.ModelConfig(model="model/a", reasoning={})
+        ],
+        temperatures=[0.0],
+        repetitions=1,
+    )
+
+    eval_dbos_harness.insert_prediction_jobs("postgresql:///unit", jobs)
+
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "ON CONFLICT (prediction_id) DO NOTHING" in statement
+
+
+def test_enqueue_generation_jobs_uses_stable_workflow_ids(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    workflow_ids: list[str] = []
+    enqueued: list[dict[str, Any]] = []
+
+    class FakeSetWorkflowID:
+        def __init__(self, workflow_id: str) -> None:
+            self.workflow_id = workflow_id
+
+        def __enter__(self) -> None:
+            workflow_ids.append(self.workflow_id)
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_enqueue_workflow(
+        queue_name: str,
+        workflow: object,
+        prediction_id: str,
+    ) -> None:
+        enqueued.append(
+            {
+                "queue_name": queue_name,
+                "workflow": workflow,
+                "prediction_id": prediction_id,
+            }
+        )
+
+    monkeypatch.setattr(eval_dbos_harness, "SetWorkflowID", FakeSetWorkflowID)
+    monkeypatch.setattr(
+        eval_dbos_harness.DBOS, "enqueue_workflow", fake_enqueue_workflow
+    )
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="abc",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="model/a",
+        temperature=0.0,
+        repetition_seed=0,
+        prompt="def add(a, b): pass",
+        test="def check(candidate): pass",
+        entry_point="add",
+    )
+
+    eval_dbos_harness.enqueue_generation_jobs([job])
+
+    assert workflow_ids == ["generate:abc"]
+    assert enqueued == [
+        {
+            "queue_name": eval_dbos_harness.GENERATION_QUEUE_NAME,
+            "workflow": eval_dbos_harness.generate_prediction_workflow,
+            "prediction_id": "abc",
+        }
     ]

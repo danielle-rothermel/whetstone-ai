@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
+import random
 import threading
+import uuid
+from collections.abc import Mapping, Sequence
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol, cast
 
 import psycopg
 import typer
-from dbos import DBOS, DBOSConfig
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
+from datasets import load_dataset  # type: ignore[import-not-found]
+from dbos import DBOS, DBOSConfig, SetWorkflowID
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from dr_dspy.event_log import DATABASE_URL_ENV
 from dr_dspy.runtime import configure_multiprocessing, load_env_file
@@ -23,6 +30,39 @@ GENERATION_QUEUE_NAME = "dr_dspy_humaneval_generation"
 SCORING_QUEUE_NAME = "dr_dspy_humaneval_scoring"
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
+DEFAULT_SEED = 0
+DEFAULT_SAMPLE_COUNT = 10
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_TEMPERATURES = (DEFAULT_TEMPERATURE,)
+DATASET_NAME = "evalplus/humanevalplus"
+DATASET_SPLIT = "test"
+SOLVE_INSTRUCTIONS = (
+    "Write functional code in Python according to the prompt. "
+    "Output only the code solution."
+)
+
+DEFAULT_MODEL_CONFIGS: tuple[dict[str, Any], ...] = (
+    {
+        "model": "google/gemini-2.5-flash",
+        "reasoning": {"enabled": False},
+    },
+    {
+        "model": "openai/gpt-oss-20b",
+        "reasoning": {"effort": "low"},
+    },
+    {
+        "model": "openai/gpt-oss-120b",
+        "reasoning": {"effort": "low"},
+    },
+    {
+        "model": "openai/gpt-5-nano",
+        "reasoning": {"effort": "minimal", "exclude": False},
+    },
+    {
+        "model": "deepseek/deepseek-v4-flash",
+        "reasoning": {"enabled": False},
+    },
+)
 
 
 EXPERIMENTS_TABLE_SQL = """
@@ -104,6 +144,50 @@ class EvalDbosConfig(BaseModel):
     scoring_concurrency: StrictInt = DEFAULT_SCORING_CONCURRENCY
 
 
+class ModelConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: StrictStr
+    reasoning: dict[str, Any] = Field(default_factory=dict)
+
+
+class HumanEvalSample(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: StrictStr
+    sample_index: StrictInt
+    prompt: StrictStr
+    test: StrictStr
+    entry_point: StrictStr
+
+
+class PredictionJob(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    experiment_name: StrictStr
+    script_kind: StrictStr = SCRIPT_KIND
+    submission_id: StrictStr
+    task_id: StrictStr
+    sample_index: StrictInt
+    model: StrictStr
+    temperature: float
+    repetition_seed: StrictInt
+    prompt: StrictStr
+    test: StrictStr
+    entry_point: StrictStr
+    reasoning: dict[str, Any] = Field(default_factory=dict)
+
+
+HumanEvalRow = Mapping[str, Any]
+
+
+class HumanEvalDataset(Protocol):
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> HumanEvalRow: ...
+
+
 def resolve_database_url(database_url: str | None) -> str:
     resolved = database_url or os.environ.get(DATABASE_URL_ENV)
     if not resolved:
@@ -161,6 +245,11 @@ def register_eval_queues(config: EvalDbosConfig) -> None:
     )
 
 
+@DBOS.workflow(name="humaneval_eval_generate_prediction_v0")
+def generate_prediction_workflow(prediction_id: str) -> str:
+    return prediction_id
+
+
 def listen_to_selected_queue(selection: QueueSelection) -> None:
     if selection is QueueSelection.GENERATION:
         DBOS.listen_queues([GENERATION_QUEUE_NAME])
@@ -172,13 +261,238 @@ def listen_to_selected_queue(selection: QueueSelection) -> None:
 
 
 def configure_dbos_runtime(
-    config: EvalDbosConfig, *, queue: QueueSelection | None = None
+    config: EvalDbosConfig,
+    *,
+    queue: QueueSelection | None = None,
+    consume_queues: bool = True,
 ) -> None:
     DBOS(config=build_dbos_config(config))
     register_eval_queues(config)
     if queue is not None:
         listen_to_selected_queue(queue)
+    elif not consume_queues:
+        DBOS.listen_queues([])
     DBOS.launch()
+
+
+def stable_json(data: Any) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def stable_prediction_id(
+    *,
+    experiment_name: str,
+    task_id: str,
+    model: str,
+    temperature: float,
+    repetition_seed: int,
+) -> str:
+    digest = hashlib.sha256(
+        stable_json(
+            {
+                "experiment_name": experiment_name,
+                "task_id": task_id,
+                "model": model,
+                "temperature": temperature,
+                "repetition_seed": repetition_seed,
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    return digest[:32]
+
+
+def parse_temperatures(raw: str) -> list[float]:
+    values = [part.strip() for part in raw.split(",") if part.strip()]
+    if not values:
+        raise ValueError("at least one temperature is required")
+    return [float(value) for value in values]
+
+
+def default_model_configs() -> list[ModelConfig]:
+    return [ModelConfig(**config) for config in DEFAULT_MODEL_CONFIGS]
+
+
+def build_humaneval_samples(
+    *,
+    seed: int,
+    sample_count: int,
+) -> list[HumanEvalSample]:
+    dataset = cast(
+        HumanEvalDataset,
+        load_dataset(DATASET_NAME, split=DATASET_SPLIT),
+    )
+    rows: list[HumanEvalRow] = [
+        dataset[index] for index in range(len(dataset))
+    ]
+    return build_humaneval_samples_from_rows(
+        rows, seed=seed, sample_count=sample_count
+    )
+
+
+def build_humaneval_samples_from_rows(
+    rows: Sequence[HumanEvalRow],
+    *,
+    seed: int,
+    sample_count: int,
+) -> list[HumanEvalSample]:
+    indices = list(range(len(rows)))
+    random.Random(seed).shuffle(indices)
+    samples: list[HumanEvalSample] = []
+    for sample_index, row_index in enumerate(indices[:sample_count]):
+        row = rows[row_index]
+        samples.append(
+            HumanEvalSample(
+                task_id=str(row["task_id"]),
+                sample_index=sample_index,
+                prompt=str(row["prompt"]),
+                test=str(row["test"]),
+                entry_point=str(row["entry_point"]),
+            )
+        )
+    return samples
+
+
+def build_prediction_jobs(
+    *,
+    experiment_name: str,
+    submission_id: str,
+    samples: Sequence[HumanEvalSample],
+    model_configs: Sequence[ModelConfig],
+    temperatures: Sequence[float],
+    repetitions: int,
+) -> list[PredictionJob]:
+    jobs: list[PredictionJob] = []
+    for sample in samples:
+        for model_config in model_configs:
+            for temperature in temperatures:
+                for repetition_seed in range(repetitions):
+                    jobs.append(
+                        PredictionJob(
+                            prediction_id=stable_prediction_id(
+                                experiment_name=experiment_name,
+                                task_id=sample.task_id,
+                                model=model_config.model,
+                                temperature=temperature,
+                                repetition_seed=repetition_seed,
+                            ),
+                            experiment_name=experiment_name,
+                            submission_id=submission_id,
+                            task_id=sample.task_id,
+                            sample_index=sample.sample_index,
+                            model=model_config.model,
+                            temperature=temperature,
+                            repetition_seed=repetition_seed,
+                            prompt=sample.prompt,
+                            test=sample.test,
+                            entry_point=sample.entry_point,
+                            reasoning=dict(model_config.reasoning),
+                        )
+                    )
+    return jobs
+
+
+def upsert_experiment(
+    database_url: str,
+    *,
+    experiment_name: str,
+    seed: int,
+    sample_count: int,
+    metadata: Mapping[str, Any],
+) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dr_dspy_eval_experiments (
+                    experiment_name,
+                    script_kind,
+                    seed,
+                    sample_count,
+                    instruction,
+                    metadata
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (experiment_name) DO UPDATE SET
+                    script_kind = EXCLUDED.script_kind,
+                    seed = EXCLUDED.seed,
+                    sample_count = EXCLUDED.sample_count,
+                    instruction = EXCLUDED.instruction,
+                    metadata = EXCLUDED.metadata,
+                    updated_at = now()
+                """,
+                (
+                    experiment_name,
+                    SCRIPT_KIND,
+                    seed,
+                    sample_count,
+                    SOLVE_INSTRUCTIONS,
+                    Jsonb(dict(metadata)),
+                ),
+            )
+
+
+def insert_prediction_jobs(
+    database_url: str, jobs: Sequence[PredictionJob]
+) -> int:
+    if not jobs:
+        return 0
+    rows = [
+        (
+            job.prediction_id,
+            job.experiment_name,
+            job.script_kind,
+            job.submission_id,
+            job.task_id,
+            job.sample_index,
+            job.model,
+            job.temperature,
+            job.repetition_seed,
+            job.prompt,
+            job.test,
+            job.entry_point,
+            Jsonb(job.reasoning),
+        )
+        for job in jobs
+    ]
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO dr_dspy_eval_predictions (
+                    prediction_id,
+                    experiment_name,
+                    script_kind,
+                    submission_id,
+                    task_id,
+                    sample_index,
+                    model,
+                    temperature,
+                    repetition_seed,
+                    prompt,
+                    test,
+                    entry_point,
+                    reasoning
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (prediction_id) DO NOTHING
+                """,
+                rows,
+            )
+            return cur.rowcount if cur.rowcount is not None else 0
+
+
+def enqueue_generation_jobs(jobs: Sequence[PredictionJob]) -> None:
+    for job in jobs:
+        workflow_id = f"generate:{job.prediction_id}"
+        with SetWorkflowID(workflow_id):
+            DBOS.enqueue_workflow(
+                GENERATION_QUEUE_NAME,
+                generate_prediction_workflow,
+                job.prediction_id,
+            )
 
 
 def fetch_status_counts(
@@ -267,6 +581,107 @@ def init_db(
     )
     create_eval_schema(config.database_url)
     typer.echo("initialized dr-dspy eval tables")
+
+
+@app.command()
+def submit(
+    experiment_name: Annotated[
+        str,
+        typer.Option(
+            "--experiment-name",
+            help="Human-readable experiment key.",
+        ),
+    ],
+    sample_count: Annotated[
+        int, typer.Option("--sample-count", min=1)
+    ] = DEFAULT_SAMPLE_COUNT,
+    seed: Annotated[int, typer.Option("--seed")] = DEFAULT_SEED,
+    temperatures: Annotated[
+        str,
+        typer.Option(
+            "--temperatures",
+            help="Comma-separated temperature values.",
+        ),
+    ] = ",".join(str(value) for value in DEFAULT_TEMPERATURES),
+    repetitions: Annotated[int, typer.Option("--repetitions", min=1)] = 1,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Plan jobs without writing or enqueueing.",
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help=(
+                "DBOS system database URL; defaults to "
+                f"{DBOS_SYSTEM_DATABASE_URL_ENV} or DATABASE_URL."
+            ),
+        ),
+    ] = None,
+    generation_concurrency: Annotated[
+        int, typer.Option("--generation-concurrency")
+    ] = DEFAULT_GENERATION_CONCURRENCY,
+    scoring_concurrency: Annotated[
+        int, typer.Option("--scoring-concurrency")
+    ] = DEFAULT_SCORING_CONCURRENCY,
+) -> None:
+    config = common_config(
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        generation_concurrency=generation_concurrency,
+        scoring_concurrency=scoring_concurrency,
+    )
+    model_configs = default_model_configs()
+    parsed_temperatures = parse_temperatures(temperatures)
+    samples = build_humaneval_samples(seed=seed, sample_count=sample_count)
+    submission_id = uuid.uuid4().hex
+    jobs = build_prediction_jobs(
+        experiment_name=experiment_name,
+        submission_id=submission_id,
+        samples=samples,
+        model_configs=model_configs,
+        temperatures=parsed_temperatures,
+        repetitions=repetitions,
+    )
+    typer.echo(
+        f"planned {len(jobs)} jobs: samples={len(samples)}, "
+        f"models={len(model_configs)}, "
+        f"temperatures={len(parsed_temperatures)}, "
+        f"repetitions={repetitions}"
+    )
+    if dry_run:
+        return
+
+    create_eval_schema(config.database_url)
+    upsert_experiment(
+        config.database_url,
+        experiment_name=experiment_name,
+        seed=seed,
+        sample_count=sample_count,
+        metadata={
+            "submission_id": submission_id,
+            "models": [
+                model.model_dump(mode="json") for model in model_configs
+            ],
+            "temperatures": parsed_temperatures,
+            "repetitions": repetitions,
+        },
+    )
+    inserted = insert_prediction_jobs(config.database_url, jobs)
+    configure_dbos_runtime(config, consume_queues=False)
+    enqueue_generation_jobs(jobs)
+    typer.echo(f"inserted {inserted} new prediction rows")
+    typer.echo(f"enqueued {len(jobs)} generation workflows")
 
 
 @app.command()
