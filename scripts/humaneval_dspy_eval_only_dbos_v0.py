@@ -18,8 +18,14 @@ from dbos import DBOS, DBOSConfig, SetWorkflowID
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
+import dspy
+from dr_dspy.code_eval import extract_dspy_code
 from dr_dspy.event_log import DATABASE_URL_ENV
+from dr_dspy.lm_logging import LoggingCallableLM
+from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
+from dr_dspy.run_metadata import FieldSignature
 from dr_dspy.runtime import configure_multiprocessing, load_env_file
+from dspy.signatures.signature import make_signature
 
 # Configuration
 
@@ -34,8 +40,15 @@ DEFAULT_SEED = 0
 DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TEMPERATURES = (DEFAULT_TEMPERATURE,)
+DEFAULT_MAX_COMPLETION_TOKENS = 1000
+MAX_TRACE_SIZE = 10_000
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
+SOLVE_NAME = "Solve"
+SOLVE_FIELDS = [
+    FieldSignature(name="prompt", type=str, role=dspy.InputField()),
+    FieldSignature(name="code", type=dspy.Code, role=dspy.OutputField()),
+]
 SOLVE_INSTRUCTIONS = (
     "Write functional code in Python according to the prompt. "
     "Output only the code solution."
@@ -179,6 +192,16 @@ class PredictionJob(BaseModel):
     reasoning: dict[str, Any] = Field(default_factory=dict)
 
 
+class GenerationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    code: StrictStr
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)
+    provider_cost: float | None = None
+
+
 HumanEvalRow = Mapping[str, Any]
 
 
@@ -186,6 +209,31 @@ class HumanEvalDataset(Protocol):
     def __len__(self) -> int: ...
 
     def __getitem__(self, index: int) -> HumanEvalRow: ...
+
+
+Solve = make_signature(
+    {field.name: (field.type, field.role) for field in SOLVE_FIELDS},
+    instructions=SOLVE_INSTRUCTIONS,
+    signature_name=SOLVE_NAME,
+)
+
+
+class LmEventBuffer:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def put_event(self, event_type: str, **kwargs: Any) -> None:
+        self.events.append({"event_type": event_type, **kwargs})
+
+    def latest_response_metadata(self) -> dict[str, Any]:
+        for event in reversed(self.events):
+            if event["event_type"] == "lm.response":
+                payload = event.get("payload")
+                if isinstance(payload, dict):
+                    response = payload.get("response")
+                    if isinstance(response, dict):
+                        return response
+        return {}
 
 
 def resolve_database_url(database_url: str | None) -> str:
@@ -246,8 +294,18 @@ def register_eval_queues(config: EvalDbosConfig) -> None:
 
 
 @DBOS.workflow(name="humaneval_eval_generate_prediction_v0")
-def generate_prediction_workflow(prediction_id: str) -> str:
-    return prediction_id
+def generate_prediction_workflow(
+    database_url: str, prediction_id: str, use_mock_lm: bool = False
+) -> str:
+    try:
+        result = generate_prediction_step(
+            database_url, prediction_id, use_mock_lm
+        )
+        record_generation_success_step(database_url, result)
+        return "generated"
+    except Exception as e:
+        record_generation_error_step(database_url, prediction_id, repr(e))
+        return "generation_error"
 
 
 def listen_to_selected_queue(selection: QueueSelection) -> None:
@@ -484,14 +542,240 @@ def insert_prediction_jobs(
             return cur.rowcount if cur.rowcount is not None else 0
 
 
-def enqueue_generation_jobs(jobs: Sequence[PredictionJob]) -> None:
+def fetch_prediction_job(
+    database_url: str, prediction_id: str
+) -> PredictionJob:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    experiment_name,
+                    script_kind,
+                    submission_id,
+                    task_id,
+                    sample_index,
+                    model,
+                    temperature,
+                    repetition_seed,
+                    prompt,
+                    test,
+                    entry_point,
+                    reasoning
+                FROM dr_dspy_eval_predictions
+                WHERE prediction_id = %s
+                """,
+                (prediction_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"prediction_id not found: {prediction_id}")
+    return PredictionJob(
+        prediction_id=row[0],
+        experiment_name=row[1],
+        script_kind=row[2],
+        submission_id=row[3],
+        task_id=row[4],
+        sample_index=row[5],
+        model=row[6],
+        temperature=row[7],
+        repetition_seed=row[8],
+        prompt=row[9],
+        test=row[10],
+        entry_point=row[11],
+        reasoning=dict(row[12] or {}),
+    )
+
+
+def mark_generation_started(database_url: str, prediction_id: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    generation_status = 'started',
+                    generation_error = NULL,
+                    updated_at = now()
+                WHERE prediction_id = %s
+                """,
+                (prediction_id,),
+            )
+
+
+def record_generation_success(
+    database_url: str, result: GenerationResult
+) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    generation_status = 'generated',
+                    generation_error = NULL,
+                    raw_code = %s,
+                    response_metadata = %s,
+                    usage_metadata = %s,
+                    provider_cost = %s,
+                    updated_at = now(),
+                    generated_at = now()
+                WHERE prediction_id = %s
+                """,
+                (
+                    result.code,
+                    Jsonb(result.response_metadata),
+                    Jsonb(result.usage_metadata),
+                    result.provider_cost,
+                    result.prediction_id,
+                ),
+            )
+
+
+def record_generation_error(
+    database_url: str, prediction_id: str, error: str
+) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    generation_status = 'generation_error',
+                    generation_error = %s,
+                    updated_at = now()
+                WHERE prediction_id = %s
+                """,
+                (error, prediction_id),
+            )
+
+
+def mock_solver(
+    messages: list[dict[str, Any]], _kwargs: dict[str, Any]
+) -> dict[str, str]:
+    text = "\n".join(str(message.get("content", "")) for message in messages)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("def ") and "(" in stripped:
+            signature = stripped.split(":", 1)[0]
+            return {"code": f"{signature}:\n    return None\n"}
+    return {"code": "def solution():\n    return None\n"}
+
+
+def build_generation_lm(
+    job: PredictionJob,
+    *,
+    use_mock_lm: bool,
+    event_buffer: LmEventBuffer,
+    client: Any = None,
+) -> dspy.BaseLM:
+    if use_mock_lm:
+        return LoggingCallableLM(
+            mock_solver,
+            log=event_buffer.put_event,
+            model="callable/mock",
+        )
+    if not os.environ.get(OPENROUTER_API_KEY_ENV) and client is None:
+        raise ValueError(f"{OPENROUTER_API_KEY_ENV} is not set")
+    return LoggingOpenRouterLM(
+        job.model,
+        log=event_buffer.put_event,
+        client=client,
+        cache=False,
+        reasoning=job.reasoning,
+        max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+        temperature=job.temperature,
+    )
+
+
+def usage_metadata_from_response(
+    response_metadata: Mapping[str, Any]
+) -> dict[str, Any]:
+    usage = response_metadata.get("usage")
+    return dict(usage) if isinstance(usage, Mapping) else {}
+
+
+def provider_cost_from_response(
+    response_metadata: Mapping[str, Any]
+) -> float | None:
+    for key in ("cost", "total_cost"):
+        value = response_metadata.get(key)
+        if isinstance(value, int | float):
+            return float(value)
+    usage = response_metadata.get("usage")
+    if isinstance(usage, Mapping):
+        value = usage.get("cost")
+        if isinstance(value, int | float):
+            return float(value)
+    return None
+
+
+def generate_code_for_job(
+    job: PredictionJob,
+    *,
+    use_mock_lm: bool,
+    client: Any = None,
+) -> GenerationResult:
+    event_buffer = LmEventBuffer()
+    lm = build_generation_lm(
+        job,
+        use_mock_lm=use_mock_lm,
+        event_buffer=event_buffer,
+        client=client,
+    )
+    with dspy.context(
+        lm=lm,
+        callbacks=[],
+        track_usage=True,
+        max_trace_size=MAX_TRACE_SIZE,
+    ):
+        pred = dspy.Predict(Solve)(prompt=job.prompt)
+    response_metadata = event_buffer.latest_response_metadata()
+    return GenerationResult(
+        prediction_id=job.prediction_id,
+        code=extract_dspy_code(pred),
+        response_metadata=response_metadata,
+        usage_metadata=usage_metadata_from_response(response_metadata),
+        provider_cost=provider_cost_from_response(response_metadata),
+    )
+
+
+@DBOS.step(retries_allowed=True, max_attempts=3, interval_seconds=2.0)
+def generate_prediction_step(
+    database_url: str, prediction_id: str, use_mock_lm: bool
+) -> GenerationResult:
+    mark_generation_started(database_url, prediction_id)
+    job = fetch_prediction_job(database_url, prediction_id)
+    return generate_code_for_job(job, use_mock_lm=use_mock_lm)
+
+
+@DBOS.step()
+def record_generation_success_step(
+    database_url: str, result: GenerationResult
+) -> None:
+    record_generation_success(database_url, result)
+
+
+@DBOS.step()
+def record_generation_error_step(
+    database_url: str, prediction_id: str, error: str
+) -> None:
+    record_generation_error(database_url, prediction_id, error)
+
+
+def enqueue_generation_jobs(
+    database_url: str, jobs: Sequence[PredictionJob], *, use_mock_lm: bool
+) -> None:
     for job in jobs:
         workflow_id = f"generate:{job.prediction_id}"
         with SetWorkflowID(workflow_id):
             DBOS.enqueue_workflow(
                 GENERATION_QUEUE_NAME,
                 generate_prediction_workflow,
+                database_url,
                 job.prediction_id,
+                use_mock_lm,
             )
 
 
@@ -611,6 +895,13 @@ def submit(
             help="Plan jobs without writing or enqueueing.",
         ),
     ] = False,
+    mock_generation: Annotated[
+        bool,
+        typer.Option(
+            "--mock-generation",
+            help="Enqueue generation jobs that use the deterministic mock LM.",
+        ),
+    ] = False,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -679,7 +970,9 @@ def submit(
     )
     inserted = insert_prediction_jobs(config.database_url, jobs)
     configure_dbos_runtime(config, consume_queues=False)
-    enqueue_generation_jobs(jobs)
+    enqueue_generation_jobs(
+        config.database_url, jobs, use_mock_lm=mock_generation
+    )
     typer.echo(f"inserted {inserted} new prediction rows")
     typer.echo(f"enqueued {len(jobs)} generation workflows")
 

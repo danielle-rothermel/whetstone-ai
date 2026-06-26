@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dspy.utils.dummies import dotdict  # type: ignore[attr-defined]
 
 
 class FakeCursor:
@@ -36,6 +37,34 @@ class FakeConnection:
 
     def cursor(self) -> FakeCursor:
         return self.cursor_instance
+
+
+class FakeCompletions:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        return dotdict(
+            model=kwargs["model"],
+            choices=[
+                dotdict(
+                    message=dotdict(role="assistant", content="ok"),
+                    finish_reason="stop",
+                )
+            ],
+            usage=dotdict(
+                prompt_tokens=1,
+                completion_tokens=1,
+                total_tokens=2,
+                cost=0.01,
+            ),
+        )
+
+
+class FakeClient:
+    def __init__(self) -> None:
+        self.chat = dotdict(completions=FakeCompletions())
 
 
 def test_build_eval_dbos_config_uses_database_url_for_dbos_default(
@@ -277,13 +306,17 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
     def fake_enqueue_workflow(
         queue_name: str,
         workflow: object,
+        database_url: str,
         prediction_id: str,
+        use_mock_lm: bool,
     ) -> None:
         enqueued.append(
             {
                 "queue_name": queue_name,
                 "workflow": workflow,
+                "database_url": database_url,
                 "prediction_id": prediction_id,
+                "use_mock_lm": use_mock_lm,
             }
         )
 
@@ -305,13 +338,80 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
         entry_point="add",
     )
 
-    eval_dbos_harness.enqueue_generation_jobs([job])
+    eval_dbos_harness.enqueue_generation_jobs(
+        "postgresql:///unit", [job], use_mock_lm=True
+    )
 
     assert workflow_ids == ["generate:abc"]
     assert enqueued == [
         {
             "queue_name": eval_dbos_harness.GENERATION_QUEUE_NAME,
             "workflow": eval_dbos_harness.generate_prediction_workflow,
+            "database_url": "postgresql:///unit",
             "prediction_id": "abc",
+            "use_mock_lm": True,
         }
     ]
+
+
+def test_build_generation_lm_passes_temperature_and_reasoning(
+    eval_dbos_harness,
+) -> None:
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="abc",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="openai/gpt-5-nano",
+        temperature=0.2,
+        repetition_seed=0,
+        prompt="def add(a, b): pass",
+        test="def check(candidate): pass",
+        entry_point="add",
+        reasoning={"effort": "minimal", "exclude": False},
+    )
+    client = FakeClient()
+    buffer = eval_dbos_harness.LmEventBuffer()
+
+    lm = eval_dbos_harness.build_generation_lm(
+        job, use_mock_lm=False, event_buffer=buffer, client=client
+    )
+    lm.forward(messages=[{"role": "user", "content": "hello"}])
+
+    assert client.chat.completions.calls == [
+        {
+            "model": "openai/gpt-5-nano",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_completion_tokens": (
+                eval_dbos_harness.DEFAULT_MAX_COMPLETION_TOKENS
+            ),
+            "temperature": 0.2,
+            "extra_body": {
+                "reasoning": {"effort": "minimal", "exclude": False}
+            },
+        }
+    ]
+
+
+def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="abc",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="callable/mock",
+        temperature=0.0,
+        repetition_seed=0,
+        prompt="def add(a, b):\n    pass\n",
+        test="def check(candidate): pass",
+        entry_point="add",
+    )
+
+    result = eval_dbos_harness.generate_code_for_job(
+        job, use_mock_lm=True
+    )
+
+    assert result.prediction_id == "abc"
+    assert "def add" in result.code
