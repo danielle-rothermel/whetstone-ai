@@ -13,7 +13,8 @@ import statistics
 import threading
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -24,6 +25,7 @@ import typer
 from datasets import load_dataset  # type: ignore[import-not-found]
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -38,7 +40,12 @@ from rich.console import Console, Group
 from rich.table import Table
 
 import dspy
-from dr_dspy.code_eval import extract_dspy_code, run_python_check
+from dr_dspy.code_eval import (
+    DEFAULT_CAPTURE_LIMIT_BYTES,
+    extract_dspy_code,
+    run_python_check,
+)
+from dr_dspy.code_extraction import apply_cleaning, validate_python_source
 from dr_dspy.event_log import DATABASE_URL_ENV
 from dr_dspy.lm_logging import LoggingCallableLM
 from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
@@ -62,6 +69,8 @@ DEFAULT_REPAIR_SCORING_LIMIT = 1000
 DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
+DEFAULT_DB_POOL_MARGIN = 8
+DB_POOL_AUTO = "auto"
 DEFAULT_SEED = 0
 DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_TEMPERATURE = 0.0
@@ -222,6 +231,31 @@ PREDICTION_INDEX_SQL = (
     "ON dr_dspy_eval_predictions(experiment_name, model, temperature)",
 )
 
+PREDICTION_MIGRATION_SQL = (
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS raw_generation TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS raw_compile_ok BOOLEAN",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS raw_compile_error TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS extraction_candidate_count INTEGER",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS extracted_compile_ok BOOLEAN",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS extracted_compile_error TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS extraction_error TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS score_stdout TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS score_stderr TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS score_stdout_truncated BOOLEAN",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS score_stderr_truncated BOOLEAN",
+)
+
 
 class QueueSelection(StrEnum):
     GENERATION = "generation"
@@ -263,6 +297,12 @@ class EvalDbosConfig(BaseModel):
     dbos_system_database_url: StrictStr
     generation_concurrency: StrictInt = DEFAULT_GENERATION_CONCURRENCY
     scoring_concurrency: StrictInt = DEFAULT_SCORING_CONCURRENCY
+
+
+class DbPoolConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_size: StrictInt
 
 
 class ModelConfig(BaseModel):
@@ -380,7 +420,7 @@ class GenerationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prediction_id: StrictStr
-    code: StrictStr
+    raw_generation: StrictStr
     response_metadata: dict[str, Any] = Field(default_factory=dict)
     usage_metadata: dict[str, Any] = Field(default_factory=dict)
     provider_cost: float | None = None
@@ -447,7 +487,7 @@ class ScoringTarget(BaseModel):
 
     prediction_id: StrictStr
     task_id: StrictStr
-    code: StrictStr
+    raw_generation: StrictStr
     test: StrictStr
     entry_point: StrictStr
 
@@ -458,6 +498,17 @@ class ScoreResult(BaseModel):
     prediction_id: StrictStr
     score: float
     error: str | None
+    raw_code: str | None = None
+    raw_compile_ok: bool
+    raw_compile_error: str | None = None
+    extraction_candidate_count: int
+    extracted_compile_ok: bool
+    extracted_compile_error: str | None = None
+    extraction_error: str | None = None
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 class AnalysisRecord(BaseModel):
@@ -469,6 +520,8 @@ class AnalysisRecord(BaseModel):
     repetition_seed: StrictInt
     score: float
     provider_cost: float | None
+    raw_compile_ok: bool | None = None
+    extracted_compile_ok: bool | None = None
 
 
 class AnalysisSummary(BaseModel):
@@ -484,6 +537,9 @@ class AnalysisSummary(BaseModel):
     avg_performance: float
     performance_variance: float | None
     avg_repetition_variance: float | None
+    raw_compile_pass_count: StrictInt
+    extracted_compile_pass_count: StrictInt
+    extraction_lift: StrictInt
 
 
 class TemperatureProbeResult(BaseModel):
@@ -529,6 +585,56 @@ class LmEventBuffer:
                         return response
         return {}
 
+    def latest_response_text(self) -> str | None:
+        for event in reversed(self.events):
+            if event["event_type"] != "lm.response":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            text = response_text(payload.get("response"))
+            if text:
+                return text
+        return None
+
+
+def response_text(response: Any) -> str | None:
+    if isinstance(response, str):
+        return response
+    if not isinstance(response, Mapping):
+        return None
+    choices = response.get("choices")
+    if not isinstance(choices, Sequence) or isinstance(choices, str | bytes):
+        return None
+    for choice in choices:
+        if not isinstance(choice, Mapping):
+            continue
+        message = choice.get("message")
+        if isinstance(message, Mapping):
+            content_text = content_to_text(message.get("content"))
+            if content_text:
+                return content_text
+        text = choice.get("text")
+        if isinstance(text, str) and text:
+            return text
+    return None
+
+
+def content_to_text(content: Any) -> str | None:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, Sequence) or isinstance(content, str | bytes):
+        return None
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            parts.append(part)
+        elif isinstance(part, Mapping):
+            text = part.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts) or None
+
 
 def resolve_database_url(database_url: str | None) -> str:
     resolved = database_url or os.environ.get(DATABASE_URL_ENV)
@@ -567,11 +673,122 @@ def build_dbos_config(config: EvalDbosConfig) -> DBOSConfig:
     }
 
 
+DB_POOLS: dict[str, ConnectionPool] = {}
+
+
+@contextmanager
+def connect_db(database_url: str) -> Iterator[psycopg.Connection[Any]]:
+    pool = DB_POOLS.get(database_url)
+    if pool is None:
+        with psycopg.connect(database_url) as conn:
+            yield conn
+        return
+    with pool.connection() as conn:
+        yield conn
+
+
+def close_db_connection_pools() -> None:
+    for pool in DB_POOLS.values():
+        pool.close()
+    DB_POOLS.clear()
+
+
+def configure_db_connection_pools(
+    database_urls: Sequence[str], *, max_size: int
+) -> None:
+    for database_url in dict.fromkeys(database_urls):
+        if database_url in DB_POOLS:
+            continue
+        DB_POOLS[database_url] = ConnectionPool(
+            conninfo=database_url,
+            min_size=0,
+            max_size=max_size,
+            open=True,
+        )
+
+
+def auto_db_pool_max_size(
+    *,
+    queue: QueueSelection,
+    generation_concurrency: int,
+    scoring_concurrency: int,
+) -> int:
+    if queue is QueueSelection.GENERATION:
+        return generation_concurrency + DEFAULT_DB_POOL_MARGIN
+    if queue is QueueSelection.SCORING:
+        return scoring_concurrency + DEFAULT_DB_POOL_MARGIN
+    return (
+        generation_concurrency
+        + scoring_concurrency
+        + DEFAULT_DB_POOL_MARGIN
+    )
+
+
+def resolve_db_pool_config(
+    *,
+    raw_max_size: str,
+    queue: QueueSelection,
+    generation_concurrency: int,
+    scoring_concurrency: int,
+) -> DbPoolConfig:
+    if raw_max_size == DB_POOL_AUTO:
+        return DbPoolConfig(
+            max_size=auto_db_pool_max_size(
+                queue=queue,
+                generation_concurrency=generation_concurrency,
+                scoring_concurrency=scoring_concurrency,
+            ),
+        )
+    max_size = int(raw_max_size)
+    if max_size < 1:
+        raise ValueError("--db-pool-max-size must be positive or 'auto'")
+    return DbPoolConfig(max_size=max_size)
+
+
+def configure_worker_db_connection_pools(
+    config: EvalDbosConfig,
+    *,
+    queue: QueueSelection,
+    raw_max_size: str,
+) -> DbPoolConfig:
+    pool_config = resolve_db_pool_config(
+        raw_max_size=raw_max_size,
+        queue=queue,
+        generation_concurrency=config.generation_concurrency,
+        scoring_concurrency=config.scoring_concurrency,
+    )
+    configure_db_connection_pools(
+        [config.database_url, config.dbos_system_database_url],
+        max_size=pool_config.max_size,
+    )
+    return pool_config
+
+
+def configure_pooled_worker_runtime(
+    config: EvalDbosConfig,
+    *,
+    experiment_name: str,
+    queue: QueueSelection,
+    raw_db_pool_max_size: str,
+) -> DbPoolConfig:
+    pool_config = configure_worker_db_connection_pools(
+        config,
+        queue=queue,
+        raw_max_size=raw_db_pool_max_size,
+    )
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, queue=queue
+    )
+    return pool_config
+
+
 def create_eval_schema(database_url: str) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(EXPERIMENTS_TABLE_SQL)
             cur.execute(PREDICTIONS_TABLE_SQL)
+            for statement in PREDICTION_MIGRATION_SQL:
+                cur.execute(statement)
             for statement in PREDICTION_INDEX_SQL:
                 cur.execute(statement)
 
@@ -677,7 +894,7 @@ def sync_existing_dbos_queue_concurrency(
 ) -> int:
     updated_count = 0
     try:
-        with psycopg.connect(config.dbos_system_database_url) as conn:
+        with connect_db(config.dbos_system_database_url) as conn:
             with conn.cursor() as cur:
                 for queue_name, worker_concurrency in (
                     eval_queue_concurrency_by_name(
@@ -1016,7 +1233,7 @@ def upsert_experiment(
     sample_count: int,
     metadata: Mapping[str, Any],
 ) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1071,7 +1288,7 @@ def insert_prediction_jobs(
         )
         for job in jobs
     ]
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.executemany(
                 """
@@ -1104,7 +1321,7 @@ def insert_prediction_jobs(
 def fetch_prediction_job(
     database_url: str, prediction_id: str
 ) -> PredictionJob:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1150,7 +1367,7 @@ def fetch_prediction_job(
 def fetch_prediction_log_context(
     database_url: str, prediction_id: str
 ) -> PredictionLogContext:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1182,7 +1399,7 @@ def fetch_prediction_log_context(
 
 
 def mark_generation_started(database_url: str, prediction_id: str) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1200,7 +1417,7 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
 def record_generation_success(
     database_url: str, result: GenerationResult
 ) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1208,7 +1425,8 @@ def record_generation_success(
                 SET
                     generation_status = 'generated',
                     generation_error = NULL,
-                    raw_code = %s,
+                    raw_generation = %s,
+                    raw_code = NULL,
                     response_metadata = %s,
                     usage_metadata = %s,
                     provider_cost = %s,
@@ -1217,7 +1435,7 @@ def record_generation_success(
                 WHERE prediction_id = %s
                 """,
                 (
-                    result.code,
+                    result.raw_generation,
                     Jsonb(result.response_metadata),
                     Jsonb(result.usage_metadata),
                     result.provider_cost,
@@ -1229,7 +1447,7 @@ def record_generation_success(
 def record_generation_error(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1237,6 +1455,8 @@ def record_generation_error(
                 SET
                     generation_status = 'generation_error',
                     generation_error = %s,
+                    raw_generation = NULL,
+                    raw_code = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1247,14 +1467,14 @@ def record_generation_error(
 def fetch_scoring_target(
     database_url: str, prediction_id: str
 ) -> ScoringTarget:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT
                     prediction_id,
                     task_id,
-                    raw_code,
+                    raw_generation,
                     test,
                     entry_point
                 FROM dr_dspy_eval_predictions
@@ -1267,12 +1487,12 @@ def fetch_scoring_target(
         raise ValueError(f"prediction_id not found: {prediction_id}")
     if row[2] is None:
         raise ValueError(
-            f"prediction_id has no generated code: {prediction_id}"
+            f"prediction_id has no raw generation: {prediction_id}"
         )
     return ScoringTarget(
         prediction_id=row[0],
         task_id=row[1],
-        code=row[2],
+        raw_generation=row[2],
         test=row[3],
         entry_point=row[4],
     )
@@ -1284,7 +1504,7 @@ def fetch_scoreable_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1309,7 +1529,7 @@ def fetch_pending_scoring_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1334,7 +1554,7 @@ def fetch_score_error_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1359,7 +1579,7 @@ def fetch_generation_error_prediction_jobs(
     experiment_name: str,
     limit: int,
 ) -> list[PredictionJob]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1414,7 +1634,7 @@ def reset_generation_errors_for_retry(
 ) -> int:
     if not prediction_ids:
         return 0
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1422,7 +1642,14 @@ def reset_generation_errors_for_retry(
                 SET
                     generation_status = 'pending',
                     generation_error = NULL,
+                    raw_generation = NULL,
                     raw_code = NULL,
+                    raw_compile_ok = NULL,
+                    raw_compile_error = NULL,
+                    extraction_candidate_count = NULL,
+                    extracted_compile_ok = NULL,
+                    extracted_compile_error = NULL,
+                    extraction_error = NULL,
                     response_metadata = '{}'::jsonb,
                     usage_metadata = '{}'::jsonb,
                     provider_cost = NULL,
@@ -1430,6 +1657,10 @@ def reset_generation_errors_for_retry(
                     scoring_status = 'pending',
                     scoring_error = NULL,
                     score = NULL,
+                    score_stdout = NULL,
+                    score_stderr = NULL,
+                    score_stdout_truncated = NULL,
+                    score_stderr_truncated = NULL,
                     scored_at = NULL,
                     updated_at = now()
                 WHERE
@@ -1447,7 +1678,7 @@ def fetch_started_generation_repair_candidates(
     dbos_system_database_url: str,
     experiment_name: str,
 ) -> list[GenerationRepairCandidate]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1476,7 +1707,7 @@ def fetch_started_generation_repair_candidates(
         generation_workflow_id(prediction_id)
         for prediction_id in prediction_ids
     ]
-    with psycopg.connect(dbos_system_database_url) as conn:
+    with connect_db(dbos_system_database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1516,7 +1747,7 @@ def mark_started_generations_as_repaired_errors(
 ) -> int:
     if not prediction_ids:
         return 0
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1552,7 +1783,7 @@ def fetch_stranded_scoring_repair_candidates(
     experiment_name: str,
     limit: int,
 ) -> list[ScoringRepairCandidate]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1586,7 +1817,7 @@ def fetch_stranded_scoring_repair_candidates(
     retry_workflow_suffixes = [
         f":{prediction_id}" for prediction_id in prediction_ids
     ]
-    with psycopg.connect(dbos_system_database_url) as conn:
+    with connect_db(dbos_system_database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1647,7 +1878,7 @@ def mark_stranded_scoring_as_errors(
 ) -> int:
     if not prediction_ids:
         return 0
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1670,7 +1901,7 @@ def mark_scoring_queued(
 ) -> int:
     if not prediction_ids:
         return 0
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1688,7 +1919,7 @@ def mark_scoring_queued(
 
 
 def mark_scoring_started(database_url: str, prediction_id: str) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1704,7 +1935,7 @@ def mark_scoring_started(database_url: str, prediction_id: str) -> None:
 
 
 def record_score_success(database_url: str, result: ScoreResult) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1713,18 +1944,44 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     scoring_status = 'scored',
                     score = %s,
                     scoring_error = %s,
+                    raw_code = %s,
+                    raw_compile_ok = %s,
+                    raw_compile_error = %s,
+                    extraction_candidate_count = %s,
+                    extracted_compile_ok = %s,
+                    extracted_compile_error = %s,
+                    extraction_error = %s,
+                    score_stdout = %s,
+                    score_stderr = %s,
+                    score_stdout_truncated = %s,
+                    score_stderr_truncated = %s,
                     updated_at = now(),
                     scored_at = now()
                 WHERE prediction_id = %s
                 """,
-                (result.score, result.error, result.prediction_id),
+                (
+                    result.score,
+                    result.error,
+                    result.raw_code,
+                    result.raw_compile_ok,
+                    result.raw_compile_error,
+                    result.extraction_candidate_count,
+                    result.extracted_compile_ok,
+                    result.extracted_compile_error,
+                    result.extraction_error,
+                    result.stdout,
+                    result.stderr,
+                    result.stdout_truncated,
+                    result.stderr_truncated,
+                    result.prediction_id,
+                ),
             )
 
 
 def record_score_error(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1742,16 +1999,60 @@ def record_score_error(
 def score_generated_code(
     target: ScoringTarget, *, timeout: float
 ) -> ScoreResult:
+    raw_validation = validate_python_source(target.raw_generation)
+    candidates = apply_cleaning(target.raw_generation, apply_dedent=True)
+    selected_code: str | None = None
+    extracted_compile_error: str | None = None
+    for candidate in candidates:
+        candidate_validation = validate_python_source(candidate)
+        if candidate_validation.compile_ok:
+            selected_code = candidate
+            extracted_compile_error = None
+            break
+        if extracted_compile_error is None:
+            extracted_compile_error = candidate_validation.compile_error
+
+    if selected_code is None:
+        extraction_error = (
+            "no code candidates extracted"
+            if not candidates
+            else "no compilable extracted candidate"
+        )
+        return ScoreResult(
+            prediction_id=target.prediction_id,
+            score=0.0,
+            error=extraction_error,
+            raw_code=None,
+            raw_compile_ok=raw_validation.compile_ok,
+            raw_compile_error=raw_validation.compile_error,
+            extraction_candidate_count=len(candidates),
+            extracted_compile_ok=False,
+            extracted_compile_error=extracted_compile_error,
+            extraction_error=extraction_error,
+        )
+
     result = run_python_check(
-        code=target.code,
+        code=selected_code,
         test=target.test,
         entry_point=target.entry_point,
         timeout=timeout,
+        capture_limit_bytes=DEFAULT_CAPTURE_LIMIT_BYTES,
     )
     return ScoreResult(
         prediction_id=target.prediction_id,
         score=result.score,
         error=result.error,
+        raw_code=selected_code,
+        raw_compile_ok=raw_validation.compile_ok,
+        raw_compile_error=raw_validation.compile_error,
+        extraction_candidate_count=len(candidates),
+        extracted_compile_ok=True,
+        extracted_compile_error=None,
+        extraction_error=None,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        stdout_truncated=result.stdout_truncated,
+        stderr_truncated=result.stderr_truncated,
     )
 
 
@@ -1948,11 +2249,21 @@ def generate_code_for_job(
         track_usage=True,
         max_trace_size=MAX_TRACE_SIZE,
     ):
-        pred = dspy.Predict(Solve)(prompt=job.prompt)
+        try:
+            pred = dspy.Predict(Solve)(prompt=job.prompt)
+        except Exception:
+            raw_generation = event_buffer.latest_response_text()
+            if raw_generation is None:
+                raise
+        else:
+            extract_dspy_code(pred)
+            raw_generation = event_buffer.latest_response_text()
+            if raw_generation is None:
+                raise ValueError("LM response did not include provider text")
     response_metadata = event_buffer.latest_response_metadata()
     return GenerationResult(
         prediction_id=job.prediction_id,
-        code=extract_dspy_code(pred),
+        raw_generation=raw_generation,
         response_metadata=response_metadata,
         usage_metadata=usage_metadata_from_response(response_metadata),
         provider_cost=provider_cost_from_response(response_metadata),
@@ -2219,7 +2530,7 @@ def apply_repair(
 def fetch_analysis_records(
     database_url: str, *, experiment_name: str
 ) -> list[AnalysisRecord]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2229,7 +2540,9 @@ def fetch_analysis_records(
                     task_id,
                     repetition_seed,
                     score,
-                    provider_cost
+                    provider_cost,
+                    raw_compile_ok,
+                    extracted_compile_ok
                 FROM dr_dspy_eval_predictions
                 WHERE
                     experiment_name = %s
@@ -2248,6 +2561,8 @@ def fetch_analysis_records(
             repetition_seed=row[3],
             score=row[4],
             provider_cost=row[5],
+            raw_compile_ok=row[6],
+            extracted_compile_ok=row[7],
         )
         for row in rows
     ]
@@ -2276,6 +2591,12 @@ def summarize_analysis_records(
     summaries: list[AnalysisSummary] = []
     for (model, temperature), group in sorted(grouped.items()):
         scores = [record.score for record in group]
+        raw_compile_pass_count = sum(
+            1 for record in group if record.raw_compile_ok is True
+        )
+        extracted_compile_pass_count = sum(
+            1 for record in group if record.extracted_compile_ok is True
+        )
         costs = [
             record.provider_cost
             for record in group
@@ -2308,6 +2629,11 @@ def summarize_analysis_records(
                 performance_variance=variance_or_none(scores),
                 avg_repetition_variance=average_or_none(
                     repetition_variances
+                ),
+                raw_compile_pass_count=raw_compile_pass_count,
+                extracted_compile_pass_count=extracted_compile_pass_count,
+                extraction_lift=(
+                    extracted_compile_pass_count - raw_compile_pass_count
                 ),
             )
         )
@@ -2408,8 +2734,10 @@ def analysis_markdown(
         f"# Eval Analysis: {experiment_name}",
         "",
         "| Model | Temp | Samples | Scored | Total Price | "
-        "Avg Price/1k Samples | Avg Perf | Price Var | Perf Var | Rep Var |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Avg Price/1k Samples | Avg Perf | Raw Compile | "
+        "Extracted Compile | Extraction Lift | Price Var | Perf Var | "
+        "Rep Var |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     total_price_values = [summary.total_price for summary in summaries]
     total_price_sum = sum_present_float(total_price_values)
@@ -2434,8 +2762,9 @@ def analysis_markdown(
         lines.append(
             "| {model} | {temperature} | {sample_count} | {scored_count} | "
             "{total_price} | {avg_price_per_sample} | {avg_performance} | "
-            "{price_variance} | {performance_variance} | "
-            "{avg_repetition_variance} |".format(
+            "{raw_compile_pass_count} | {extracted_compile_pass_count} | "
+            "{extraction_lift} | {price_variance} | "
+            "{performance_variance} | {avg_repetition_variance} |".format(
                 model=summary.model,
                 temperature=format_float(summary.temperature),
                 sample_count=summary.sample_count,
@@ -2443,6 +2772,11 @@ def analysis_markdown(
                 total_price=total_price,
                 avg_price_per_sample=price_per_thousand,
                 avg_performance=format_float(summary.avg_performance),
+                raw_compile_pass_count=summary.raw_compile_pass_count,
+                extracted_compile_pass_count=(
+                    summary.extracted_compile_pass_count
+                ),
+                extraction_lift=summary.extraction_lift,
                 price_variance=format_float(summary.price_variance),
                 performance_variance=format_float(
                     summary.performance_variance
@@ -2454,8 +2788,12 @@ def analysis_markdown(
         )
     if summaries:
         lines.append(
-            "| {model} |  | {sample_count} | {scored_count} | "
-            "{total_price} |  |  |  |  |  |".format(
+            (
+                "| {model} |  | {sample_count} | {scored_count} | "
+                "{total_price} |  |  | {raw_compile_pass_count} | "
+                "{extracted_compile_pass_count} | {extraction_lift} | "
+                " |  |  |"
+            ).format(
                 model=ANALYSIS_TOTAL_LABEL,
                 sample_count=sum(
                     summary.sample_count for summary in summaries
@@ -2464,6 +2802,16 @@ def analysis_markdown(
                     summary.scored_count for summary in summaries
                 ),
                 total_price=total_prices[-1],
+                raw_compile_pass_count=sum(
+                    summary.raw_compile_pass_count for summary in summaries
+                ),
+                extracted_compile_pass_count=sum(
+                    summary.extracted_compile_pass_count
+                    for summary in summaries
+                ),
+                extraction_lift=sum(
+                    summary.extraction_lift for summary in summaries
+                ),
             )
         )
     return "\n".join(lines) + "\n"
@@ -2483,6 +2831,9 @@ def analysis_table(
     performance_table.add_column("Samples", justify="right")
     performance_table.add_column("Scored", justify="right")
     performance_table.add_column("Avg Perf", justify="right")
+    performance_table.add_column("Raw Compile", justify="right")
+    performance_table.add_column("Extracted Compile", justify="right")
+    performance_table.add_column("Lift", justify="right")
 
     cost_table = Table(
         title="Cost",
@@ -2534,6 +2885,9 @@ def analysis_table(
             str(summary.sample_count),
             str(summary.scored_count),
             format_float(summary.avg_performance),
+            str(summary.raw_compile_pass_count),
+            str(summary.extracted_compile_pass_count),
+            str(summary.extraction_lift),
         )
         cost_table.add_row(
             summary.model,
@@ -2555,6 +2909,14 @@ def analysis_table(
             str(sum(summary.sample_count for summary in summaries)),
             str(sum(summary.scored_count for summary in summaries)),
             "",
+            str(sum(summary.raw_compile_pass_count for summary in summaries)),
+            str(
+                sum(
+                    summary.extracted_compile_pass_count
+                    for summary in summaries
+                )
+            ),
+            str(sum(summary.extraction_lift for summary in summaries)),
             style=TABLE_TOTAL_ROW_STYLE,
         )
         cost_table.add_row(
@@ -2581,7 +2943,7 @@ def write_analysis_csv(
 def fetch_dbos_status_counts(
     dbos_system_database_url: str, queue_names: Sequence[str]
 ) -> dict[str, int]:
-    with psycopg.connect(dbos_system_database_url) as conn:
+    with connect_db(dbos_system_database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -2602,7 +2964,7 @@ def fetch_prediction_phase_counts(
     status_column: str,
     experiment_name: str,
 ) -> dict[str, int]:
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             if status_column == "generation_status":
                 cur.execute(
@@ -3002,7 +3364,7 @@ def fetch_status_counts(
             generation_status,
             scoring_status
     """
-    with psycopg.connect(database_url) as conn:
+    with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
             rows = cur.fetchall()
@@ -3678,6 +4040,16 @@ def worker(
         float,
         typer.Option("--monitor-summary-interval", min=1.0),
     ] = DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS,
+    db_pool_max_size: Annotated[
+        str,
+        typer.Option(
+            "--db-pool-max-size",
+            help=(
+                "Worker Postgres connection pool max size. Use 'auto' to "
+                "match active queue capacity plus a small margin."
+            ),
+        ),
+    ] = DB_POOL_AUTO,
 ) -> None:
     file_limit = raise_open_file_limit(open_file_limit)
     operator_log(
@@ -3691,15 +4063,23 @@ def worker(
         scoring_concurrency=scoring_concurrency,
     )
     create_eval_schema(config.database_url)
+    pool_config = configure_pooled_worker_runtime(
+        config,
+        experiment_name=experiment_name,
+        queue=queue,
+        raw_db_pool_max_size=db_pool_max_size,
+    )
+    operator_log(
+        f"{'DB Pool':<14} | max_size={pool_config.max_size:>5} | "
+        f"urls={len(DB_POOLS):>2}",
+        style="cyan",
+    )
     resolved_log_file = resolve_worker_log_path(
         experiment_name=experiment_name,
         queue=queue,
         log_file=log_file,
     )
     configure_worker_file_logging(resolved_log_file)
-    configure_dbos_runtime(
-        config, experiment_name=experiment_name, queue=queue
-    )
     selected_queue_names = queue_names_for_selection(
         queue, experiment_name=experiment_name
     )
@@ -3737,6 +4117,7 @@ def worker(
         stop_event.set()
         if monitor_thread is not None:
             monitor_thread.join(timeout=1.0)
+        close_db_connection_pools()
 
 
 if __name__ == "__main__":

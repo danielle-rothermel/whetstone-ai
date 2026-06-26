@@ -14,6 +14,7 @@ dependencies = [
     "marimo[recommended]>=0.23.11",
     "pre-commit>=4.6.0",
     "psycopg>=3.3.4",
+    "psycopg-pool>=3.3.1",
     "pytest>=8.4.2",
     "python-dotenv>=1.1.0",
     "rich>=13.9.4",

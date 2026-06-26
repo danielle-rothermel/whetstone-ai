@@ -23,6 +23,8 @@ class FakeCursor:
 
     def execute(self, statement: str, params: Any = None) -> None:
         self.statements.append(statement)
+        if not isinstance(self.params, list):
+            self.params = params
 
     def executemany(self, statement: str, params: Any) -> None:
         self.statements.append(statement)
@@ -139,7 +141,130 @@ def test_create_eval_schema_executes_expected_statements(
     statements = fake_conn.cursor_instance.statements
     assert statements[0] == eval_dbos_harness.EXPERIMENTS_TABLE_SQL
     assert statements[1] == eval_dbos_harness.PREDICTIONS_TABLE_SQL
-    assert statements[2:] == list(eval_dbos_harness.PREDICTION_INDEX_SQL)
+    assert statements[2:13] == list(eval_dbos_harness.PREDICTION_MIGRATION_SQL)
+    assert statements[13:] == list(eval_dbos_harness.PREDICTION_INDEX_SQL)
+
+
+def test_unconfigured_connect_db_uses_psycopg_connect(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    fake_conn = FakeConnection()
+    calls: list[str] = []
+    eval_dbos_harness.close_db_connection_pools()
+
+    def fake_connect(database_url: str) -> FakeConnection:
+        calls.append(database_url)
+        return fake_conn
+
+    monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
+
+    with eval_dbos_harness.connect_db("postgresql:///unit") as conn:
+        assert conn is fake_conn
+
+    assert calls == ["postgresql:///unit"]
+
+
+def test_db_pool_auto_size_follows_queue_selection(eval_dbos_harness) -> None:
+    assert (
+        eval_dbos_harness.auto_db_pool_max_size(
+            queue=eval_dbos_harness.QueueSelection.GENERATION,
+            generation_concurrency=11,
+            scoring_concurrency=5,
+        )
+        == 19
+    )
+    assert (
+        eval_dbos_harness.auto_db_pool_max_size(
+            queue=eval_dbos_harness.QueueSelection.SCORING,
+            generation_concurrency=11,
+            scoring_concurrency=5,
+        )
+        == 13
+    )
+    assert (
+        eval_dbos_harness.auto_db_pool_max_size(
+            queue=eval_dbos_harness.QueueSelection.BOTH,
+            generation_concurrency=11,
+            scoring_concurrency=5,
+        )
+        == 24
+    )
+
+
+def test_worker_db_pool_setup_keys_by_distinct_database_url(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    created: list[dict[str, object]] = []
+    eval_dbos_harness.close_db_connection_pools()
+
+    class FakePool:
+        def __init__(
+            self,
+            *,
+            conninfo: str,
+            min_size: int,
+            max_size: int,
+            open: bool,
+        ) -> None:
+            self.conninfo = conninfo
+            created.append(
+                {
+                    "conninfo": conninfo,
+                    "min_size": min_size,
+                    "max_size": max_size,
+                    "open": open,
+                }
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(eval_dbos_harness, "ConnectionPool", FakePool)
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///same",
+        dbos_system_database_url="postgresql:///same",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+
+    pool_config = eval_dbos_harness.configure_worker_db_connection_pools(
+        config,
+        queue=eval_dbos_harness.QueueSelection.BOTH,
+        raw_max_size=eval_dbos_harness.DB_POOL_AUTO,
+    )
+
+    assert pool_config.max_size == 24
+    assert created == [
+        {
+            "conninfo": "postgresql:///same",
+            "min_size": 0,
+            "max_size": 24,
+            "open": True,
+        }
+    ]
+    eval_dbos_harness.close_db_connection_pools()
+
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+
+    eval_dbos_harness.configure_worker_db_connection_pools(
+        config,
+        queue=eval_dbos_harness.QueueSelection.SCORING,
+        raw_max_size="3",
+    )
+
+    assert [item["conninfo"] for item in created[1:]] == [
+        "postgresql:///app",
+        "postgresql:///dbos",
+    ]
+    assert [item["max_size"] for item in created[1:]] == [3, 3]
+    eval_dbos_harness.close_db_connection_pools()
 
 
 def test_raise_open_file_limit_raises_soft_limit(
@@ -880,6 +1005,59 @@ def test_configure_dbos_runtime_syncs_before_launch_and_registers_after(
     ]
 
 
+def test_configure_pooled_worker_runtime_configures_pool_before_launch(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+    pool_config = eval_dbos_harness.DbPoolConfig(max_size=13)
+
+    def fake_configure_worker_db_connection_pools(
+        _config: object,
+        *,
+        queue: object,
+        raw_max_size: str,
+    ) -> object:
+        assert queue is eval_dbos_harness.QueueSelection.SCORING
+        assert raw_max_size == eval_dbos_harness.DB_POOL_AUTO
+        calls.append("pool")
+        return pool_config
+
+    def fake_configure_dbos_runtime(
+        _config: object, *, experiment_name: str, queue: object
+    ) -> None:
+        assert experiment_name == "exp"
+        assert queue is eval_dbos_harness.QueueSelection.SCORING
+        calls.append("launch")
+
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "configure_worker_db_connection_pools",
+        fake_configure_worker_db_connection_pools,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "configure_dbos_runtime",
+        fake_configure_dbos_runtime,
+    )
+
+    result = eval_dbos_harness.configure_pooled_worker_runtime(
+        config,
+        experiment_name="exp",
+        queue=eval_dbos_harness.QueueSelection.SCORING,
+        raw_db_pool_max_size=eval_dbos_harness.DB_POOL_AUTO,
+    )
+
+    assert result == pool_config
+    assert calls == ["pool", "launch"]
+
+
 def test_build_humaneval_samples_from_rows_is_seeded(
     eval_dbos_harness,
 ) -> None:
@@ -1128,7 +1306,7 @@ def test_generation_workflow_enqueues_scoring_after_success(
     calls: list[tuple[str, object]] = []
     result = eval_dbos_harness.GenerationResult(
         prediction_id="abc",
-        code="def add(a, b): return a + b",
+        raw_generation="def add(a, b): return a + b",
     )
 
     def fake_generate_prediction_step(
@@ -1381,6 +1559,24 @@ def test_build_generation_lm_passes_temperature_and_reasoning(
     ]
 
 
+def test_lm_event_buffer_extracts_latest_response_text(
+    eval_dbos_harness,
+) -> None:
+    buffer = eval_dbos_harness.LmEventBuffer()
+    buffer.put_event(
+        "lm.response",
+        payload={
+            "response": {
+                "choices": [
+                    {"message": {"content": "def add(a, b): return a + b"}}
+                ]
+            }
+        },
+    )
+
+    assert buffer.latest_response_text() == "def add(a, b): return a + b"
+
+
 def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
     job = eval_dbos_harness.PredictionJob(
         prediction_id="abc",
@@ -1401,7 +1597,7 @@ def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
     )
 
     assert result.prediction_id == "abc"
-    assert "def add" in result.code
+    assert "def add" in result.raw_generation
 
 
 def test_score_generated_code_records_pass_and_failure(
@@ -1410,7 +1606,7 @@ def test_score_generated_code_records_pass_and_failure(
     passing = eval_dbos_harness.ScoringTarget(
         prediction_id="pass",
         task_id="task/add",
-        code="def add(a, b):\n    return a + b\n",
+        raw_generation="def add(a, b):\n    return a + b\n",
         test=(
             "def check(candidate):\n"
             "    assert candidate(1, 2) == 3\n"
@@ -1420,7 +1616,7 @@ def test_score_generated_code_records_pass_and_failure(
     failing = eval_dbos_harness.ScoringTarget(
         prediction_id="fail",
         task_id="task/add",
-        code="def add(a, b):\n    return a - b\n",
+        raw_generation="def add(a, b):\n    return a - b\n",
         test=(
             "def check(candidate):\n"
             "    assert candidate(1, 2) == 3\n"
@@ -1437,8 +1633,111 @@ def test_score_generated_code_records_pass_and_failure(
 
     assert pass_result.score == 1.0
     assert pass_result.error is None
+    assert pass_result.raw_code == "def add(a, b):\n    return a + b"
+    assert pass_result.raw_compile_ok is True
+    assert pass_result.extracted_compile_ok is True
     assert fail_result.score == 0.0
     assert "AssertionError" in fail_result.error
+
+
+def test_score_generated_code_recovers_raw_compile_failure_by_extraction(
+    eval_dbos_harness,
+) -> None:
+    target = eval_dbos_harness.ScoringTarget(
+        prediction_id="pass",
+        task_id="task/add",
+        raw_generation=(
+            "Here is the code:\n"
+            "```python\n"
+            "def add(a, b):\n"
+            "    return a + b\n"
+            "```"
+        ),
+        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        entry_point="add",
+    )
+
+    result = eval_dbos_harness.score_generated_code(target, timeout=5.0)
+
+    assert result.score == 1.0
+    assert result.raw_compile_ok is False
+    assert result.raw_compile_error is not None
+    assert result.extracted_compile_ok is True
+    assert result.extraction_candidate_count == 1
+    assert result.raw_code == "def add(a, b):\n    return a + b"
+
+
+def test_score_generated_code_scores_zero_when_no_candidate_compiles(
+    eval_dbos_harness,
+) -> None:
+    target = eval_dbos_harness.ScoringTarget(
+        prediction_id="fail",
+        task_id="task/add",
+        raw_generation="def broken(:\n    pass\n",
+        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        entry_point="add",
+    )
+
+    result = eval_dbos_harness.score_generated_code(target, timeout=5.0)
+
+    assert result.score == 0.0
+    assert result.error == "no compilable extracted candidate"
+    assert result.raw_code is None
+    assert result.raw_compile_ok is False
+    assert result.extracted_compile_ok is False
+    assert result.extracted_compile_error is not None
+    assert result.extraction_error == "no compilable extracted candidate"
+
+
+def test_record_score_success_persists_extraction_metrics(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+    result = eval_dbos_harness.ScoreResult(
+        prediction_id="pred-1",
+        score=0.0,
+        error="AssertionError",
+        raw_code="def add(a, b):\n    return a - b",
+        raw_compile_ok=False,
+        raw_compile_error="SyntaxError: invalid syntax",
+        extraction_candidate_count=1,
+        extracted_compile_ok=True,
+        extracted_compile_error=None,
+        extraction_error=None,
+        stdout="out",
+        stderr="err",
+        stdout_truncated=True,
+        stderr_truncated=False,
+    )
+
+    eval_dbos_harness.record_score_success("postgresql:///unit", result)
+
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "raw_code = %s" in statement
+    assert "raw_compile_ok = %s" in statement
+    assert "score_stdout = %s" in statement
+    assert fake_conn.cursor_instance.params == (
+        0.0,
+        "AssertionError",
+        "def add(a, b):\n    return a - b",
+        False,
+        "SyntaxError: invalid syntax",
+        1,
+        True,
+        None,
+        None,
+        "out",
+        "err",
+        True,
+        False,
+        "pred-1",
+    )
 
 
 def test_enqueue_score_jobs_uses_stable_workflow_ids(
@@ -1766,6 +2065,8 @@ def test_summarize_analysis_records_includes_variance(
             repetition_seed=0,
             score=1.0,
             provider_cost=0.01,
+            raw_compile_ok=False,
+            extracted_compile_ok=True,
         ),
         eval_dbos_harness.AnalysisRecord(
             model="model/a",
@@ -1774,6 +2075,8 @@ def test_summarize_analysis_records_includes_variance(
             repetition_seed=1,
             score=0.0,
             provider_cost=0.03,
+            raw_compile_ok=False,
+            extracted_compile_ok=False,
         ),
         eval_dbos_harness.AnalysisRecord(
             model="model/a",
@@ -1782,6 +2085,8 @@ def test_summarize_analysis_records_includes_variance(
             repetition_seed=0,
             score=1.0,
             provider_cost=0.02,
+            raw_compile_ok=True,
+            extracted_compile_ok=True,
         ),
     ]
 
@@ -1798,6 +2103,9 @@ def test_summarize_analysis_records_includes_variance(
     assert summary.price_variance == pytest.approx(0.0001)
     assert summary.performance_variance == pytest.approx(1 / 3)
     assert summary.avg_repetition_variance == pytest.approx(0.5)
+    assert summary.raw_compile_pass_count == 1
+    assert summary.extracted_compile_pass_count == 2
+    assert summary.extraction_lift == 1
 
 
 def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
@@ -1813,6 +2121,9 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
             avg_performance=2 / 3,
             performance_variance=1 / 3,
             avg_repetition_variance=0.5,
+            raw_compile_pass_count=1,
+            extracted_compile_pass_count=2,
+            extraction_lift=1,
         )
     ]
 
@@ -1825,10 +2136,11 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
     assert "# Eval Analysis: exp" in markdown
     assert "model/a" in markdown
     assert "Avg Price/1k Samples" in markdown
+    assert "Extraction Lift" in markdown
     assert "0.06" in markdown
     assert "20" in markdown
     assert "0.666667" in markdown
-    assert "| Total |  | 2 | 3 | 0.06 |  |  |  |  |  |" in markdown
+    assert "| Total |  | 2 | 3 | 0.06 |  |  | 1 | 2 | 1 |  |  |  |" in markdown
     csv_text = csv_path.read_text()
     assert "model,temperature,sample_count" in csv_text
     assert "model/a" in csv_text
@@ -1895,6 +2207,9 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
                 avg_performance=1.0,
                 performance_variance=None,
                 avg_repetition_variance=None,
+                raw_compile_pass_count=1,
+                extracted_compile_pass_count=2,
+                extraction_lift=1,
             ),
             eval_dbos_harness.AnalysisSummary(
                 model="model/b",
@@ -1907,6 +2222,9 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
                 avg_performance=1.0,
                 performance_variance=None,
                 avg_repetition_variance=None,
+                raw_compile_pass_count=2,
+                extracted_compile_pass_count=2,
+                extraction_lift=0,
             ),
             eval_dbos_harness.AnalysisSummary(
                 model="model/c",
@@ -1919,6 +2237,9 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
                 avg_performance=1.0,
                 performance_variance=None,
                 avg_repetition_variance=None,
+                raw_compile_pass_count=0,
+                extracted_compile_pass_count=2,
+                extraction_lift=2,
             ),
         ],
     )
