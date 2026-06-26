@@ -38,6 +38,58 @@ It imports the real `run_humaneval_bootstrap_flow` but supplies a tiny mock
 dataset and `LoggingCallableLM`, so it exercises the same harness without
 calling a real model.
 
+### 2. HumanEval Eval-Only DBOS v0
+
+Script:
+[`scripts/humaneval_dspy_eval_only_dbos_v0.py`](scripts/humaneval_dspy_eval_only_dbos_v0.py)
+
+This experiment is a durable eval-only model sweep over HumanEval Plus. It:
+
+- builds a seeded HumanEval sample slice;
+- expands model x temperature x repetition jobs;
+- queues high-parallel OpenRouter generation through DBOS;
+- queues lower-parallel sandbox scoring through DBOS;
+- stores resumable prediction and score state in Postgres tables;
+- reports price/performance summaries by experiment name.
+
+The script is intentionally Postgres-only. It uses `DATABASE_URL` for the
+application tables and `DBOS_SYSTEM_DATABASE_URL` for DBOS system tables; when
+`DBOS_SYSTEM_DATABASE_URL` is unset, it uses `DATABASE_URL` for both.
+
+Generation and scoring are separate DBOS queues:
+
+```text
+dr_dspy_humaneval_generation  # default worker_concurrency=200
+dr_dspy_humaneval_scoring     # default worker_concurrency=32
+```
+
+Run submit/status/analyze as short-lived commands, and run workers as separate
+long-lived processes. For example:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py init-db
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
+  --experiment-name smoke-db-queue \
+  --sample-count 2 \
+  --mock-generation
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
+  --queue generation
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py enqueue-scores \
+  --experiment-name smoke-db-queue
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
+  --queue scoring
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
+  --experiment-name smoke-db-queue
+```
+
+`temperature-probe` is the only command that intentionally makes immediate
+OpenRouter calls. It refuses to run unless `--confirm-live` is passed.
+
 ## Repository Shape
 
 `scripts/` contains experiment entrypoints. A script should make the exact
@@ -61,8 +113,9 @@ but they own fake datasets, fake solvers, and smoke-test-specific setup.
 - `runtime.py`: shared script runtime setup.
 - `serialization.py`: DSPy-aware JSON-safe serialization.
 
-`tests/` covers both library behavior and the mock harness path. The tests are
-not part of the Ruff/Ty target by default; they remain executable with pytest.
+`tests/` covers library behavior, the mock harness path, and the DBOS eval-only
+planning/generation/scoring/analysis helpers. The tests are not part of the
+Ruff/Ty target by default; they remain executable with pytest.
 
 ## Design Decisions
 
@@ -77,9 +130,10 @@ experiment what it is.
 Prefer clean boundaries over compatibility shims. This package is early enough
 that breaking changes are acceptable when they make the structure clearer.
 
-Use Postgres as the default event store. `DATABASE_URL` is the standard
-configuration key, and scripts load the package-local `.env` file before writer
-construction. SQLite remains available via `--event-store sqlite`.
+Use Postgres as the default event store and the only store for DBOS-backed
+sweeps. `DATABASE_URL` is the standard configuration key, and scripts load the
+package-local `.env` file before writer construction. SQLite remains available
+for the older bootstrap event writer via `--event-store sqlite`.
 
 Keep mock infrastructure parallel to, not inside, experiment scripts. The main
 script should stay readable as the real experiment; the mock script should prove
