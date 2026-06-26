@@ -19,7 +19,7 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 import dspy
-from dr_dspy.code_eval import extract_dspy_code
+from dr_dspy.code_eval import extract_dspy_code, run_python_check
 from dr_dspy.event_log import DATABASE_URL_ENV
 from dr_dspy.lm_logging import LoggingCallableLM
 from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
@@ -36,11 +36,13 @@ GENERATION_QUEUE_NAME = "dr_dspy_humaneval_generation"
 SCORING_QUEUE_NAME = "dr_dspy_humaneval_scoring"
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
+DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_SEED = 0
 DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TEMPERATURES = (DEFAULT_TEMPERATURE,)
 DEFAULT_MAX_COMPLETION_TOKENS = 1000
+DEFAULT_SUBPROCESS_TIMEOUT = 15.0
 MAX_TRACE_SIZE = 10_000
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
@@ -202,6 +204,24 @@ class GenerationResult(BaseModel):
     provider_cost: float | None = None
 
 
+class ScoringTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    task_id: StrictStr
+    code: StrictStr
+    test: StrictStr
+    entry_point: StrictStr
+
+
+class ScoreResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    score: float
+    error: str | None
+
+
 HumanEvalRow = Mapping[str, Any]
 
 
@@ -306,6 +326,19 @@ def generate_prediction_workflow(
     except Exception as e:
         record_generation_error_step(database_url, prediction_id, repr(e))
         return "generation_error"
+
+
+@DBOS.workflow(name="humaneval_eval_score_prediction_v0")
+def score_prediction_workflow(
+    database_url: str, prediction_id: str, timeout: float
+) -> str:
+    try:
+        result = score_prediction_step(database_url, prediction_id, timeout)
+        record_score_success_step(database_url, result)
+        return "scored"
+    except Exception as e:
+        record_score_error_step(database_url, prediction_id, repr(e))
+        return "score_error"
 
 
 def listen_to_selected_queue(selection: QueueSelection) -> None:
@@ -651,6 +684,176 @@ def record_generation_error(
             )
 
 
+def fetch_scoring_target(
+    database_url: str, prediction_id: str
+) -> ScoringTarget:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    task_id,
+                    raw_code,
+                    test,
+                    entry_point
+                FROM dr_dspy_eval_predictions
+                WHERE prediction_id = %s
+                """,
+                (prediction_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"prediction_id not found: {prediction_id}")
+    if row[2] is None:
+        raise ValueError(
+            f"prediction_id has no generated code: {prediction_id}"
+        )
+    return ScoringTarget(
+        prediction_id=row[0],
+        task_id=row[1],
+        code=row[2],
+        test=row[3],
+        entry_point=row[4],
+    )
+
+
+def fetch_scoreable_prediction_ids(
+    database_url: str,
+    *,
+    experiment_name: str,
+    limit: int,
+) -> list[str]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT prediction_id
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND generation_status = 'generated'
+                    AND scoring_status IN ('pending', 'score_error')
+                ORDER BY model, temperature, sample_index, repetition_seed
+                LIMIT %s
+                """,
+                (experiment_name, limit),
+            )
+            rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def mark_scoring_queued(
+    database_url: str, prediction_ids: Sequence[str]
+) -> None:
+    if not prediction_ids:
+        return
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    scoring_status = 'queued',
+                    scoring_error = NULL,
+                    updated_at = now()
+                WHERE prediction_id = ANY(%s)
+                """,
+                (list(prediction_ids),),
+            )
+
+
+def mark_scoring_started(database_url: str, prediction_id: str) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    scoring_status = 'started',
+                    scoring_error = NULL,
+                    updated_at = now()
+                WHERE prediction_id = %s
+                """,
+                (prediction_id,),
+            )
+
+
+def record_score_success(database_url: str, result: ScoreResult) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    scoring_status = 'scored',
+                    score = %s,
+                    scoring_error = %s,
+                    updated_at = now(),
+                    scored_at = now()
+                WHERE prediction_id = %s
+                """,
+                (result.score, result.error, result.prediction_id),
+            )
+
+
+def record_score_error(
+    database_url: str, prediction_id: str, error: str
+) -> None:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dr_dspy_eval_predictions
+                SET
+                    scoring_status = 'score_error',
+                    scoring_error = %s,
+                    updated_at = now()
+                WHERE prediction_id = %s
+                """,
+                (error, prediction_id),
+            )
+
+
+def score_generated_code(
+    target: ScoringTarget, *, timeout: float
+) -> ScoreResult:
+    result = run_python_check(
+        code=target.code,
+        test=target.test,
+        entry_point=target.entry_point,
+        timeout=timeout,
+    )
+    return ScoreResult(
+        prediction_id=target.prediction_id,
+        score=result.score,
+        error=result.error,
+    )
+
+
+@DBOS.step()
+def score_prediction_step(
+    database_url: str, prediction_id: str, timeout: float
+) -> ScoreResult:
+    mark_scoring_started(database_url, prediction_id)
+    target = fetch_scoring_target(database_url, prediction_id)
+    return score_generated_code(target, timeout=timeout)
+
+
+@DBOS.step()
+def record_score_success_step(
+    database_url: str, result: ScoreResult
+) -> None:
+    record_score_success(database_url, result)
+
+
+@DBOS.step()
+def record_score_error_step(
+    database_url: str, prediction_id: str, error: str
+) -> None:
+    record_score_error(database_url, prediction_id, error)
+
+
 def mock_solver(
     messages: list[dict[str, Any]], _kwargs: dict[str, Any]
 ) -> dict[str, str]:
@@ -776,6 +979,21 @@ def enqueue_generation_jobs(
                 database_url,
                 job.prediction_id,
                 use_mock_lm,
+            )
+
+
+def enqueue_score_jobs(
+    database_url: str, prediction_ids: Sequence[str], *, timeout: float
+) -> None:
+    for prediction_id in prediction_ids:
+        workflow_id = f"score:{prediction_id}"
+        with SetWorkflowID(workflow_id):
+            DBOS.enqueue_workflow(
+                SCORING_QUEUE_NAME,
+                score_prediction_workflow,
+                database_url,
+                prediction_id,
+                timeout,
             )
 
 
@@ -1012,6 +1230,62 @@ def status(
             "generation={generation_status} | scoring={scoring_status} | "
             "count={count}".format(**row)
         )
+
+
+@app.command("enqueue-scores")
+def enqueue_scores_command(
+    experiment_name: Annotated[
+        str,
+        typer.Option("--experiment-name", help="Experiment to score."),
+    ],
+    limit: Annotated[
+        int, typer.Option("--limit", min=1)
+    ] = DEFAULT_SCORE_ENQUEUE_LIMIT,
+    timeout: Annotated[
+        float, typer.Option("--timeout", min=0.1)
+    ] = DEFAULT_SUBPROCESS_TIMEOUT,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help=(
+                "DBOS system database URL; defaults to "
+                f"{DBOS_SYSTEM_DATABASE_URL_ENV} or DATABASE_URL."
+            ),
+        ),
+    ] = None,
+    generation_concurrency: Annotated[
+        int, typer.Option("--generation-concurrency")
+    ] = DEFAULT_GENERATION_CONCURRENCY,
+    scoring_concurrency: Annotated[
+        int, typer.Option("--scoring-concurrency")
+    ] = DEFAULT_SCORING_CONCURRENCY,
+) -> None:
+    config = common_config(
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        generation_concurrency=generation_concurrency,
+        scoring_concurrency=scoring_concurrency,
+    )
+    create_eval_schema(config.database_url)
+    prediction_ids = fetch_scoreable_prediction_ids(
+        config.database_url, experiment_name=experiment_name, limit=limit
+    )
+    mark_scoring_queued(config.database_url, prediction_ids)
+    configure_dbos_runtime(config, consume_queues=False)
+    enqueue_score_jobs(
+        config.database_url,
+        prediction_ids,
+        timeout=timeout,
+    )
+    typer.echo(f"enqueued {len(prediction_ids)} scoring workflows")
 
 
 @app.command()

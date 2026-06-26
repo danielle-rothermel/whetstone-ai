@@ -415,3 +415,95 @@ def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
 
     assert result.prediction_id == "abc"
     assert "def add" in result.code
+
+
+def test_score_generated_code_records_pass_and_failure(
+    eval_dbos_harness,
+) -> None:
+    passing = eval_dbos_harness.ScoringTarget(
+        prediction_id="pass",
+        task_id="task/add",
+        code="def add(a, b):\n    return a + b\n",
+        test=(
+            "def check(candidate):\n"
+            "    assert candidate(1, 2) == 3\n"
+        ),
+        entry_point="add",
+    )
+    failing = eval_dbos_harness.ScoringTarget(
+        prediction_id="fail",
+        task_id="task/add",
+        code="def add(a, b):\n    return a - b\n",
+        test=(
+            "def check(candidate):\n"
+            "    assert candidate(1, 2) == 3\n"
+        ),
+        entry_point="add",
+    )
+
+    pass_result = eval_dbos_harness.score_generated_code(
+        passing, timeout=5.0
+    )
+    fail_result = eval_dbos_harness.score_generated_code(
+        failing, timeout=5.0
+    )
+
+    assert pass_result.score == 1.0
+    assert pass_result.error is None
+    assert fail_result.score == 0.0
+    assert "AssertionError" in fail_result.error
+
+
+def test_enqueue_score_jobs_uses_stable_workflow_ids(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    workflow_ids: list[str] = []
+    enqueued: list[dict[str, Any]] = []
+
+    class FakeSetWorkflowID:
+        def __init__(self, workflow_id: str) -> None:
+            self.workflow_id = workflow_id
+
+        def __enter__(self) -> None:
+            workflow_ids.append(self.workflow_id)
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_enqueue_workflow(
+        queue_name: str,
+        workflow: object,
+        database_url: str,
+        prediction_id: str,
+        timeout: float,
+    ) -> None:
+        enqueued.append(
+            {
+                "queue_name": queue_name,
+                "workflow": workflow,
+                "database_url": database_url,
+                "prediction_id": prediction_id,
+                "timeout": timeout,
+            }
+        )
+
+    monkeypatch.setattr(eval_dbos_harness, "SetWorkflowID", FakeSetWorkflowID)
+    monkeypatch.setattr(
+        eval_dbos_harness.DBOS, "enqueue_workflow", fake_enqueue_workflow
+    )
+
+    eval_dbos_harness.enqueue_score_jobs(
+        "postgresql:///unit", ["abc"], timeout=7.0
+    )
+
+    assert workflow_ids == ["score:abc"]
+    assert enqueued == [
+        {
+            "queue_name": eval_dbos_harness.SCORING_QUEUE_NAME,
+            "workflow": eval_dbos_harness.score_prediction_workflow,
+            "database_url": "postgresql:///unit",
+            "prediction_id": "abc",
+            "timeout": 7.0,
+        }
+    ]
