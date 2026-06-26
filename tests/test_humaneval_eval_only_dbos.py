@@ -507,3 +507,78 @@ def test_enqueue_score_jobs_uses_stable_workflow_ids(
             "timeout": 7.0,
         }
     ]
+
+
+def test_summarize_analysis_records_includes_variance(
+    eval_dbos_harness,
+) -> None:
+    records = [
+        eval_dbos_harness.AnalysisRecord(
+            model="model/a",
+            temperature=0.0,
+            task_id="task/1",
+            repetition_seed=0,
+            score=1.0,
+            provider_cost=0.01,
+        ),
+        eval_dbos_harness.AnalysisRecord(
+            model="model/a",
+            temperature=0.0,
+            task_id="task/1",
+            repetition_seed=1,
+            score=0.0,
+            provider_cost=0.03,
+        ),
+        eval_dbos_harness.AnalysisRecord(
+            model="model/a",
+            temperature=0.0,
+            task_id="task/2",
+            repetition_seed=0,
+            score=1.0,
+            provider_cost=0.02,
+        ),
+    ]
+
+    summaries = eval_dbos_harness.summarize_analysis_records(records)
+
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.model == "model/a"
+    assert summary.sample_count == 2
+    assert summary.scored_count == 3
+    assert summary.total_price == pytest.approx(0.06)
+    assert summary.avg_price_per_sample == pytest.approx(0.02)
+    assert summary.avg_performance == pytest.approx(2 / 3)
+    assert summary.price_variance == pytest.approx(0.0001)
+    assert summary.performance_variance == pytest.approx(1 / 3)
+    assert summary.avg_repetition_variance == pytest.approx(0.5)
+
+
+def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
+    summaries = [
+        eval_dbos_harness.AnalysisSummary(
+            model="model/a",
+            temperature=0.0,
+            sample_count=2,
+            scored_count=3,
+            total_price=0.06,
+            avg_price_per_sample=0.02,
+            price_variance=0.0001,
+            avg_performance=2 / 3,
+            performance_variance=1 / 3,
+            avg_repetition_variance=0.5,
+        )
+    ]
+
+    markdown = eval_dbos_harness.analysis_markdown(
+        experiment_name="exp", summaries=summaries
+    )
+    csv_path = tmp_path / "analysis.csv"
+    eval_dbos_harness.write_analysis_csv(summaries, csv_path=csv_path)
+
+    assert "# Eval Analysis: exp" in markdown
+    assert "model/a" in markdown
+    assert "0.666667" in markdown
+    csv_text = csv_path.read_text()
+    assert "model,temperature,sample_count" in csv_text
+    assert "model/a" in csv_text

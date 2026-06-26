@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import logging
 import os
 import random
+import statistics
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 import psycopg
@@ -220,6 +223,32 @@ class ScoreResult(BaseModel):
     prediction_id: StrictStr
     score: float
     error: str | None
+
+
+class AnalysisRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: StrictStr
+    temperature: float
+    task_id: StrictStr
+    repetition_seed: StrictInt
+    score: float
+    provider_cost: float | None
+
+
+class AnalysisSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: StrictStr
+    temperature: float
+    sample_count: StrictInt
+    scored_count: StrictInt
+    total_price: float | None
+    avg_price_per_sample: float | None
+    price_variance: float | None
+    avg_performance: float
+    performance_variance: float | None
+    avg_repetition_variance: float | None
 
 
 HumanEvalRow = Mapping[str, Any]
@@ -997,6 +1026,158 @@ def enqueue_score_jobs(
             )
 
 
+def fetch_analysis_records(
+    database_url: str, *, experiment_name: str
+) -> list[AnalysisRecord]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    model,
+                    temperature,
+                    task_id,
+                    repetition_seed,
+                    score,
+                    provider_cost
+                FROM dr_dspy_eval_predictions
+                WHERE
+                    experiment_name = %s
+                    AND scoring_status = 'scored'
+                    AND score IS NOT NULL
+                ORDER BY model, temperature, task_id, repetition_seed
+                """,
+                (experiment_name,),
+            )
+            rows = cur.fetchall()
+    return [
+        AnalysisRecord(
+            model=row[0],
+            temperature=row[1],
+            task_id=row[2],
+            repetition_seed=row[3],
+            score=row[4],
+            provider_cost=row[5],
+        )
+        for row in rows
+    ]
+
+
+def variance_or_none(values: Sequence[float]) -> float | None:
+    if len(values) < 2:
+        return None
+    return statistics.variance(values)
+
+
+def average_or_none(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    return statistics.fmean(values)
+
+
+def summarize_analysis_records(
+    records: Sequence[AnalysisRecord],
+) -> list[AnalysisSummary]:
+    grouped: dict[tuple[str, float], list[AnalysisRecord]] = {}
+    for record in records:
+        key = (record.model, record.temperature)
+        grouped.setdefault(key, []).append(record)
+
+    summaries: list[AnalysisSummary] = []
+    for (model, temperature), group in sorted(grouped.items()):
+        scores = [record.score for record in group]
+        costs = [
+            record.provider_cost
+            for record in group
+            if record.provider_cost is not None
+        ]
+        task_ids = {record.task_id for record in group}
+        repetition_variances: list[float] = []
+        by_task: dict[str, list[float]] = {}
+        for record in group:
+            by_task.setdefault(record.task_id, []).append(record.score)
+        for task_scores in by_task.values():
+            task_variance = variance_or_none(task_scores)
+            if task_variance is not None:
+                repetition_variances.append(task_variance)
+
+        total_price = sum(costs) if costs else None
+        avg_price_per_sample = (
+            total_price / len(group) if total_price is not None else None
+        )
+        summaries.append(
+            AnalysisSummary(
+                model=model,
+                temperature=temperature,
+                sample_count=len(task_ids),
+                scored_count=len(group),
+                total_price=total_price,
+                avg_price_per_sample=avg_price_per_sample,
+                price_variance=variance_or_none(costs),
+                avg_performance=statistics.fmean(scores),
+                performance_variance=variance_or_none(scores),
+                avg_repetition_variance=average_or_none(
+                    repetition_variances
+                ),
+            )
+        )
+    return summaries
+
+
+def format_float(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.6g}"
+
+
+def analysis_markdown(
+    *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+) -> str:
+    lines = [
+        f"# Eval Analysis: {experiment_name}",
+        "",
+        "| Model | Temp | Samples | Scored | Total Price | "
+        "Avg Price/Sample | Avg Perf | Price Var | Perf Var | Rep Var |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for summary in summaries:
+        lines.append(
+            "| {model} | {temperature} | {sample_count} | {scored_count} | "
+            "{total_price} | {avg_price_per_sample} | {avg_performance} | "
+            "{price_variance} | {performance_variance} | "
+            "{avg_repetition_variance} |".format(
+                model=summary.model,
+                temperature=format_float(summary.temperature),
+                sample_count=summary.sample_count,
+                scored_count=summary.scored_count,
+                total_price=format_float(summary.total_price),
+                avg_price_per_sample=format_float(
+                    summary.avg_price_per_sample
+                ),
+                avg_performance=format_float(summary.avg_performance),
+                price_variance=format_float(summary.price_variance),
+                performance_variance=format_float(
+                    summary.performance_variance
+                ),
+                avg_repetition_variance=format_float(
+                    summary.avg_repetition_variance
+                ),
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def write_analysis_csv(
+    summaries: Sequence[AnalysisSummary], *, csv_path: Path
+) -> None:
+    fieldnames = list(AnalysisSummary.model_fields)
+    with csv_path.open("w", newline="") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+        writer.writeheader()
+        for summary in summaries:
+            writer.writerow(summary.model_dump(mode="json"))
+
+
 def fetch_status_counts(
     database_url: str, *, experiment_name: str | None
 ) -> list[dict[str, Any]]:
@@ -1286,6 +1467,45 @@ def enqueue_scores_command(
         timeout=timeout,
     )
     typer.echo(f"enqueued {len(prediction_ids)} scoring workflows")
+
+
+@app.command()
+def analyze(
+    experiment_name: Annotated[
+        str,
+        typer.Option("--experiment-name", help="Experiment to analyze."),
+    ],
+    csv_path: Annotated[
+        Path | None,
+        typer.Option("--csv-path", help="Optional CSV output path."),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
+        ),
+    ] = None,
+) -> None:
+    config = common_config(
+        database_url=database_url,
+        dbos_system_database_url=None,
+        generation_concurrency=DEFAULT_GENERATION_CONCURRENCY,
+        scoring_concurrency=DEFAULT_SCORING_CONCURRENCY,
+    )
+    records = fetch_analysis_records(
+        config.database_url, experiment_name=experiment_name
+    )
+    summaries = summarize_analysis_records(records)
+    typer.echo(
+        analysis_markdown(
+            experiment_name=experiment_name, summaries=summaries
+        ),
+        nl=False,
+    )
+    if csv_path is not None:
+        write_analysis_csv(summaries, csv_path=csv_path)
+        typer.echo(f"wrote {csv_path}")
 
 
 @app.command()
