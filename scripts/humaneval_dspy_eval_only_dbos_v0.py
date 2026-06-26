@@ -397,12 +397,12 @@ def configure_dbos_runtime(
     consume_queues: bool = True,
 ) -> None:
     DBOS(config=build_dbos_config(config))
-    register_eval_queues(config)
     if queue is not None:
         listen_to_selected_queue(queue)
     elif not consume_queues:
         DBOS.listen_queues([])
     DBOS.launch()
+    register_eval_queues(config)
 
 
 def stable_json(data: Any) -> str:

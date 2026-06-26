@@ -183,6 +183,41 @@ def test_register_and_listen_to_eval_queues(
     ]
 
 
+def test_configure_dbos_runtime_launches_before_registering_queues(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def fake_dbos(*_args: object, **_kwargs: object) -> None:
+        calls.append("init")
+
+    def fake_listen_queues(_queues: list[str]) -> None:
+        calls.append("listen")
+
+    def fake_launch() -> None:
+        calls.append("launch")
+
+    def fake_register_queue(_name: str, **_kwargs: object) -> None:
+        calls.append("register")
+
+    monkeypatch.setattr(eval_dbos_harness, "DBOS", fake_dbos)
+    fake_dbos.listen_queues = fake_listen_queues  # type: ignore[attr-defined]
+    fake_dbos.launch = fake_launch  # type: ignore[attr-defined]
+    fake_dbos.register_queue = fake_register_queue  # type: ignore[attr-defined]
+
+    config = eval_dbos_harness.EvalDbosConfig(
+        database_url="postgresql:///app",
+        dbos_system_database_url="postgresql:///dbos",
+        generation_concurrency=11,
+        scoring_concurrency=5,
+    )
+
+    eval_dbos_harness.configure_dbos_runtime(config, consume_queues=False)
+
+    assert calls == ["init", "listen", "launch", "register", "register"]
+
+
 def test_build_humaneval_samples_from_rows_is_seeded(eval_dbos_harness) -> None:
     rows = [
         {
