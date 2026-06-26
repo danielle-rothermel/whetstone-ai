@@ -3,9 +3,8 @@ from __future__ import annotations
 import sqlite3
 
 import dspy
-from dspy.teleprompt import BootstrapFewShot
-
 from dr_dspy.event_log import EventStore, SQLiteWriter
+from dspy.teleprompt import BootstrapFewShot
 
 
 def test_bootstrap_selects_passing_demos(
@@ -42,13 +41,42 @@ def test_bootstrap_selects_passing_demos(
     assert len(lm.calls) >= len(train)
 
 
+def test_default_compiled_path_is_under_logs(humaneval_harness) -> None:
+    assert humaneval_harness.DEFAULT_COMPILED_PATH == (
+        "./logs/compiled_humaneval.json"
+    )
+
+
+def test_real_lm_uses_script_level_openrouter_config(
+    humaneval_harness,
+    tmp_path,
+) -> None:
+    writer = SQLiteWriter(str(tmp_path / "runs.db"), run_id="lm-config-test")
+    config = humaneval_harness.HarnessConfig(
+        event_store=EventStore.SQLITE,
+        db_path=str(tmp_path / "runs.db"),
+        database_url=None,
+    )
+    try:
+        lm = humaneval_harness.build_real_lm(config, writer)
+    finally:
+        writer.close()
+
+    assert lm.model == humaneval_harness.DEFAULT_MODEL
+    assert lm.reasoning == humaneval_harness.DEFAULT_OPENROUTER_REASONING
+    assert (
+        lm.kwargs["max_completion_tokens"]
+        == humaneval_harness.DEFAULT_MAX_COMPLETION_TOKENS
+    )
+
+
 def test_full_harness_smoke(
     humaneval_harness,
     humaneval_mock_harness,
     tmp_path,
 ) -> None:
     db_path = tmp_path / "smoke.db"
-    compiled_path = tmp_path / "compiled.json"
+    compiled_path = tmp_path / "logs" / "compiled.json"
     config = humaneval_harness.HarnessConfig(
         event_store=EventStore.SQLITE,
         db_path=str(db_path),
@@ -80,7 +108,15 @@ def test_full_harness_smoke(
         flows = {
             row[0]
             for row in conn.execute(
-                "SELECT DISTINCT flow FROM events WHERE event_type='flow.start'"
+                "SELECT DISTINCT flow FROM events "
+                "WHERE event_type='flow.start'"
+            ).fetchall()
+        }
+        lm_request_flows = {
+            row[0]
+            for row in conn.execute(
+                "SELECT DISTINCT flow FROM events "
+                "WHERE event_type='lm.request'"
             ).fetchall()
         }
         row_count, min_payload_is_null = conn.execute(
@@ -104,6 +140,12 @@ def test_full_harness_smoke(
     }
     assert not required - types_present
     assert {"eval_baseline", "optimize", "eval_optimized"} <= flows
+    assert {
+        "eval_baseline",
+        "optimize",
+        "eval_optimized",
+    } <= lm_request_flows
+    assert "unknown" not in lm_request_flows
     assert row_count > 0
     assert min_payload_is_null in (0, None)
 

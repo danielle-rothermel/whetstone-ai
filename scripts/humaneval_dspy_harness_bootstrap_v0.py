@@ -9,11 +9,19 @@ import traceback
 import uuid
 from collections.abc import Mapping
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
 import typer
 from datasets import load_dataset  # type: ignore[import-not-found]
-from pydantic import BaseModel, ConfigDict, StrictFloat, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+)
 
 import dspy
 from dr_dspy.code_eval import extract_dspy_code, run_python_check
@@ -29,7 +37,10 @@ from dr_dspy.event_log import (
     build_event_writer,
 )
 from dr_dspy.flow import current_flow, event_flow
-from dr_dspy.lm_logging import LoggingLM
+from dr_dspy.openrouter_lm import (
+    OPENROUTER_API_KEY_ENV,
+    LoggingOpenRouterLM,
+)
 from dr_dspy.run_metadata import FieldSignature, build_run_metadata
 from dr_dspy.runtime import configure_multiprocessing, load_env_file
 from dspy.signatures.signature import make_signature
@@ -38,9 +49,11 @@ from dspy.teleprompt import BootstrapFewShot
 # Configuration
 
 DEFAULT_DB_PATH = "./runs.db"
-DEFAULT_COMPILED_PATH = "./compiled_humaneval.json"
+DEFAULT_COMPILED_PATH = "./logs/compiled_humaneval.json"
 DEFAULT_EVENT_STORE = EventStore.POSTGRES
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_MODEL = "openai/gpt-5-nano"
+DEFAULT_OPENROUTER_REASONING = {"effort": "minimal", "exclude": False}
+DEFAULT_MAX_COMPLETION_TOKENS = 1000
 DEFAULT_TRAIN_SIZE = 32
 DEFAULT_DEV_SIZE = 32
 DEFAULT_NUM_THREADS = 8
@@ -57,10 +70,13 @@ SOLVE_FIELDS = [
     FieldSignature(name="code", type=dspy.Code, role=dspy.OutputField()),
 ]
 SOLVE_INSTRUCTIONS = (
-    "Write a self-contained Python function that satisfies the prompt.\n\n"
-    "Include any imports inside the function or at the top. Do not include "
-    "tests or example calls. Define exactly the function named in the prompt."
+    "Write functional code in Python according to the prompt."
 )
+# ( # V0: written during impl, ran 2x
+#    "Write a self-contained Python function that satisfies the prompt.\n\n"
+#    "Include any imports inside the function or at the top. Do not include "
+#    "tests or example calls. Define exactly the function named in the prompt."
+# )
 
 MAX_TRACE_SIZE = 10_000
 DISPLAY_TABLE_ROWS = 10
@@ -81,6 +97,10 @@ class HarnessConfig(BaseModel):
     database_url: StrictStr | None = None
     compiled_path: StrictStr = DEFAULT_COMPILED_PATH
     model: StrictStr = DEFAULT_MODEL
+    openrouter_reasoning: dict[str, Any] = Field(
+        default_factory=lambda: dict(DEFAULT_OPENROUTER_REASONING)
+    )
+    max_completion_tokens: StrictInt = DEFAULT_MAX_COMPLETION_TOKENS
     seed: StrictInt = DEFAULT_SEED
     train_size: StrictInt = DEFAULT_TRAIN_SIZE
     dev_size: StrictInt = DEFAULT_DEV_SIZE
@@ -263,6 +283,9 @@ def run_humaneval_bootstrap_flow(
             optimized = evaluate_program_with_async_runner(evaluator, compiled)
 
         try:
+            Path(config.compiled_path).parent.mkdir(
+                parents=True, exist_ok=True
+            )
             compiled.save(config.compiled_path)
         except Exception as e:
             print(f"[save compiled] {e!r}", file=sys.stderr)
@@ -304,15 +327,23 @@ def build_harness_writer(config: HarnessConfig, *, run_id: str) -> EventWriter:
     )
 
 
-def build_real_lm(config: HarnessConfig, writer: EventWriter) -> LoggingLM:
-    return LoggingLM(config.model, log=writer.put_event, cache=False)
+def build_real_lm(
+    config: HarnessConfig, writer: EventWriter
+) -> LoggingOpenRouterLM:
+    return LoggingOpenRouterLM(
+        config.model,
+        log=writer.put_event,
+        cache=False,
+        reasoning=config.openrouter_reasoning,
+        max_completion_tokens=config.max_completion_tokens,
+    )
 
 
 def run_real_humaneval_bootstrap(config: HarnessConfig) -> int:
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not os.environ.get(OPENROUTER_API_KEY_ENV):
         print(
-            "OPENAI_API_KEY is not set; either export it or use the mock "
-            "script under scripts/mocks/.",
+            f"{OPENROUTER_API_KEY_ENV} is not set; either export it or use "
+            "the mock script under scripts/mocks/.",
             file=sys.stderr,
         )
         return 2
@@ -389,6 +420,8 @@ def main(
         database_url=database_url,
         compiled_path=compiled_path,
         model=model,
+        openrouter_reasoning=dict(DEFAULT_OPENROUTER_REASONING),
+        max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
         seed=seed,
         train_size=train_size,
         dev_size=dev_size,
