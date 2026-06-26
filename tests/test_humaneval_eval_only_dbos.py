@@ -729,10 +729,24 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
 
     assert "# Eval Analysis: exp" in markdown
     assert "model/a" in markdown
+    assert "Avg Price/1k Samples" in markdown
+    assert "0.06" in markdown
+    assert "20" in markdown
     assert "0.666667" in markdown
     csv_text = csv_path.read_text()
     assert "model,temperature,sample_count" in csv_text
     assert "model/a" in csv_text
+
+
+def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
+    assert eval_dbos_harness.format_cost(5.0862e-05) == "0.000050862"
+    assert eval_dbos_harness.format_cost(0.0007023) == "0.0007023"
+    assert eval_dbos_harness.format_cost(47.12) == "47.12"
+    assert eval_dbos_harness.format_cost(0.0) == "0"
+    assert eval_dbos_harness.format_cost(None) == ""
+    assert eval_dbos_harness.price_per_thousand_samples(
+        5.0862e-05
+    ) == pytest.approx(0.050862)
 
 
 def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
@@ -775,7 +789,7 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
     assert "Generation" in text
     assert "Scoring" in text
     assert "Eval Analysis: exp" in text
-    assert "Avg $/Sample" in text
+    assert "Avg $/1k Samples" in text
     assert "Variance" in text
 
 

@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Protocol, cast
 
 from dr_dspy.serialization import to_jsonable
@@ -23,7 +23,7 @@ DATABASE_URL_ENV = "DATABASE_URL"
 DefaultFlowFn = Callable[[], str]
 
 
-class EventStore(str, Enum):
+class EventStore(StrEnum):
     """Supported event-log backends."""
 
     SQLITE = "sqlite"

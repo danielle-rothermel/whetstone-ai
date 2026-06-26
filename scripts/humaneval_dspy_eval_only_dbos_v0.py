@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -13,7 +14,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
 
@@ -61,6 +62,8 @@ DEFAULT_TEMPERATURE = 0.0
 DEFAULT_TEMPERATURES = (DEFAULT_TEMPERATURE,)
 DEFAULT_MAX_COMPLETION_TOKENS = 1000
 DEFAULT_SUBPROCESS_TIMEOUT = 15.0
+DEFAULT_COST_SIGNIFICANT_DIGITS = 6
+PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER = 1000.0
 MAX_TRACE_SIZE = 10_000
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
@@ -167,13 +170,13 @@ PREDICTION_INDEX_SQL = (
 )
 
 
-class QueueSelection(str, Enum):
+class QueueSelection(StrEnum):
     GENERATION = "generation"
     SCORING = "scoring"
     BOTH = "both"
 
 
-class DbosWorkflowStatus(str, Enum):
+class DbosWorkflowStatus(StrEnum):
     PENDING = "PENDING"
     SUCCESS = "SUCCESS"
     ERROR = "ERROR"
@@ -1470,6 +1473,26 @@ def format_float(value: float | None) -> str:
     return f"{value:.6g}"
 
 
+def format_cost(value: float | None) -> str:
+    if value is None:
+        return ""
+    if value == 0:
+        return "0"
+    decimals = max(
+        DEFAULT_COST_SIGNIFICANT_DIGITS
+        - math.floor(math.log10(abs(value)))
+        - 1,
+        0,
+    )
+    return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
+
+
+def price_per_thousand_samples(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return value * PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER
+
+
 def operator_timestamp(now: datetime | None = None) -> str:
     resolved_now = now or datetime.now()
     return resolved_now.strftime(OPERATOR_TIMESTAMP_FORMAT)
@@ -1495,7 +1518,7 @@ def analysis_markdown(
         f"# Eval Analysis: {experiment_name}",
         "",
         "| Model | Temp | Samples | Scored | Total Price | "
-        "Avg Price/Sample | Avg Perf | Price Var | Perf Var | Rep Var |",
+        "Avg Price/1k Samples | Avg Perf | Price Var | Perf Var | Rep Var |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for summary in summaries:
@@ -1508,9 +1531,11 @@ def analysis_markdown(
                 temperature=format_float(summary.temperature),
                 sample_count=summary.sample_count,
                 scored_count=summary.scored_count,
-                total_price=format_float(summary.total_price),
-                avg_price_per_sample=format_float(
-                    summary.avg_price_per_sample
+                total_price=format_cost(summary.total_price),
+                avg_price_per_sample=format_cost(
+                    price_per_thousand_samples(
+                        summary.avg_price_per_sample
+                    )
                 ),
                 avg_performance=format_float(summary.avg_performance),
                 price_variance=format_float(summary.price_variance),
@@ -1547,7 +1572,7 @@ def analysis_table(
     cost_table.add_column("Model", min_width=28, overflow="fold")
     cost_table.add_column("Temp", justify="right")
     cost_table.add_column("Total $", justify="right")
-    cost_table.add_column("Avg $/Sample", justify="right")
+    cost_table.add_column("Avg $/1k Samples", justify="right")
 
     variance_table = Table(
         title="Variance",
@@ -1571,8 +1596,10 @@ def analysis_table(
         cost_table.add_row(
             summary.model,
             format_float(summary.temperature),
-            format_float(summary.total_price),
-            format_float(summary.avg_price_per_sample),
+            format_cost(summary.total_price),
+            format_cost(
+                price_per_thousand_samples(summary.avg_price_per_sample)
+            ),
         )
         variance_table.add_row(
             summary.model,
