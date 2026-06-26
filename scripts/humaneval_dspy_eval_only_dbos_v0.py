@@ -51,11 +51,12 @@ DBOS_APP_NAME = "dr-dspy-humaneval-eval-only"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
 GENERATION_QUEUE_NAME = "dr_dspy_humaneval_generation"
 SCORING_QUEUE_NAME = "dr_dspy_humaneval_scoring"
+EXPERIMENT_QUEUE_HASH_LENGTH = 8
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
-DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 60.0
+DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
 DEFAULT_SEED = 0
 DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_TEMPERATURE = 0.0
@@ -244,10 +245,18 @@ class WorkerMonitorConfig(BaseModel):
 
     database_url: StrictStr
     dbos_system_database_url: StrictStr
+    experiment_name: StrictStr
     queue_selection: QueueSelection
     queue_names: tuple[StrictStr, ...]
     interval_seconds: StrictFloat
     summary_interval_seconds: StrictFloat
+
+
+class EvalQueueNames(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    generation: StrictStr
+    scoring: StrictStr
 
 
 class WorkerQueueSnapshot(BaseModel):
@@ -446,35 +455,60 @@ def create_eval_schema(database_url: str) -> None:
                 cur.execute(statement)
 
 
-def register_eval_queues(config: EvalDbosConfig) -> None:
+def experiment_hash(experiment_name: str) -> str:
+    return hashlib.sha256(experiment_name.encode("utf-8")).hexdigest()[
+        :EXPERIMENT_QUEUE_HASH_LENGTH
+    ]
+
+
+def eval_queue_names(experiment_name: str) -> EvalQueueNames:
+    suffix = experiment_hash(experiment_name)
+    return EvalQueueNames(
+        generation=f"{GENERATION_QUEUE_NAME}_{suffix}",
+        scoring=f"{SCORING_QUEUE_NAME}_{suffix}",
+    )
+
+
+def register_eval_queues(
+    config: EvalDbosConfig, *, experiment_name: str
+) -> None:
+    queue_names = eval_queue_names(experiment_name)
     DBOS.register_queue(
-        GENERATION_QUEUE_NAME,
+        queue_names.generation,
         worker_concurrency=config.generation_concurrency,
     )
     DBOS.register_queue(
-        SCORING_QUEUE_NAME,
+        queue_names.scoring,
         worker_concurrency=config.scoring_concurrency,
     )
 
 
-def queue_names_for_selection(selection: QueueSelection) -> tuple[str, ...]:
+def queue_names_for_selection(
+    selection: QueueSelection, *, experiment_name: str
+) -> tuple[str, ...]:
+    queue_names = eval_queue_names(experiment_name)
     if selection is QueueSelection.GENERATION:
-        return (GENERATION_QUEUE_NAME,)
+        return (queue_names.generation,)
     if selection is QueueSelection.SCORING:
-        return (SCORING_QUEUE_NAME,)
-    return (GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME)
+        return (queue_names.scoring,)
+    return (queue_names.generation, queue_names.scoring)
 
 
-def sanitize_log_run_name(run_name: str) -> str:
-    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", run_name.strip()).strip(
-        "-."
+def sanitize_log_name(name: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip()).strip("-.")
+    return sanitized or "experiment"
+
+
+def hashed_experiment_log_name(experiment_name: str) -> str:
+    return (
+        f"{sanitize_log_name(experiment_name)}-"
+        f"{experiment_hash(experiment_name)}"
     )
-    return sanitized or "worker"
 
 
 def default_worker_log_path(
     *,
-    run_name: str,
+    experiment_name: str,
     queue: QueueSelection,
     now: datetime | None = None,
     pid: int | None = None,
@@ -486,20 +520,23 @@ def default_worker_log_path(
         f"{resolved_pid}.log"
     )
     return (
-        DEFAULT_WORKER_LOG_ROOT / sanitize_log_run_name(run_name) / filename
+        DEFAULT_WORKER_LOG_ROOT
+        / hashed_experiment_log_name(experiment_name)
+        / filename
     )
 
 
 def resolve_worker_log_path(
     *,
-    run_name: str | None,
+    experiment_name: str,
     queue: QueueSelection,
     log_file: Path | None,
 ) -> Path:
     if log_file is not None:
         return log_file
-    resolved_run_name = run_name or f"worker-{queue.value}"
-    return default_worker_log_path(run_name=resolved_run_name, queue=queue)
+    return default_worker_log_path(
+        experiment_name=experiment_name, queue=queue
+    )
 
 
 def configure_worker_file_logging(log_file: Path) -> logging.Logger:
@@ -551,17 +588,28 @@ def emit_prediction_log_event(
 
 @DBOS.workflow(name="humaneval_eval_generate_prediction_v0")
 def generate_prediction_workflow(
-    database_url: str, prediction_id: str, use_mock_lm: bool = False
+    database_url: str,
+    prediction_id: str,
+    experiment_name: str,
+    use_mock_lm: bool = False,
+    score_timeout: float = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> str:
     try:
         result = generate_prediction_step(
             database_url, prediction_id, use_mock_lm
         )
         record_generation_success_step(database_url, result)
-        return "generated"
     except Exception as e:
         record_generation_error_step(database_url, prediction_id, repr(e))
         return "generation_error"
+    enqueue_score_job(
+        database_url,
+        prediction_id,
+        experiment_name=experiment_name,
+        timeout=score_timeout,
+    )
+    mark_scoring_queued_step(database_url, prediction_id)
+    return "generated"
 
 
 @DBOS.workflow(name="humaneval_eval_score_prediction_v0")
@@ -577,23 +625,32 @@ def score_prediction_workflow(
         return "score_error"
 
 
-def listen_to_selected_queue(selection: QueueSelection) -> None:
-    DBOS.listen_queues(list(queue_names_for_selection(selection)))
+def listen_to_selected_queue(
+    selection: QueueSelection, *, experiment_name: str
+) -> None:
+    DBOS.listen_queues(
+        list(
+            queue_names_for_selection(
+                selection, experiment_name=experiment_name
+            )
+        )
+    )
 
 
 def configure_dbos_runtime(
     config: EvalDbosConfig,
     *,
+    experiment_name: str,
     queue: QueueSelection | None = None,
     consume_queues: bool = True,
 ) -> None:
     DBOS(config=build_dbos_config(config))
     if queue is not None:
-        listen_to_selected_queue(queue)
+        listen_to_selected_queue(queue, experiment_name=experiment_name)
     elif not consume_queues:
         DBOS.listen_queues([])
     DBOS.launch()
-    register_eval_queues(config)
+    register_eval_queues(config, experiment_name=experiment_name)
 
 
 def stable_json(data: Any) -> str:
@@ -1029,6 +1086,7 @@ def mark_scoring_queued(
                     scoring_error = NULL,
                     updated_at = now()
                 WHERE prediction_id = ANY(%s)
+                    AND scoring_status IN ('pending', 'score_error')
                 """,
                 (list(prediction_ids),),
             )
@@ -1141,6 +1199,13 @@ def record_score_error_step(
         extra={"error": error},
     )
     record_score_error(database_url, prediction_id, error)
+
+
+@DBOS.step()
+def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event("scoring_enqueued", context)
+    mark_scoring_queued(database_url, [prediction_id])
 
 
 def mock_solver(
@@ -1343,33 +1408,60 @@ def record_generation_error_step(
 
 
 def enqueue_generation_jobs(
-    database_url: str, jobs: Sequence[PredictionJob], *, use_mock_lm: bool
+    database_url: str,
+    jobs: Sequence[PredictionJob],
+    *,
+    use_mock_lm: bool,
+    score_timeout: float,
 ) -> None:
     for job in jobs:
         workflow_id = f"generate:{job.prediction_id}"
+        queue_names = eval_queue_names(job.experiment_name)
         with SetWorkflowID(workflow_id):
             DBOS.enqueue_workflow(
-                GENERATION_QUEUE_NAME,
+                queue_names.generation,
                 generate_prediction_workflow,
                 database_url,
                 job.prediction_id,
+                job.experiment_name,
                 use_mock_lm,
+                score_timeout,
             )
+
+
+def enqueue_score_job(
+    database_url: str,
+    prediction_id: str,
+    *,
+    experiment_name: str,
+    timeout: float,
+) -> None:
+    workflow_id = f"score:{prediction_id}"
+    queue_names = eval_queue_names(experiment_name)
+    with SetWorkflowID(workflow_id):
+        DBOS.enqueue_workflow(
+            queue_names.scoring,
+            score_prediction_workflow,
+            database_url,
+            prediction_id,
+            timeout,
+        )
 
 
 def enqueue_score_jobs(
-    database_url: str, prediction_ids: Sequence[str], *, timeout: float
+    database_url: str,
+    prediction_ids: Sequence[str],
+    *,
+    experiment_name: str,
+    timeout: float,
 ) -> None:
     for prediction_id in prediction_ids:
-        workflow_id = f"score:{prediction_id}"
-        with SetWorkflowID(workflow_id):
-            DBOS.enqueue_workflow(
-                SCORING_QUEUE_NAME,
-                score_prediction_workflow,
-                database_url,
-                prediction_id,
-                timeout,
-            )
+        enqueue_score_job(
+            database_url,
+            prediction_id,
+            experiment_name=experiment_name,
+            timeout=timeout,
+        )
 
 
 def fetch_analysis_records(
@@ -1753,7 +1845,10 @@ def fetch_dbos_status_counts(
 
 
 def fetch_prediction_phase_counts(
-    database_url: str, status_column: str
+    database_url: str,
+    *,
+    status_column: str,
+    experiment_name: str,
 ) -> dict[str, int]:
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
@@ -1762,16 +1857,20 @@ def fetch_prediction_phase_counts(
                     """
                     SELECT generation_status, COUNT(*)
                     FROM dr_dspy_eval_predictions
+                    WHERE experiment_name = %s
                     GROUP BY generation_status
-                    """
+                    """,
+                    (experiment_name,),
                 )
             elif status_column == "scoring_status":
                 cur.execute(
                     """
                     SELECT scoring_status, COUNT(*)
                     FROM dr_dspy_eval_predictions
+                    WHERE experiment_name = %s
                     GROUP BY scoring_status
-                    """
+                    """,
+                    (experiment_name,),
                 )
             else:
                 raise ValueError(f"unsupported status column: {status_column}")
@@ -1789,14 +1888,18 @@ def fetch_worker_queue_snapshot(
         QueueSelection.BOTH,
     ):
         generation_counts = fetch_prediction_phase_counts(
-            config.database_url, "generation_status"
+            config.database_url,
+            status_column="generation_status",
+            experiment_name=config.experiment_name,
         )
     if config.queue_selection in (
         QueueSelection.SCORING,
         QueueSelection.BOTH,
     ):
         scoring_counts = fetch_prediction_phase_counts(
-            config.database_url, "scoring_status"
+            config.database_url,
+            status_column="scoring_status",
+            experiment_name=config.experiment_name,
         )
     return WorkerQueueSnapshot(
         dbos_status_counts=fetch_dbos_status_counts(
@@ -1887,7 +1990,7 @@ def worker_monitor_line(
 ) -> str | None:
     is_active = snapshot.active_total > 0
     changed_state = was_active is None or is_active != was_active
-    if not changed_state and not (force_summary and is_active):
+    if not changed_state and not force_summary:
         return None
 
     completed_since_start = max(
@@ -1969,8 +2072,7 @@ def run_worker_monitor(
                 initial_success_total = snapshot.success_total
                 initial_failure_total = snapshot.failure_total
             force_summary = (
-                snapshot.active_total > 0
-                and time.monotonic() - last_summary_at
+                time.monotonic() - last_summary_at
                 >= config.summary_interval_seconds
             )
             line = worker_monitor_line(
@@ -2197,6 +2299,9 @@ def submit(
     scoring_concurrency: Annotated[
         int, typer.Option("--scoring-concurrency")
     ] = DEFAULT_SCORING_CONCURRENCY,
+    score_timeout: Annotated[
+        float, typer.Option("--score-timeout", min=0.1)
+    ] = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> None:
     config = common_config(
         database_url=database_url,
@@ -2243,12 +2348,18 @@ def submit(
             ],
             "temperatures": parsed_temperatures,
             "repetitions": repetitions,
+            "score_timeout": score_timeout,
         },
     )
     inserted = insert_prediction_jobs(config.database_url, jobs)
-    configure_dbos_runtime(config, consume_queues=False)
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
     enqueue_generation_jobs(
-        config.database_url, jobs, use_mock_lm=mock_generation
+        config.database_url,
+        jobs,
+        use_mock_lm=mock_generation,
+        score_timeout=score_timeout,
     )
     operator_log(
         f"inserted {inserted} new prediction rows",
@@ -2340,13 +2451,16 @@ def enqueue_scores_command(
     prediction_ids = fetch_scoreable_prediction_ids(
         config.database_url, experiment_name=experiment_name, limit=limit
     )
-    mark_scoring_queued(config.database_url, prediction_ids)
-    configure_dbos_runtime(config, consume_queues=False)
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
     enqueue_score_jobs(
         config.database_url,
         prediction_ids,
+        experiment_name=experiment_name,
         timeout=timeout,
     )
+    mark_scoring_queued(config.database_url, prediction_ids)
     operator_log(
         enqueue_scores_line(
             experiment_name=experiment_name,
@@ -2535,6 +2649,16 @@ def temperature_sweep(
 
 @app.command()
 def worker(
+    experiment_name: Annotated[
+        str,
+        typer.Option(
+            "--experiment-name",
+            help=(
+                "Experiment this worker is serving; used for monitor "
+                "counts and detailed log directory naming."
+            ),
+        ),
+    ],
     queue: Annotated[
         QueueSelection,
         typer.Option("--queue", help="Queue set this worker should consume."),
@@ -2562,15 +2686,6 @@ def worker(
     scoring_concurrency: Annotated[
         int, typer.Option("--scoring-concurrency")
     ] = DEFAULT_SCORING_CONCURRENCY,
-    run_name: Annotated[
-        str | None,
-        typer.Option(
-            "--run-name",
-            help=(
-                "Name for the default detailed log directory under logs/."
-            ),
-        ),
-    ] = None,
     log_file: Annotated[
         Path | None,
         typer.Option(
@@ -2602,13 +2717,17 @@ def worker(
     )
     create_eval_schema(config.database_url)
     resolved_log_file = resolve_worker_log_path(
-        run_name=run_name,
+        experiment_name=experiment_name,
         queue=queue,
         log_file=log_file,
     )
     configure_worker_file_logging(resolved_log_file)
-    configure_dbos_runtime(config, queue=queue)
-    selected_queue_names = queue_names_for_selection(queue)
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, queue=queue
+    )
+    selected_queue_names = queue_names_for_selection(
+        queue, experiment_name=experiment_name
+    )
     operator_log(
         f"worker listening on {queue.value} queue(s): "
         f"{', '.join(selected_queue_names)}",
@@ -2622,6 +2741,7 @@ def worker(
         monitor_config = WorkerMonitorConfig(
             database_url=config.database_url,
             dbos_system_database_url=config.dbos_system_database_url,
+            experiment_name=experiment_name,
             queue_selection=queue,
             queue_names=selected_queue_names,
             interval_seconds=monitor_interval,

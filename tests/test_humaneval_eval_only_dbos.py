@@ -162,45 +162,40 @@ def test_register_and_listen_to_eval_queues(
         generation_concurrency=11,
         scoring_concurrency=5,
     )
-    eval_dbos_harness.register_eval_queues(config)
+    queue_names = eval_dbos_harness.eval_queue_names("exp")
+    eval_dbos_harness.register_eval_queues(config, experiment_name="exp")
     eval_dbos_harness.listen_to_selected_queue(
-        eval_dbos_harness.QueueSelection.BOTH
+        eval_dbos_harness.QueueSelection.BOTH, experiment_name="exp"
     )
 
     assert registered == [
         {
-            "name": eval_dbos_harness.GENERATION_QUEUE_NAME,
+            "name": queue_names.generation,
             "worker_concurrency": 11,
         },
         {
-            "name": eval_dbos_harness.SCORING_QUEUE_NAME,
+            "name": queue_names.scoring,
             "worker_concurrency": 5,
         },
     ]
-    assert listened == [
-        [
-            eval_dbos_harness.GENERATION_QUEUE_NAME,
-            eval_dbos_harness.SCORING_QUEUE_NAME,
-        ]
-    ]
+    assert listened == [[queue_names.generation, queue_names.scoring]]
 
 
 def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
+    queue_names = eval_dbos_harness.eval_queue_names("exp")
     assert eval_dbos_harness.queue_names_for_selection(
-        eval_dbos_harness.QueueSelection.GENERATION
-    ) == (eval_dbos_harness.GENERATION_QUEUE_NAME,)
+        eval_dbos_harness.QueueSelection.GENERATION, experiment_name="exp"
+    ) == (queue_names.generation,)
     assert eval_dbos_harness.queue_names_for_selection(
-        eval_dbos_harness.QueueSelection.SCORING
-    ) == (eval_dbos_harness.SCORING_QUEUE_NAME,)
+        eval_dbos_harness.QueueSelection.SCORING, experiment_name="exp"
+    ) == (queue_names.scoring,)
     assert eval_dbos_harness.queue_names_for_selection(
-        eval_dbos_harness.QueueSelection.BOTH
-    ) == (
-        eval_dbos_harness.GENERATION_QUEUE_NAME,
-        eval_dbos_harness.SCORING_QUEUE_NAME,
-    )
+        eval_dbos_harness.QueueSelection.BOTH, experiment_name="exp"
+    ) == (queue_names.generation, queue_names.scoring)
 
+    experiment_name = "local mock/dbos smoke"
     path = eval_dbos_harness.default_worker_log_path(
-        run_name="local mock/dbos smoke",
+        experiment_name=experiment_name,
         queue=eval_dbos_harness.QueueSelection.GENERATION,
         now=datetime(2026, 1, 2, 3, 4, 5),
         pid=123,
@@ -208,9 +203,63 @@ def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
 
     assert path == (
         eval_dbos_harness.DEFAULT_WORKER_LOG_ROOT
-        / "local-mock-dbos-smoke"
+        / eval_dbos_harness.hashed_experiment_log_name(experiment_name)
         / "20260102-030405-generation-pid123.log"
     )
+
+
+def test_worker_monitor_phase_counts_filter_experiment(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class FetchCursor:
+        def __init__(self) -> None:
+            self.statement: str | None = None
+            self.params: object = None
+
+        def __enter__(self) -> FetchCursor:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def execute(self, statement: str, params: object = None) -> None:
+            self.statement = statement
+            self.params = params
+
+        def fetchall(self) -> list[tuple[str, int]]:
+            return [("pending", 3)]
+
+    class FetchConnection:
+        def __init__(self) -> None:
+            self.cursor_instance = FetchCursor()
+
+        def __enter__(self) -> FetchConnection:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def cursor(self) -> FetchCursor:
+            return self.cursor_instance
+
+    fake_conn = FetchConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+
+    counts = eval_dbos_harness.fetch_prediction_phase_counts(
+        "postgresql:///unit",
+        status_column="scoring_status",
+        experiment_name="exp-1",
+    )
+
+    assert counts == {"pending": 3}
+    assert fake_conn.cursor_instance.statement is not None
+    assert "WHERE experiment_name = %s" in fake_conn.cursor_instance.statement
+    assert fake_conn.cursor_instance.params == ("exp-1",)
 
 
 def test_worker_monitor_line_has_aligned_metrics(
@@ -233,6 +282,28 @@ def test_worker_monitor_line_has_aligned_metrics(
     assert "completed=   0" in line
     assert "gen pend=   0 start=   3 done=   2 err=   0" in line
     assert "score pend=   -" in line
+
+
+def test_worker_monitor_line_can_force_empty_summary(
+    eval_dbos_harness,
+) -> None:
+    snapshot = eval_dbos_harness.WorkerQueueSnapshot(
+        dbos_status_counts={"SUCCESS": 7},
+        scoring_status_counts={"pending": 2, "scored": 5},
+    )
+
+    line = eval_dbos_harness.worker_monitor_line(
+        snapshot,
+        was_active=False,
+        initial_success_total=2,
+        initial_failure_total=0,
+        force_summary=True,
+    )
+
+    assert line is not None
+    assert line.startswith("Queue Empty  | active=   0")
+    assert "completed=   5" in line
+    assert "score pend=   2 queue=   0 start=   0 done=   5 err=   0" in line
 
 
 def test_timestamped_operator_lines(eval_dbos_harness) -> None:
@@ -321,7 +392,9 @@ def test_configure_dbos_runtime_launches_before_registering_queues(
         scoring_concurrency=5,
     )
 
-    eval_dbos_harness.configure_dbos_runtime(config, consume_queues=False)
+    eval_dbos_harness.configure_dbos_runtime(
+        config, experiment_name="exp", consume_queues=False
+    )
 
     assert calls == ["init", "listen", "launch", "register", "register"]
 
@@ -459,7 +532,9 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
         workflow: object,
         database_url: str,
         prediction_id: str,
+        experiment_name: str,
         use_mock_lm: bool,
+        score_timeout: float,
     ) -> None:
         enqueued.append(
             {
@@ -467,7 +542,9 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
                 "workflow": workflow,
                 "database_url": database_url,
                 "prediction_id": prediction_id,
+                "experiment_name": experiment_name,
                 "use_mock_lm": use_mock_lm,
+                "score_timeout": score_timeout,
             }
         )
 
@@ -490,18 +567,245 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
     )
 
     eval_dbos_harness.enqueue_generation_jobs(
-        "postgresql:///unit", [job], use_mock_lm=True
+        "postgresql:///unit",
+        [job],
+        use_mock_lm=True,
+        score_timeout=7.0,
     )
 
     assert workflow_ids == ["generate:abc"]
     assert enqueued == [
         {
-            "queue_name": eval_dbos_harness.GENERATION_QUEUE_NAME,
+            "queue_name": eval_dbos_harness.eval_queue_names(
+                "exp"
+            ).generation,
             "workflow": eval_dbos_harness.generate_prediction_workflow,
             "database_url": "postgresql:///unit",
             "prediction_id": "abc",
+            "experiment_name": "exp",
             "use_mock_lm": True,
+            "score_timeout": 7.0,
         }
+    ]
+
+
+def test_generation_workflow_enqueues_scoring_after_success(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+    result = eval_dbos_harness.GenerationResult(
+        prediction_id="abc",
+        code="def add(a, b): return a + b",
+    )
+
+    def fake_generate_prediction_step(
+        database_url: str, prediction_id: str, use_mock_lm: bool
+    ) -> object:
+        calls.append(
+            (
+                "generate",
+                {
+                    "database_url": database_url,
+                    "prediction_id": prediction_id,
+                    "use_mock_lm": use_mock_lm,
+                },
+            )
+        )
+        return result
+
+    def fake_record_generation_success_step(
+        database_url: str, generation_result: object
+    ) -> None:
+        calls.append(
+            (
+                "record_generation_success",
+                {
+                    "database_url": database_url,
+                    "result": generation_result,
+                },
+            )
+        )
+
+    def fake_enqueue_score_job(
+        database_url: str,
+        prediction_id: str,
+        *,
+        experiment_name: str,
+        timeout: float,
+    ) -> None:
+        calls.append(
+            (
+                "enqueue_score",
+                {
+                    "database_url": database_url,
+                    "prediction_id": prediction_id,
+                    "experiment_name": experiment_name,
+                    "timeout": timeout,
+                },
+            )
+        )
+
+    def fake_mark_scoring_queued_step(
+        database_url: str, prediction_id: str
+    ) -> None:
+        calls.append(
+            (
+                "mark_scoring_queued",
+                {
+                    "database_url": database_url,
+                    "prediction_id": prediction_id,
+                },
+            )
+        )
+
+    def fail_record_generation_error_step(
+        _database_url: str, _prediction_id: str, _error: str
+    ) -> None:
+        raise AssertionError("generation should not be marked failed")
+
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "generate_prediction_step",
+        fake_generate_prediction_step,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "record_generation_success_step",
+        fake_record_generation_success_step,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "enqueue_score_job",
+        fake_enqueue_score_job,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "mark_scoring_queued_step",
+        fake_mark_scoring_queued_step,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "record_generation_error_step",
+        fail_record_generation_error_step,
+    )
+
+    status = eval_dbos_harness.generate_prediction_workflow.__wrapped__(
+        "postgresql:///unit",
+        "abc",
+        "exp",
+        True,
+        9.0,
+    )
+
+    assert status == "generated"
+    assert calls == [
+        (
+            "generate",
+            {
+                "database_url": "postgresql:///unit",
+                "prediction_id": "abc",
+                "use_mock_lm": True,
+            },
+        ),
+        (
+            "record_generation_success",
+            {"database_url": "postgresql:///unit", "result": result},
+        ),
+        (
+            "enqueue_score",
+            {
+                "database_url": "postgresql:///unit",
+                "prediction_id": "abc",
+                "experiment_name": "exp",
+                "timeout": 9.0,
+            },
+        ),
+        (
+            "mark_scoring_queued",
+            {"database_url": "postgresql:///unit", "prediction_id": "abc"},
+        ),
+    ]
+
+
+def test_generation_workflow_does_not_enqueue_scoring_after_failure(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    def fake_generate_prediction_step(
+        _database_url: str, _prediction_id: str, _use_mock_lm: bool
+    ) -> object:
+        raise RuntimeError("generation failed")
+
+    def fake_record_generation_error_step(
+        database_url: str, prediction_id: str, error: str
+    ) -> None:
+        calls.append(
+            (
+                "record_generation_error",
+                {
+                    "database_url": database_url,
+                    "prediction_id": prediction_id,
+                    "error": error,
+                },
+            )
+        )
+
+    def fail_enqueue_score_job(
+        _database_url: str,
+        _prediction_id: str,
+        *,
+        experiment_name: str,
+        timeout: float,
+    ) -> None:
+        raise AssertionError("scoring should not be enqueued")
+
+    def fail_mark_scoring_queued_step(
+        _database_url: str, _prediction_id: str
+    ) -> None:
+        raise AssertionError("scoring should not be marked queued")
+
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "generate_prediction_step",
+        fake_generate_prediction_step,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "record_generation_error_step",
+        fake_record_generation_error_step,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "enqueue_score_job",
+        fail_enqueue_score_job,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness,
+        "mark_scoring_queued_step",
+        fail_mark_scoring_queued_step,
+    )
+
+    status = eval_dbos_harness.generate_prediction_workflow.__wrapped__(
+        "postgresql:///unit",
+        "abc",
+        "exp",
+        True,
+        9.0,
+    )
+
+    assert status == "generation_error"
+    assert calls == [
+        (
+            "record_generation_error",
+            {
+                "database_url": "postgresql:///unit",
+                "prediction_id": "abc",
+                "error": "RuntimeError('generation failed')",
+            },
+        )
     ]
 
 
@@ -645,19 +949,40 @@ def test_enqueue_score_jobs_uses_stable_workflow_ids(
     )
 
     eval_dbos_harness.enqueue_score_jobs(
-        "postgresql:///unit", ["abc"], timeout=7.0
+        "postgresql:///unit",
+        ["abc"],
+        experiment_name="exp",
+        timeout=7.0,
     )
 
     assert workflow_ids == ["score:abc"]
     assert enqueued == [
         {
-            "queue_name": eval_dbos_harness.SCORING_QUEUE_NAME,
+            "queue_name": eval_dbos_harness.eval_queue_names("exp").scoring,
             "workflow": eval_dbos_harness.score_prediction_workflow,
             "database_url": "postgresql:///unit",
             "prediction_id": "abc",
             "timeout": 7.0,
         }
     ]
+
+
+def test_mark_scoring_queued_only_updates_waiting_predictions(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    fake_conn = FakeConnection()
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+
+    eval_dbos_harness.mark_scoring_queued("postgresql:///unit", ["abc"])
+
+    statement = fake_conn.cursor_instance.statements[0]
+    assert "scoring_status = 'queued'" in statement
+    assert "AND scoring_status IN ('pending', 'score_error')" in statement
 
 
 def test_summarize_analysis_records_includes_variance(
