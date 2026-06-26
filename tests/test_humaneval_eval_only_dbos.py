@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -181,6 +182,126 @@ def test_register_and_listen_to_eval_queues(
             eval_dbos_harness.SCORING_QUEUE_NAME,
         ]
     ]
+
+
+def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
+    assert eval_dbos_harness.queue_names_for_selection(
+        eval_dbos_harness.QueueSelection.GENERATION
+    ) == (eval_dbos_harness.GENERATION_QUEUE_NAME,)
+    assert eval_dbos_harness.queue_names_for_selection(
+        eval_dbos_harness.QueueSelection.SCORING
+    ) == (eval_dbos_harness.SCORING_QUEUE_NAME,)
+    assert eval_dbos_harness.queue_names_for_selection(
+        eval_dbos_harness.QueueSelection.BOTH
+    ) == (
+        eval_dbos_harness.GENERATION_QUEUE_NAME,
+        eval_dbos_harness.SCORING_QUEUE_NAME,
+    )
+
+    path = eval_dbos_harness.default_worker_log_path(
+        run_name="local mock/dbos smoke",
+        queue=eval_dbos_harness.QueueSelection.GENERATION,
+        now=datetime(2026, 1, 2, 3, 4, 5),
+        pid=123,
+    )
+
+    assert path == (
+        eval_dbos_harness.DEFAULT_WORKER_LOG_ROOT
+        / "local-mock-dbos-smoke"
+        / "20260102-030405-generation-pid123.log"
+    )
+
+
+def test_worker_monitor_message_reports_active_and_idle(
+    eval_dbos_harness,
+) -> None:
+    active = eval_dbos_harness.WorkerQueueSnapshot(
+        dbos_status_counts={"ENQUEUED": 3, "SUCCESS": 2},
+        generation_status_counts={"generated": 2, "started": 3},
+    )
+
+    active_message = eval_dbos_harness.format_worker_monitor_message(
+        active,
+        was_active=None,
+        initial_success_total=2,
+        initial_failure_total=0,
+        force_summary=False,
+    )
+
+    assert active_message is not None
+    assert "queue active: active=3" in active_message
+    assert "ENQUEUED=3" in active_message
+    assert "generation=generated=2, started=3" in active_message
+
+    assert (
+        eval_dbos_harness.format_worker_monitor_message(
+            active,
+            was_active=True,
+            initial_success_total=2,
+            initial_failure_total=0,
+            force_summary=False,
+        )
+        is None
+    )
+
+    summary_message = eval_dbos_harness.format_worker_monitor_message(
+        active,
+        was_active=True,
+        initial_success_total=2,
+        initial_failure_total=0,
+        force_summary=True,
+    )
+
+    assert summary_message is not None
+    assert "queue active" in summary_message
+
+    idle = eval_dbos_harness.WorkerQueueSnapshot(
+        dbos_status_counts={"SUCCESS": 5, "ERROR": 1},
+        scoring_status_counts={"scored": 5, "score_error": 1},
+    )
+
+    idle_message = eval_dbos_harness.format_worker_monitor_message(
+        idle,
+        was_active=True,
+        initial_success_total=2,
+        initial_failure_total=0,
+        force_summary=False,
+    )
+
+    assert idle_message is not None
+    assert "queue empty; waiting for more items" in idle_message
+    assert "completed_since_start=3" in idle_message
+    assert "errors_since_start=1" in idle_message
+
+
+def test_worker_detail_log_writes_prediction_context(
+    eval_dbos_harness, tmp_path
+) -> None:
+    log_file = tmp_path / "worker.log"
+    logger = eval_dbos_harness.configure_worker_file_logging(log_file)
+    context = eval_dbos_harness.PredictionLogContext(
+        prediction_id="pred-1",
+        experiment_name="exp",
+        task_id="HumanEval/1",
+        sample_index=0,
+        model="model/a",
+        temperature=0.0,
+        repetition_seed=0,
+    )
+
+    eval_dbos_harness.emit_prediction_log_event(
+        "generation_started",
+        context,
+        extra={"use_mock_lm": True},
+    )
+    for handler in logger.handlers:
+        handler.flush()
+
+    text = log_file.read_text()
+    assert '"event":"generation_started"' in text
+    assert '"prediction_id":"pred-1"' in text
+    assert '"task_id":"HumanEval/1"' in text
+    assert '"use_mock_lm":true' in text
 
 
 def test_configure_dbos_runtime_launches_before_registering_queues(

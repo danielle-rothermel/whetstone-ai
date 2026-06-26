@@ -75,17 +75,25 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
   --mock-generation
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue generation
+  --queue generation \
+  --run-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py enqueue-scores \
   --experiment-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue scoring
+  --queue scoring \
+  --run-name smoke-db-queue
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
   --experiment-name smoke-db-queue
 ```
+
+Workers print compact queue state changes to stdout: when selected queues have
+active work, and when they become empty and wait for more jobs. Detailed
+per-job logs go to `logs/<run-name>/<timestamp>-<queue>-pid<PID>.log` by
+default; pass `--log-file` to choose an exact file, or `--no-monitor` to disable
+the stdout monitor.
 
 `temperature-probe` is the only command that intentionally makes immediate
 OpenRouter calls. It refuses to run unless `--confirm-live` is passed.

@@ -6,10 +6,13 @@ import json
 import logging
 import os
 import random
+import re
 import statistics
 import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast
@@ -19,7 +22,14 @@ import typer
 from datasets import load_dataset  # type: ignore[import-not-found]
 from dbos import DBOS, DBOSConfig, SetWorkflowID
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+)
 
 import dspy
 from dr_dspy.code_eval import extract_dspy_code, run_python_check
@@ -40,6 +50,8 @@ SCORING_QUEUE_NAME = "dr_dspy_humaneval_scoring"
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
+DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
+DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 60.0
 DEFAULT_SEED = 0
 DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_TEMPERATURE = 0.0
@@ -47,6 +59,9 @@ DEFAULT_TEMPERATURES = (DEFAULT_TEMPERATURE,)
 DEFAULT_MAX_COMPLETION_TOKENS = 1000
 DEFAULT_SUBPROCESS_TIMEOUT = 15.0
 MAX_TRACE_SIZE = 10_000
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
+DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_eval_only_worker"
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
 SOLVE_NAME = "Solve"
@@ -153,6 +168,28 @@ class QueueSelection(str, Enum):
     BOTH = "both"
 
 
+class DbosWorkflowStatus(str, Enum):
+    PENDING = "PENDING"
+    SUCCESS = "SUCCESS"
+    ERROR = "ERROR"
+    MAX_RECOVERY_ATTEMPTS_EXCEEDED = "MAX_RECOVERY_ATTEMPTS_EXCEEDED"
+    CANCELLED = "CANCELLED"
+    ENQUEUED = "ENQUEUED"
+    DELAYED = "DELAYED"
+
+
+DBOS_ACTIVE_WORKFLOW_STATUSES = (
+    DbosWorkflowStatus.ENQUEUED.value,
+    DbosWorkflowStatus.PENDING.value,
+    DbosWorkflowStatus.DELAYED.value,
+)
+DBOS_FAILED_WORKFLOW_STATUSES = (
+    DbosWorkflowStatus.ERROR.value,
+    DbosWorkflowStatus.CANCELLED.value,
+    DbosWorkflowStatus.MAX_RECOVERY_ATTEMPTS_EXCEEDED.value,
+)
+
+
 class EvalDbosConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -177,6 +214,63 @@ class HumanEvalSample(BaseModel):
     prompt: StrictStr
     test: StrictStr
     entry_point: StrictStr
+
+
+class PredictionLogContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    experiment_name: StrictStr
+    task_id: StrictStr
+    sample_index: StrictInt
+    model: StrictStr
+    temperature: float | None
+    repetition_seed: StrictInt
+
+
+class WorkerMonitorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    database_url: StrictStr
+    dbos_system_database_url: StrictStr
+    queue_selection: QueueSelection
+    queue_names: tuple[StrictStr, ...]
+    interval_seconds: StrictFloat
+    summary_interval_seconds: StrictFloat
+
+
+class WorkerQueueSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dbos_status_counts: dict[StrictStr, StrictInt] = Field(
+        default_factory=dict
+    )
+    generation_status_counts: dict[StrictStr, StrictInt] = Field(
+        default_factory=dict
+    )
+    scoring_status_counts: dict[StrictStr, StrictInt] = Field(
+        default_factory=dict
+    )
+
+    @property
+    def active_total(self) -> int:
+        return sum(
+            self.dbos_status_counts.get(status, 0)
+            for status in DBOS_ACTIVE_WORKFLOW_STATUSES
+        )
+
+    @property
+    def success_total(self) -> int:
+        return self.dbos_status_counts.get(
+            DbosWorkflowStatus.SUCCESS.value, 0
+        )
+
+    @property
+    def failure_total(self) -> int:
+        return sum(
+            self.dbos_status_counts.get(status, 0)
+            for status in DBOS_FAILED_WORKFLOW_STATUSES
+        )
 
 
 class PredictionJob(BaseModel):
@@ -352,6 +446,98 @@ def register_eval_queues(config: EvalDbosConfig) -> None:
     )
 
 
+def queue_names_for_selection(selection: QueueSelection) -> tuple[str, ...]:
+    if selection is QueueSelection.GENERATION:
+        return (GENERATION_QUEUE_NAME,)
+    if selection is QueueSelection.SCORING:
+        return (SCORING_QUEUE_NAME,)
+    return (GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME)
+
+
+def sanitize_log_run_name(run_name: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", run_name.strip()).strip(
+        "-."
+    )
+    return sanitized or "worker"
+
+
+def default_worker_log_path(
+    *,
+    run_name: str,
+    queue: QueueSelection,
+    now: datetime | None = None,
+    pid: int | None = None,
+) -> Path:
+    resolved_now = now or datetime.now()
+    resolved_pid = pid if pid is not None else os.getpid()
+    filename = (
+        f"{resolved_now:%Y%m%d-%H%M%S}-{queue.value}-pid"
+        f"{resolved_pid}.log"
+    )
+    return (
+        DEFAULT_WORKER_LOG_ROOT / sanitize_log_run_name(run_name) / filename
+    )
+
+
+def resolve_worker_log_path(
+    *,
+    run_name: str | None,
+    queue: QueueSelection,
+    log_file: Path | None,
+) -> Path:
+    if log_file is not None:
+        return log_file
+    resolved_run_name = run_name or f"worker-{queue.value}"
+    return default_worker_log_path(run_name=resolved_run_name, queue=queue)
+
+
+def configure_worker_file_logging(log_file: Path) -> logging.Logger:
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger(DETAILED_WORKER_LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    handler = logging.FileHandler(log_file, encoding="utf-8")
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    logger.addHandler(handler)
+    return logger
+
+
+def emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
+    logger = logging.getLogger(DETAILED_WORKER_LOGGER_NAME)
+    if not logger.handlers:
+        return
+    logger.info(stable_json({"event": event, **payload}))
+
+
+def prediction_context_from_job(job: PredictionJob) -> PredictionLogContext:
+    return PredictionLogContext(
+        prediction_id=job.prediction_id,
+        experiment_name=job.experiment_name,
+        task_id=job.task_id,
+        sample_index=job.sample_index,
+        model=job.model,
+        temperature=job.temperature,
+        repetition_seed=job.repetition_seed,
+    )
+
+
+def emit_prediction_log_event(
+    event: str,
+    context: PredictionLogContext,
+    *,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    payload = context.model_dump(mode="json")
+    if extra is not None:
+        payload.update(extra)
+    emit_worker_detail_log(event, payload)
+
+
 @DBOS.workflow(name="humaneval_eval_generate_prediction_v0")
 def generate_prediction_workflow(
     database_url: str, prediction_id: str, use_mock_lm: bool = False
@@ -381,13 +567,7 @@ def score_prediction_workflow(
 
 
 def listen_to_selected_queue(selection: QueueSelection) -> None:
-    if selection is QueueSelection.GENERATION:
-        DBOS.listen_queues([GENERATION_QUEUE_NAME])
-        return
-    if selection is QueueSelection.SCORING:
-        DBOS.listen_queues([SCORING_QUEUE_NAME])
-        return
-    DBOS.listen_queues([GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME])
+    DBOS.listen_queues(list(queue_names_for_selection(selection)))
 
 
 def configure_dbos_runtime(
@@ -667,6 +847,40 @@ def fetch_prediction_job(
     )
 
 
+def fetch_prediction_log_context(
+    database_url: str, prediction_id: str
+) -> PredictionLogContext:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    prediction_id,
+                    experiment_name,
+                    task_id,
+                    sample_index,
+                    model,
+                    temperature,
+                    repetition_seed
+                FROM dr_dspy_eval_predictions
+                WHERE prediction_id = %s
+                """,
+                (prediction_id,),
+            )
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"prediction_id not found: {prediction_id}")
+    return PredictionLogContext(
+        prediction_id=row[0],
+        experiment_name=row[1],
+        task_id=row[2],
+        sample_index=row[3],
+        model=row[4],
+        temperature=row[5],
+        repetition_seed=row[6],
+    )
+
+
 def mark_generation_started(database_url: str, prediction_id: str) -> None:
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
@@ -882,6 +1096,12 @@ def score_prediction_step(
     database_url: str, prediction_id: str, timeout: float
 ) -> ScoreResult:
     mark_scoring_started(database_url, prediction_id)
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_started",
+        context,
+        extra={"timeout": timeout},
+    )
     target = fetch_scoring_target(database_url, prediction_id)
     return score_generated_code(target, timeout=timeout)
 
@@ -890,6 +1110,12 @@ def score_prediction_step(
 def record_score_success_step(
     database_url: str, result: ScoreResult
 ) -> None:
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "scoring_succeeded",
+        context,
+        extra={"score": result.score, "scoring_error": result.error},
+    )
     record_score_success(database_url, result)
 
 
@@ -897,6 +1123,12 @@ def record_score_success_step(
 def record_score_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_failed",
+        context,
+        extra={"error": error},
+    )
     record_score_error(database_url, prediction_id, error)
 
 
@@ -1062,6 +1294,11 @@ def generate_prediction_step(
 ) -> GenerationResult:
     mark_generation_started(database_url, prediction_id)
     job = fetch_prediction_job(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_started",
+        prediction_context_from_job(job),
+        extra={"use_mock_lm": use_mock_lm},
+    )
     return generate_code_for_job(job, use_mock_lm=use_mock_lm)
 
 
@@ -1069,6 +1306,15 @@ def generate_prediction_step(
 def record_generation_success_step(
     database_url: str, result: GenerationResult
 ) -> None:
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "generation_succeeded",
+        context,
+        extra={
+            "provider_cost": result.provider_cost,
+            "usage_metadata": result.usage_metadata,
+        },
+    )
     record_generation_success(database_url, result)
 
 
@@ -1076,6 +1322,12 @@ def record_generation_success_step(
 def record_generation_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_failed",
+        context,
+        extra={"error": error},
+    )
     record_generation_error(database_url, prediction_id, error)
 
 
@@ -1259,6 +1511,197 @@ def write_analysis_csv(
         writer.writeheader()
         for summary in summaries:
             writer.writerow(summary.model_dump(mode="json"))
+
+
+def fetch_dbos_status_counts(
+    dbos_system_database_url: str, queue_names: Sequence[str]
+) -> dict[str, int]:
+    with psycopg.connect(dbos_system_database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status, COUNT(*)
+                FROM dbos.workflow_status
+                WHERE queue_name = ANY(%s)
+                GROUP BY status
+                """,
+                (list(queue_names),),
+            )
+            rows = cur.fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def fetch_prediction_phase_counts(
+    database_url: str, status_column: str
+) -> dict[str, int]:
+    with psycopg.connect(database_url) as conn:
+        with conn.cursor() as cur:
+            if status_column == "generation_status":
+                cur.execute(
+                    """
+                    SELECT generation_status, COUNT(*)
+                    FROM dr_dspy_eval_predictions
+                    GROUP BY generation_status
+                    """
+                )
+            elif status_column == "scoring_status":
+                cur.execute(
+                    """
+                    SELECT scoring_status, COUNT(*)
+                    FROM dr_dspy_eval_predictions
+                    GROUP BY scoring_status
+                    """
+                )
+            else:
+                raise ValueError(f"unsupported status column: {status_column}")
+            rows = cur.fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
+def fetch_worker_queue_snapshot(
+    config: WorkerMonitorConfig,
+) -> WorkerQueueSnapshot:
+    generation_counts: dict[str, int] = {}
+    scoring_counts: dict[str, int] = {}
+    if config.queue_selection in (
+        QueueSelection.GENERATION,
+        QueueSelection.BOTH,
+    ):
+        generation_counts = fetch_prediction_phase_counts(
+            config.database_url, "generation_status"
+        )
+    if config.queue_selection in (
+        QueueSelection.SCORING,
+        QueueSelection.BOTH,
+    ):
+        scoring_counts = fetch_prediction_phase_counts(
+            config.database_url, "scoring_status"
+        )
+    return WorkerQueueSnapshot(
+        dbos_status_counts=fetch_dbos_status_counts(
+            config.dbos_system_database_url,
+            config.queue_names,
+        ),
+        generation_status_counts=generation_counts,
+        scoring_status_counts=scoring_counts,
+    )
+
+
+def format_count_map(counts: Mapping[str, int]) -> str:
+    if not counts:
+        return "none"
+    return ", ".join(
+        f"{key}={counts[key]}" for key in sorted(counts.keys())
+    )
+
+
+def format_prediction_phase_counts(snapshot: WorkerQueueSnapshot) -> str:
+    parts: list[str] = []
+    if snapshot.generation_status_counts:
+        parts.append(
+            "generation="
+            f"{format_count_map(snapshot.generation_status_counts)}"
+        )
+    if snapshot.scoring_status_counts:
+        parts.append(
+            f"scoring={format_count_map(snapshot.scoring_status_counts)}"
+        )
+    return "; ".join(parts) if parts else "predictions=none"
+
+
+def format_worker_monitor_message(
+    snapshot: WorkerQueueSnapshot,
+    *,
+    was_active: bool | None,
+    initial_success_total: int,
+    initial_failure_total: int,
+    force_summary: bool,
+) -> str | None:
+    is_active = snapshot.active_total > 0
+    changed_state = was_active is None or is_active != was_active
+    if not changed_state and not (force_summary and is_active):
+        return None
+
+    completed_since_start = max(
+        snapshot.success_total - initial_success_total,
+        0,
+    )
+    failures_since_start = max(
+        snapshot.failure_total - initial_failure_total,
+        0,
+    )
+    prediction_counts = format_prediction_phase_counts(snapshot)
+    if is_active:
+        return (
+            "queue active: "
+            f"active={snapshot.active_total} "
+            f"({format_count_map(snapshot.dbos_status_counts)}); "
+            f"completed_since_start={completed_since_start}; "
+            f"errors_since_start={failures_since_start}; "
+            f"{prediction_counts}"
+        )
+    return (
+        "queue empty; waiting for more items. "
+        f"completed_since_start={completed_since_start}; "
+        f"errors_since_start={failures_since_start}; "
+        f"{prediction_counts}"
+    )
+
+
+def run_worker_monitor(
+    config: WorkerMonitorConfig, stop_event: threading.Event
+) -> None:
+    was_active: bool | None = None
+    initial_success_total: int | None = None
+    initial_failure_total: int | None = None
+    last_summary_at = 0.0
+    last_error: str | None = None
+    while not stop_event.is_set():
+        try:
+            snapshot = fetch_worker_queue_snapshot(config)
+            if initial_success_total is None:
+                initial_success_total = snapshot.success_total
+                initial_failure_total = snapshot.failure_total
+            force_summary = (
+                snapshot.active_total > 0
+                and time.monotonic() - last_summary_at
+                >= config.summary_interval_seconds
+            )
+            message = format_worker_monitor_message(
+                snapshot,
+                was_active=was_active,
+                initial_success_total=initial_success_total,
+                initial_failure_total=initial_failure_total or 0,
+                force_summary=force_summary,
+            )
+            if message is not None:
+                typer.echo(message)
+                last_summary_at = time.monotonic()
+            was_active = snapshot.active_total > 0
+            last_error = None
+        except Exception as e:
+            error = repr(e)
+            emit_worker_detail_log(
+                "worker_monitor_error",
+                {"error": error},
+            )
+            if error != last_error:
+                typer.echo(f"worker monitor error: {error}; retrying")
+                last_error = error
+        stop_event.wait(config.interval_seconds)
+
+
+def start_worker_monitor(
+    config: WorkerMonitorConfig, stop_event: threading.Event
+) -> threading.Thread:
+    thread = threading.Thread(
+        target=run_worker_monitor,
+        args=(config, stop_event),
+        name=f"worker-monitor-{config.queue_selection.value}",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def fetch_status_counts(
@@ -1742,6 +2185,37 @@ def worker(
     scoring_concurrency: Annotated[
         int, typer.Option("--scoring-concurrency")
     ] = DEFAULT_SCORING_CONCURRENCY,
+    run_name: Annotated[
+        str | None,
+        typer.Option(
+            "--run-name",
+            help=(
+                "Name for the default detailed log directory under logs/."
+            ),
+        ),
+    ] = None,
+    log_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--log-file",
+            help="Override the detailed worker log file path.",
+        ),
+    ] = None,
+    monitor: Annotated[
+        bool,
+        typer.Option(
+            "--monitor/--no-monitor",
+            help="Print compact queue activity updates to stdout.",
+        ),
+    ] = True,
+    monitor_interval: Annotated[
+        float,
+        typer.Option("--monitor-interval", min=0.5),
+    ] = DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS,
+    monitor_summary_interval: Annotated[
+        float,
+        typer.Option("--monitor-summary-interval", min=1.0),
+    ] = DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS,
 ) -> None:
     config = common_config(
         database_url=database_url,
@@ -1750,9 +2224,45 @@ def worker(
         scoring_concurrency=scoring_concurrency,
     )
     create_eval_schema(config.database_url)
+    resolved_log_file = resolve_worker_log_path(
+        run_name=run_name,
+        queue=queue,
+        log_file=log_file,
+    )
+    configure_worker_file_logging(resolved_log_file)
     configure_dbos_runtime(config, queue=queue)
-    typer.echo(f"worker listening on {queue.value} queue(s)")
-    threading.Event().wait()
+    selected_queue_names = queue_names_for_selection(queue)
+    typer.echo(
+        f"worker listening on {queue.value} queue(s): "
+        f"{', '.join(selected_queue_names)}"
+    )
+    typer.echo(f"detailed worker log: {resolved_log_file}")
+
+    stop_event = threading.Event()
+    monitor_thread: threading.Thread | None = None
+    if monitor:
+        monitor_config = WorkerMonitorConfig(
+            database_url=config.database_url,
+            dbos_system_database_url=config.dbos_system_database_url,
+            queue_selection=queue,
+            queue_names=selected_queue_names,
+            interval_seconds=monitor_interval,
+            summary_interval_seconds=monitor_summary_interval,
+        )
+        monitor_thread = start_worker_monitor(monitor_config, stop_event)
+        typer.echo(
+            "worker monitor enabled: "
+            f"interval={monitor_interval}s, "
+            f"summary_interval={monitor_summary_interval}s"
+        )
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        typer.echo("worker stopping")
+    finally:
+        stop_event.set()
+        if monitor_thread is not None:
+            monitor_thread.join(timeout=1.0)
 
 
 if __name__ == "__main__":

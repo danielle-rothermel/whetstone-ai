@@ -49,7 +49,8 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
   --mock-generation
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue generation
+  --queue generation \
+  --run-name local-mock-dbos-smoke
 ```
 
 Stop the generation worker after jobs complete, then enqueue and run scoring:
@@ -59,7 +60,8 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py enqueue-scores \
   --experiment-name local-mock-dbos-smoke
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue scoring
+  --queue scoring \
+  --run-name local-mock-dbos-smoke
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py status \
   --experiment-name local-mock-dbos-smoke
@@ -67,3 +69,6 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py status \
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
   --experiment-name local-mock-dbos-smoke
 ```
+
+The worker should print compact active/empty queue transitions to stdout and
+write detailed per-job logs under `logs/local-mock-dbos-smoke/`.
