@@ -40,11 +40,15 @@ class FakeConnection:
 
 
 class FakeCompletions:
-    def __init__(self) -> None:
+    def __init__(self, *, reject_temperatures: set[float] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.reject_temperatures = reject_temperatures or set()
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
+        temperature = kwargs.get("temperature")
+        if temperature in self.reject_temperatures:
+            raise ValueError(f"temperature rejected: {temperature}")
         return dotdict(
             model=kwargs["model"],
             choices=[
@@ -63,8 +67,12 @@ class FakeCompletions:
 
 
 class FakeClient:
-    def __init__(self) -> None:
-        self.chat = dotdict(completions=FakeCompletions())
+    def __init__(self, *, reject_temperatures: set[float] | None = None) -> None:
+        self.chat = dotdict(
+            completions=FakeCompletions(
+                reject_temperatures=reject_temperatures
+            )
+        )
 
 
 def test_build_eval_dbos_config_uses_database_url_for_dbos_default(
@@ -582,3 +590,27 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
     csv_text = csv_path.read_text()
     assert "model,temperature,sample_count" in csv_text
     assert "model/a" in csv_text
+
+
+def test_run_temperature_probe_records_accept_and_reject(
+    eval_dbos_harness,
+) -> None:
+    client = FakeClient(reject_temperatures={1.0})
+
+    results = eval_dbos_harness.run_temperature_probe(
+        model="openai/gpt-5.4-nano",
+        reasoning={"enabled": False},
+        temperatures=[0.0, 1.0],
+        client=client,
+    )
+
+    assert [result.accepted for result in results] == [True, False]
+    assert results[0].response_metadata["usage"]["cost"] == 0.01
+    assert "temperature rejected" in results[1].error
+    assert [
+        call["temperature"] for call in client.chat.completions.calls
+    ] == [0.0, 1.0]
+    assert all(
+        call["extra_body"]["reasoning"] == {"enabled": False}
+        for call in client.chat.completions.calls
+    )

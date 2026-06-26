@@ -251,6 +251,16 @@ class AnalysisSummary(BaseModel):
     avg_repetition_variance: float | None
 
 
+class TemperatureProbeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model: StrictStr
+    temperature: float
+    accepted: bool
+    error: str | None = None
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 HumanEvalRow = Mapping[str, Any]
 
 
@@ -426,6 +436,13 @@ def parse_temperatures(raw: str) -> list[float]:
     if not values:
         raise ValueError("at least one temperature is required")
     return [float(value) for value in values]
+
+
+def parse_reasoning_json(raw: str) -> dict[str, Any]:
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise ValueError("reasoning JSON must be an object")
+    return value
 
 
 def default_model_configs() -> list[ModelConfig]:
@@ -941,6 +958,72 @@ def provider_cost_from_response(
         if isinstance(value, int | float):
             return float(value)
     return None
+
+
+def run_temperature_probe(
+    *,
+    model: str,
+    reasoning: Mapping[str, Any],
+    temperatures: Sequence[float],
+    client: Any = None,
+) -> list[TemperatureProbeResult]:
+    results: list[TemperatureProbeResult] = []
+    for temperature in temperatures:
+        job = PredictionJob(
+            prediction_id=stable_prediction_id(
+                experiment_name="temperature-probe",
+                task_id="probe",
+                model=model,
+                temperature=temperature,
+                repetition_seed=0,
+            ),
+            experiment_name="temperature-probe",
+            submission_id="probe",
+            task_id="probe",
+            sample_index=0,
+            model=model,
+            temperature=temperature,
+            repetition_seed=0,
+            prompt="Return exactly the word ok.",
+            test="",
+            entry_point="",
+            reasoning=dict(reasoning),
+        )
+        event_buffer = LmEventBuffer()
+        try:
+            lm = build_generation_lm(
+                job,
+                use_mock_lm=False,
+                event_buffer=event_buffer,
+                client=client,
+            )
+            lm.forward(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Return exactly the word ok.",
+                    }
+                ]
+            )
+        except Exception as e:
+            results.append(
+                TemperatureProbeResult(
+                    model=model,
+                    temperature=temperature,
+                    accepted=False,
+                    error=repr(e),
+                )
+            )
+            continue
+        results.append(
+            TemperatureProbeResult(
+                model=model,
+                temperature=temperature,
+                accepted=True,
+                response_metadata=event_buffer.latest_response_metadata(),
+            )
+        )
+    return results
 
 
 def generate_code_for_job(
@@ -1506,6 +1589,128 @@ def analyze(
     if csv_path is not None:
         write_analysis_csv(summaries, csv_path=csv_path)
         typer.echo(f"wrote {csv_path}")
+
+
+@app.command("temperature-probe")
+def temperature_probe(
+    model: Annotated[
+        str,
+        typer.Option("--model", help="OpenRouter model ID to probe."),
+    ] = "openai/gpt-5.4-nano",
+    temperatures: Annotated[
+        str,
+        typer.Option(
+            "--temperatures",
+            help="Comma-separated temperature values.",
+        ),
+    ] = "0.0,0.2,1.0",
+    reasoning_json: Annotated[
+        str,
+        typer.Option(
+            "--reasoning-json",
+            help="OpenRouter reasoning JSON object.",
+        ),
+    ] = '{"enabled": false}',
+    confirm_live: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-live",
+            help="Required because this command calls OpenRouter.",
+        ),
+    ] = False,
+) -> None:
+    load_env_file()
+    if not confirm_live:
+        typer.echo(
+            "temperature-probe calls OpenRouter; rerun with --confirm-live",
+            err=True,
+        )
+        raise typer.Exit(2)
+    results = run_temperature_probe(
+        model=model,
+        reasoning=parse_reasoning_json(reasoning_json),
+        temperatures=parse_temperatures(temperatures),
+    )
+    for result in results:
+        status_text = "accepted" if result.accepted else "rejected"
+        typer.echo(
+            f"{result.model} temp={result.temperature}: {status_text}"
+        )
+        if result.error:
+            typer.echo(f"  error={result.error}")
+
+
+@app.command("temperature-sweep")
+def temperature_sweep(
+    experiment_name: Annotated[
+        str,
+        typer.Option(
+            "--experiment-name",
+            help="Human-readable experiment key.",
+        ),
+    ],
+    sample_count: Annotated[
+        int, typer.Option("--sample-count", min=1)
+    ] = 20,
+    seed: Annotated[int, typer.Option("--seed")] = DEFAULT_SEED,
+    temperatures: Annotated[
+        str,
+        typer.Option(
+            "--temperatures",
+            help="Comma-separated temperature values.",
+        ),
+    ] = "0.0,0.1,0.2,0.4",
+    enqueue: Annotated[
+        bool,
+        typer.Option(
+            "--enqueue",
+            help="Actually write rows and enqueue generation workflows.",
+        ),
+    ] = False,
+    mock_generation: Annotated[
+        bool,
+        typer.Option(
+            "--mock-generation",
+            help="Enqueue generation jobs that use the deterministic mock LM.",
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help=(
+                "DBOS system database URL; defaults to "
+                f"{DBOS_SYSTEM_DATABASE_URL_ENV} or DATABASE_URL."
+            ),
+        ),
+    ] = None,
+    generation_concurrency: Annotated[
+        int, typer.Option("--generation-concurrency")
+    ] = DEFAULT_GENERATION_CONCURRENCY,
+    scoring_concurrency: Annotated[
+        int, typer.Option("--scoring-concurrency")
+    ] = DEFAULT_SCORING_CONCURRENCY,
+) -> None:
+    submit(
+        experiment_name=experiment_name,
+        sample_count=sample_count,
+        seed=seed,
+        temperatures=temperatures,
+        repetitions=1,
+        dry_run=not enqueue,
+        mock_generation=mock_generation,
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        generation_concurrency=generation_concurrency,
+        scoring_concurrency=scoring_concurrency,
+    )
 
 
 @app.command()
