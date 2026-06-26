@@ -47,9 +47,13 @@ class FakeConnection:
 
 class FakeCompletions:
     def __init__(
-        self, *, reject_temperatures: set[float] | None = None
+        self,
+        *,
+        content: str | None = "ok",
+        reject_temperatures: set[float] | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.content = content
         self.reject_temperatures = reject_temperatures or set()
 
     def create(self, **kwargs: Any) -> Any:
@@ -61,7 +65,7 @@ class FakeCompletions:
             model=kwargs["model"],
             choices=[
                 dotdict(
-                    message=dotdict(role="assistant", content="ok"),
+                    message=dotdict(role="assistant", content=self.content),
                     finish_reason="stop",
                 )
             ],
@@ -76,10 +80,14 @@ class FakeCompletions:
 
 class FakeClient:
     def __init__(
-        self, *, reject_temperatures: set[float] | None = None
+        self,
+        *,
+        content: str | None = "ok",
+        reject_temperatures: set[float] | None = None,
     ) -> None:
         self.chat = dotdict(
             completions=FakeCompletions(
+                content=content,
                 reject_temperatures=reject_temperatures
             )
         )
@@ -1575,6 +1583,7 @@ def test_lm_event_buffer_extracts_latest_response_text(
     )
 
     assert buffer.latest_response_text() == "def add(a, b): return a + b"
+    assert buffer.has_latest_response() is True
 
 
 def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
@@ -1598,6 +1607,32 @@ def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
 
     assert result.prediction_id == "abc"
     assert "def add" in result.raw_generation
+
+
+def test_generate_code_for_job_stores_empty_raw_generation_for_null_response(
+    eval_dbos_harness,
+) -> None:
+    job = eval_dbos_harness.PredictionJob(
+        prediction_id="abc",
+        experiment_name="exp",
+        submission_id="sub",
+        task_id="task/add",
+        sample_index=0,
+        model="openai/gpt-5-nano",
+        temperature=0.0,
+        repetition_seed=0,
+        prompt="def add(a, b):\n    pass\n",
+        test="def check(candidate): pass",
+        entry_point="add",
+    )
+
+    result = eval_dbos_harness.generate_code_for_job(
+        job, use_mock_lm=False, client=FakeClient(content=None)
+    )
+
+    assert result.prediction_id == "abc"
+    assert result.raw_generation == ""
+    assert result.response_metadata["choices"][0]["message"]["content"] is None
 
 
 def test_score_generated_code_records_pass_and_failure(
@@ -1687,6 +1722,29 @@ def test_score_generated_code_scores_zero_when_no_candidate_compiles(
     assert result.extracted_compile_ok is False
     assert result.extracted_compile_error is not None
     assert result.extraction_error == "no compilable extracted candidate"
+
+
+def test_score_generated_code_scores_zero_for_empty_raw_generation(
+    eval_dbos_harness,
+) -> None:
+    target = eval_dbos_harness.ScoringTarget(
+        prediction_id="empty",
+        task_id="task/add",
+        raw_generation="",
+        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        entry_point="add",
+    )
+
+    result = eval_dbos_harness.score_generated_code(target, timeout=5.0)
+
+    assert result.score == 0.0
+    assert result.error == "empty raw generation"
+    assert result.raw_code is None
+    assert result.raw_compile_ok is False
+    assert result.raw_compile_error == "empty raw generation"
+    assert result.extraction_candidate_count == 0
+    assert result.extracted_compile_ok is False
+    assert result.extraction_error == "empty raw generation"
 
 
 def test_record_score_success_persists_extraction_metrics(

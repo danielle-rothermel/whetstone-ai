@@ -585,6 +585,12 @@ class LmEventBuffer:
                         return response
         return {}
 
+    def has_latest_response(self) -> bool:
+        for event in reversed(self.events):
+            if event["event_type"] == "lm.response":
+                return True
+        return False
+
     def latest_response_text(self) -> str | None:
         for event in reversed(self.events):
             if event["event_type"] != "lm.response":
@@ -1999,6 +2005,21 @@ def record_score_error(
 def score_generated_code(
     target: ScoringTarget, *, timeout: float
 ) -> ScoreResult:
+    if not target.raw_generation.strip():
+        extraction_error = "empty raw generation"
+        return ScoreResult(
+            prediction_id=target.prediction_id,
+            score=0.0,
+            error=extraction_error,
+            raw_code=None,
+            raw_compile_ok=False,
+            raw_compile_error=extraction_error,
+            extraction_candidate_count=0,
+            extracted_compile_ok=False,
+            extracted_compile_error=None,
+            extraction_error=extraction_error,
+        )
+
     raw_validation = validate_python_source(target.raw_generation)
     candidates = apply_cleaning(target.raw_generation, apply_dedent=True)
     selected_code: str | None = None
@@ -2253,13 +2274,15 @@ def generate_code_for_job(
             pred = dspy.Predict(Solve)(prompt=job.prompt)
         except Exception:
             raw_generation = event_buffer.latest_response_text()
-            if raw_generation is None:
+            if raw_generation is None and event_buffer.has_latest_response():
+                raw_generation = ""
+            elif raw_generation is None:
                 raise
         else:
             extract_dspy_code(pred)
             raw_generation = event_buffer.latest_response_text()
             if raw_generation is None:
-                raise ValueError("LM response did not include provider text")
+                raw_generation = ""
     response_metadata = event_buffer.latest_response_metadata()
     return GenerationResult(
         prediction_id=job.prediction_id,
