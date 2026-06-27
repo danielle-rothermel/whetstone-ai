@@ -312,6 +312,9 @@ def summarize_analysis_records[RecordT, SummaryT](
     provider_cost: Callable[[RecordT], float | None],
     raw_compile_ok: Callable[[RecordT], bool | None],
     extracted_compile_ok: Callable[[RecordT], bool | None],
+    raw_compression_ratio: Callable[[RecordT], float | None] = (
+        lambda _record: None
+    ),
     best_compression_ratio: Callable[[RecordT], float | None] = (
         lambda _record: None
     ),
@@ -352,6 +355,11 @@ def summarize_analysis_records[RecordT, SummaryT](
             1 for record in group if extracted_compile_ok(record) is True
         )
         total_price = sum(costs) if costs else None
+        raw_compression_ratios = [
+            ratio
+            for ratio in (raw_compression_ratio(record) for record in group)
+            if ratio is not None
+        ]
         compression_ratios = [
             ratio
             for ratio in (best_compression_ratio(record) for record in group)
@@ -385,6 +393,9 @@ def summarize_analysis_records[RecordT, SummaryT](
                 extracted_compile_pass_count=extracted_compile_pass_count,
                 extraction_lift=(
                     extracted_compile_pass_count - raw_compile_pass_count
+                ),
+                avg_raw_compression_ratio=analysis.average_or_none(
+                    raw_compression_ratios
                 ),
                 avg_best_compression_ratio=analysis.average_or_none(
                     compression_ratios

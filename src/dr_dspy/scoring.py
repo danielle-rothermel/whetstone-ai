@@ -50,6 +50,7 @@ class HumanEvalScoreResult(BaseModel):
     evaluation_failure_count: int | None = None
     evaluation_status_counts: dict[str, int] = Field(default_factory=dict)
     compression_metrics: CompressionMetrics = Field(default_factory=dict)
+    raw_compression_ratio: float | None = None
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
 
@@ -167,6 +168,13 @@ def score_humaneval_prediction(
         representation_text=compression_input,
     )
     best = best_compression_metric(metrics)
+    raw_compression_ratio: float | None = None
+    if metrics:
+        any_metric = next(iter(metrics.values()))
+        if any_metric.ground_truth_bytes:
+            raw_compression_ratio = (
+                any_metric.representation_bytes / any_metric.ground_truth_bytes
+            )
     evaluation = generated_score.evaluation
     return HumanEvalScoreResult(
         prediction_id=prediction_id,
@@ -191,6 +199,7 @@ def score_humaneval_prediction(
         if evaluation
         else {},
         compression_metrics=metrics,
+        raw_compression_ratio=raw_compression_ratio,
         best_compression_ratio=best.ratio_to_ground_truth if best else None,
         best_compression_percent_reduction=(
             best.percent_reduction_vs_ground_truth if best else None

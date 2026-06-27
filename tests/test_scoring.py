@@ -60,3 +60,7 @@ def test_empty_generation_scores_zero() -> None:
 def test_compression_metrics_present() -> None:
     result = _score("def add(a, b):\n    return a + b\n")
     assert result.compression_metrics
+    # raw (uncompressed) ratio is reported alongside the best compressed one
+    assert result.raw_compression_ratio is not None
+    assert result.raw_compression_ratio > 0
+    assert result.best_compression_ratio is not None

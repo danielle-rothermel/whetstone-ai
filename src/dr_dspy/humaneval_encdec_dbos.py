@@ -196,6 +196,7 @@ __DIMENSION_COLUMNS__
     evaluation_failure_count INTEGER,
     evaluation_status_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
     compression_metrics  JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    raw_compression_ratio DOUBLE PRECISION,
     best_compression_ratio DOUBLE PRECISION,
     best_compression_percent_reduction DOUBLE PRECISION,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -366,6 +367,7 @@ class AnalysisRecord(BaseModel):
     provider_cost: float | None
     raw_compile_ok: bool | None = None
     extracted_compile_ok: bool | None = None
+    raw_compression_ratio: float | None = None
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
 
@@ -385,6 +387,7 @@ class AnalysisSummary(BaseModel):
     raw_compile_pass_count: StrictInt
     extracted_compile_pass_count: StrictInt
     extraction_lift: StrictInt
+    avg_raw_compression_ratio: float | None = None
     avg_best_compression_ratio: float | None = None
     avg_best_compression_percent_reduction: float | None = None
 
@@ -1081,6 +1084,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     evaluation_failure_count = %s,
                     evaluation_status_counts = %s,
                     compression_metrics = %s,
+                    raw_compression_ratio = %s,
                     best_compression_ratio = %s,
                     best_compression_percent_reduction = %s,
                     scored_at = now(),
@@ -1110,6 +1114,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                             )
                         }
                     ),
+                    result.raw_compression_ratio,
                     result.best_compression_ratio,
                     result.best_compression_percent_reduction,
                     result.prediction_id,
@@ -1319,6 +1324,7 @@ def reset_generation_errors_for_retry(
                     evaluation_failure_count = NULL,
                     evaluation_status_counts = '{}'::jsonb,
                     compression_metrics = '{}'::jsonb,
+                    raw_compression_ratio = NULL,
                     best_compression_ratio = NULL,
                     best_compression_percent_reduction = NULL,
                     scored_at = NULL,
@@ -1726,6 +1732,7 @@ def fetch_analysis_records(
                     provider_cost,
                     raw_compile_ok,
                     extracted_compile_ok,
+                    raw_compression_ratio,
                     best_compression_ratio,
                     best_compression_percent_reduction
                 FROM dr_dspy_encdec_eval_predictions
@@ -1758,8 +1765,9 @@ def fetch_analysis_records(
             provider_cost=row[8],
             raw_compile_ok=row[9],
             extracted_compile_ok=row[10],
-            best_compression_ratio=row[11],
-            best_compression_percent_reduction=row[12],
+            raw_compression_ratio=row[11],
+            best_compression_ratio=row[12],
+            best_compression_percent_reduction=row[13],
         )
         for row in rows
     ]
@@ -1789,6 +1797,7 @@ def summarize_analysis_records(
         provider_cost=lambda record: record.provider_cost,
         raw_compile_ok=lambda record: record.raw_compile_ok,
         extracted_compile_ok=lambda record: record.extracted_compile_ok,
+        raw_compression_ratio=lambda record: record.raw_compression_ratio,
         best_compression_ratio=lambda record: record.best_compression_ratio,
         best_compression_percent_reduction=(
             lambda record: record.best_compression_percent_reduction

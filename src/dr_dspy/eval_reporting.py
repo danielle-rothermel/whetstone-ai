@@ -38,6 +38,7 @@ class AnalysisSummaryLike(Protocol):
     raw_compile_pass_count: int
     extracted_compile_pass_count: int
     extraction_lift: int
+    avg_raw_compression_ratio: float | None
     avg_best_compression_ratio: float | None
     avg_best_compression_percent_reduction: float | None
 
@@ -172,6 +173,7 @@ def analysis_markdown(
         "Raw Compile",
         "Extracted Compile",
         "Extraction Lift",
+        "Avg Raw Ratio",
         "Avg Compression Ratio",
         "Avg Compression Reduction",
         "Price Var",
@@ -216,6 +218,7 @@ def analysis_markdown(
             str(summary.raw_compile_pass_count),
             str(summary.extracted_compile_pass_count),
             str(summary.extraction_lift),
+            analysis.format_float(summary.avg_raw_compression_ratio),
             analysis.format_float(summary.avg_best_compression_ratio),
             analysis.format_float(
                 summary.avg_best_compression_percent_reduction
@@ -241,6 +244,7 @@ def analysis_markdown(
                 )
             ),
             str(sum(summary.extraction_lift for summary in summaries)),
+            "",
             "",
             "",
             "",
@@ -294,6 +298,7 @@ def analysis_table(
         "Raw Compile",
         "Extracted Compile",
         "Lift",
+        "Raw Ratio",
         "Comp Ratio",
         "Comp Reduction",
     ):
@@ -339,6 +344,7 @@ def analysis_table(
             str(summary.raw_compile_pass_count),
             str(summary.extracted_compile_pass_count),
             str(summary.extraction_lift),
+            analysis.format_float(summary.avg_raw_compression_ratio),
             analysis.format_float(summary.avg_best_compression_ratio),
             analysis.format_float(
                 summary.avg_best_compression_percent_reduction
@@ -370,6 +376,7 @@ def analysis_table(
                 )
             ),
             str(sum(summary.extraction_lift for summary in summaries)),
+            "",
             "",
             "",
             style=TABLE_TOTAL_ROW_STYLE,

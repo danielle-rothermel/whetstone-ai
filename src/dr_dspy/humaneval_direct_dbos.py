@@ -217,6 +217,8 @@ PREDICTION_MIGRATION_SQL = (
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS best_compression_percent_reduction "
     "DOUBLE PRECISION",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS raw_compression_ratio DOUBLE PRECISION",
 )
 PREDICTION_CONSTRAINT_MIGRATION_SQL = (
     """
@@ -368,6 +370,7 @@ class AnalysisRecord(BaseModel):
     provider_cost: float | None
     raw_compile_ok: bool | None = None
     extracted_compile_ok: bool | None = None
+    raw_compression_ratio: float | None = None
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
 
@@ -387,6 +390,7 @@ class AnalysisSummary(BaseModel):
     raw_compile_pass_count: StrictInt
     extracted_compile_pass_count: StrictInt
     extraction_lift: StrictInt
+    avg_raw_compression_ratio: float | None = None
     avg_best_compression_ratio: float | None = None
     avg_best_compression_percent_reduction: float | None = None
 
@@ -972,6 +976,7 @@ def reset_generation_errors_for_retry(
                     evaluation_failure_count = NULL,
                     evaluation_status_counts = '{}'::jsonb,
                     compression_metrics = '{}'::jsonb,
+                    raw_compression_ratio = NULL,
                     best_compression_ratio = NULL,
                     best_compression_percent_reduction = NULL,
                     scored_at = NULL,
@@ -1034,6 +1039,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     evaluation_failure_count = %s,
                     evaluation_status_counts = %s,
                     compression_metrics = %s,
+                    raw_compression_ratio = %s,
                     best_compression_ratio = %s,
                     best_compression_percent_reduction = %s,
                     updated_at = now(),
@@ -1063,6 +1069,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                             )
                         }
                     ),
+                    result.raw_compression_ratio,
                     result.best_compression_ratio,
                     result.best_compression_percent_reduction,
                     result.prediction_id,
@@ -1276,6 +1283,7 @@ def fetch_analysis_records(
                     provider_cost,
                     raw_compile_ok,
                     extracted_compile_ok,
+                    raw_compression_ratio,
                     best_compression_ratio,
                     best_compression_percent_reduction
                 FROM dr_dspy_eval_predictions
@@ -1298,8 +1306,9 @@ def fetch_analysis_records(
             provider_cost=row[5],
             raw_compile_ok=row[6],
             extracted_compile_ok=row[7],
-            best_compression_ratio=row[8],
-            best_compression_percent_reduction=row[9],
+            raw_compression_ratio=row[8],
+            best_compression_ratio=row[9],
+            best_compression_percent_reduction=row[10],
         )
         for row in rows
     ]
@@ -1320,6 +1329,7 @@ def summarize_analysis_records(
         provider_cost=lambda record: record.provider_cost,
         raw_compile_ok=lambda record: record.raw_compile_ok,
         extracted_compile_ok=lambda record: record.extracted_compile_ok,
+        raw_compression_ratio=lambda record: record.raw_compression_ratio,
         best_compression_ratio=lambda record: record.best_compression_ratio,
         best_compression_percent_reduction=(
             lambda record: record.best_compression_percent_reduction

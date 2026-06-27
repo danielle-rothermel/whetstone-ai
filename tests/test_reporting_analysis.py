@@ -28,6 +28,7 @@ class Summary(BaseModel):
     raw_compile_pass_count: int = 0
     extracted_compile_pass_count: int = 0
     extraction_lift: int = 0
+    avg_raw_compression_ratio: float | None = None
     avg_best_compression_ratio: float | None = None
     avg_best_compression_percent_reduction: float | None = None
 
