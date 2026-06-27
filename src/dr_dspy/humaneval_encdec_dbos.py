@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS
 from psycopg.types.json import Jsonb
 from pydantic import (
     BaseModel,
@@ -1333,15 +1333,12 @@ QUEUE_NAME_CONFIG = shared_dbos.QueueNameConfig(
 
 QueueSelection = shared_dbos.QueueSelection
 EvalDbosConfig = shared_dbos.EvalDbosConfig
-EvalQueueNames = shared_dbos.EvalQueueNames
 DbPoolConfig = shared_dbos.DbPoolConfig
 OpenFileLimitResult = shared_dbos.OpenFileLimitResult
 DB_POOL_AUTO = shared_dbos.DB_POOL_AUTO
 DB_POOLS = shared_dbos.DB_POOLS
 connect_db = shared_dbos.connect_db
 close_db_connection_pools = shared_dbos.close_db_connection_pools
-generation_workflow_id = shared_dbos.generation_workflow_id
-score_workflow_id = shared_dbos.score_workflow_id
 WorkerMonitorConfig = shared_worker_monitor.WorkerMonitorConfig
 WorkerQueueSnapshot = shared_worker_monitor.WorkerQueueSnapshot
 open_file_limit_line = shared_dbos.open_file_limit_line
@@ -1443,10 +1440,6 @@ def build_lm(
         max_completion_tokens=experiment_config().default_max_completion_tokens,
     )
 
-
-prediction_field_text = shared_dspy_runner.prediction_field_text
-
-
 def run_predictor(
     *,
     signature: type[dspy.Signature],
@@ -1471,7 +1464,6 @@ def configure_dbos_runtime(
     queue: QueueSelection | None = None,
     consume_queues: bool = True,
 ) -> None:
-    shared_dbos.DBOS = DBOS
     shared_dbos.configure_dbos_runtime(
         config,
         app_name=DBOS_APP_NAME,
@@ -1520,8 +1512,6 @@ def enqueue_generation_jobs(
     retry_token: str | None = None,
 ) -> None:
     _ = experiment_name
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_generation_workflows(
         database_url,
         jobs,
@@ -1540,8 +1530,6 @@ def enqueue_score_job(
     timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_score_workflow(
         database_url,
         prediction_id,
@@ -1561,8 +1549,6 @@ def enqueue_score_jobs(
     timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_score_workflows(
         database_url,
         prediction_ids,
@@ -1795,38 +1781,6 @@ def write_analysis_csv(
         csv_path=csv_path,
         fieldnames=list(AnalysisSummary.model_fields),
     )
-
-
-def fetch_prediction_phase_counts(
-    database_url: str,
-    *,
-    status_column: str,
-    experiment_name: str,
-) -> dict[str, int]:
-    return shared_worker_monitor.fetch_prediction_phase_counts(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        status_column=status_column,
-        experiment_name=experiment_name,
-    )
-
-
-def fetch_dbos_status_counts(
-    dbos_system_database_url: str, queue_names: Sequence[str]
-) -> dict[str, int]:
-    return shared_worker_monitor.fetch_dbos_status_counts(
-        dbos_system_database_url, queue_names
-    )
-
-
-def fetch_worker_queue_snapshot(
-    config: WorkerMonitorConfig,
-) -> WorkerQueueSnapshot:
-    return shared_worker_monitor.fetch_worker_queue_snapshot(config)
-
-
-worker_monitor_line = shared_worker_monitor.worker_monitor_line
-worker_monitor_style = shared_worker_monitor.worker_monitor_style
 
 
 def start_worker_monitor(

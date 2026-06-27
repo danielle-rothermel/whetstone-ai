@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import resource
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
@@ -10,9 +9,8 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS
 from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -45,8 +43,6 @@ from dr_dspy.scoring import (
 )
 from dr_dspy.signatures import DspySignatureConfig
 from dspy.signatures.signature import make_signature
-
-psycopg = shared_dbos.psycopg
 
 # Configuration
 
@@ -199,11 +195,6 @@ PREDICTION_MIGRATION_SQL = (
     "ADD COLUMN IF NOT EXISTS best_compression_percent_reduction "
     "DOUBLE PRECISION",
 )
-
-
-GENERATION_REPAIR_ERROR = shared_eval_repair.GENERATION_REPAIR_ERROR
-SCORING_REPAIR_ERROR = shared_eval_repair.SCORING_REPAIR_ERROR
-
 
 class HumanEvalSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -374,10 +365,6 @@ def solve_signature() -> type[dspy.Signature]:
             "create_app(config) from the experiment script first."
         )
     return _SOLVE_SIGNATURE
-
-
-DB_POOLS: dict[str, ConnectionPool] = {}
-
 
 def resolve_worker_log_path(
     *,
@@ -952,30 +939,6 @@ def reset_generation_errors_for_retry(
             return cur.rowcount if cur.rowcount is not None else 0
 
 
-def mark_started_generations_as_repaired_errors(
-    database_url: str,
-    *,
-    prediction_ids: Sequence[str],
-) -> int:
-    return shared_eval_repair.mark_started_generations_as_repaired_errors(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        prediction_ids=prediction_ids,
-    )
-
-
-def mark_stranded_scoring_as_errors(
-    database_url: str,
-    *,
-    prediction_ids: Sequence[str],
-) -> int:
-    return shared_eval_repair.mark_stranded_scoring_as_errors(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        prediction_ids=prediction_ids,
-    )
-
-
 def mark_scoring_queued(
     database_url: str, prediction_ids: Sequence[str]
 ) -> int:
@@ -1508,16 +1471,7 @@ connect_db = shared_dbos.connect_db
 
 
 def raise_open_file_limit(requested: int) -> OpenFileLimitResult:
-    shared_dbos.resource = resource
     return shared_dbos.raise_open_file_limit(requested)
-
-
-def resolve_database_url(database_url: str | None) -> str:
-    return shared_dbos.resolve_database_url(
-        database_url,
-        database_url_env=DATABASE_URL_ENV,
-        error_suffix="for this Postgres-only DBOS harness",
-    )
 
 
 def build_eval_dbos_config(
@@ -1544,7 +1498,6 @@ def configure_worker_db_connection_pools(
     queue: QueueSelection,
     raw_max_size: str,
 ) -> DbPoolConfig:
-    shared_dbos.ConnectionPool = ConnectionPool
     return shared_dbos.configure_worker_db_connection_pools(
         config, queue=queue, raw_max_size=raw_max_size
     )
@@ -1562,62 +1515,10 @@ def create_eval_schema(database_url: str) -> None:
     )
 
 
-def experiment_hash(experiment_name: str) -> str:
-    return shared_dbos.experiment_hash(
-        experiment_name, hash_length=EXPERIMENT_QUEUE_HASH_LENGTH
-    )
-
-
-def eval_queue_names(experiment_name: str) -> shared_dbos.EvalQueueNames:
-    return shared_dbos.eval_queue_names(experiment_name, QUEUE_NAME_CONFIG)
-
-
-def register_eval_queues(
-    config: EvalDbosConfig, *, experiment_name: str
-) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.register_eval_queues(
-        config, experiment_name=experiment_name, queue_config=QUEUE_NAME_CONFIG
-    )
-
-
-def eval_queue_concurrency_by_name(
-    config: EvalDbosConfig, *, experiment_name: str
-) -> dict[str, int]:
-    return shared_dbos.eval_queue_concurrency_by_name(
-        config, experiment_name=experiment_name, queue_config=QUEUE_NAME_CONFIG
-    )
-
-
-def sync_existing_dbos_queue_concurrency(
-    config: EvalDbosConfig, *, experiment_name: str
-) -> int:
-    return shared_dbos.sync_existing_dbos_queue_concurrency(
-        config, experiment_name=experiment_name, queue_config=QUEUE_NAME_CONFIG
-    )
-
-
-def queue_config_line(config: EvalDbosConfig, *, experiment_name: str) -> str:
-    return shared_dbos.queue_config_line(
-        config, experiment_name=experiment_name
-    )
-
-
 def queue_names_for_selection(
     selection: QueueSelection, *, experiment_name: str
 ) -> tuple[str, ...]:
     return shared_dbos.queue_names_for_selection(
-        selection,
-        experiment_name=experiment_name,
-        queue_config=QUEUE_NAME_CONFIG,
-    )
-
-
-def listen_to_selected_queue(
-    selection: QueueSelection, *, experiment_name: str
-) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.listen_to_selected_queue(
         selection,
         experiment_name=experiment_name,
         queue_config=QUEUE_NAME_CONFIG,
@@ -1631,7 +1532,6 @@ def configure_dbos_runtime(
     queue: QueueSelection | None = None,
     consume_queues: bool = True,
 ) -> None:
-    shared_dbos.DBOS = DBOS
     shared_dbos.configure_dbos_runtime(
         config,
         app_name=DBOS_APP_NAME,
@@ -1762,8 +1662,6 @@ def enqueue_generation_jobs(
     score_timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_generation_workflows(
         database_url,
         jobs,
@@ -1782,8 +1680,6 @@ def enqueue_score_job(
     timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_score_workflow(
         database_url,
         prediction_id,
@@ -1803,8 +1699,6 @@ def enqueue_score_jobs(
     timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    shared_dbos.DBOS = DBOS
-    shared_dbos.SetWorkflowID = SetWorkflowID
     shared_dbos.enqueue_score_workflows(
         database_url,
         prediction_ids,
@@ -1813,45 +1707,6 @@ def enqueue_score_jobs(
         workflow=score_prediction_workflow,
         timeout=timeout,
         retry_token=retry_token,
-    )
-
-
-def fetch_prediction_phase_counts(
-    database_url: str,
-    *,
-    status_column: str,
-    experiment_name: str,
-) -> dict[str, int]:
-    return shared_worker_monitor.fetch_prediction_phase_counts(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        status_column=status_column,
-        experiment_name=experiment_name,
-    )
-
-
-def fetch_dbos_status_counts(
-    dbos_system_database_url: str, queue_names: Sequence[str]
-) -> dict[str, int]:
-    return shared_worker_monitor.fetch_dbos_status_counts(
-        dbos_system_database_url, queue_names
-    )
-
-
-def fetch_worker_queue_snapshot(
-    config: WorkerMonitorConfig,
-) -> WorkerQueueSnapshot:
-    return shared_worker_monitor.fetch_worker_queue_snapshot(config)
-
-
-def run_worker_monitor(
-    config: WorkerMonitorConfig, stop_event: threading.Event
-) -> None:
-    shared_worker_monitor.run_worker_monitor(
-        config,
-        stop_event,
-        operator_log=operator_log,
-        emit_worker_detail_log=emit_worker_detail_log,
     )
 
 

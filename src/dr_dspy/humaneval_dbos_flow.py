@@ -7,33 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import typer
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 from rich.console import Console
 
 from dr_dspy import analysis
 from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
 from dr_dspy.lm_utils import stable_json
 from dr_dspy.worker_monitor import WorkerMonitorConfig
-
-
-class AnalysisSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: StrictStr
-    temperature: float
-    sample_count: StrictInt
-    scored_count: StrictInt
-    total_price: float | None
-    avg_price_per_sample: float | None
-    price_variance: float | None
-    avg_performance: float
-    performance_variance: float | None
-    avg_repetition_variance: float | None
-    raw_compile_pass_count: StrictInt
-    extracted_compile_pass_count: StrictInt
-    extraction_lift: StrictInt
-    avg_best_compression_ratio: float | None = None
-    avg_best_compression_percent_reduction: float | None = None
 
 
 def parse_float_csv(raw: str, *, value_name: str = "value") -> list[float]:
