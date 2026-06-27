@@ -9,10 +9,18 @@ from typing import Any
 import typer
 from rich.console import Console
 
-from dr_dspy import analysis
+from dr_dspy import analysis, dbos_runtime, eval_reporting
 from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
+from dr_dspy.eval_logging import operator_log as _console_operator_log
+from dr_dspy.experiment_backend import ExperimentBackend
 from dr_dspy.lm_utils import stable_json
 from dr_dspy.worker_monitor import WorkerMonitorConfig
+
+_CONSOLE = Console()
+
+
+def operator_log(line: str, *, style: str | None = None) -> None:
+    _console_operator_log(_CONSOLE, line, style=style)
 
 
 def parse_float_csv(raw: str, *, value_name: str = "value") -> list[float]:
@@ -44,201 +52,30 @@ def stable_prediction_id_from_dimensions(
     return digest[:digest_length]
 
 
-def run_generation_workflow[GenerationResultT](
-    *,
-    database_url: str,
-    prediction_id: str,
-    experiment_name: str,
-    score_timeout: float,
-    generate_prediction: Callable[[str, str], GenerationResultT],
-    record_generation_success: Callable[[str, GenerationResultT], None],
-    record_generation_error: Callable[[str, str, str], None],
-    enqueue_score: Callable[[str, str, str, float], None],
-    mark_scoring_queued: Callable[[str, str], None],
-) -> str:
-    try:
-        result = generate_prediction(database_url, prediction_id)
-        record_generation_success(database_url, result)
-    except Exception as e:
-        record_generation_error(database_url, prediction_id, repr(e))
-        return "generation_error"
-    enqueue_score(database_url, prediction_id, experiment_name, score_timeout)
-    mark_scoring_queued(database_url, prediction_id)
-    return "generated"
-
-
-def run_score_workflow[ScoreResultT](
-    *,
-    database_url: str,
-    prediction_id: str,
-    timeout: float,
-    score_prediction: Callable[[str, str, float], ScoreResultT],
-    record_score_success: Callable[[str, ScoreResultT], None],
-    record_score_error: Callable[[str, str, str], None],
-) -> str:
-    try:
-        result = score_prediction(database_url, prediction_id, timeout)
-        record_score_success(database_url, result)
-        return "scored"
-    except Exception as e:
-        record_score_error(database_url, prediction_id, repr(e))
-        return "score_error"
-
-
-def run_generate_prediction_step[JobT, GenerationResultT](
-    *,
-    database_url: str,
-    prediction_id: str,
-    mark_generation_started: Callable[[str, str], None],
-    fetch_prediction_job: Callable[[str, str], JobT],
-    prediction_context_from_job: Callable[[JobT], Any],
-    emit_prediction_log_event: Callable[..., None],
-    generate_code_for_job: Callable[[JobT], GenerationResultT],
-) -> GenerationResultT:
-    mark_generation_started(database_url, prediction_id)
-    job = fetch_prediction_job(database_url, prediction_id)
-    emit_prediction_log_event(
-        "generation_started",
-        prediction_context_from_job(job),
-    )
-    return generate_code_for_job(job)
-
-
-def run_record_generation_success_step[GenerationResultT](
-    *,
-    database_url: str,
-    result: GenerationResultT,
-    prediction_id: str,
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    success_extra: Callable[[GenerationResultT], Mapping[str, Any]],
-    record_generation_success: Callable[[str, GenerationResultT], None],
-) -> None:
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
-        "generation_succeeded",
-        context,
-        extra=success_extra(result),
-    )
-    record_generation_success(database_url, result)
-
-
-def run_record_generation_error_step(
-    *,
-    database_url: str,
-    prediction_id: str,
-    error: str,
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    record_generation_error: Callable[[str, str, str], None],
-) -> None:
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
-        "generation_failed",
-        context,
-        extra={"error": error},
-    )
-    record_generation_error(database_url, prediction_id, error)
-
-
-def run_mark_scoring_queued_step(
-    *,
-    database_url: str,
-    prediction_id: str,
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    mark_scoring_queued: Callable[[str, Sequence[str]], int],
-) -> None:
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event("scoring_enqueued", context)
-    mark_scoring_queued(database_url, [prediction_id])
-
-
-def run_score_prediction_step[ScoreResultT](
-    *,
-    database_url: str,
-    prediction_id: str,
-    timeout: float,
-    mark_scoring_started: Callable[[str, str], None],
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    score_generated_prediction: Callable[[str, str, float], ScoreResultT],
-) -> ScoreResultT:
-    mark_scoring_started(database_url, prediction_id)
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
-        "scoring_started",
-        context,
-        extra={"timeout": timeout},
-    )
-    return score_generated_prediction(database_url, prediction_id, timeout)
-
-
-def run_record_score_success_step[ScoreResultT](
-    *,
-    database_url: str,
-    result: ScoreResultT,
-    prediction_id: str,
-    score: float,
-    error: str | None,
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    record_score_success: Callable[[str, ScoreResultT], None],
-) -> None:
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
-        "scoring_succeeded",
-        context,
-        extra={"score": score, "scoring_error": error},
-    )
-    record_score_success(database_url, result)
-
-
-def run_record_score_error_step(
-    *,
-    database_url: str,
-    prediction_id: str,
-    error: str,
-    fetch_prediction_log_context: Callable[[str, str], Any],
-    emit_prediction_log_event: Callable[..., None],
-    record_score_error: Callable[[str, str, str], None],
-) -> None:
-    context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
-        "scoring_failed",
-        context,
-        extra={"error": error},
-    )
-    record_score_error(database_url, prediction_id, error)
-
-
-def run_submit_jobs[JobT](
+def run_submit_jobs(
+    backend: ExperimentBackend,
     *,
     config: EvalDbosConfig,
     experiment_name: str,
     seed: int,
     sample_count: int,
     metadata: Mapping[str, Any],
-    jobs: Sequence[JobT],
+    jobs: Sequence[Any],
     score_timeout: float,
-    create_schema: Callable[[str], None],
-    upsert_experiment: Callable[..., None],
-    insert_prediction_jobs: Callable[[str, Sequence[JobT]], int],
-    configure_runtime: Callable[[EvalDbosConfig, str], None],
-    enqueue_generation_jobs: Callable[[str, Sequence[JobT], float], None],
-    operator_log: Callable[..., None],
 ) -> None:
-    create_schema(config.database_url)
-    upsert_experiment(
+    backend.create_schema(config.database_url)
+    backend.upsert_experiment(
         config.database_url,
         experiment_name=experiment_name,
         seed=seed,
         sample_count=sample_count,
         metadata=metadata,
     )
-    inserted = insert_prediction_jobs(config.database_url, jobs)
-    configure_runtime(config, experiment_name)
-    enqueue_generation_jobs(config.database_url, jobs, score_timeout)
+    inserted = backend.insert_prediction_jobs(config.database_url, jobs)
+    backend.configure_runtime(config, experiment_name)
+    backend.enqueue_generation_jobs(
+        config.database_url, jobs, score_timeout=score_timeout
+    )
     operator_log(
         f"inserted {inserted} new prediction rows",
         style="green" if inserted else "yellow",
@@ -250,60 +87,55 @@ def run_submit_jobs[JobT](
 
 
 def run_status_command(
+    backend: ExperimentBackend,
     *,
     database_url: str,
     experiment_name: str | None,
-    fetch_status_counts: Callable[..., Sequence[Mapping[str, Any]]],
-    status_counts_table: Callable[..., object],
-    console: Console,
-    operator_log: Callable[..., None],
 ) -> None:
-    rows = fetch_status_counts(database_url, experiment_name=experiment_name)
+    rows = backend.fetch_status_counts(
+        database_url, experiment_name=experiment_name
+    )
     if not rows:
         operator_log("no prediction rows found", style="yellow")
         return
-    console.print(status_counts_table(rows, experiment_name=experiment_name))
+    _CONSOLE.print(
+        backend.status_counts_table(rows, experiment_name=experiment_name)
+    )
 
 
 def run_enqueue_scores_command(
+    backend: ExperimentBackend,
     *,
     config: EvalDbosConfig,
     experiment_name: str,
     limit: int,
     timeout: float,
-    create_schema: Callable[[str], None],
-    fetch_scoreable_prediction_ids: Callable[..., list[str]],
-    configure_runtime: Callable[[EvalDbosConfig, str], None],
-    enqueue_score_jobs: Callable[[str, Sequence[str], str, float], None],
-    mark_scoring_queued: Callable[[str, Sequence[str]], int],
-    enqueue_scores_line: Callable[..., str],
-    enqueue_scores_style: Callable[[int], str],
-    operator_log: Callable[..., None],
 ) -> None:
-    create_schema(config.database_url)
-    prediction_ids = fetch_scoreable_prediction_ids(
+    backend.create_schema(config.database_url)
+    prediction_ids = backend.fetch_scoreable_prediction_ids(
         config.database_url, experiment_name=experiment_name, limit=limit
     )
-    configure_runtime(config, experiment_name)
-    enqueue_score_jobs(
+    backend.configure_runtime(config, experiment_name)
+    backend.enqueue_score_jobs(
         config.database_url,
         prediction_ids,
-        experiment_name,
-        timeout,
+        experiment_name=experiment_name,
+        timeout=timeout,
     )
-    mark_scoring_queued(config.database_url, prediction_ids)
+    backend.mark_scoring_queued(config.database_url, prediction_ids)
     operator_log(
-        enqueue_scores_line(
+        eval_reporting.enqueue_scores_line(
             experiment_name=experiment_name,
             selected_count=len(prediction_ids),
             limit=limit,
             timeout=timeout,
         ),
-        style=enqueue_scores_style(len(prediction_ids)),
+        style=eval_reporting.enqueue_scores_style(len(prediction_ids)),
     )
 
 
 def run_repair_command(
+    backend: ExperimentBackend,
     *,
     config: EvalDbosConfig,
     experiment_name: str,
@@ -311,38 +143,36 @@ def run_repair_command(
     scoring_limit: int,
     score_timeout: float,
     apply: bool,
-    build_repair_plan: Callable[..., Any],
-    apply_repair: Callable[..., Any],
-    repair_plan_line: Callable[..., str],
-    repair_plan_style: Callable[..., str],
-    repair_apply_line: Callable[..., str],
-    plan_has_work: Callable[[Any], bool],
-    operator_log: Callable[..., None],
 ) -> None:
-    plan = build_repair_plan(
+    plan = backend.build_repair_plan(
         config.database_url,
         dbos_system_database_url=config.dbos_system_database_url,
         experiment_name=experiment_name,
         generation_limit=generation_limit,
         scoring_limit=scoring_limit,
     )
+    counts = {
+        "gen_stranded": len(plan.stranded_generations),
+        "gen_errors": len(plan.generation_retry_prediction_ids),
+        "score_pending": len(plan.pending_scoring_prediction_ids),
+        "score_stranded": len(plan.stranded_scoring),
+        "score_errors": len(plan.scoring_retry_prediction_ids),
+    }
     operator_log(
-        repair_plan_line(
-            experiment_name=experiment_name,
-            plan=plan,
-            apply=apply,
+        eval_reporting.repair_plan_line(
+            experiment_name=experiment_name, apply=apply, **counts
         ),
-        style=repair_plan_style(plan, apply=apply),
+        style=eval_reporting.repair_plan_style(apply=apply, **counts),
     )
     if not apply:
-        if plan_has_work(plan):
+        if any(counts.values()):
             operator_log(
                 "dry run only; rerun with --apply to reconcile statuses and "
                 "enqueue fresh retry workflows",
                 style="yellow",
             )
         return
-    result = apply_repair(
+    result = backend.apply_repair(
         config,
         experiment_name=experiment_name,
         generation_limit=generation_limit,
@@ -350,50 +180,51 @@ def run_repair_command(
         score_timeout=score_timeout,
     )
     operator_log(
-        repair_apply_line(experiment_name=experiment_name, result=result),
+        eval_reporting.repair_apply_line(
+            experiment_name=experiment_name,
+            stranded_generations_marked=result.stranded_generations_marked,
+            generation_retries_enqueued=result.generation_retries_enqueued,
+            stranded_scoring_marked=result.stranded_scoring_marked,
+            pending_scoring_enqueued=result.pending_scoring_enqueued,
+            scoring_retries_enqueued=result.scoring_retries_enqueued,
+            repair_token=result.repair_token,
+        ),
         style="green",
     )
 
 
-def run_analyze_command[RecordT, SummaryT](
+def run_analyze_command(
+    backend: ExperimentBackend,
     *,
     database_url: str,
     experiment_name: str,
     csv_path: Path | None,
     markdown: bool,
-    fetch_analysis_records: Callable[..., Sequence[RecordT]],
-    summarize_analysis_records: Callable[
-        [Sequence[RecordT]], Sequence[SummaryT]
-    ],
-    analysis_markdown: Callable[..., str],
-    analysis_table: Callable[..., object],
-    write_analysis_csv: Callable[[Sequence[SummaryT], Path], None],
-    console: Console,
-    operator_log: Callable[..., None],
 ) -> None:
-    records = fetch_analysis_records(
+    records = backend.fetch_analysis_records(
         database_url, experiment_name=experiment_name
     )
-    summaries = summarize_analysis_records(records)
+    summaries = backend.summarize_analysis_records(records)
     if markdown:
         typer.echo(
-            analysis_markdown(
+            backend.analysis_markdown(
                 experiment_name=experiment_name, summaries=summaries
             ),
             nl=False,
         )
     else:
-        console.print(
-            analysis_table(
+        _CONSOLE.print(
+            backend.analysis_table(
                 experiment_name=experiment_name, summaries=summaries
             )
         )
     if csv_path is not None:
-        write_analysis_csv(summaries, csv_path)
+        backend.write_analysis_csv(summaries, csv_path)
         operator_log(f"wrote {csv_path}", style="green")
 
 
 def run_worker_command(
+    backend: ExperimentBackend,
     *,
     config: EvalDbosConfig,
     experiment_name: str,
@@ -404,29 +235,14 @@ def run_worker_command(
     monitor_interval: float,
     monitor_summary_interval: float,
     db_pool_max_size: str,
-    prediction_table: str,
-    db_pools: Mapping[str, object],
-    raise_open_file_limit: Callable[[int], Any],
-    open_file_limit_line: Callable[[Any], str],
-    open_file_limit_style: Callable[[Any], str],
-    create_schema: Callable[[str], None],
-    configure_pooled_worker_runtime: Callable[..., Any],
-    resolve_worker_log_path: Callable[..., Path],
-    configure_worker_file_logging: Callable[[Path], object],
-    queue_names_for_selection: Callable[..., tuple[str, ...]],
-    start_worker_monitor: Callable[
-        [WorkerMonitorConfig, threading.Event], threading.Thread
-    ],
-    close_db_connection_pools: Callable[[], None],
-    operator_log: Callable[..., None],
 ) -> None:
-    file_limit = raise_open_file_limit(open_file_limit)
+    file_limit = dbos_runtime.raise_open_file_limit(open_file_limit)
     operator_log(
-        open_file_limit_line(file_limit),
-        style=open_file_limit_style(file_limit),
+        dbos_runtime.open_file_limit_line(file_limit),
+        style=dbos_runtime.open_file_limit_style(file_limit),
     )
-    create_schema(config.database_url)
-    pool_config = configure_pooled_worker_runtime(
+    backend.create_schema(config.database_url)
+    pool_config = backend.configure_pooled_worker_runtime(
         config,
         experiment_name=experiment_name,
         queue=queue,
@@ -434,16 +250,16 @@ def run_worker_command(
     )
     operator_log(
         f"{'DB Pool':<14} | max_size={pool_config.max_size:>5} | "
-        f"urls={len(db_pools):>2}",
+        f"urls={len(dbos_runtime.DB_POOLS):>2}",
         style="cyan",
     )
-    resolved_log_file = resolve_worker_log_path(
+    resolved_log_file = backend.resolve_worker_log_path(
         experiment_name=experiment_name,
         queue=queue,
         log_file=log_file,
     )
-    configure_worker_file_logging(resolved_log_file)
-    selected_queue_names = queue_names_for_selection(
+    backend.configure_worker_file_logging(resolved_log_file)
+    selected_queue_names = backend.queue_names_for_selection(
         queue, experiment_name=experiment_name
     )
     operator_log(
@@ -460,13 +276,15 @@ def run_worker_command(
             database_url=config.database_url,
             dbos_system_database_url=config.dbos_system_database_url,
             experiment_name=experiment_name,
-            prediction_table=prediction_table,
+            prediction_table=backend.prediction_table,
             queue_selection=queue,
             queue_names=selected_queue_names,
             interval_seconds=monitor_interval,
             summary_interval_seconds=monitor_summary_interval,
         )
-        monitor_thread = start_worker_monitor(monitor_config, stop_event)
+        monitor_thread = backend.start_worker_monitor(
+            monitor_config, stop_event
+        )
         operator_log(
             "worker monitor enabled: "
             f"interval={monitor_interval}s, "
@@ -481,15 +299,14 @@ def run_worker_command(
         stop_event.set()
         if monitor_thread is not None:
             monitor_thread.join(timeout=1.0)
-        close_db_connection_pools()
+        dbos_runtime.close_db_connection_pools()
 
 
 def summarize_analysis_records[RecordT, SummaryT](
     records: Sequence[RecordT],
     *,
     group_key: Callable[[RecordT], object],
-    model_label: Callable[[RecordT], str],
-    temperature: Callable[[RecordT], float],
+    dimension_values: Callable[[RecordT], Mapping[str, Any]],
     task_id: Callable[[RecordT], str],
     score: Callable[[RecordT], float],
     provider_cost: Callable[[RecordT], float | None],
@@ -498,9 +315,9 @@ def summarize_analysis_records[RecordT, SummaryT](
     best_compression_ratio: Callable[[RecordT], float | None] = (
         lambda _record: None
     ),
-    best_compression_percent_reduction: Callable[
-        [RecordT], float | None
-    ] = (lambda _record: None),
+    best_compression_percent_reduction: Callable[[RecordT], float | None] = (
+        lambda _record: None
+    ),
     summary_factory: Callable[..., SummaryT],
 ) -> list[SummaryT]:
     grouped: dict[object, list[RecordT]] = {}
@@ -508,7 +325,9 @@ def summarize_analysis_records[RecordT, SummaryT](
         grouped.setdefault(group_key(record), []).append(record)
 
     summaries: list[SummaryT] = []
-    for _key, group in sorted(grouped.items(), key=lambda item: item[0]):
+    # repr keeps the sort total-ordered even when a group key tuple mixes
+    # None and float (e.g. a swept budget_ratio of `none,0.5`).
+    for _key, group in sorted(grouped.items(), key=lambda item: repr(item[0])):
         scores = [score(record) for record in group]
         costs: list[float] = []
         for record in group:
@@ -541,15 +360,13 @@ def summarize_analysis_records[RecordT, SummaryT](
         compression_reductions = [
             reduction
             for reduction in (
-                best_compression_percent_reduction(record)
-                for record in group
+                best_compression_percent_reduction(record) for record in group
             )
             if reduction is not None
         ]
         summaries.append(
             summary_factory(
-                model=model_label(group[0]),
-                temperature=temperature(group[0]),
+                dimensions=dict(dimension_values(group[0])),
                 sample_count=len(by_task),
                 scored_count=len(group),
                 total_price=total_price,

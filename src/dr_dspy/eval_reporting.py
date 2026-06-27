@@ -26,8 +26,7 @@ class StatusDimension(BaseModel):
 
 
 class AnalysisSummaryLike(Protocol):
-    model: str
-    temperature: float
+    dimensions: dict[str, Any]
     sample_count: int
     scored_count: int
     total_price: float | None
@@ -43,6 +42,12 @@ class AnalysisSummaryLike(Protocol):
     avg_best_compression_percent_reduction: float | None
 
     def model_dump(self, *, mode: str) -> dict[str, Any]: ...
+
+
+def _dimension_cell(value: Any) -> str:
+    if isinstance(value, float):
+        return analysis.format_float(value)
+    return str(value)
 
 
 def validate_sql_identifier(identifier: str) -> None:
@@ -153,17 +158,34 @@ def status_counts_table(
 
 
 def analysis_markdown(
-    *, experiment_name: str, summaries: Sequence[AnalysisSummaryLike]
+    *,
+    experiment_name: str,
+    summaries: Sequence[AnalysisSummaryLike],
+    dimensions: Sequence[StatusDimension],
 ) -> str:
-    lines = [
-        f"# Eval Analysis: {experiment_name}",
-        "",
-        "| Model | Temp | Samples | Scored | Total Price | "
-        "Avg Price/1k Samples | Avg Perf | Raw Compile | "
-        "Extracted Compile | Extraction Lift | Avg Compression Ratio | "
-        "Avg Compression Reduction | Price Var | Perf Var | Rep Var |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    metric_headers = [
+        "Samples",
+        "Scored",
+        "Total Price",
+        "Avg Price/1k Samples",
+        "Avg Perf",
+        "Raw Compile",
+        "Extracted Compile",
+        "Extraction Lift",
+        "Avg Compression Ratio",
+        "Avg Compression Reduction",
+        "Price Var",
+        "Perf Var",
+        "Rep Var",
     ]
+    dim_titles = [dimension.title for dimension in dimensions]
+    header = "| " + " | ".join([*dim_titles, *metric_headers]) + " |"
+    align = (
+        "|"
+        + "|".join(["---"] * len(dimensions) + ["---:"] * len(metric_headers))
+        + "|"
+    )
+    lines = [f"# Eval Analysis: {experiment_name}", "", header, align]
     total_price_values = [summary.total_price for summary in summaries]
     total_price_sum = analysis.sum_present_float(total_price_values)
     total_prices = analysis.format_cost_column(
@@ -174,140 +196,121 @@ def analysis_markdown(
     row_total_prices = total_prices[: len(summaries)]
     prices_per_thousand_samples = analysis.format_cost_column(
         [
-            analysis.price_per_thousand_samples(
-                summary.avg_price_per_sample
-            )
+            analysis.price_per_thousand_samples(summary.avg_price_per_sample)
             for summary in summaries
         ]
     )
     for summary, total_price, price_per_thousand in zip(
-        summaries,
-        row_total_prices,
-        prices_per_thousand_samples,
-        strict=True,
+        summaries, row_total_prices, prices_per_thousand_samples, strict=True
     ):
-        lines.append(
-            "| {model} | {temperature} | {sample_count} | {scored_count} | "
-            "{total_price} | {avg_price_per_sample} | {avg_performance} | "
-            "{raw_compile_pass_count} | {extracted_compile_pass_count} | "
-            "{extraction_lift} | {avg_best_compression_ratio} | "
-            "{avg_best_compression_percent_reduction} | {price_variance} | "
-            "{performance_variance} | {avg_repetition_variance} |".format(
-                model=summary.model,
-                temperature=analysis.format_float(summary.temperature),
-                sample_count=summary.sample_count,
-                scored_count=summary.scored_count,
-                total_price=total_price,
-                avg_price_per_sample=price_per_thousand,
-                avg_performance=analysis.format_float(
-                    summary.avg_performance
-                ),
-                raw_compile_pass_count=summary.raw_compile_pass_count,
-                extracted_compile_pass_count=(
-                    summary.extracted_compile_pass_count
-                ),
-                extraction_lift=summary.extraction_lift,
-                avg_best_compression_ratio=analysis.format_float(
-                    summary.avg_best_compression_ratio
-                ),
-                avg_best_compression_percent_reduction=(
-                    analysis.format_float(
-                        summary.avg_best_compression_percent_reduction
-                    )
-                ),
-                price_variance=analysis.format_float(
-                    summary.price_variance
-                ),
-                performance_variance=analysis.format_float(
-                    summary.performance_variance
-                ),
-                avg_repetition_variance=analysis.format_float(
-                    summary.avg_repetition_variance
-                ),
-            )
-        )
+        dim_cells = [
+            _dimension_cell(summary.dimensions.get(dimension.key))
+            for dimension in dimensions
+        ]
+        metric_cells = [
+            str(summary.sample_count),
+            str(summary.scored_count),
+            total_price,
+            price_per_thousand,
+            analysis.format_float(summary.avg_performance),
+            str(summary.raw_compile_pass_count),
+            str(summary.extracted_compile_pass_count),
+            str(summary.extraction_lift),
+            analysis.format_float(summary.avg_best_compression_ratio),
+            analysis.format_float(
+                summary.avg_best_compression_percent_reduction
+            ),
+            analysis.format_float(summary.price_variance),
+            analysis.format_float(summary.performance_variance),
+            analysis.format_float(summary.avg_repetition_variance),
+        ]
+        lines.append("| " + " | ".join([*dim_cells, *metric_cells]) + " |")
     if summaries:
-        lines.append(
-            (
-                "| {model} |  | {sample_count} | {scored_count} | "
-                "{total_price} |  |  | {raw_compile_pass_count} | "
-                "{extracted_compile_pass_count} | {extraction_lift} | "
-                " |  |  |  |  |"
-            ).format(
-                model=ANALYSIS_TOTAL_LABEL,
-                sample_count=sum(
-                    summary.sample_count for summary in summaries
-                ),
-                scored_count=sum(
-                    summary.scored_count for summary in summaries
-                ),
-                total_price=total_prices[-1],
-                raw_compile_pass_count=sum(
-                    summary.raw_compile_pass_count for summary in summaries
-                ),
-                extracted_compile_pass_count=sum(
+        total_dim_cells = _total_dimension_cells(dimensions)
+        total_metric_cells = [
+            str(sum(summary.sample_count for summary in summaries)),
+            str(sum(summary.scored_count for summary in summaries)),
+            total_prices[-1],
+            "",
+            "",
+            str(sum(summary.raw_compile_pass_count for summary in summaries)),
+            str(
+                sum(
                     summary.extracted_compile_pass_count
                     for summary in summaries
-                ),
-                extraction_lift=sum(
-                    summary.extraction_lift for summary in summaries
-                ),
-            )
+                )
+            ),
+            str(sum(summary.extraction_lift for summary in summaries)),
+            "",
+            "",
+            "",
+            "",
+            "",
+        ]
+        lines.append(
+            "| " + " | ".join([*total_dim_cells, *total_metric_cells]) + " |"
         )
     return "\n".join(lines) + "\n"
 
 
+def _total_dimension_cells(
+    dimensions: Sequence[StatusDimension],
+) -> list[str]:
+    if not dimensions:
+        return []
+    return [ANALYSIS_TOTAL_LABEL, *([""] * (len(dimensions) - 1))]
+
+
+def _add_dimension_columns(
+    table: Table, dimensions: Sequence[StatusDimension]
+) -> None:
+    for index, dimension in enumerate(dimensions):
+        if index == 0:
+            table.add_column(dimension.title, min_width=28, overflow="fold")
+        else:
+            table.add_column(dimension.title, justify=dimension.justify)
+
+
 def analysis_table(
-    *, experiment_name: str, summaries: Sequence[AnalysisSummaryLike]
+    *,
+    experiment_name: str,
+    summaries: Sequence[AnalysisSummaryLike],
+    dimensions: Sequence[StatusDimension],
 ) -> Group:
-    performance_table = Table(
-        title=f"Eval Analysis: {experiment_name}",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
-    )
-    performance_table.add_column("Model", min_width=28, overflow="fold")
-    performance_table.add_column("Temp", justify="right")
-    performance_table.add_column("Samples", justify="right")
-    performance_table.add_column("Scored", justify="right")
-    performance_table.add_column("Avg Perf", justify="right")
-    performance_table.add_column("Raw Compile", justify="right")
-    performance_table.add_column("Extracted Compile", justify="right")
-    performance_table.add_column("Lift", justify="right")
-    performance_table.add_column("Comp Ratio", justify="right")
-    performance_table.add_column("Comp Reduction", justify="right")
+    def new_table(title: str) -> Table:
+        return Table(
+            title=title,
+            box=box.SIMPLE_HEAVY,
+            show_lines=False,
+            row_styles=TABLE_ROW_STYLES,
+        )
 
-    cost_table = Table(
-        title="Cost",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
-    )
-    cost_table.add_column("Model", min_width=28, overflow="fold")
-    cost_table.add_column("Temp", justify="right")
-    cost_table.add_column("Total $", justify="right")
-    cost_table.add_column("Avg $/1k Samples", justify="right")
+    performance_table = new_table(f"Eval Analysis: {experiment_name}")
+    _add_dimension_columns(performance_table, dimensions)
+    for column in (
+        "Samples",
+        "Scored",
+        "Avg Perf",
+        "Raw Compile",
+        "Extracted Compile",
+        "Lift",
+        "Comp Ratio",
+        "Comp Reduction",
+    ):
+        performance_table.add_column(column, justify="right")
 
-    variance_table = Table(
-        title="Variance",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
-    )
-    variance_table.add_column("Model", min_width=28, overflow="fold")
-    variance_table.add_column("Temp", justify="right")
-    variance_table.add_column("Price Var", justify="right")
-    variance_table.add_column("Perf Var", justify="right")
-    variance_table.add_column("Rep Var", justify="right")
+    cost_table = new_table("Cost")
+    _add_dimension_columns(cost_table, dimensions)
+    for column in ("Total $", "Avg $/1k Samples"):
+        cost_table.add_column(column, justify="right")
+
+    variance_table = new_table("Variance")
+    _add_dimension_columns(variance_table, dimensions)
+    for column in ("Price Var", "Perf Var", "Rep Var"):
+        variance_table.add_column(column, justify="right")
 
     total_price_values = [summary.total_price for summary in summaries]
     total_price_sum = analysis.sum_present_float(total_price_values)
-    temperatures = analysis.format_float_column(
-        [summary.temperature for summary in summaries]
-    )
-    avg_performances = analysis.format_float_column(
-        [summary.avg_performance for summary in summaries]
-    )
     total_prices = analysis.format_cost_column(
         [*total_price_values, total_price_sum]
         if summaries
@@ -316,84 +319,46 @@ def analysis_table(
     row_total_prices = total_prices[: len(summaries)]
     prices_per_thousand_samples = analysis.format_cost_column(
         [
-            analysis.price_per_thousand_samples(
-                summary.avg_price_per_sample
-            )
-            for summary in summaries
-        ]
-    )
-    price_variances = analysis.format_float_column(
-        [summary.price_variance for summary in summaries]
-    )
-    performance_variances = analysis.format_float_column(
-        [summary.performance_variance for summary in summaries]
-    )
-    repetition_variances = analysis.format_float_column(
-        [summary.avg_repetition_variance for summary in summaries]
-    )
-    compression_ratios = analysis.format_float_column(
-        [summary.avg_best_compression_ratio for summary in summaries]
-    )
-    compression_reductions = analysis.format_float_column(
-        [
-            summary.avg_best_compression_percent_reduction
+            analysis.price_per_thousand_samples(summary.avg_price_per_sample)
             for summary in summaries
         ]
     )
 
-    for (
-        summary,
-        temperature,
-        avg_performance,
-        total_price,
-        price_per_thousand,
-        price_variance,
-        performance_variance,
-        repetition_variance,
-        compression_ratio,
-        compression_reduction,
-    ) in zip(
-        summaries,
-        temperatures,
-        avg_performances,
-        row_total_prices,
-        prices_per_thousand_samples,
-        price_variances,
-        performance_variances,
-        repetition_variances,
-        compression_ratios,
-        compression_reductions,
-        strict=True,
+    for summary, total_price, price_per_thousand in zip(
+        summaries, row_total_prices, prices_per_thousand_samples, strict=True
     ):
+        dim_cells = [
+            _dimension_cell(summary.dimensions.get(dimension.key))
+            for dimension in dimensions
+        ]
         performance_table.add_row(
-            summary.model,
-            temperature,
+            *dim_cells,
             str(summary.sample_count),
             str(summary.scored_count),
-            avg_performance,
+            analysis.format_float(summary.avg_performance),
             str(summary.raw_compile_pass_count),
             str(summary.extracted_compile_pass_count),
             str(summary.extraction_lift),
-            compression_ratio,
-            compression_reduction,
+            analysis.format_float(summary.avg_best_compression_ratio),
+            analysis.format_float(
+                summary.avg_best_compression_percent_reduction
+            ),
         )
         cost_table.add_row(
-            summary.model,
-            temperature,
+            *dim_cells,
             total_price,
             price_per_thousand,
         )
         variance_table.add_row(
-            summary.model,
-            temperature,
-            price_variance,
-            performance_variance,
-            repetition_variance,
+            *dim_cells,
+            analysis.format_float(summary.price_variance),
+            analysis.format_float(summary.performance_variance),
+            analysis.format_float(summary.avg_repetition_variance),
         )
     if summaries:
+        total_dim_cells = _total_dimension_cells(dimensions)
         performance_table.add_row(
-            ANALYSIS_TOTAL_LABEL,
-            "",
+            *total_dim_cells,
             str(sum(summary.sample_count for summary in summaries)),
             str(sum(summary.scored_count for summary in summaries)),
             "",
@@ -410,8 +375,7 @@ def analysis_table(
             style=TABLE_TOTAL_ROW_STYLE,
         )
         cost_table.add_row(
-            ANALYSIS_TOTAL_LABEL,
-            "",
+            *total_dim_cells,
             total_prices[-1],
             "",
             style=TABLE_TOTAL_ROW_STYLE,
@@ -429,7 +393,9 @@ def write_analysis_csv(
         writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
         writer.writeheader()
         for summary in summaries:
-            writer.writerow(summary.model_dump(mode="json"))
+            data = summary.model_dump(mode="json")
+            dimensions = data.pop("dimensions", {})
+            writer.writerow({**dimensions, **data})
 
 
 def enqueue_scores_line(

@@ -17,6 +17,7 @@ DEFAULT_SAMPLE_COUNT = 10
 DEFAULT_SEED = 0
 DEFAULT_ENCODER_TEMPERATURES = (0.0,)
 DEFAULT_DECODER_TEMPERATURES = (0.0,)
+DEFAULT_BUDGET_RATIOS: tuple[float | None, ...] = (None,)
 DEFAULT_REPETITIONS = 1
 DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_SUBPROCESS_TIMEOUT = 15.0
@@ -25,9 +26,7 @@ ENCODER_SIGNATURE = DspySignatureConfig(
     name="EncodeCode",
     fields=(
         FieldSignature(name="code", type=str, role=dspy.InputField()),
-        FieldSignature(
-            name="description", type=str, role=dspy.OutputField()
-        ),
+        FieldSignature(name="description", type=str, role=dspy.OutputField()),
     ),
     instructions=(
         "Encode this Python function implementation into a complete "
@@ -36,12 +35,27 @@ ENCODER_SIGNATURE = DspySignatureConfig(
     ),
 )
 
+ENCODER_BUDGETED_SIGNATURE = DspySignatureConfig(
+    name="EncodeCodeBudgeted",
+    fields=(
+        FieldSignature(name="code", type=str, role=dspy.InputField()),
+        FieldSignature(
+            name="max_characters", type=int, role=dspy.InputField()
+        ),
+        FieldSignature(name="description", type=str, role=dspy.OutputField()),
+    ),
+    instructions=(
+        "Encode this Python function implementation into a complete "
+        "lossless description. Preserve all behavior needed to reconstruct "
+        "the code, but do not output Python code. Keep the description "
+        "within at most max_characters characters."
+    ),
+)
+
 DECODER_SIGNATURE = DspySignatureConfig(
     name="DecodeCode",
     fields=(
-        FieldSignature(
-            name="description", type=str, role=dspy.InputField()
-        ),
+        FieldSignature(name="description", type=str, role=dspy.InputField()),
         FieldSignature(name="code", type=dspy.Code, role=dspy.OutputField()),
     ),
     instructions=(
@@ -68,12 +82,14 @@ EXPERIMENT_CONFIG = EncDecHumanEvalExperimentConfig(
     dataset_name=DATASET_NAME,
     dataset_split=DATASET_SPLIT,
     encoder_signature=ENCODER_SIGNATURE,
+    budgeted_encoder_signature=ENCODER_BUDGETED_SIGNATURE,
     decoder_signature=DECODER_SIGNATURE,
     default_model_pairs=DEFAULT_MODEL_PAIRS,
     default_sample_count=DEFAULT_SAMPLE_COUNT,
     default_seed=DEFAULT_SEED,
     default_encoder_temperatures=DEFAULT_ENCODER_TEMPERATURES,
     default_decoder_temperatures=DEFAULT_DECODER_TEMPERATURES,
+    default_budget_ratios=DEFAULT_BUDGET_RATIOS,
     default_repetitions=DEFAULT_REPETITIONS,
     default_max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
     default_subprocess_timeout=DEFAULT_SUBPROCESS_TIMEOUT,

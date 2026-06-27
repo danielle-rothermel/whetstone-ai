@@ -30,7 +30,12 @@ from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import worker_monitor as shared_worker_monitor
-from dr_dspy.code_extraction import extract_dspy_code
+from dr_dspy.experiment_dimensions import (
+    Dimension,
+    identity_dimension_names,
+    reporting_dimension_names,
+    status_dimensions,
+)
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -66,7 +71,6 @@ PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER = 1000.0
 ANALYSIS_TOTAL_LABEL = "Total"
 TABLE_ROW_STYLES = ("", "on grey7")
 TABLE_TOTAL_ROW_STYLE = "bold black on green3"
-MAX_TRACE_SIZE = 10_000
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
 DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_eval_only_worker"
@@ -74,7 +78,30 @@ CONSOLE = Console(soft_wrap=True)
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 PREDICTION_TABLE_NAME = "dr_dspy_eval_predictions"
 PREDICTION_ID_DIGEST_LENGTH = 32
-REPAIR_DIMENSION_COLUMNS = ("model", "temperature", "reasoning")
+DIMENSIONS: tuple[Dimension, ...] = (
+    Dimension(
+        name="model",
+        sql_type="TEXT",
+        nullable=False,
+        report_title="Model",
+    ),
+    Dimension(
+        name="temperature",
+        sql_type="DOUBLE PRECISION",
+        report_title="Temp",
+        report_justify="right",
+    ),
+    Dimension(
+        name="reasoning",
+        sql_type="JSONB",
+        nullable=False,
+        default_sql="'{}'::jsonb",
+        in_reporting=False,
+        report_title="Reasoning",
+    ),
+)
+REPAIR_DIMENSION_COLUMNS = identity_dimension_names(DIMENSIONS)
+REPORTING_DIMENSION_COLUMNS = reporting_dimension_names(DIMENSIONS)
 REPAIR_ORDER_COLUMNS = (
     "model",
     "temperature",
@@ -244,6 +271,7 @@ PREDICTION_CONSTRAINT_MIGRATION_SQL = (
     """,
 )
 
+
 class HumanEvalSample(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -325,6 +353,7 @@ class ScoringTarget(BaseModel):
             entry_point=self.entry_point,
         )
 
+
 ScoreResult = HumanEvalScoreResult
 
 
@@ -346,8 +375,7 @@ class AnalysisRecord(BaseModel):
 class AnalysisSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: StrictStr
-    temperature: float
+    dimensions: dict[str, Any]
     sample_count: StrictInt
     scored_count: StrictInt
     total_price: float | None
@@ -401,6 +429,7 @@ def solve_signature() -> type[dspy.Signature]:
             "create_app(config) from the experiment script first."
         )
     return _SOLVE_SIGNATURE
+
 
 def resolve_worker_log_path(
     *,
@@ -467,38 +496,33 @@ def generate_prediction_workflow(
     experiment_name: str,
     score_timeout: float,
 ) -> str:
-    return shared_flow.run_generation_workflow(
-        database_url=database_url,
-        prediction_id=prediction_id,
+    try:
+        result = generate_prediction_step(database_url, prediction_id)
+        record_generation_success_step(database_url, result)
+    except Exception as error:
+        record_generation_error_step(database_url, prediction_id, repr(error))
+        return "generation_error"
+    enqueue_score_job(
+        database_url,
+        prediction_id,
         experiment_name=experiment_name,
-        score_timeout=score_timeout,
-        generate_prediction=generate_prediction_step,
-        record_generation_success=record_generation_success_step,
-        record_generation_error=record_generation_error_step,
-        enqueue_score=(
-            lambda db_url, pred_id, exp_name, timeout: enqueue_score_job(
-                db_url,
-                pred_id,
-                experiment_name=exp_name,
-                timeout=timeout,
-            )
-        ),
-        mark_scoring_queued=mark_scoring_queued_step,
+        timeout=score_timeout,
     )
+    mark_scoring_queued_step(database_url, prediction_id)
+    return "generated"
 
 
 @DBOS.workflow(name="humaneval_eval_score_prediction_v0")
 def score_prediction_workflow(
     database_url: str, prediction_id: str, timeout: float
 ) -> str:
-    return shared_flow.run_score_workflow(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        timeout=timeout,
-        score_prediction=score_prediction_step,
-        record_score_success=record_score_success_step,
-        record_score_error=record_score_error_step,
-    )
+    try:
+        result = score_prediction_step(database_url, prediction_id, timeout)
+        record_score_success_step(database_url, result)
+        return "scored"
+    except Exception as error:
+        record_score_error_step(database_url, prediction_id, repr(error))
+        return "score_error"
 
 
 def stable_prediction_id(
@@ -1081,61 +1105,43 @@ def score_generated_code(
 def score_prediction_step(
     database_url: str, prediction_id: str, timeout: float
 ) -> ScoreResult:
-    return shared_flow.run_score_prediction_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        timeout=timeout,
-        mark_scoring_started=mark_scoring_started,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        score_generated_prediction=(
-            lambda db_url, pred_id, score_timeout: score_generated_code(
-                fetch_scoring_target(db_url, pred_id),
-                timeout=score_timeout,
-            )
-        ),
+    mark_scoring_started(database_url, prediction_id)
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_started", context, extra={"timeout": timeout}
+    )
+    return score_generated_code(
+        fetch_scoring_target(database_url, prediction_id), timeout=timeout
     )
 
 
 @DBOS.step(name="humaneval_direct_record_score_success_step_v0")
-def record_score_success_step(
-    database_url: str, result: ScoreResult
-) -> None:
-    shared_flow.run_record_score_success_step(
-        database_url=database_url,
-        result=result,
-        prediction_id=result.prediction_id,
-        score=result.score,
-        error=result.error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_score_success=record_score_success,
+def record_score_success_step(database_url: str, result: ScoreResult) -> None:
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "scoring_succeeded",
+        context,
+        extra={"score": result.score, "scoring_error": result.error},
     )
+    record_score_success(database_url, result)
 
 
 @DBOS.step(name="humaneval_direct_record_score_error_step_v0")
 def record_score_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    shared_flow.run_record_score_error_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        error=error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_score_error=record_score_error,
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_failed", context, extra={"error": error}
     )
+    record_score_error(database_url, prediction_id, error)
 
 
 @DBOS.step(name="humaneval_direct_mark_scoring_queued_step_v0")
 def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
-    shared_flow.run_mark_scoring_queued_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        mark_scoring_queued=mark_scoring_queued,
-    )
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event("scoring_enqueued", context)
+    mark_scoring_queued(database_url, [prediction_id])
 
 
 @DBOS.step(
@@ -1147,47 +1153,39 @@ def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
 def generate_prediction_step(
     database_url: str, prediction_id: str
 ) -> GenerationResult:
-    return shared_flow.run_generate_prediction_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        mark_generation_started=mark_generation_started,
-        fetch_prediction_job=fetch_prediction_job,
-        prediction_context_from_job=prediction_context_from_job,
-        emit_prediction_log_event=emit_prediction_log_event,
-        generate_code_for_job=generate_code_for_job,
+    mark_generation_started(database_url, prediction_id)
+    job = fetch_prediction_job(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_started", prediction_context_from_job(job)
     )
+    return generate_code_for_job(job)
 
 
 @DBOS.step(name="humaneval_direct_record_generation_success_step_v0")
 def record_generation_success_step(
     database_url: str, result: GenerationResult
 ) -> None:
-    shared_flow.run_record_generation_success_step(
-        database_url=database_url,
-        result=result,
-        prediction_id=result.prediction_id,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        success_extra=lambda generation_result: {
-            "provider_cost": generation_result.provider_cost,
-            "usage_metadata": generation_result.usage_metadata,
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "generation_succeeded",
+        context,
+        extra={
+            "provider_cost": result.provider_cost,
+            "usage_metadata": result.usage_metadata,
         },
-        record_generation_success=record_generation_success,
     )
+    record_generation_success(database_url, result)
 
 
 @DBOS.step(name="humaneval_direct_record_generation_error_step_v0")
 def record_generation_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    shared_flow.run_record_generation_error_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        error=error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_generation_error=record_generation_error,
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_failed", context, extra={"error": error}
     )
+    record_generation_error(database_url, prediction_id, error)
 
 
 def build_repair_plan(
@@ -1313,8 +1311,10 @@ def summarize_analysis_records(
     return shared_flow.summarize_analysis_records(
         records,
         group_key=lambda record: (record.model, record.temperature),
-        model_label=lambda record: record.model,
-        temperature=lambda record: record.temperature,
+        dimension_values=lambda record: {
+            "model": record.model,
+            "temperature": record.temperature,
+        },
         task_id=lambda record: record.task_id,
         score=lambda record: record.score,
         provider_cost=lambda record: record.provider_cost,
@@ -1347,7 +1347,9 @@ def analysis_markdown(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> str:
     return shared_eval_reporting.analysis_markdown(
-        experiment_name=experiment_name, summaries=summaries
+        experiment_name=experiment_name,
+        summaries=summaries,
+        dimensions=status_dimensions(DIMENSIONS),
     )
 
 
@@ -1355,80 +1357,26 @@ def analysis_table(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> Group:
     return shared_eval_reporting.analysis_table(
-        experiment_name=experiment_name, summaries=summaries
+        experiment_name=experiment_name,
+        summaries=summaries,
+        dimensions=status_dimensions(DIMENSIONS),
     )
 
 
 def write_analysis_csv(
-    summaries: Sequence[AnalysisSummary], *, csv_path: Path
+    summaries: Sequence[AnalysisSummary], csv_path: Path
 ) -> None:
     shared_eval_reporting.write_analysis_csv(
         summaries,
         csv_path=csv_path,
-        fieldnames=list(AnalysisSummary.model_fields),
-    )
-
-
-def enqueue_scores_line(
-    *,
-    experiment_name: str,
-    selected_count: int,
-    limit: int,
-    timeout: float,
-) -> str:
-    return shared_eval_reporting.enqueue_scores_line(
-        experiment_name=experiment_name,
-        selected_count=selected_count,
-        limit=limit,
-        timeout=timeout,
-    )
-
-
-def enqueue_scores_style(selected_count: int) -> str:
-    return shared_eval_reporting.enqueue_scores_style(selected_count)
-
-
-def repair_plan_line(
-    *,
-    experiment_name: str,
-    plan: shared_eval_repair.RepairPlan,
-    apply: bool,
-) -> str:
-    return shared_eval_reporting.repair_plan_line(
-        experiment_name=experiment_name,
-        gen_stranded=len(plan.stranded_generations),
-        gen_errors=len(plan.generation_retry_prediction_ids),
-        score_pending=len(plan.pending_scoring_prediction_ids),
-        score_stranded=len(plan.stranded_scoring),
-        score_errors=len(plan.scoring_retry_prediction_ids),
-        apply=apply,
-    )
-
-
-def repair_apply_line(
-    *, experiment_name: str, result: shared_eval_repair.RepairApplyResult
-) -> str:
-    return shared_eval_reporting.repair_apply_line(
-        experiment_name=experiment_name,
-        stranded_generations_marked=result.stranded_generations_marked,
-        generation_retries_enqueued=result.generation_retries_enqueued,
-        stranded_scoring_marked=result.stranded_scoring_marked,
-        pending_scoring_enqueued=result.pending_scoring_enqueued,
-        scoring_retries_enqueued=result.scoring_retries_enqueued,
-        repair_token=result.repair_token,
-    )
-
-
-def repair_plan_style(
-    plan: shared_eval_repair.RepairPlan, *, apply: bool
-) -> str:
-    return shared_eval_reporting.repair_plan_style(
-        apply=apply,
-        gen_stranded=len(plan.stranded_generations),
-        gen_errors=len(plan.generation_retry_prediction_ids),
-        score_pending=len(plan.pending_scoring_prediction_ids),
-        score_stranded=len(plan.stranded_scoring),
-        score_errors=len(plan.scoring_retry_prediction_ids),
+        fieldnames=[
+            *REPORTING_DIMENSION_COLUMNS,
+            *(
+                name
+                for name in AnalysisSummary.model_fields
+                if name != "dimensions"
+            ),
+        ],
     )
 
 
@@ -1438,7 +1386,7 @@ def fetch_status_counts(
     return shared_eval_reporting.fetch_status_counts(
         database_url,
         prediction_table=PREDICTION_TABLE_NAME,
-        dimension_columns=REPAIR_DIMENSION_COLUMNS,
+        dimension_columns=REPORTING_DIMENSION_COLUMNS,
         experiment_name=experiment_name,
     )
 
@@ -1451,14 +1399,7 @@ def status_counts_table(
     return shared_eval_reporting.status_counts_table(
         rows,
         title="Eval Status",
-        dimensions=(
-            shared_eval_reporting.StatusDimension(
-                key="model", title="Model"
-            ),
-            shared_eval_reporting.StatusDimension(
-                key="temperature", title="Temp", justify="right"
-            ),
-        ),
+        dimensions=status_dimensions(DIMENSIONS),
         experiment_name=experiment_name,
     )
 
@@ -1662,8 +1603,6 @@ def generate_code_for_job(
         output_field="code",
         lm=lm,
         event_buffer=event_buffer,
-        max_trace_size=MAX_TRACE_SIZE,
-        after_prediction=extract_dspy_code,
     )
     result = shared_dspy_runner.predictor_run_result(
         raw_generation, event_buffer
@@ -1741,6 +1680,309 @@ def start_worker_monitor(
         operator_log=operator_log,
         emit_worker_detail_log=emit_worker_detail_log,
     )
+
+
+class DirectExperiment:
+    prediction_table = PREDICTION_TABLE_NAME
+    dimensions = DIMENSIONS
+
+    def create_schema(self, database_url: str) -> None:
+        create_eval_schema(database_url)
+
+    def upsert_experiment(
+        self,
+        database_url: str,
+        *,
+        experiment_name: str,
+        seed: int,
+        sample_count: int,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        upsert_experiment(
+            database_url,
+            experiment_name=experiment_name,
+            seed=seed,
+            sample_count=sample_count,
+            metadata=metadata,
+        )
+
+    def insert_prediction_jobs(
+        self, database_url: str, jobs: Sequence[PredictionJob]
+    ) -> int:
+        return insert_prediction_jobs(database_url, jobs)
+
+    def configure_runtime(
+        self,
+        config: EvalDbosConfig,
+        experiment_name: str,
+        *,
+        consume_queues: bool = True,
+    ) -> None:
+        configure_dbos_runtime(
+            config,
+            experiment_name=experiment_name,
+            consume_queues=consume_queues,
+        )
+
+    def enqueue_generation_jobs(
+        self,
+        database_url: str,
+        jobs: Sequence[PredictionJob],
+        *,
+        score_timeout: float,
+        retry_token: str | None = None,
+    ) -> None:
+        enqueue_generation_jobs(
+            database_url,
+            jobs,
+            score_timeout=score_timeout,
+            retry_token=retry_token,
+        )
+
+    def mark_generation_started(
+        self, database_url: str, prediction_id: str
+    ) -> None:
+        mark_generation_started(database_url, prediction_id)
+
+    def fetch_prediction_job(
+        self, database_url: str, prediction_id: str
+    ) -> PredictionJob:
+        return fetch_prediction_job(database_url, prediction_id)
+
+    def generate_code_for_job(self, job: PredictionJob) -> GenerationResult:
+        return generate_code_for_job(job)
+
+    def record_generation_success(
+        self, database_url: str, result: GenerationResult
+    ) -> None:
+        record_generation_success(database_url, result)
+
+    def record_generation_error(
+        self, database_url: str, prediction_id: str, error: str
+    ) -> None:
+        record_generation_error(database_url, prediction_id, error)
+
+    def generation_success_log_extra(
+        self, result: GenerationResult
+    ) -> Mapping[str, Any]:
+        return {
+            "provider_cost": result.provider_cost,
+            "usage_metadata": result.usage_metadata,
+        }
+
+    def prediction_context_from_job(
+        self, job: PredictionJob
+    ) -> shared_eval_logging.PredictionLogContext:
+        return prediction_context_from_job(job)
+
+    def fetch_prediction_log_context(
+        self, database_url: str, prediction_id: str
+    ) -> shared_eval_logging.PredictionLogContext:
+        return fetch_prediction_log_context(database_url, prediction_id)
+
+    def emit_prediction_log_event(
+        self,
+        event: str,
+        context: shared_eval_logging.PredictionLogContext,
+        *,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        emit_prediction_log_event(event, context, extra=extra)
+
+    def mark_scoring_started(
+        self, database_url: str, prediction_id: str
+    ) -> None:
+        mark_scoring_started(database_url, prediction_id)
+
+    def mark_scoring_queued(
+        self, database_url: str, prediction_ids: Sequence[str]
+    ) -> int:
+        return mark_scoring_queued(database_url, prediction_ids)
+
+    def score_prediction(
+        self, database_url: str, prediction_id: str, timeout: float
+    ) -> ScoreResult:
+        return score_generated_code(
+            fetch_scoring_target(database_url, prediction_id),
+            timeout=timeout,
+        )
+
+    def record_score_success(
+        self, database_url: str, result: ScoreResult
+    ) -> None:
+        record_score_success(database_url, result)
+
+    def record_score_error(
+        self, database_url: str, prediction_id: str, error: str
+    ) -> None:
+        record_score_error(database_url, prediction_id, error)
+
+    def enqueue_score(
+        self,
+        database_url: str,
+        prediction_id: str,
+        *,
+        experiment_name: str,
+        timeout: float,
+    ) -> None:
+        enqueue_score_job(
+            database_url,
+            prediction_id,
+            experiment_name=experiment_name,
+            timeout=timeout,
+        )
+
+    def enqueue_score_jobs(
+        self,
+        database_url: str,
+        prediction_ids: Sequence[str],
+        *,
+        experiment_name: str,
+        timeout: float,
+        retry_token: str | None = None,
+    ) -> None:
+        enqueue_score_jobs(
+            database_url,
+            prediction_ids,
+            experiment_name=experiment_name,
+            timeout=timeout,
+            retry_token=retry_token,
+        )
+
+    def fetch_scoreable_prediction_ids(
+        self, database_url: str, *, experiment_name: str, limit: int
+    ) -> list[str]:
+        return fetch_scoreable_prediction_ids(
+            database_url, experiment_name=experiment_name, limit=limit
+        )
+
+    def build_repair_plan(
+        self,
+        database_url: str,
+        *,
+        dbos_system_database_url: str,
+        experiment_name: str,
+        generation_limit: int,
+        scoring_limit: int,
+    ) -> shared_eval_repair.RepairPlan:
+        return build_repair_plan(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+        )
+
+    def apply_repair(
+        self,
+        config: EvalDbosConfig,
+        *,
+        experiment_name: str,
+        generation_limit: int,
+        scoring_limit: int,
+        score_timeout: float,
+        repair_token: str | None = None,
+    ) -> shared_eval_repair.RepairApplyResult:
+        return apply_repair(
+            config,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+            score_timeout=score_timeout,
+            repair_token=repair_token,
+        )
+
+    def fetch_status_counts(
+        self, database_url: str, *, experiment_name: str | None
+    ) -> list[dict[str, Any]]:
+        return fetch_status_counts(
+            database_url, experiment_name=experiment_name
+        )
+
+    def status_counts_table(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        experiment_name: str | None,
+    ) -> Table:
+        return status_counts_table(rows, experiment_name=experiment_name)
+
+    def fetch_analysis_records(
+        self, database_url: str, *, experiment_name: str
+    ) -> list[AnalysisRecord]:
+        return fetch_analysis_records(
+            database_url, experiment_name=experiment_name
+        )
+
+    def summarize_analysis_records(
+        self, records: Sequence[AnalysisRecord]
+    ) -> list[AnalysisSummary]:
+        return summarize_analysis_records(records)
+
+    def analysis_table(
+        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+    ) -> Group:
+        return analysis_table(
+            experiment_name=experiment_name, summaries=summaries
+        )
+
+    def analysis_markdown(
+        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+    ) -> str:
+        return analysis_markdown(
+            experiment_name=experiment_name, summaries=summaries
+        )
+
+    def write_analysis_csv(
+        self, summaries: Sequence[AnalysisSummary], csv_path: Path
+    ) -> None:
+        write_analysis_csv(summaries, csv_path)
+
+    def configure_pooled_worker_runtime(
+        self,
+        config: EvalDbosConfig,
+        *,
+        experiment_name: str,
+        queue: QueueSelection,
+        raw_db_pool_max_size: str,
+    ) -> DbPoolConfig:
+        return configure_pooled_worker_runtime(
+            config,
+            experiment_name=experiment_name,
+            queue=queue,
+            raw_db_pool_max_size=raw_db_pool_max_size,
+        )
+
+    def queue_names_for_selection(
+        self, selection: QueueSelection, *, experiment_name: str
+    ) -> tuple[str, ...]:
+        return queue_names_for_selection(
+            selection, experiment_name=experiment_name
+        )
+
+    def resolve_worker_log_path(
+        self,
+        *,
+        experiment_name: str,
+        queue: QueueSelection,
+        log_file: Path | None,
+    ) -> Path:
+        return resolve_worker_log_path(
+            experiment_name=experiment_name, queue=queue, log_file=log_file
+        )
+
+    def configure_worker_file_logging(self, log_file: Path) -> logging.Logger:
+        return configure_worker_file_logging(log_file)
+
+    def start_worker_monitor(
+        self,
+        monitor_config: WorkerMonitorConfig,
+        stop_event: threading.Event,
+    ) -> threading.Thread:
+        return start_worker_monitor(monitor_config, stop_event)
+
+
+_BACKEND = DirectExperiment()
 
 
 def common_config(
@@ -1886,6 +2128,7 @@ def submit(
         return
 
     shared_flow.run_submit_jobs(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         seed=seed,
@@ -1901,24 +2144,6 @@ def submit(
         },
         jobs=jobs,
         score_timeout=score_timeout,
-        create_schema=create_eval_schema,
-        upsert_experiment=upsert_experiment,
-        insert_prediction_jobs=insert_prediction_jobs,
-        configure_runtime=(
-            lambda dbos_config, exp_name: configure_dbos_runtime(
-                dbos_config,
-                experiment_name=exp_name,
-                consume_queues=False,
-            )
-        ),
-        enqueue_generation_jobs=(
-            lambda db_url, generation_jobs, timeout: enqueue_generation_jobs(
-                db_url,
-                generation_jobs,
-                score_timeout=timeout,
-            )
-        ),
-        operator_log=operator_log,
     )
 
 
@@ -1948,12 +2173,9 @@ def status(
         env_file=env_file,
     )
     shared_flow.run_status_command(
+        _BACKEND,
         database_url=config.database_url,
         experiment_name=experiment_name,
-        fetch_status_counts=fetch_status_counts,
-        status_counts_table=status_counts_table,
-        console=CONSOLE,
-        operator_log=operator_log,
     )
 
 
@@ -2007,33 +2229,11 @@ def enqueue_scores_command(
         env_file=env_file,
     )
     shared_flow.run_enqueue_scores_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         limit=limit,
         timeout=timeout,
-        create_schema=create_eval_schema,
-        fetch_scoreable_prediction_ids=fetch_scoreable_prediction_ids,
-        configure_runtime=(
-            lambda dbos_config, exp_name: configure_dbos_runtime(
-                dbos_config,
-                experiment_name=exp_name,
-                consume_queues=False,
-            )
-        ),
-        enqueue_score_jobs=(
-            lambda db_url, prediction_ids, exp_name, score_timeout: (
-                enqueue_score_jobs(
-                    db_url,
-                    prediction_ids,
-                    experiment_name=exp_name,
-                    timeout=score_timeout,
-                )
-            )
-        ),
-        mark_scoring_queued=mark_scoring_queued,
-        enqueue_scores_line=enqueue_scores_line,
-        enqueue_scores_style=enqueue_scores_style,
-        operator_log=operator_log,
     )
 
 
@@ -2100,25 +2300,13 @@ def repair_command(
         env_file=env_file,
     )
     shared_flow.run_repair_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         generation_limit=generation_limit,
         scoring_limit=scoring_limit,
         score_timeout=score_timeout,
         apply=apply,
-        build_repair_plan=build_repair_plan,
-        apply_repair=apply_repair,
-        repair_plan_line=repair_plan_line,
-        repair_plan_style=repair_plan_style,
-        repair_apply_line=repair_apply_line,
-        plan_has_work=lambda plan: bool(
-            plan.stranded_generations
-            or plan.generation_retry_prediction_ids
-            or plan.pending_scoring_prediction_ids
-            or plan.stranded_scoring
-            or plan.scoring_retry_prediction_ids
-        ),
-        operator_log=operator_log,
     )
 
 
@@ -2156,19 +2344,11 @@ def analyze(
         env_file=env_file,
     )
     shared_flow.run_analyze_command(
+        _BACKEND,
         database_url=config.database_url,
         experiment_name=experiment_name,
         csv_path=csv_path,
         markdown=markdown,
-        fetch_analysis_records=fetch_analysis_records,
-        summarize_analysis_records=summarize_analysis_records,
-        analysis_markdown=analysis_markdown,
-        analysis_table=analysis_table,
-        write_analysis_csv=lambda summaries, path: write_analysis_csv(
-            summaries, csv_path=path
-        ),
-        console=CONSOLE,
-        operator_log=operator_log,
     )
 
 
@@ -2264,6 +2444,7 @@ def worker(
         env_file=env_file,
     )
     shared_flow.run_worker_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         queue=queue,
@@ -2273,17 +2454,4 @@ def worker(
         monitor_interval=monitor_interval,
         monitor_summary_interval=monitor_summary_interval,
         db_pool_max_size=db_pool_max_size,
-        prediction_table=PREDICTION_TABLE_NAME,
-        db_pools=DB_POOLS,
-        raise_open_file_limit=raise_open_file_limit,
-        open_file_limit_line=open_file_limit_line,
-        open_file_limit_style=open_file_limit_style,
-        create_schema=create_eval_schema,
-        configure_pooled_worker_runtime=configure_pooled_worker_runtime,
-        resolve_worker_log_path=resolve_worker_log_path,
-        configure_worker_file_logging=configure_worker_file_logging,
-        queue_names_for_selection=queue_names_for_selection,
-        start_worker_monitor=start_worker_monitor,
-        close_db_connection_pools=close_db_connection_pools,
-        operator_log=operator_log,
     )

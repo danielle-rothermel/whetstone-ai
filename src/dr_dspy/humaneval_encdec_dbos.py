@@ -32,6 +32,14 @@ from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import worker_monitor as shared_worker_monitor
+from dr_dspy.experiment_dimensions import (
+    Dimension,
+    dimension_columns_ddl,
+    identity_constraint_columns,
+    identity_dimension_names,
+    reporting_dimension_names,
+    status_dimensions,
+)
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -64,14 +72,56 @@ DEFAULT_REPAIR_GENERATION_LIMIT = 1000
 DEFAULT_REPAIR_SCORING_LIMIT = 1000
 PREDICTION_TABLE_NAME = "dr_dspy_encdec_eval_predictions"
 PREDICTION_ID_DIGEST_LENGTH = 32
-REPAIR_DIMENSION_COLUMNS = (
-    "encoder_model",
-    "decoder_model",
-    "encoder_temperature",
-    "decoder_temperature",
-    "encoder_reasoning",
-    "decoder_reasoning",
+DIMENSIONS: tuple[Dimension, ...] = (
+    Dimension(
+        name="encoder_model",
+        sql_type="TEXT",
+        nullable=False,
+        report_title="Encoder",
+    ),
+    Dimension(
+        name="decoder_model",
+        sql_type="TEXT",
+        nullable=False,
+        report_title="Decoder",
+    ),
+    Dimension(
+        name="encoder_temperature",
+        sql_type="DOUBLE PRECISION",
+        report_title="Enc Temp",
+        report_justify="right",
+    ),
+    Dimension(
+        name="decoder_temperature",
+        sql_type="DOUBLE PRECISION",
+        report_title="Dec Temp",
+        report_justify="right",
+    ),
+    Dimension(
+        name="budget_ratio",
+        sql_type="DOUBLE PRECISION",
+        report_title="Budget",
+        report_justify="right",
+    ),
+    Dimension(
+        name="encoder_reasoning",
+        sql_type="JSONB",
+        nullable=False,
+        default_sql="'{}'::jsonb",
+        in_reporting=False,
+        report_title="Encoder Reasoning",
+    ),
+    Dimension(
+        name="decoder_reasoning",
+        sql_type="JSONB",
+        nullable=False,
+        default_sql="'{}'::jsonb",
+        in_reporting=False,
+        report_title="Decoder Reasoning",
+    ),
 )
+REPAIR_DIMENSION_COLUMNS = identity_dimension_names(DIMENSIONS)
+REPORTING_DIMENSION_COLUMNS = reporting_dimension_names(DIMENSIONS)
 REPAIR_ORDER_COLUMNS = (
     "encoder_model",
     "decoder_model",
@@ -109,18 +159,14 @@ CREATE TABLE IF NOT EXISTS dr_dspy_encdec_eval_predictions (
     submission_id        TEXT        NOT NULL,
     task_id              TEXT        NOT NULL,
     sample_index         INTEGER     NOT NULL,
-    encoder_model        TEXT        NOT NULL,
-    decoder_model        TEXT        NOT NULL,
-    encoder_temperature  DOUBLE PRECISION,
-    decoder_temperature  DOUBLE PRECISION,
     repetition_seed      INTEGER     NOT NULL,
+__DIMENSION_COLUMNS__
     prompt               TEXT        NOT NULL,
     canonical_solution   TEXT        NOT NULL,
     ground_truth_code    TEXT        NOT NULL,
     test                 TEXT        NOT NULL,
     entry_point          TEXT        NOT NULL,
-    encoder_reasoning    JSONB       NOT NULL DEFAULT '{}'::jsonb,
-    decoder_reasoning    JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    encoder_char_budget  INTEGER,
     generation_status    TEXT        NOT NULL DEFAULT 'pending',
     generation_error     TEXT,
     encoded_description  TEXT,
@@ -156,81 +202,14 @@ CREATE TABLE IF NOT EXISTS dr_dspy_encdec_eval_predictions (
     generated_at         TIMESTAMPTZ,
     scored_at            TIMESTAMPTZ,
     CONSTRAINT dr_dspy_encdec_eval_predictions_identity_key UNIQUE (
-        experiment_name,
-        task_id,
-        encoder_model,
-        decoder_model,
-        encoder_temperature,
-        decoder_temperature,
-        encoder_reasoning,
-        decoder_reasoning,
-        repetition_seed
+__IDENTITY_CONSTRAINT__
     )
 )
-"""
-PREDICTION_MIGRATION_SQL = (
-    "ALTER TABLE dr_dspy_encdec_eval_predictions "
-    "ALTER COLUMN compression_metrics SET DEFAULT '{}'::jsonb",
-)
-PREDICTION_CONSTRAINT_MIGRATION_SQL = (
-    """
-    DO $$
-    DECLARE old_constraint_name text;
-    BEGIN
-        SELECT c.conname INTO old_constraint_name
-        FROM pg_constraint c
-        JOIN pg_class t ON t.oid = c.conrelid
-        WHERE t.relname = 'dr_dspy_encdec_eval_predictions'
-          AND c.contype = 'u'
-          AND ARRAY(
-              SELECT a.attname
-              FROM unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord)
-              JOIN pg_attribute a
-                ON a.attrelid = c.conrelid
-               AND a.attnum = cols.attnum
-              ORDER BY cols.ord
-          ) = ARRAY[
-              'experiment_name',
-              'task_id',
-              'encoder_model',
-              'decoder_model',
-              'encoder_temperature',
-              'decoder_temperature',
-              'repetition_seed'
-          ];
-
-        IF old_constraint_name IS NOT NULL THEN
-            EXECUTE format(
-                'ALTER TABLE dr_dspy_encdec_eval_predictions '
-                'DROP CONSTRAINT %I',
-                old_constraint_name
-            );
-        END IF;
-
-        IF NOT EXISTS (
-            SELECT 1
-            FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            WHERE t.relname = 'dr_dspy_encdec_eval_predictions'
-              AND c.conname = 'dr_dspy_encdec_eval_predictions_identity_key'
-        ) THEN
-            ALTER TABLE dr_dspy_encdec_eval_predictions
-            ADD CONSTRAINT
-                dr_dspy_encdec_eval_predictions_identity_key
-            UNIQUE (
-                experiment_name,
-                task_id,
-                encoder_model,
-                decoder_model,
-                encoder_temperature,
-                decoder_temperature,
-                encoder_reasoning,
-                decoder_reasoning,
-                repetition_seed
-            );
-        END IF;
-    END $$;
-    """,
+""".replace(
+    "__DIMENSION_COLUMNS__", dimension_columns_ddl(DIMENSIONS).rstrip()
+).replace(
+    "__IDENTITY_CONSTRAINT__",
+    "        " + ",\n        ".join(identity_constraint_columns(DIMENSIONS)),
 )
 
 PREDICTION_INDEX_SQL = (
@@ -262,12 +241,14 @@ class EncDecHumanEvalExperimentConfig(BaseModel):
     dataset_name: StrictStr
     dataset_split: StrictStr
     encoder_signature: DspySignatureConfig
+    budgeted_encoder_signature: DspySignatureConfig
     decoder_signature: DspySignatureConfig
     default_model_pairs: tuple[EncDecPair, ...]
     default_sample_count: StrictInt
     default_seed: StrictInt
     default_encoder_temperatures: tuple[float, ...]
     default_decoder_temperatures: tuple[float, ...]
+    default_budget_ratios: tuple[float | None, ...]
     default_repetitions: StrictInt
     default_max_completion_tokens: StrictInt
     default_subprocess_timeout: float
@@ -297,6 +278,7 @@ class EncDecJob(BaseModel):
     decoder_model: StrictStr
     encoder_temperature: StrictFloat | None
     decoder_temperature: StrictFloat | None
+    budget_ratio: StrictFloat | None = None
     repetition_seed: StrictInt
     prompt: StrictStr
     canonical_solution: StrictStr
@@ -328,6 +310,7 @@ class GenerationResult(BaseModel):
     decoder_usage_metadata: dict[str, Any] = Field(default_factory=dict)
     encoder_provider_cost: float | None = None
     decoder_provider_cost: float | None = None
+    encoder_char_budget: int | None = None
 
     @property
     def provider_cost(self) -> float | None:
@@ -375,6 +358,7 @@ class AnalysisRecord(BaseModel):
     decoder_model: StrictStr
     encoder_temperature: float | None
     decoder_temperature: float | None
+    budget_ratio: float | None
     task_id: StrictStr
     repetition_seed: StrictInt
     score: float
@@ -388,8 +372,7 @@ class AnalysisRecord(BaseModel):
 class AnalysisSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    model: StrictStr
-    temperature: float
+    dimensions: dict[str, Any]
     sample_count: StrictInt
     scored_count: StrictInt
     total_price: float | None
@@ -407,6 +390,7 @@ class AnalysisSummary(BaseModel):
 
 _EXPERIMENT_CONFIG: EncDecHumanEvalExperimentConfig | None = None
 _ENCODER_SIGNATURE: type[dspy.Signature] | None = None
+_BUDGETED_ENCODER_SIGNATURE: type[dspy.Signature] | None = None
 _DECODER_SIGNATURE: type[dspy.Signature] | None = None
 
 
@@ -419,9 +403,13 @@ def build_dspy_signature(config: DspySignatureConfig) -> type[dspy.Signature]:
 
 
 def configure_experiment(config: EncDecHumanEvalExperimentConfig) -> None:
-    global _EXPERIMENT_CONFIG, _ENCODER_SIGNATURE, _DECODER_SIGNATURE
+    global _EXPERIMENT_CONFIG, _ENCODER_SIGNATURE
+    global _BUDGETED_ENCODER_SIGNATURE, _DECODER_SIGNATURE
     _EXPERIMENT_CONFIG = config
     _ENCODER_SIGNATURE = build_dspy_signature(config.encoder_signature)
+    _BUDGETED_ENCODER_SIGNATURE = build_dspy_signature(
+        config.budgeted_encoder_signature
+    )
     _DECODER_SIGNATURE = build_dspy_signature(config.decoder_signature)
 
 
@@ -441,6 +429,15 @@ def encoder_signature() -> type[dspy.Signature]:
             "create_app(config) from the experiment script first."
         )
     return _ENCODER_SIGNATURE
+
+
+def budgeted_encoder_signature() -> type[dspy.Signature]:
+    if _BUDGETED_ENCODER_SIGNATURE is None:
+        raise RuntimeError(
+            "HumanEval enc-dec budgeted encoder signature is not configured; "
+            "call create_app(config) from the experiment script first."
+        )
+    return _BUDGETED_ENCODER_SIGNATURE
 
 
 def decoder_signature() -> type[dspy.Signature]:
@@ -508,6 +505,7 @@ def prediction_context_from_job(
             "decoder_model": job.decoder_model,
             "encoder_temperature": job.encoder_temperature,
             "decoder_temperature": job.decoder_temperature,
+            "budget_ratio": job.budget_ratio,
             "encoder_reasoning": job.encoder_reasoning,
             "decoder_reasoning": job.decoder_reasoning,
         },
@@ -535,6 +533,21 @@ def load_optional_env_file(env_file: Path | None) -> None:
         load_env_file(env_file)
 
 
+def parse_budget_ratios(raw: str) -> list[float | None]:
+    values: list[float | None] = []
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if token.lower() == "none":
+            values.append(None)
+        else:
+            values.append(float(token))
+    if not values:
+        raise ValueError("at least one budget ratio is required")
+    return values
+
+
 def parse_model_pairs(raw: str | None) -> list[EncDecPair]:
     if raw is None:
         return [
@@ -555,8 +568,9 @@ def stable_prediction_id(
     task_id: str,
     encoder_model: str,
     decoder_model: str,
-    encoder_temperature: float,
-    decoder_temperature: float,
+    encoder_temperature: float | None,
+    decoder_temperature: float | None,
+    budget_ratio: float | None,
     encoder_reasoning: Mapping[str, Any],
     decoder_reasoning: Mapping[str, Any],
     repetition_seed: int,
@@ -569,6 +583,7 @@ def stable_prediction_id(
             "decoder_model": decoder_model,
             "encoder_temperature": encoder_temperature,
             "decoder_temperature": decoder_temperature,
+            "budget_ratio": budget_ratio,
             "encoder_reasoning": dict(encoder_reasoning),
             "decoder_reasoning": dict(decoder_reasoning),
         },
@@ -585,6 +600,7 @@ def build_prediction_jobs(
     model_pairs: Sequence[EncDecPair],
     encoder_temperatures: Sequence[float],
     decoder_temperatures: Sequence[float],
+    budget_ratios: Sequence[float | None],
     repetitions: int,
 ) -> list[EncDecJob]:
     jobs: list[EncDecJob] = []
@@ -592,38 +608,55 @@ def build_prediction_jobs(
         for pair in model_pairs:
             for encoder_temperature in encoder_temperatures:
                 for decoder_temperature in decoder_temperatures:
-                    for repetition_seed in range(repetitions):
-                        jobs.append(
-                            EncDecJob(
-                                prediction_id=stable_prediction_id(
+                    for budget_ratio in budget_ratios:
+                        for repetition_seed in range(repetitions):
+                            jobs.append(
+                                EncDecJob(
+                                    prediction_id=stable_prediction_id(
+                                        experiment_name=experiment_name,
+                                        task_id=sample.task_id,
+                                        encoder_model=pair.encoder.model,
+                                        decoder_model=pair.decoder.model,
+                                        encoder_temperature=(
+                                            encoder_temperature
+                                        ),
+                                        decoder_temperature=(
+                                            decoder_temperature
+                                        ),
+                                        budget_ratio=budget_ratio,
+                                        encoder_reasoning=(
+                                            pair.encoder.reasoning
+                                        ),
+                                        decoder_reasoning=(
+                                            pair.decoder.reasoning
+                                        ),
+                                        repetition_seed=repetition_seed,
+                                    ),
                                     experiment_name=experiment_name,
+                                    submission_id=submission_id,
                                     task_id=sample.task_id,
+                                    sample_index=sample.sample_index,
                                     encoder_model=pair.encoder.model,
                                     decoder_model=pair.decoder.model,
                                     encoder_temperature=encoder_temperature,
                                     decoder_temperature=decoder_temperature,
-                                    encoder_reasoning=pair.encoder.reasoning,
-                                    decoder_reasoning=pair.decoder.reasoning,
+                                    budget_ratio=budget_ratio,
                                     repetition_seed=repetition_seed,
-                                ),
-                                experiment_name=experiment_name,
-                                submission_id=submission_id,
-                                task_id=sample.task_id,
-                                sample_index=sample.sample_index,
-                                encoder_model=pair.encoder.model,
-                                decoder_model=pair.decoder.model,
-                                encoder_temperature=encoder_temperature,
-                                decoder_temperature=decoder_temperature,
-                                repetition_seed=repetition_seed,
-                                prompt=sample.prompt,
-                                canonical_solution=sample.canonical_solution,
-                                ground_truth_code=sample.ground_truth_code,
-                                test=sample.test,
-                                entry_point=sample.entry_point,
-                                encoder_reasoning=dict(pair.encoder.reasoning),
-                                decoder_reasoning=dict(pair.decoder.reasoning),
+                                    prompt=sample.prompt,
+                                    canonical_solution=(
+                                        sample.canonical_solution
+                                    ),
+                                    ground_truth_code=sample.ground_truth_code,
+                                    test=sample.test,
+                                    entry_point=sample.entry_point,
+                                    encoder_reasoning=dict(
+                                        pair.encoder.reasoning
+                                    ),
+                                    decoder_reasoning=dict(
+                                        pair.decoder.reasoning
+                                    ),
+                                )
                             )
-                        )
     return jobs
 
 
@@ -687,6 +720,7 @@ def insert_prediction_jobs(
             job.decoder_model,
             job.encoder_temperature,
             job.decoder_temperature,
+            job.budget_ratio,
             job.repetition_seed,
             job.prompt,
             job.canonical_solution,
@@ -713,6 +747,7 @@ def insert_prediction_jobs(
                     decoder_model,
                     encoder_temperature,
                     decoder_temperature,
+                    budget_ratio,
                     repetition_seed,
                     prompt,
                     canonical_solution,
@@ -723,7 +758,7 @@ def insert_prediction_jobs(
                     decoder_reasoning
                 )
                 VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT DO NOTHING
@@ -743,9 +778,20 @@ def generate_code_for_job(job: EncDecJob) -> GenerationResult:
         temperature=job.encoder_temperature,
         event_buffer=encoder_events,
     )
+    if job.budget_ratio is None:
+        encoder_char_budget: int | None = None
+        encoder_program = encoder_signature()
+        encoder_inputs: dict[str, Any] = {"code": job.ground_truth_code}
+    else:
+        encoder_char_budget = round(job.budget_ratio * len(job.prompt))
+        encoder_program = budgeted_encoder_signature()
+        encoder_inputs = {
+            "code": job.ground_truth_code,
+            "max_characters": encoder_char_budget,
+        }
     encoded_description = run_predictor(
-        signature=encoder_signature(),
-        input_kwargs={"code": job.ground_truth_code},
+        signature=encoder_program,
+        input_kwargs=encoder_inputs,
         output_field="description",
         lm=encoder_lm,
         event_buffer=encoder_events,
@@ -775,6 +821,7 @@ def generate_code_for_job(job: EncDecJob) -> GenerationResult:
         decoder_usage_metadata=usage_metadata_from_response(decoder_metadata),
         encoder_provider_cost=provider_cost_from_response(encoder_metadata),
         decoder_provider_cost=provider_cost_from_response(decoder_metadata),
+        encoder_char_budget=encoder_char_budget,
     )
 
 
@@ -793,6 +840,7 @@ def fetch_prediction_job(database_url: str, prediction_id: str) -> EncDecJob:
                     decoder_model,
                     encoder_temperature,
                     decoder_temperature,
+                    budget_ratio,
                     repetition_seed,
                     prompt,
                     canonical_solution,
@@ -819,14 +867,15 @@ def fetch_prediction_job(database_url: str, prediction_id: str) -> EncDecJob:
         decoder_model=row[6],
         encoder_temperature=row[7],
         decoder_temperature=row[8],
-        repetition_seed=row[9],
-        prompt=row[10],
-        canonical_solution=row[11],
-        ground_truth_code=row[12],
-        test=row[13],
-        entry_point=row[14],
-        encoder_reasoning=dict(row[15]),
-        decoder_reasoning=dict(row[16]),
+        budget_ratio=row[9],
+        repetition_seed=row[10],
+        prompt=row[11],
+        canonical_solution=row[12],
+        ground_truth_code=row[13],
+        test=row[14],
+        entry_point=row[15],
+        encoder_reasoning=dict(row[16]),
+        decoder_reasoning=dict(row[17]),
     )
 
 
@@ -872,6 +921,7 @@ def record_generation_success(
                     encoder_provider_cost = %s,
                     decoder_provider_cost = %s,
                     provider_cost = %s,
+                    encoder_char_budget = %s,
                     raw_code = NULL,
                     generated_at = now(),
                     updated_at = now()
@@ -888,6 +938,7 @@ def record_generation_success(
                     result.encoder_provider_cost,
                     result.decoder_provider_cost,
                     result.provider_cost,
+                    result.encoder_char_budget,
                     result.prediction_id,
                 ),
             )
@@ -1085,111 +1136,83 @@ def record_score_error(
 def generate_prediction_step(
     database_url: str, prediction_id: str
 ) -> GenerationResult:
-    return shared_flow.run_generate_prediction_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        mark_generation_started=mark_generation_started,
-        fetch_prediction_job=fetch_prediction_job,
-        prediction_context_from_job=prediction_context_from_job,
-        emit_prediction_log_event=emit_prediction_log_event,
-        generate_code_for_job=generate_code_for_job,
+    mark_generation_started(database_url, prediction_id)
+    job = fetch_prediction_job(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_started", prediction_context_from_job(job)
     )
+    return generate_code_for_job(job)
 
 
 @DBOS.step(name="humaneval_encdec_record_generation_success_step_v0")
 def record_generation_success_step(
     database_url: str, result: GenerationResult
 ) -> None:
-    shared_flow.run_record_generation_success_step(
-        database_url=database_url,
-        result=result,
-        prediction_id=result.prediction_id,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        success_extra=lambda generation_result: {
-            "provider_cost": generation_result.provider_cost,
-            "encoder_usage_metadata": (
-                generation_result.encoder_usage_metadata
-            ),
-            "decoder_usage_metadata": (
-                generation_result.decoder_usage_metadata
-            ),
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "generation_succeeded",
+        context,
+        extra={
+            "provider_cost": result.provider_cost,
+            "encoder_usage_metadata": result.encoder_usage_metadata,
+            "decoder_usage_metadata": result.decoder_usage_metadata,
         },
-        record_generation_success=record_generation_success,
     )
+    record_generation_success(database_url, result)
 
 
 @DBOS.step(name="humaneval_encdec_record_generation_error_step_v0")
 def record_generation_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    shared_flow.run_record_generation_error_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        error=error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_generation_error=record_generation_error,
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "generation_failed", context, extra={"error": error}
     )
+    record_generation_error(database_url, prediction_id, error)
 
 
 @DBOS.step(name="humaneval_encdec_mark_scoring_queued_step_v0")
 def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
-    shared_flow.run_mark_scoring_queued_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        mark_scoring_queued=mark_scoring_queued,
-    )
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event("scoring_enqueued", context)
+    mark_scoring_queued(database_url, [prediction_id])
 
 
 @DBOS.step(name="humaneval_encdec_score_prediction_step_v0")
 def score_prediction_step(
     database_url: str, prediction_id: str, timeout: float
 ) -> ScoreResult:
-    return shared_flow.run_score_prediction_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        timeout=timeout,
-        mark_scoring_started=mark_scoring_started,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        score_generated_prediction=(
-            lambda db_url, pred_id, score_timeout: score_generated_code(
-                fetch_scoring_target(db_url, pred_id),
-                timeout=score_timeout,
-            )
-        ),
+    mark_scoring_started(database_url, prediction_id)
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_started", context, extra={"timeout": timeout}
+    )
+    return score_generated_code(
+        fetch_scoring_target(database_url, prediction_id), timeout=timeout
     )
 
 
 @DBOS.step(name="humaneval_encdec_record_score_success_step_v0")
 def record_score_success_step(database_url: str, result: ScoreResult) -> None:
-    shared_flow.run_record_score_success_step(
-        database_url=database_url,
-        result=result,
-        prediction_id=result.prediction_id,
-        score=result.score,
-        error=result.error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_score_success=record_score_success,
+    context = fetch_prediction_log_context(database_url, result.prediction_id)
+    emit_prediction_log_event(
+        "scoring_succeeded",
+        context,
+        extra={"score": result.score, "scoring_error": result.error},
     )
+    record_score_success(database_url, result)
 
 
 @DBOS.step(name="humaneval_encdec_record_score_error_step_v0")
 def record_score_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
-    shared_flow.run_record_score_error_step(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        error=error,
-        fetch_prediction_log_context=fetch_prediction_log_context,
-        emit_prediction_log_event=emit_prediction_log_event,
-        record_score_error=record_score_error,
+    context = fetch_prediction_log_context(database_url, prediction_id)
+    emit_prediction_log_event(
+        "scoring_failed", context, extra={"error": error}
     )
+    record_score_error(database_url, prediction_id, error)
 
 
 @DBOS.workflow(name="humaneval_encdec_generate_prediction_v0")
@@ -1199,38 +1222,33 @@ def generate_prediction_workflow(
     experiment_name: str,
     score_timeout: float,
 ) -> str:
-    return shared_flow.run_generation_workflow(
-        database_url=database_url,
-        prediction_id=prediction_id,
+    try:
+        result = generate_prediction_step(database_url, prediction_id)
+        record_generation_success_step(database_url, result)
+    except Exception as error:
+        record_generation_error_step(database_url, prediction_id, repr(error))
+        return "generation_error"
+    enqueue_score_job(
+        database_url,
+        prediction_id,
         experiment_name=experiment_name,
-        score_timeout=score_timeout,
-        generate_prediction=generate_prediction_step,
-        record_generation_success=record_generation_success_step,
-        record_generation_error=record_generation_error_step,
-        enqueue_score=(
-            lambda db_url, pred_id, exp_name, timeout: enqueue_score_job(
-                db_url,
-                pred_id,
-                experiment_name=exp_name,
-                timeout=timeout,
-            )
-        ),
-        mark_scoring_queued=mark_scoring_queued_step,
+        timeout=score_timeout,
     )
+    mark_scoring_queued_step(database_url, prediction_id)
+    return "generated"
 
 
 @DBOS.workflow(name="humaneval_encdec_score_prediction_v0")
 def score_prediction_workflow(
     database_url: str, prediction_id: str, timeout: float
 ) -> str:
-    return shared_flow.run_score_workflow(
-        database_url=database_url,
-        prediction_id=prediction_id,
-        timeout=timeout,
-        score_prediction=score_prediction_step,
-        record_score_success=record_score_success_step,
-        record_score_error=record_score_error_step,
-    )
+    try:
+        result = score_prediction_step(database_url, prediction_id, timeout)
+        record_score_success_step(database_url, result)
+        return "scored"
+    except Exception as error:
+        record_score_error_step(database_url, prediction_id, repr(error))
+        return "score_error"
 
 
 def fetch_generation_error_prediction_jobs(
@@ -1489,8 +1507,6 @@ def create_eval_schema(database_url: str) -> None:
         statements=(
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
-            *PREDICTION_MIGRATION_SQL,
-            *PREDICTION_CONSTRAINT_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
         ),
     )
@@ -1540,6 +1556,7 @@ def build_lm(
         event_buffer=event_buffer,
         max_completion_tokens=experiment_config().default_max_completion_tokens,
     )
+
 
 def run_predictor(
     *,
@@ -1665,7 +1682,7 @@ def fetch_status_counts(
     return shared_eval_reporting.fetch_status_counts(
         database_url,
         prediction_table=PREDICTION_TABLE_NAME,
-        dimension_columns=REPAIR_DIMENSION_COLUMNS,
+        dimension_columns=REPORTING_DIMENSION_COLUMNS,
         experiment_name=experiment_name,
     )
 
@@ -1678,96 +1695,8 @@ def status_counts_table(
     return shared_eval_reporting.status_counts_table(
         rows,
         title="Enc-Dec Eval Status",
-        dimensions=(
-            shared_eval_reporting.StatusDimension(
-                key="encoder_model", title="Encoder"
-            ),
-            shared_eval_reporting.StatusDimension(
-                key="decoder_model", title="Decoder"
-            ),
-            shared_eval_reporting.StatusDimension(
-                key="encoder_temperature", title="Enc Temp", justify="right"
-            ),
-            shared_eval_reporting.StatusDimension(
-                key="decoder_temperature", title="Dec Temp", justify="right"
-            ),
-        ),
+        dimensions=status_dimensions(DIMENSIONS),
         experiment_name=experiment_name,
-    )
-
-
-def enqueue_scores_line(
-    *,
-    experiment_name: str,
-    selected_count: int,
-    limit: int,
-    timeout: float,
-) -> str:
-    return shared_eval_reporting.enqueue_scores_line(
-        experiment_name=experiment_name,
-        selected_count=selected_count,
-        limit=limit,
-        timeout=timeout,
-    )
-
-
-def enqueue_scores_style(selected_count: int) -> str:
-    return shared_eval_reporting.enqueue_scores_style(selected_count)
-
-
-def repair_plan_line(
-    *,
-    experiment_name: str,
-    plan: shared_eval_repair.RepairPlan,
-    apply: bool,
-) -> str:
-    return shared_eval_reporting.repair_plan_line(
-        experiment_name=experiment_name,
-        gen_stranded=len(plan.stranded_generations),
-        gen_errors=len(plan.generation_retry_prediction_ids),
-        score_pending=len(plan.pending_scoring_prediction_ids),
-        score_stranded=len(plan.stranded_scoring),
-        score_errors=len(plan.scoring_retry_prediction_ids),
-        apply=apply,
-    )
-
-
-def repair_apply_line(
-    *, experiment_name: str, result: shared_eval_repair.RepairApplyResult
-) -> str:
-    return shared_eval_reporting.repair_apply_line(
-        experiment_name=experiment_name,
-        stranded_generations_marked=result.stranded_generations_marked,
-        generation_retries_enqueued=result.generation_retries_enqueued,
-        stranded_scoring_marked=result.stranded_scoring_marked,
-        pending_scoring_enqueued=result.pending_scoring_enqueued,
-        scoring_retries_enqueued=result.scoring_retries_enqueued,
-        repair_token=result.repair_token,
-    )
-
-
-def repair_plan_style(
-    plan: shared_eval_repair.RepairPlan, *, apply: bool
-) -> str:
-    return shared_eval_reporting.repair_plan_style(
-        apply=apply,
-        gen_stranded=len(plan.stranded_generations),
-        gen_errors=len(plan.generation_retry_prediction_ids),
-        score_pending=len(plan.pending_scoring_prediction_ids),
-        score_stranded=len(plan.stranded_scoring),
-        score_errors=len(plan.scoring_retry_prediction_ids),
-    )
-
-
-def analysis_model_label(record: AnalysisRecord) -> str:
-    encoder_temperature = (
-        "None"
-        if record.encoder_temperature is None
-        else f"{record.encoder_temperature:g}"
-    )
-    return (
-        f"{record.encoder_model} @ {encoder_temperature} -> "
-        f"{record.decoder_model}"
     )
 
 
@@ -1783,6 +1712,7 @@ def fetch_analysis_records(
                     decoder_model,
                     encoder_temperature,
                     decoder_temperature,
+                    budget_ratio,
                     task_id,
                     repetition_seed,
                     score,
@@ -1801,6 +1731,7 @@ def fetch_analysis_records(
                     decoder_model,
                     encoder_temperature,
                     decoder_temperature,
+                    budget_ratio,
                     task_id,
                     repetition_seed
                 """,
@@ -1813,14 +1744,15 @@ def fetch_analysis_records(
             decoder_model=row[1],
             encoder_temperature=row[2],
             decoder_temperature=row[3],
-            task_id=row[4],
-            repetition_seed=row[5],
-            score=row[6],
-            provider_cost=row[7],
-            raw_compile_ok=row[8],
-            extracted_compile_ok=row[9],
-            best_compression_ratio=row[10],
-            best_compression_percent_reduction=row[11],
+            budget_ratio=row[4],
+            task_id=row[5],
+            repetition_seed=row[6],
+            score=row[7],
+            provider_cost=row[8],
+            raw_compile_ok=row[9],
+            extracted_compile_ok=row[10],
+            best_compression_ratio=row[11],
+            best_compression_percent_reduction=row[12],
         )
         for row in rows
     ]
@@ -1834,15 +1766,17 @@ def summarize_analysis_records(
         group_key=lambda record: (
             record.encoder_model,
             record.decoder_model,
-            record.encoder_temperature,
-            record.decoder_temperature,
+            str(record.encoder_temperature),
+            str(record.decoder_temperature),
+            str(record.budget_ratio),
         ),
-        model_label=analysis_model_label,
-        temperature=lambda record: (
-            record.decoder_temperature
-            if record.decoder_temperature is not None
-            else 0.0
-        ),
+        dimension_values=lambda record: {
+            "encoder_model": record.encoder_model,
+            "decoder_model": record.decoder_model,
+            "encoder_temperature": record.encoder_temperature,
+            "decoder_temperature": record.decoder_temperature,
+            "budget_ratio": record.budget_ratio,
+        },
         task_id=lambda record: record.task_id,
         score=lambda record: record.score,
         provider_cost=lambda record: record.provider_cost,
@@ -1860,7 +1794,9 @@ def analysis_markdown(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> str:
     return shared_eval_reporting.analysis_markdown(
-        experiment_name=experiment_name, summaries=summaries
+        experiment_name=experiment_name,
+        summaries=summaries,
+        dimensions=status_dimensions(DIMENSIONS),
     )
 
 
@@ -1868,17 +1804,26 @@ def analysis_table(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> object:
     return shared_eval_reporting.analysis_table(
-        experiment_name=experiment_name, summaries=summaries
+        experiment_name=experiment_name,
+        summaries=summaries,
+        dimensions=status_dimensions(DIMENSIONS),
     )
 
 
 def write_analysis_csv(
-    summaries: Sequence[AnalysisSummary], *, csv_path: Path
+    summaries: Sequence[AnalysisSummary], csv_path: Path
 ) -> None:
     shared_eval_reporting.write_analysis_csv(
         summaries,
         csv_path=csv_path,
-        fieldnames=list(AnalysisSummary.model_fields),
+        fieldnames=[
+            *REPORTING_DIMENSION_COLUMNS,
+            *(
+                name
+                for name in AnalysisSummary.model_fields
+                if name != "dimensions"
+            ),
+        ],
     )
 
 
@@ -1892,6 +1837,309 @@ def start_worker_monitor(
         emit_worker_detail_log=emit_worker_detail_log,
     )
 
+
+class EncDecExperiment:
+    prediction_table = PREDICTION_TABLE_NAME
+    dimensions = DIMENSIONS
+
+    def create_schema(self, database_url: str) -> None:
+        create_eval_schema(database_url)
+
+    def upsert_experiment(
+        self,
+        database_url: str,
+        *,
+        experiment_name: str,
+        seed: int,
+        sample_count: int,
+        metadata: Mapping[str, Any],
+    ) -> None:
+        upsert_experiment(
+            database_url,
+            experiment_name=experiment_name,
+            seed=seed,
+            sample_count=sample_count,
+            metadata=metadata,
+        )
+
+    def insert_prediction_jobs(
+        self, database_url: str, jobs: Sequence[EncDecJob]
+    ) -> int:
+        return insert_prediction_jobs(database_url, jobs)
+
+    def configure_runtime(
+        self,
+        config: EvalDbosConfig,
+        experiment_name: str,
+        *,
+        consume_queues: bool = True,
+    ) -> None:
+        configure_dbos_runtime(
+            config,
+            experiment_name=experiment_name,
+            consume_queues=consume_queues,
+        )
+
+    def enqueue_generation_jobs(
+        self,
+        database_url: str,
+        jobs: Sequence[EncDecJob],
+        *,
+        score_timeout: float,
+        retry_token: str | None = None,
+    ) -> None:
+        enqueue_generation_jobs(
+            database_url,
+            jobs,
+            score_timeout=score_timeout,
+            retry_token=retry_token,
+        )
+
+    def mark_generation_started(
+        self, database_url: str, prediction_id: str
+    ) -> None:
+        mark_generation_started(database_url, prediction_id)
+
+    def fetch_prediction_job(
+        self, database_url: str, prediction_id: str
+    ) -> EncDecJob:
+        return fetch_prediction_job(database_url, prediction_id)
+
+    def generate_code_for_job(self, job: EncDecJob) -> GenerationResult:
+        return generate_code_for_job(job)
+
+    def record_generation_success(
+        self, database_url: str, result: GenerationResult
+    ) -> None:
+        record_generation_success(database_url, result)
+
+    def record_generation_error(
+        self, database_url: str, prediction_id: str, error: str
+    ) -> None:
+        record_generation_error(database_url, prediction_id, error)
+
+    def generation_success_log_extra(
+        self, result: GenerationResult
+    ) -> Mapping[str, Any]:
+        return {
+            "provider_cost": result.provider_cost,
+            "encoder_usage_metadata": result.encoder_usage_metadata,
+            "decoder_usage_metadata": result.decoder_usage_metadata,
+        }
+
+    def prediction_context_from_job(
+        self, job: EncDecJob
+    ) -> shared_eval_logging.PredictionLogContext:
+        return prediction_context_from_job(job)
+
+    def fetch_prediction_log_context(
+        self, database_url: str, prediction_id: str
+    ) -> shared_eval_logging.PredictionLogContext:
+        return fetch_prediction_log_context(database_url, prediction_id)
+
+    def emit_prediction_log_event(
+        self,
+        event: str,
+        context: shared_eval_logging.PredictionLogContext,
+        *,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
+        emit_prediction_log_event(event, context, extra=extra)
+
+    def mark_scoring_started(
+        self, database_url: str, prediction_id: str
+    ) -> None:
+        mark_scoring_started(database_url, prediction_id)
+
+    def mark_scoring_queued(
+        self, database_url: str, prediction_ids: Sequence[str]
+    ) -> int:
+        return mark_scoring_queued(database_url, prediction_ids)
+
+    def score_prediction(
+        self, database_url: str, prediction_id: str, timeout: float
+    ) -> ScoreResult:
+        return score_generated_code(
+            fetch_scoring_target(database_url, prediction_id),
+            timeout=timeout,
+        )
+
+    def record_score_success(
+        self, database_url: str, result: ScoreResult
+    ) -> None:
+        record_score_success(database_url, result)
+
+    def record_score_error(
+        self, database_url: str, prediction_id: str, error: str
+    ) -> None:
+        record_score_error(database_url, prediction_id, error)
+
+    def enqueue_score(
+        self,
+        database_url: str,
+        prediction_id: str,
+        *,
+        experiment_name: str,
+        timeout: float,
+    ) -> None:
+        enqueue_score_job(
+            database_url,
+            prediction_id,
+            experiment_name=experiment_name,
+            timeout=timeout,
+        )
+
+    def enqueue_score_jobs(
+        self,
+        database_url: str,
+        prediction_ids: Sequence[str],
+        *,
+        experiment_name: str,
+        timeout: float,
+        retry_token: str | None = None,
+    ) -> None:
+        enqueue_score_jobs(
+            database_url,
+            prediction_ids,
+            experiment_name=experiment_name,
+            timeout=timeout,
+            retry_token=retry_token,
+        )
+
+    def fetch_scoreable_prediction_ids(
+        self, database_url: str, *, experiment_name: str, limit: int
+    ) -> list[str]:
+        return fetch_scoreable_prediction_ids(
+            database_url, experiment_name=experiment_name, limit=limit
+        )
+
+    def build_repair_plan(
+        self,
+        database_url: str,
+        *,
+        dbos_system_database_url: str,
+        experiment_name: str,
+        generation_limit: int,
+        scoring_limit: int,
+    ) -> shared_eval_repair.RepairPlan:
+        return build_repair_plan(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+        )
+
+    def apply_repair(
+        self,
+        config: EvalDbosConfig,
+        *,
+        experiment_name: str,
+        generation_limit: int,
+        scoring_limit: int,
+        score_timeout: float,
+        repair_token: str | None = None,
+    ) -> shared_eval_repair.RepairApplyResult:
+        return apply_repair(
+            config,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+            score_timeout=score_timeout,
+            repair_token=repair_token,
+        )
+
+    def fetch_status_counts(
+        self, database_url: str, *, experiment_name: str | None
+    ) -> list[dict[str, Any]]:
+        return fetch_status_counts(
+            database_url, experiment_name=experiment_name
+        )
+
+    def status_counts_table(
+        self,
+        rows: Sequence[Mapping[str, Any]],
+        *,
+        experiment_name: str | None,
+    ) -> Table:
+        return status_counts_table(rows, experiment_name=experiment_name)
+
+    def fetch_analysis_records(
+        self, database_url: str, *, experiment_name: str
+    ) -> list[AnalysisRecord]:
+        return fetch_analysis_records(
+            database_url, experiment_name=experiment_name
+        )
+
+    def summarize_analysis_records(
+        self, records: Sequence[AnalysisRecord]
+    ) -> list[AnalysisSummary]:
+        return summarize_analysis_records(records)
+
+    def analysis_table(
+        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+    ) -> object:
+        return analysis_table(
+            experiment_name=experiment_name, summaries=summaries
+        )
+
+    def analysis_markdown(
+        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
+    ) -> str:
+        return analysis_markdown(
+            experiment_name=experiment_name, summaries=summaries
+        )
+
+    def write_analysis_csv(
+        self, summaries: Sequence[AnalysisSummary], csv_path: Path
+    ) -> None:
+        write_analysis_csv(summaries, csv_path)
+
+    def configure_pooled_worker_runtime(
+        self,
+        config: EvalDbosConfig,
+        *,
+        experiment_name: str,
+        queue: QueueSelection,
+        raw_db_pool_max_size: str,
+    ) -> DbPoolConfig:
+        return configure_pooled_worker_runtime(
+            config,
+            experiment_name=experiment_name,
+            queue=queue,
+            raw_db_pool_max_size=raw_db_pool_max_size,
+        )
+
+    def queue_names_for_selection(
+        self, selection: QueueSelection, *, experiment_name: str
+    ) -> tuple[str, ...]:
+        return queue_names_for_selection(
+            selection, experiment_name=experiment_name
+        )
+
+    def resolve_worker_log_path(
+        self,
+        *,
+        experiment_name: str,
+        queue: QueueSelection,
+        log_file: Path | None,
+    ) -> Path:
+        return resolve_worker_log_path(
+            experiment_name=experiment_name, queue=queue, log_file=log_file
+        )
+
+    def configure_worker_file_logging(self, log_file: Path) -> logging.Logger:
+        return configure_worker_file_logging(log_file)
+
+    def start_worker_monitor(
+        self,
+        monitor_config: WorkerMonitorConfig,
+        stop_event: threading.Event,
+    ) -> threading.Thread:
+        return start_worker_monitor(monitor_config, stop_event)
+
+
+_BACKEND = EncDecExperiment()
 
 _APP = typer.Typer(no_args_is_help=True)
 
@@ -1921,6 +2169,16 @@ def submit(
     seed: Annotated[int | None, typer.Option()] = None,
     encoder_temperatures: Annotated[str | None, typer.Option()] = None,
     decoder_temperatures: Annotated[str | None, typer.Option()] = None,
+    budget_ratios: Annotated[
+        str | None,
+        typer.Option(
+            "--budget-ratios",
+            help=(
+                "Comma-separated encoder char-budget ratios; use 'none' "
+                "for no budget."
+            ),
+        ),
+    ] = None,
     repetitions: Annotated[int | None, typer.Option()] = None,
     generation_concurrency: Annotated[
         int, typer.Option()
@@ -1947,6 +2205,10 @@ def submit(
     decoder_temperatures = decoder_temperatures or ",".join(
         str(value) for value in experiment.default_decoder_temperatures
     )
+    budget_ratios = budget_ratios or ",".join(
+        "none" if value is None else str(value)
+        for value in experiment.default_budget_ratios
+    )
     repetitions = repetitions or experiment.default_repetitions
     score_timeout = (
         score_timeout
@@ -1964,6 +2226,7 @@ def submit(
     samples = build_humaneval_samples(seed=seed, sample_count=sample_count)
     parsed_encoder_temperatures = parse_temperatures(encoder_temperatures)
     parsed_decoder_temperatures = parse_temperatures(decoder_temperatures)
+    parsed_budget_ratios = parse_budget_ratios(budget_ratios)
     jobs = build_prediction_jobs(
         experiment_name=experiment_name,
         submission_id=uuid.uuid4().hex,
@@ -1971,12 +2234,14 @@ def submit(
         model_pairs=model_pairs,
         encoder_temperatures=parsed_encoder_temperatures,
         decoder_temperatures=parsed_decoder_temperatures,
+        budget_ratios=parsed_budget_ratios,
         repetitions=repetitions,
     )
     metadata = {
         "model_pairs": [pair.model_dump(mode="json") for pair in model_pairs],
         "encoder_temperatures": parsed_encoder_temperatures,
         "decoder_temperatures": parsed_decoder_temperatures,
+        "budget_ratios": parsed_budget_ratios,
         "repetitions": repetitions,
     }
     operator_log(
@@ -1984,6 +2249,7 @@ def submit(
         f"model_pairs={len(model_pairs)}, "
         f"encoder_temperatures={len(metadata['encoder_temperatures'])}, "
         f"decoder_temperatures={len(metadata['decoder_temperatures'])}, "
+        f"budget_ratios={len(parsed_budget_ratios)}, "
         f"repetitions={repetitions}",
         style="cyan",
     )
@@ -1994,6 +2260,7 @@ def submit(
         )
         return
     shared_flow.run_submit_jobs(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         seed=seed,
@@ -2001,24 +2268,6 @@ def submit(
         metadata=metadata,
         jobs=jobs,
         score_timeout=score_timeout,
-        create_schema=create_eval_schema,
-        upsert_experiment=upsert_experiment,
-        insert_prediction_jobs=insert_prediction_jobs,
-        configure_runtime=(
-            lambda dbos_config, exp_name: configure_dbos_runtime(
-                dbos_config,
-                experiment_name=exp_name,
-                consume_queues=False,
-            )
-        ),
-        enqueue_generation_jobs=(
-            lambda db_url, generation_jobs, timeout: enqueue_generation_jobs(
-                db_url,
-                generation_jobs,
-                score_timeout=timeout,
-            )
-        ),
-        operator_log=operator_log,
     )
 
 
@@ -2087,6 +2336,7 @@ def worker(
         scoring_concurrency=scoring_concurrency,
     )
     shared_flow.run_worker_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         queue=queue,
@@ -2096,19 +2346,6 @@ def worker(
         monitor_interval=monitor_interval,
         monitor_summary_interval=monitor_summary_interval,
         db_pool_max_size=db_pool_max_size,
-        prediction_table=PREDICTION_TABLE_NAME,
-        db_pools=DB_POOLS,
-        raise_open_file_limit=raise_open_file_limit,
-        open_file_limit_line=open_file_limit_line,
-        open_file_limit_style=open_file_limit_style,
-        create_schema=create_eval_schema,
-        configure_pooled_worker_runtime=configure_pooled_worker_runtime,
-        resolve_worker_log_path=resolve_worker_log_path,
-        configure_worker_file_logging=configure_worker_file_logging,
-        queue_names_for_selection=queue_names_for_selection,
-        start_worker_monitor=start_worker_monitor,
-        close_db_connection_pools=close_db_connection_pools,
-        operator_log=operator_log,
     )
 
 
@@ -2120,12 +2357,9 @@ def status(
 ) -> None:
     load_optional_env_file(env_file)
     shared_flow.run_status_command(
+        _BACKEND,
         database_url=resolve_database_url(database_url),
         experiment_name=experiment_name,
-        fetch_status_counts=fetch_status_counts,
-        status_counts_table=status_counts_table,
-        console=CONSOLE,
-        operator_log=operator_log,
     )
 
 
@@ -2161,33 +2395,11 @@ def enqueue_scores_command(
         scoring_concurrency=scoring_concurrency,
     )
     shared_flow.run_enqueue_scores_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         limit=limit,
         timeout=timeout,
-        create_schema=create_eval_schema,
-        fetch_scoreable_prediction_ids=fetch_scoreable_prediction_ids,
-        configure_runtime=(
-            lambda dbos_config, exp_name: configure_dbos_runtime(
-                dbos_config,
-                experiment_name=exp_name,
-                consume_queues=False,
-            )
-        ),
-        enqueue_score_jobs=(
-            lambda db_url, prediction_ids, exp_name, score_timeout: (
-                enqueue_score_jobs(
-                    db_url,
-                    prediction_ids,
-                    experiment_name=exp_name,
-                    timeout=score_timeout,
-                )
-            )
-        ),
-        mark_scoring_queued=mark_scoring_queued,
-        enqueue_scores_line=enqueue_scores_line,
-        enqueue_scores_style=enqueue_scores_style,
-        operator_log=operator_log,
     )
 
 
@@ -2210,19 +2422,11 @@ def analyze(
 ) -> None:
     load_optional_env_file(env_file)
     shared_flow.run_analyze_command(
+        _BACKEND,
         database_url=resolve_database_url(database_url),
         experiment_name=experiment_name,
         csv_path=csv_path,
         markdown=markdown,
-        fetch_analysis_records=fetch_analysis_records,
-        summarize_analysis_records=summarize_analysis_records,
-        analysis_markdown=analysis_markdown,
-        analysis_table=analysis_table,
-        write_analysis_csv=lambda summaries, path: write_analysis_csv(
-            summaries, csv_path=path
-        ),
-        console=CONSOLE,
-        operator_log=operator_log,
     )
 
 
@@ -2260,23 +2464,11 @@ def repair(
         scoring_concurrency=scoring_concurrency,
     )
     shared_flow.run_repair_command(
+        _BACKEND,
         config=config,
         experiment_name=experiment_name,
         generation_limit=generation_limit,
         scoring_limit=scoring_limit,
         score_timeout=score_timeout,
         apply=apply,
-        build_repair_plan=build_repair_plan,
-        apply_repair=apply_repair,
-        repair_plan_line=repair_plan_line,
-        repair_plan_style=repair_plan_style,
-        repair_apply_line=repair_apply_line,
-        plan_has_work=lambda plan: bool(
-            plan.stranded_generations
-            or plan.generation_retry_prediction_ids
-            or plan.pending_scoring_prediction_ids
-            or plan.stranded_scoring
-            or plan.scoring_retry_prediction_ids
-        ),
-        operator_log=operator_log,
     )

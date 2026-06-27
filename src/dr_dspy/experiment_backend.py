@@ -14,6 +14,7 @@ yields `HumanEvalScoreResult`.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
@@ -23,6 +24,7 @@ from dr_dspy.eval_logging import PredictionLogContext
 from dr_dspy.eval_repair import RepairApplyResult, RepairPlan
 from dr_dspy.experiment_dimensions import Dimension
 from dr_dspy.scoring import HumanEvalScoreResult
+from dr_dspy.worker_monitor import WorkerMonitorConfig
 
 
 class ExperimentBackend(Protocol):
@@ -193,3 +195,16 @@ class ExperimentBackend(Protocol):
     def queue_names_for_selection(
         self, selection: QueueSelection, *, experiment_name: str
     ) -> tuple[str, ...]: ...
+    def resolve_worker_log_path(
+        self,
+        *,
+        experiment_name: str,
+        queue: QueueSelection,
+        log_file: Path | None,
+    ) -> Path: ...
+    def configure_worker_file_logging(self, log_file: Path) -> object: ...
+    def start_worker_monitor(
+        self,
+        monitor_config: WorkerMonitorConfig,
+        stop_event: threading.Event,
+    ) -> threading.Thread: ...
