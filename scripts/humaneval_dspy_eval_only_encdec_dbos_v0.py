@@ -13,7 +13,7 @@ from dr_dspy.signatures import DspySignatureConfig, FieldSignature
 SCRIPT_KIND = "humaneval_eval_only_encdec_dbos_v0"
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
-DEFAULT_SAMPLE_COUNT = 10
+DEFAULT_SAMPLE_COUNT = 164  # all HumanEval+ tasks
 DEFAULT_SEED = 0
 DEFAULT_ENCODER_TEMPERATURES = (0.0,)
 DEFAULT_DECODER_TEMPERATURES = (0.0,)
@@ -26,7 +26,7 @@ DEFAULT_BUDGET_RATIOS: tuple[float | None, ...] = (
     2.0,
     None,
 )
-DEFAULT_REPETITIONS = 1
+DEFAULT_REPETITIONS = 3
 DEFAULT_MAX_COMPLETION_TOKENS = 2000
 DEFAULT_SUBPROCESS_TIMEOUT = 15.0
 
