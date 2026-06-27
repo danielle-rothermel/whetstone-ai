@@ -104,66 +104,6 @@ Use `status` for database counts, `enqueue-scores` to backfill score workflows
 for generated rows, and `repair` to reconcile stranded DBOS workflows and
 re-enqueue failed generation/scoring work with fresh workflow IDs.
 
-## Repository Shape
-
-`scripts/` contains executable experiment entrypoints. Scripts define the
-experiment mechanics: dataset, DSPy signature fields and instructions, default
-models or model pairs, and default sampling/generation parameters. They pass
-that configuration to the matching `src/dr_dspy/` app factory and expose the
-result as a CLI.
-
-`src/dr_dspy/` contains behavior expected to remain stable across experiments:
-
-- `analysis.py`: shared numeric summaries and report formatting helpers.
-- `code_eval.py`: legacy generated-code subprocess evaluation.
-- `code_extraction.py`: generated-code extraction and syntax validation.
-- `compression.py`: encoded-description compression metrics.
-- `dbos_runtime.py`: shared DBOS/Postgres runtime, queue, workflow, and
-  connection-pool helpers.
-- `dspy_runner.py`: shared logged LM construction and DSPy predictor execution.
-- `eval_logging.py`: shared operator and detailed worker logging helpers.
-- `eval_repair.py`: shared DBOS/Postgres repair planning and apply sequence.
-- `eval_reporting.py`: shared status, analysis, enqueue, and repair reporting.
-- `human_eval_sampling.py`: HumanEval Plus loading, parsing, and seeded
-  sampling.
-- `humaneval_dbos_flow.py`: shared HumanEval DBOS lifecycle, command bodies,
-  stable workflow IDs, and analysis aggregation.
-- `humaneval_direct_dbos.py`: direct-decoder HumanEval DBOS/Postgres adapter.
-- `humaneval_encdec_dbos.py`: encoder-decoder HumanEval DBOS/Postgres adapter.
-- `human_eval.py`: HumanEval task parsing and name-independent evaluation.
-- `import_inference.py`: Python import inference helpers for extracted code.
-- `lm_logging.py`: logging LM wrappers.
-- `lm_utils.py`: model config and LM response helpers.
-- `openrouter_lm.py`: direct OpenRouter chat-completions LM wrapper.
-- `parsed_code.py`: AST-backed code parsing and comment/docstring stripping.
-- `parsed_tests.py`: HumanEval `check(candidate)` case parsing.
-- `runtime.py`: shared script runtime setup.
-- `scoring.py`: reusable generated-code scoring over `HumanEvalTask`.
-- `serialization.py`: DSPy-aware JSON-safe serialization.
-- `signatures.py`: reusable signature field model.
-- `worker_monitor.py`: shared two-phase generation/scoring worker monitor.
-
-`tests/` covers reusable library behavior, the shared HumanEval DBOS flow, and
-the direct DBOS eval planning, generation, scoring, and analysis helpers.
-
-## Design Decisions
-
-Default to a readable experiment flow first. Move mechanics into shared
-library modules only when they are likely to be reused unchanged by multiple
-experiments and centralizing them reduces setup bugs.
-
-Keep experiment-defining decisions in the script. The library should not hide
-which dataset, signature, optimizer, metric, model, generation default, or
-artifact path makes an experiment what it is.
-
-The HumanEval ground truth for encoder/compression experiments is
-`prompt + canonical_solution` with comments and docstrings stripped. This keeps
-the encoder input aligned with executable solution behavior rather than
-benchmark prose.
-
-Prefer clean boundaries over compatibility shims. This package is early enough
-that breaking changes are acceptable when they make the structure clearer.
-
 ## Local Setup
 
 Create a package-local `.env` from the example:
@@ -195,7 +135,4 @@ Run package checks from `dr-dspy/`:
 ```sh
 uv run ruff check src scripts
 uv run ty check
-uv run pytest tests
 ```
-
-See [`TESTING.md`](TESTING.md) for smoke commands and success criteria.
