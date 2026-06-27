@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import csv
 import hashlib
 import logging
-import os
-import re
 import resource
 import statistics
 import threading
@@ -25,7 +22,6 @@ from pydantic import (
     StrictInt,
     StrictStr,
 )
-from rich import box
 from rich.console import Console, Group
 from rich.table import Table
 
@@ -33,6 +29,9 @@ import dspy
 from dr_dspy import analysis as shared_analysis
 from dr_dspy import dbos_runtime as shared_dbos
 from dr_dspy import dspy_runner as shared_dspy_runner
+from dr_dspy import eval_logging as shared_eval_logging
+from dr_dspy import eval_repair as shared_eval_repair
+from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy.code_eval import (
@@ -91,6 +90,13 @@ OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 DATASET_NAME = "evalplus/humanevalplus"
 DATASET_SPLIT = "test"
 PREDICTION_TABLE_NAME = "dr_dspy_eval_predictions"
+REPAIR_DIMENSION_COLUMNS = ("model", "temperature")
+REPAIR_ORDER_COLUMNS = (
+    "model",
+    "temperature",
+    "sample_index",
+    "repetition_seed",
+)
 SOLVE_NAME = "Solve"
 SOLVE_FIELDS = [
     FieldSignature(name="prompt", type=str, role=dspy.InputField()),
@@ -258,10 +264,8 @@ PREDICTION_MIGRATION_SQL = (
 )
 
 
-GENERATION_REPAIR_ERROR = "Reconciled from DBOS failed generation workflow."
-SCORING_REPAIR_ERROR = (
-    "Reconciled from missing or failed DBOS scoring workflow."
-)
+GENERATION_REPAIR_ERROR = shared_eval_repair.GENERATION_REPAIR_ERROR
+SCORING_REPAIR_ERROR = shared_eval_repair.SCORING_REPAIR_ERROR
 
 
 class HumanEvalSample(BaseModel):
@@ -450,14 +454,12 @@ DB_POOLS: dict[str, ConnectionPool] = {}
 
 
 def sanitize_log_name(name: str) -> str:
-    sanitized = re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip()).strip("-.")
-    return sanitized or "experiment"
+    return shared_eval_logging.sanitize_log_name(name)
 
 
 def hashed_experiment_log_name(experiment_name: str) -> str:
-    return (
-        f"{sanitize_log_name(experiment_name)}-"
-        f"{experiment_hash(experiment_name)}"
+    return shared_eval_logging.hashed_experiment_log_name(
+        experiment_name, hash_length=EXPERIMENT_QUEUE_HASH_LENGTH
     )
 
 
@@ -468,16 +470,13 @@ def default_worker_log_path(
     now: datetime | None = None,
     pid: int | None = None,
 ) -> Path:
-    resolved_now = now or datetime.now()
-    resolved_pid = pid if pid is not None else os.getpid()
-    filename = (
-        f"{resolved_now:%Y%m%d-%H%M%S}-{queue.value}-pid"
-        f"{resolved_pid}.log"
-    )
-    return (
-        DEFAULT_WORKER_LOG_ROOT
-        / hashed_experiment_log_name(experiment_name)
-        / filename
+    return shared_eval_logging.default_worker_log_path(
+        log_root=DEFAULT_WORKER_LOG_ROOT,
+        experiment_name=experiment_name,
+        queue=queue,
+        hash_length=EXPERIMENT_QUEUE_HASH_LENGTH,
+        now=now,
+        pid=pid,
     )
 
 
@@ -487,34 +486,25 @@ def resolve_worker_log_path(
     queue: QueueSelection,
     log_file: Path | None,
 ) -> Path:
-    if log_file is not None:
-        return log_file
-    return default_worker_log_path(
-        experiment_name=experiment_name, queue=queue
+    return shared_eval_logging.resolve_worker_log_path(
+        log_root=DEFAULT_WORKER_LOG_ROOT,
+        experiment_name=experiment_name,
+        queue=queue,
+        log_file=log_file,
+        hash_length=EXPERIMENT_QUEUE_HASH_LENGTH,
     )
 
 
 def configure_worker_file_logging(log_file: Path) -> logging.Logger:
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger(DETAILED_WORKER_LOGGER_NAME)
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    for handler in list(logger.handlers):
-        logger.removeHandler(handler)
-        handler.close()
-    handler = logging.FileHandler(log_file, encoding="utf-8")
-    handler.setFormatter(
-        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    return shared_eval_logging.configure_worker_file_logging(
+        log_file, logger_name=DETAILED_WORKER_LOGGER_NAME
     )
-    logger.addHandler(handler)
-    return logger
 
 
 def emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
-    logger = logging.getLogger(DETAILED_WORKER_LOGGER_NAME)
-    if not logger.handlers:
-        return
-    logger.info(stable_json({"event": event, **payload}))
+    shared_eval_logging.emit_worker_detail_log(
+        event, payload, logger_name=DETAILED_WORKER_LOGGER_NAME
+    )
 
 
 def prediction_context_from_job(job: PredictionJob) -> PredictionLogContext:
@@ -928,23 +918,13 @@ def fetch_scoreable_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT prediction_id
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'generated'
-                    AND scoring_status IN ('pending', 'score_error')
-                ORDER BY model, temperature, sample_index, repetition_seed
-                LIMIT %s
-                """,
-                (experiment_name, limit),
-            )
-            rows = cur.fetchall()
-    return [row[0] for row in rows]
+    return shared_eval_repair.fetch_scoreable_prediction_ids(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        limit=limit,
+    )
 
 
 def fetch_pending_scoring_prediction_ids(
@@ -953,23 +933,13 @@ def fetch_pending_scoring_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT prediction_id
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'generated'
-                    AND scoring_status = 'pending'
-                ORDER BY model, temperature, sample_index, repetition_seed
-                LIMIT %s
-                """,
-                (experiment_name, limit),
-            )
-            rows = cur.fetchall()
-    return [row[0] for row in rows]
+    return shared_eval_repair.fetch_pending_scoring_prediction_ids(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        limit=limit,
+    )
 
 
 def fetch_score_error_prediction_ids(
@@ -978,23 +948,13 @@ def fetch_score_error_prediction_ids(
     experiment_name: str,
     limit: int,
 ) -> list[str]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT prediction_id
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'generated'
-                    AND scoring_status = 'score_error'
-                ORDER BY model, temperature, sample_index, repetition_seed
-                LIMIT %s
-                """,
-                (experiment_name, limit),
-            )
-            rows = cur.fetchall()
-    return [row[0] for row in rows]
+    return shared_eval_repair.fetch_score_error_prediction_ids(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        limit=limit,
+    )
 
 
 def fetch_generation_error_prediction_jobs(
@@ -1003,51 +963,16 @@ def fetch_generation_error_prediction_jobs(
     experiment_name: str,
     limit: int,
 ) -> list[PredictionJob]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    prediction_id,
-                    experiment_name,
-                    script_kind,
-                    submission_id,
-                    task_id,
-                    sample_index,
-                    model,
-                    temperature,
-                    repetition_seed,
-                    prompt,
-                    test,
-                    entry_point,
-                    reasoning
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'generation_error'
-                ORDER BY model, temperature, sample_index, repetition_seed
-                LIMIT %s
-                """,
-                (experiment_name, limit),
-            )
-            rows = cur.fetchall()
+    prediction_ids = shared_eval_repair.fetch_generation_error_prediction_ids(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        limit=limit,
+    )
     return [
-        PredictionJob(
-            prediction_id=row[0],
-            experiment_name=row[1],
-            script_kind=row[2],
-            submission_id=row[3],
-            task_id=row[4],
-            sample_index=row[5],
-            model=row[6],
-            temperature=row[7],
-            repetition_seed=row[8],
-            prompt=row[9],
-            test=row[10],
-            entry_point=row[11],
-            reasoning=dict(row[12] or {}),
-        )
-        for row in rows
+        fetch_prediction_job(database_url, prediction_id)
+        for prediction_id in prediction_ids
     ]
 
 
@@ -1102,65 +1027,27 @@ def fetch_started_generation_repair_candidates(
     dbos_system_database_url: str,
     experiment_name: str,
 ) -> list[GenerationRepairCandidate]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    prediction_id,
-                    model,
-                    temperature,
-                    task_id,
-                    sample_index,
-                    repetition_seed
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'started'
-                ORDER BY model, temperature, sample_index, repetition_seed
-                """,
-                (experiment_name,),
-            )
-            app_rows = cur.fetchall()
-
-    if not app_rows:
-        return []
-
-    prediction_ids = [row[0] for row in app_rows]
-    workflow_ids = [
-        generation_workflow_id(prediction_id)
-        for prediction_id in prediction_ids
-    ]
-    with connect_db(dbos_system_database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT workflow_uuid, status
-                FROM dbos.workflow_status
-                WHERE
-                    workflow_uuid = ANY(%s)
-                    AND status = ANY(%s)
-                """,
-                (workflow_ids, list(DBOS_FAILED_WORKFLOW_STATUSES)),
-            )
-            dbos_rows = cur.fetchall()
-
-    dbos_status_by_prediction_id = {
-        workflow_uuid.removeprefix("generate:"): status
-        for workflow_uuid, status in dbos_rows
-    }
+    candidates = (
+        shared_eval_repair.fetch_started_generation_repair_candidates(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            prediction_table=PREDICTION_TABLE_NAME,
+            experiment_name=experiment_name,
+            dimension_columns=REPAIR_DIMENSION_COLUMNS,
+            order_columns=REPAIR_ORDER_COLUMNS,
+        )
+    )
     return [
         GenerationRepairCandidate(
-            prediction_id=row[0],
-            model=row[1],
-            temperature=row[2],
-            task_id=row[3],
-            sample_index=row[4],
-            repetition_seed=row[5],
-            dbos_status=dbos_status_by_prediction_id[row[0]],
+            prediction_id=candidate.prediction_id,
+            model=candidate.dimensions["model"],
+            temperature=candidate.dimensions["temperature"],
+            task_id=candidate.task_id,
+            sample_index=candidate.sample_index,
+            repetition_seed=candidate.repetition_seed,
+            dbos_status=candidate.dbos_status,
         )
-        for row in app_rows
-        if row[0] in dbos_status_by_prediction_id
+        for candidate in candidates
     ]
 
 
@@ -1169,27 +1056,11 @@ def mark_started_generations_as_repaired_errors(
     *,
     prediction_ids: Sequence[str],
 ) -> int:
-    if not prediction_ids:
-        return 0
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE dr_dspy_eval_predictions
-                SET
-                    generation_status = 'generation_error',
-                    generation_error = %s,
-                    updated_at = now()
-                WHERE
-                    prediction_id = ANY(%s)
-                    AND generation_status = 'started'
-                """,
-                (
-                    GENERATION_REPAIR_ERROR,
-                    list(prediction_ids),
-                ),
-            )
-            return cur.rowcount if cur.rowcount is not None else 0
+    return shared_eval_repair.mark_started_generations_as_repaired_errors(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        prediction_ids=prediction_ids,
+    )
 
 
 def fetch_stranded_scoring_repair_candidates(
@@ -1199,92 +1070,30 @@ def fetch_stranded_scoring_repair_candidates(
     experiment_name: str,
     limit: int,
 ) -> list[ScoringRepairCandidate]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    prediction_id,
-                    model,
-                    temperature,
-                    task_id,
-                    sample_index,
-                    repetition_seed,
-                    scoring_status
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND generation_status = 'generated'
-                    AND scoring_status IN ('started', 'queued')
-                ORDER BY model, temperature, sample_index, repetition_seed
-                LIMIT %s
-                """,
-                (experiment_name, limit),
-            )
-            app_rows = cur.fetchall()
-
-    if not app_rows:
-        return []
-
-    prediction_ids = [row[0] for row in app_rows]
-    stable_workflow_ids = [
-        score_workflow_id(prediction_id) for prediction_id in prediction_ids
-    ]
-    retry_workflow_suffixes = [
-        f":{prediction_id}" for prediction_id in prediction_ids
-    ]
-    with connect_db(dbos_system_database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT workflow_uuid, status
-                FROM dbos.workflow_status
-                WHERE
-                    workflow_uuid = ANY(%s)
-                    OR workflow_uuid LIKE ANY(%s)
-                """,
-                (
-                    stable_workflow_ids,
-                    [
-                        f"score-retry:%{suffix}"
-                        for suffix in retry_workflow_suffixes
-                    ],
-                ),
-            )
-            dbos_rows = cur.fetchall()
-
-    active_prediction_ids: set[str] = set()
-    failed_status_by_prediction_id: dict[str, str] = {}
-    seen_prediction_ids: set[str] = set()
-    for workflow_uuid, status in dbos_rows:
-        prediction_id = workflow_uuid.rsplit(":", 1)[-1]
-        seen_prediction_ids.add(prediction_id)
-        if status in DBOS_ACTIVE_WORKFLOW_STATUSES:
-            active_prediction_ids.add(prediction_id)
-        if status in DBOS_FAILED_WORKFLOW_STATUSES:
-            failed_status_by_prediction_id[prediction_id] = status
-
-    candidates: list[ScoringRepairCandidate] = []
-    for row in app_rows:
-        prediction_id = row[0]
-        if prediction_id in active_prediction_ids:
-            continue
-        dbos_status = failed_status_by_prediction_id.get(prediction_id)
-        if dbos_status is None and prediction_id in seen_prediction_ids:
-            continue
-        candidates.append(
-            ScoringRepairCandidate(
-                prediction_id=prediction_id,
-                model=row[1],
-                temperature=row[2],
-                task_id=row[3],
-                sample_index=row[4],
-                repetition_seed=row[5],
-                scoring_status=row[6],
-                dbos_status=dbos_status or MISSING_DBOS_WORKFLOW_STATUS,
-            )
+    candidates = (
+        shared_eval_repair.fetch_stranded_scoring_repair_candidates(
+            database_url,
+            dbos_system_database_url=dbos_system_database_url,
+            prediction_table=PREDICTION_TABLE_NAME,
+            experiment_name=experiment_name,
+            dimension_columns=REPAIR_DIMENSION_COLUMNS,
+            order_columns=REPAIR_ORDER_COLUMNS,
+            limit=limit,
         )
-    return candidates
+    )
+    return [
+        ScoringRepairCandidate(
+            prediction_id=candidate.prediction_id,
+            model=candidate.dimensions["model"],
+            temperature=candidate.dimensions["temperature"],
+            task_id=candidate.task_id,
+            sample_index=candidate.sample_index,
+            repetition_seed=candidate.repetition_seed,
+            scoring_status=candidate.scoring_status or "",
+            dbos_status=candidate.dbos_status,
+        )
+        for candidate in candidates
+    ]
 
 
 def mark_stranded_scoring_as_errors(
@@ -1292,46 +1101,21 @@ def mark_stranded_scoring_as_errors(
     *,
     prediction_ids: Sequence[str],
 ) -> int:
-    if not prediction_ids:
-        return 0
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE dr_dspy_eval_predictions
-                SET
-                    scoring_status = 'score_error',
-                    scoring_error = %s,
-                    updated_at = now()
-                WHERE
-                    prediction_id = ANY(%s)
-                    AND scoring_status IN ('started', 'queued')
-                """,
-                (SCORING_REPAIR_ERROR, list(prediction_ids)),
-            )
-            return cur.rowcount if cur.rowcount is not None else 0
+    return shared_eval_repair.mark_stranded_scoring_as_errors(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        prediction_ids=prediction_ids,
+    )
 
 
 def mark_scoring_queued(
     database_url: str, prediction_ids: Sequence[str]
 ) -> int:
-    if not prediction_ids:
-        return 0
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE dr_dspy_eval_predictions
-                SET
-                    scoring_status = 'queued',
-                    scoring_error = NULL,
-                    updated_at = now()
-                WHERE prediction_id = ANY(%s)
-                    AND scoring_status IN ('pending', 'score_error')
-                """,
-                (list(prediction_ids),),
-            )
-            return cur.rowcount if cur.rowcount is not None else 0
+    return shared_eval_repair.mark_scoring_queued(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        prediction_ids=prediction_ids,
+    )
 
 
 def mark_scoring_started(database_url: str, prediction_id: str) -> None:
@@ -1583,95 +1367,49 @@ def apply_repair(
     score_timeout: float,
     repair_token: str | None = None,
 ) -> RepairApplyResult:
-    resolved_repair_token = repair_token or uuid.uuid4().hex
-
-    stranded_generations = fetch_started_generation_repair_candidates(
-        config.database_url,
-        dbos_system_database_url=config.dbos_system_database_url,
+    result = shared_eval_repair.apply_repair(
+        config,
+        prediction_table=PREDICTION_TABLE_NAME,
         experiment_name=experiment_name,
-    )
-    stranded_generations_marked = (
-        mark_started_generations_as_repaired_errors(
-            config.database_url,
-            prediction_ids=[
-                candidate.prediction_id
-                for candidate in stranded_generations
-            ],
-        )
-    )
-
-    generation_retry_jobs = fetch_generation_error_prediction_jobs(
-        config.database_url,
-        experiment_name=experiment_name,
-        limit=generation_limit,
-    )
-    configure_dbos_runtime(
-        config, experiment_name=experiment_name, consume_queues=False
-    )
-    enqueue_generation_jobs(
-        config.database_url,
-        generation_retry_jobs,
+        dimension_columns=REPAIR_DIMENSION_COLUMNS,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        generation_limit=generation_limit,
+        scoring_limit=scoring_limit,
         score_timeout=score_timeout,
-        retry_token=resolved_repair_token,
-    )
-    generation_retries_reset = reset_generation_errors_for_retry(
-        config.database_url,
-        prediction_ids=[job.prediction_id for job in generation_retry_jobs],
-    )
-
-    stranded_scoring = fetch_stranded_scoring_repair_candidates(
-        config.database_url,
-        dbos_system_database_url=config.dbos_system_database_url,
-        experiment_name=experiment_name,
-        limit=scoring_limit,
-    )
-    stranded_scoring_marked = mark_stranded_scoring_as_errors(
-        config.database_url,
-        prediction_ids=[
-            candidate.prediction_id for candidate in stranded_scoring
+        fetch_generation_jobs=lambda prediction_ids: [
+            fetch_prediction_job(config.database_url, prediction_id)
+            for prediction_id in prediction_ids
         ],
+        reset_generation_errors=lambda prediction_ids: (
+            reset_generation_errors_for_retry(
+                config.database_url,
+                prediction_ids=prediction_ids,
+            )
+        ),
+        configure_runtime=lambda: configure_dbos_runtime(
+            config,
+            experiment_name=experiment_name,
+            consume_queues=False,
+        ),
+        enqueue_generation_jobs=lambda jobs, token: enqueue_generation_jobs(
+            config.database_url,
+            jobs,
+            score_timeout=score_timeout,
+            retry_token=token,
+        ),
+        enqueue_score_jobs=lambda prediction_ids, timeout, token: (
+            enqueue_score_jobs(
+                config.database_url,
+                prediction_ids,
+                experiment_name=experiment_name,
+                timeout=timeout,
+                retry_token=token,
+            )
+        ),
+        repair_token=repair_token,
     )
-
-    pending_scoring_prediction_ids = fetch_pending_scoring_prediction_ids(
-        config.database_url,
-        experiment_name=experiment_name,
-        limit=scoring_limit,
-    )
-    enqueue_score_jobs(
-        config.database_url,
-        pending_scoring_prediction_ids,
-        experiment_name=experiment_name,
-        timeout=score_timeout,
-    )
-    pending_scoring_enqueued = mark_scoring_queued(
-        config.database_url, pending_scoring_prediction_ids
-    )
-
-    scoring_retry_prediction_ids = fetch_score_error_prediction_ids(
-        config.database_url,
-        experiment_name=experiment_name,
-        limit=scoring_limit,
-    )
-    enqueue_score_jobs(
-        config.database_url,
-        scoring_retry_prediction_ids,
-        experiment_name=experiment_name,
-        timeout=score_timeout,
-        retry_token=resolved_repair_token,
-    )
-    scoring_retries_marked_queued = mark_scoring_queued(
-        config.database_url, scoring_retry_prediction_ids
-    )
-
     return RepairApplyResult(
-        repair_token=resolved_repair_token,
-        stranded_generations_marked=stranded_generations_marked,
-        generation_retries_enqueued=len(generation_retry_jobs),
-        generation_retries_reset=generation_retries_reset,
-        stranded_scoring_marked=stranded_scoring_marked,
-        pending_scoring_enqueued=pending_scoring_enqueued,
-        scoring_retries_enqueued=len(scoring_retry_prediction_ids),
-        scoring_retries_marked_queued=scoring_retries_marked_queued,
+        **result.model_dump(mode="json"),
     )
 
 
@@ -1777,12 +1515,15 @@ def summarize_analysis_records(
 
 
 def operator_timestamp(now: datetime | None = None) -> str:
-    resolved_now = now or datetime.now()
-    return resolved_now.strftime(OPERATOR_TIMESTAMP_FORMAT)
+    return shared_eval_logging.operator_timestamp(
+        now, timestamp_format=OPERATOR_TIMESTAMP_FORMAT
+    )
 
 
 def timestamped_line(line: str, *, now: datetime | None = None) -> str:
-    return f"{operator_timestamp(now)} | {line}"
+    return shared_eval_logging.timestamped_line(
+        line, now=now, timestamp_format=OPERATOR_TIMESTAMP_FORMAT
+    )
 
 
 def operator_log(
@@ -1791,249 +1532,39 @@ def operator_log(
     style: str | None = None,
     now: datetime | None = None,
 ) -> None:
-    CONSOLE.print(timestamped_line(line, now=now), style=style)
+    shared_eval_logging.operator_log(
+        CONSOLE,
+        line,
+        style=style,
+        now=now,
+        timestamp_format=OPERATOR_TIMESTAMP_FORMAT,
+    )
 
 
 def analysis_markdown(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> str:
-    lines = [
-        f"# Eval Analysis: {experiment_name}",
-        "",
-        "| Model | Temp | Samples | Scored | Total Price | "
-        "Avg Price/1k Samples | Avg Perf | Raw Compile | "
-        "Extracted Compile | Extraction Lift | Price Var | Perf Var | "
-        "Rep Var |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ]
-    total_price_values = [summary.total_price for summary in summaries]
-    total_price_sum = sum_present_float(total_price_values)
-    total_prices = format_cost_column(
-        [*total_price_values, total_price_sum]
-        if summaries
-        else total_price_values
+    return shared_eval_reporting.analysis_markdown(
+        experiment_name=experiment_name, summaries=summaries
     )
-    row_total_prices = total_prices[: len(summaries)]
-    prices_per_thousand_samples = format_cost_column(
-        [
-            price_per_thousand_samples(summary.avg_price_per_sample)
-            for summary in summaries
-        ]
-    )
-    for summary, total_price, price_per_thousand in zip(
-        summaries,
-        row_total_prices,
-        prices_per_thousand_samples,
-        strict=True,
-    ):
-        lines.append(
-            "| {model} | {temperature} | {sample_count} | {scored_count} | "
-            "{total_price} | {avg_price_per_sample} | {avg_performance} | "
-            "{raw_compile_pass_count} | {extracted_compile_pass_count} | "
-            "{extraction_lift} | {price_variance} | "
-            "{performance_variance} | {avg_repetition_variance} |".format(
-                model=summary.model,
-                temperature=format_float(summary.temperature),
-                sample_count=summary.sample_count,
-                scored_count=summary.scored_count,
-                total_price=total_price,
-                avg_price_per_sample=price_per_thousand,
-                avg_performance=format_float(summary.avg_performance),
-                raw_compile_pass_count=summary.raw_compile_pass_count,
-                extracted_compile_pass_count=(
-                    summary.extracted_compile_pass_count
-                ),
-                extraction_lift=summary.extraction_lift,
-                price_variance=format_float(summary.price_variance),
-                performance_variance=format_float(
-                    summary.performance_variance
-                ),
-                avg_repetition_variance=format_float(
-                    summary.avg_repetition_variance
-                ),
-            )
-        )
-    if summaries:
-        lines.append(
-            (
-                "| {model} |  | {sample_count} | {scored_count} | "
-                "{total_price} |  |  | {raw_compile_pass_count} | "
-                "{extracted_compile_pass_count} | {extraction_lift} | "
-                " |  |  |"
-            ).format(
-                model=ANALYSIS_TOTAL_LABEL,
-                sample_count=sum(
-                    summary.sample_count for summary in summaries
-                ),
-                scored_count=sum(
-                    summary.scored_count for summary in summaries
-                ),
-                total_price=total_prices[-1],
-                raw_compile_pass_count=sum(
-                    summary.raw_compile_pass_count for summary in summaries
-                ),
-                extracted_compile_pass_count=sum(
-                    summary.extracted_compile_pass_count
-                    for summary in summaries
-                ),
-                extraction_lift=sum(
-                    summary.extraction_lift for summary in summaries
-                ),
-            )
-        )
-    return "\n".join(lines) + "\n"
 
 
 def analysis_table(
     *, experiment_name: str, summaries: Sequence[AnalysisSummary]
 ) -> Group:
-    performance_table = Table(
-        title=f"Eval Analysis: {experiment_name}",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
+    return shared_eval_reporting.analysis_table(
+        experiment_name=experiment_name, summaries=summaries
     )
-    performance_table.add_column("Model", min_width=28, overflow="fold")
-    performance_table.add_column("Temp", justify="right")
-    performance_table.add_column("Samples", justify="right")
-    performance_table.add_column("Scored", justify="right")
-    performance_table.add_column("Avg Perf", justify="right")
-    performance_table.add_column("Raw Compile", justify="right")
-    performance_table.add_column("Extracted Compile", justify="right")
-    performance_table.add_column("Lift", justify="right")
-
-    cost_table = Table(
-        title="Cost",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
-    )
-    cost_table.add_column("Model", min_width=28, overflow="fold")
-    cost_table.add_column("Temp", justify="right")
-    cost_table.add_column("Total $", justify="right")
-    cost_table.add_column("Avg $/1k Samples", justify="right")
-
-    variance_table = Table(
-        title="Variance",
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
-    )
-    variance_table.add_column("Model", min_width=28, overflow="fold")
-    variance_table.add_column("Temp", justify="right")
-    variance_table.add_column("Price Var", justify="right")
-    variance_table.add_column("Perf Var", justify="right")
-    variance_table.add_column("Rep Var", justify="right")
-
-    total_price_values = [summary.total_price for summary in summaries]
-    total_price_sum = sum_present_float(total_price_values)
-    temperatures = format_float_column(
-        [summary.temperature for summary in summaries]
-    )
-    avg_performances = format_float_column(
-        [summary.avg_performance for summary in summaries]
-    )
-    total_prices = format_cost_column(
-        [*total_price_values, total_price_sum]
-        if summaries
-        else total_price_values
-    )
-    row_total_prices = total_prices[: len(summaries)]
-    prices_per_thousand_samples = format_cost_column(
-        [
-            price_per_thousand_samples(summary.avg_price_per_sample)
-            for summary in summaries
-        ]
-    )
-    price_variances = format_float_column(
-        [summary.price_variance for summary in summaries]
-    )
-    performance_variances = format_float_column(
-        [summary.performance_variance for summary in summaries]
-    )
-    repetition_variances = format_float_column(
-        [summary.avg_repetition_variance for summary in summaries]
-    )
-
-    for (
-        summary,
-        temperature,
-        avg_performance,
-        total_price,
-        price_per_thousand,
-        price_variance,
-        performance_variance,
-        repetition_variance,
-    ) in zip(
-        summaries,
-        temperatures,
-        avg_performances,
-        row_total_prices,
-        prices_per_thousand_samples,
-        price_variances,
-        performance_variances,
-        repetition_variances,
-        strict=True,
-    ):
-        performance_table.add_row(
-            summary.model,
-            temperature,
-            str(summary.sample_count),
-            str(summary.scored_count),
-            avg_performance,
-            str(summary.raw_compile_pass_count),
-            str(summary.extracted_compile_pass_count),
-            str(summary.extraction_lift),
-        )
-        cost_table.add_row(
-            summary.model,
-            temperature,
-            total_price,
-            price_per_thousand,
-        )
-        variance_table.add_row(
-            summary.model,
-            temperature,
-            price_variance,
-            performance_variance,
-            repetition_variance,
-        )
-    if summaries:
-        performance_table.add_row(
-            ANALYSIS_TOTAL_LABEL,
-            "",
-            str(sum(summary.sample_count for summary in summaries)),
-            str(sum(summary.scored_count for summary in summaries)),
-            "",
-            str(sum(summary.raw_compile_pass_count for summary in summaries)),
-            str(
-                sum(
-                    summary.extracted_compile_pass_count
-                    for summary in summaries
-                )
-            ),
-            str(sum(summary.extraction_lift for summary in summaries)),
-            style=TABLE_TOTAL_ROW_STYLE,
-        )
-        cost_table.add_row(
-            ANALYSIS_TOTAL_LABEL,
-            "",
-            total_prices[-1],
-            "",
-            style=TABLE_TOTAL_ROW_STYLE,
-        )
-    return Group(performance_table, cost_table, variance_table)
 
 
 def write_analysis_csv(
     summaries: Sequence[AnalysisSummary], *, csv_path: Path
 ) -> None:
-    fieldnames = list(AnalysisSummary.model_fields)
-    with csv_path.open("w", newline="") as csv_file:
-        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-        writer.writeheader()
-        for summary in summaries:
-            writer.writerow(summary.model_dump(mode="json"))
+    shared_eval_reporting.write_analysis_csv(
+        summaries,
+        csv_path=csv_path,
+        fieldnames=list(AnalysisSummary.model_fields),
+    )
 
 
 def enqueue_scores_line(
@@ -2043,19 +1574,16 @@ def enqueue_scores_line(
     limit: int,
     timeout: float,
 ) -> str:
-    return (
-        f"{'Enqueue Scores':<14} | "
-        f"selected={selected_count:>5} | "
-        f"limit={limit:>5} | "
-        f"timeout={timeout:>6.1f}s | "
-        f"experiment={experiment_name}"
+    return shared_eval_reporting.enqueue_scores_line(
+        experiment_name=experiment_name,
+        selected_count=selected_count,
+        limit=limit,
+        timeout=timeout,
     )
 
 
 def enqueue_scores_style(selected_count: int) -> str:
-    if selected_count == 0:
-        return "yellow"
-    return "green"
+    return shared_eval_reporting.enqueue_scores_style(selected_count)
 
 
 def repair_generation_started_line(
@@ -2119,95 +1647,51 @@ def repair_plan_line(
     plan: RepairPlan,
     apply: bool,
 ) -> str:
-    mode = "apply" if apply else "dry-run"
-    return (
-        f"{'Repair Plan':<14} | "
-        f"gen_stranded={len(plan.stranded_generations):>5} | "
-        f"gen_errors={len(plan.generation_retry_jobs):>5} | "
-        f"score_pending={len(plan.pending_scoring_prediction_ids):>5} | "
-        f"score_stranded={len(plan.stranded_scoring):>5} | "
-        f"score_errors={len(plan.scoring_retry_prediction_ids):>5} | "
-        f"mode={mode} | "
-        f"experiment={experiment_name}"
+    return shared_eval_reporting.repair_plan_line(
+        experiment_name=experiment_name,
+        gen_stranded=len(plan.stranded_generations),
+        gen_errors=len(plan.generation_retry_jobs),
+        score_pending=len(plan.pending_scoring_prediction_ids),
+        score_stranded=len(plan.stranded_scoring),
+        score_errors=len(plan.scoring_retry_prediction_ids),
+        apply=apply,
     )
 
 
 def repair_apply_line(
     *, experiment_name: str, result: RepairApplyResult
 ) -> str:
-    return (
-        f"{'Repair Apply':<14} | "
-        f"gen_marked={result.stranded_generations_marked:>5} | "
-        f"gen_retry={result.generation_retries_enqueued:>5} | "
-        f"score_marked={result.stranded_scoring_marked:>5} | "
-        f"score_pending={result.pending_scoring_enqueued:>5} | "
-        f"score_retry={result.scoring_retries_enqueued:>5} | "
-        f"token={result.repair_token} | "
-        f"experiment={experiment_name}"
+    return shared_eval_reporting.repair_apply_line(
+        experiment_name=experiment_name,
+        stranded_generations_marked=result.stranded_generations_marked,
+        generation_retries_enqueued=result.generation_retries_enqueued,
+        stranded_scoring_marked=result.stranded_scoring_marked,
+        pending_scoring_enqueued=result.pending_scoring_enqueued,
+        scoring_retries_enqueued=result.scoring_retries_enqueued,
+        repair_token=result.repair_token,
     )
 
 
 def repair_plan_style(plan: RepairPlan, *, apply: bool) -> str:
-    if apply:
-        return "green"
-    if (
-        plan.stranded_generations
-        or plan.generation_retry_jobs
-        or plan.pending_scoring_prediction_ids
-        or plan.stranded_scoring
-        or plan.scoring_retry_prediction_ids
-    ):
-        return "cyan"
-    return "yellow"
+    return shared_eval_reporting.repair_plan_style(
+        apply=apply,
+        gen_stranded=len(plan.stranded_generations),
+        gen_errors=len(plan.generation_retry_jobs),
+        score_pending=len(plan.pending_scoring_prediction_ids),
+        score_stranded=len(plan.stranded_scoring),
+        score_errors=len(plan.scoring_retry_prediction_ids),
+    )
 
 
 def fetch_status_counts(
     database_url: str, *, experiment_name: str | None
 ) -> list[dict[str, Any]]:
-    where_clause = ""
-    params: tuple[str, ...] = ()
-    if experiment_name is not None:
-        where_clause = "WHERE experiment_name = %s"
-        params = (experiment_name,)
-
-    query = f"""
-        SELECT
-            experiment_name,
-            model,
-            temperature,
-            generation_status,
-            scoring_status,
-            COUNT(*) AS count
-        FROM dr_dspy_eval_predictions
-        {where_clause}
-        GROUP BY
-            experiment_name,
-            model,
-            temperature,
-            generation_status,
-            scoring_status
-        ORDER BY
-            experiment_name,
-            model,
-            temperature,
-            generation_status,
-            scoring_status
-    """
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            rows = cur.fetchall()
-    return [
-        {
-            "experiment_name": row[0],
-            "model": row[1],
-            "temperature": row[2],
-            "generation_status": row[3],
-            "scoring_status": row[4],
-            "count": row[5],
-        }
-        for row in rows
-    ]
+    return shared_eval_reporting.fetch_status_counts(
+        database_url,
+        prediction_table=PREDICTION_TABLE_NAME,
+        dimension_columns=("model", "temperature"),
+        experiment_name=experiment_name,
+    )
 
 
 def status_counts_table(
@@ -2215,37 +1699,19 @@ def status_counts_table(
     *,
     experiment_name: str | None,
 ) -> Table:
-    title = "Eval Status"
-    if experiment_name is not None:
-        title = f"Eval Status: {experiment_name}"
-    table = Table(
-        title=title,
-        box=box.SIMPLE_HEAVY,
-        show_lines=False,
-        row_styles=TABLE_ROW_STYLES,
+    return shared_eval_reporting.status_counts_table(
+        rows,
+        title="Eval Status",
+        dimensions=(
+            shared_eval_reporting.StatusDimension(
+                key="model", title="Model"
+            ),
+            shared_eval_reporting.StatusDimension(
+                key="temperature", title="Temp", justify="right"
+            ),
+        ),
+        experiment_name=experiment_name,
     )
-    if experiment_name is None:
-        table.add_column("Experiment", overflow="fold")
-    table.add_column("Model", overflow="fold")
-    table.add_column("Temp", justify="right")
-    table.add_column("Generation", justify="center")
-    table.add_column("Scoring", justify="center")
-    table.add_column("Count", justify="right")
-    for row in rows:
-        values = []
-        if experiment_name is None:
-            values.append(str(row["experiment_name"]))
-        values.extend(
-            [
-                str(row["model"]),
-                format_float(row["temperature"]),
-                str(row["generation_status"]),
-                str(row["scoring_status"]),
-                str(row["count"]),
-            ]
-        )
-        table.add_row(*values)
-    return table
 
 
 app = typer.Typer(no_args_is_help=True)

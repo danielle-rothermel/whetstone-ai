@@ -649,8 +649,8 @@ def test_fetch_started_generation_repair_candidates(
 
     app_conn = RepairConnection(
         [
-            ("pred-1", "model/a", 0.1, "HumanEval/1", 0, 0),
-            ("pred-2", "model/b", 0.2, "HumanEval/2", 1, 0),
+            ("pred-1", "HumanEval/1", 0, 0, "model/a", 0.1),
+            ("pred-2", "HumanEval/2", 1, 0, "model/b", 0.2),
         ]
     )
     dbos_conn = RepairConnection([("generate:pred-2", "ERROR")])
@@ -753,9 +753,9 @@ def test_fetch_stranded_scoring_repair_candidates_finds_failed_and_missing(
 
     app_conn = RepairConnection(
         [
-            ("pred-1", "model/a", 0.1, "HumanEval/1", 0, 0, "queued"),
-            ("pred-2", "model/b", 0.2, "HumanEval/2", 1, 0, "started"),
-            ("pred-3", "model/c", 0.3, "HumanEval/3", 2, 0, "queued"),
+            ("pred-1", "HumanEval/1", 0, 0, "queued", "model/a", 0.1),
+            ("pred-2", "HumanEval/2", 1, 0, "started", "model/b", 0.2),
+            ("pred-3", "HumanEval/3", 2, 0, "queued", "model/c", 0.3),
         ]
     )
     dbos_conn = RepairConnection(
@@ -1913,21 +1913,21 @@ def test_apply_repair_reconciles_before_selecting_retries(
         entry_point="add",
     )
 
-    monkeypatch.setattr(
-        eval_dbos_harness,
-        "fetch_started_generation_repair_candidates",
-        lambda *_args, **_kwargs: [
-            eval_dbos_harness.GenerationRepairCandidate(
+    shared_repair = eval_dbos_harness.shared_eval_repair
+
+    def fake_fetch_started_generation_repair_candidates(
+        *_args: object, **_kwargs: object
+    ) -> list[Any]:
+        return [
+            shared_repair.RepairCandidate(
                 prediction_id="gen-1",
-                model="model/a",
-                temperature=0.0,
                 task_id="task/add",
                 sample_index=0,
                 repetition_seed=0,
                 dbos_status="ERROR",
+                dimensions={"model": "model/a", "temperature": 0.0},
             )
-        ],
-    )
+        ]
 
     def fake_mark_started_generations_as_repaired_errors(
         *_args: object, **_kwargs: object
@@ -1935,12 +1935,15 @@ def test_apply_repair_reconciles_before_selecting_retries(
         calls.append("mark_generation")
         return 1
 
-    def fake_fetch_generation_error_prediction_jobs(
+    def fake_fetch_generation_error_prediction_ids(
         *_args: object, **_kwargs: object
-    ) -> list[Any]:
+    ) -> list[str]:
         assert calls == ["mark_generation"]
         calls.append("fetch_generation_errors")
-        return [job]
+        return ["gen-1"]
+
+    def fake_fetch_prediction_job(*_args: object, **_kwargs: object) -> Any:
+        return job
 
     def fake_configure_dbos_runtime(*_args: object, **_kwargs: object) -> None:
         calls.append("configure")
@@ -1963,15 +1966,14 @@ def test_apply_repair_reconciles_before_selecting_retries(
         assert "reset_generation" in calls
         calls.append("fetch_stranded_scoring")
         return [
-            eval_dbos_harness.ScoringRepairCandidate(
+            shared_repair.RepairCandidate(
                 prediction_id="score-1",
-                model="model/a",
-                temperature=0.0,
                 task_id="task/add",
                 sample_index=0,
                 repetition_seed=0,
                 scoring_status="queued",
                 dbos_status="ERROR",
+                dimensions={"model": "model/a", "temperature": 0.0},
             )
         ]
 
@@ -2009,14 +2011,22 @@ def test_apply_repair_reconciles_before_selecting_retries(
         return ["score-1"]
 
     monkeypatch.setattr(
-        eval_dbos_harness,
+        shared_repair,
+        "fetch_started_generation_repair_candidates",
+        fake_fetch_started_generation_repair_candidates,
+    )
+    monkeypatch.setattr(
+        shared_repair,
         "mark_started_generations_as_repaired_errors",
         fake_mark_started_generations_as_repaired_errors,
     )
     monkeypatch.setattr(
-        eval_dbos_harness,
-        "fetch_generation_error_prediction_jobs",
-        fake_fetch_generation_error_prediction_jobs,
+        shared_repair,
+        "fetch_generation_error_prediction_ids",
+        fake_fetch_generation_error_prediction_ids,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness, "fetch_prediction_job", fake_fetch_prediction_job
     )
     monkeypatch.setattr(
         eval_dbos_harness,
@@ -2034,17 +2044,17 @@ def test_apply_repair_reconciles_before_selecting_retries(
         fake_reset_generation_errors_for_retry,
     )
     monkeypatch.setattr(
-        eval_dbos_harness,
+        shared_repair,
         "fetch_stranded_scoring_repair_candidates",
         fake_fetch_stranded_scoring_repair_candidates,
     )
     monkeypatch.setattr(
-        eval_dbos_harness,
+        shared_repair,
         "mark_stranded_scoring_as_errors",
         fake_mark_stranded_scoring_as_errors,
     )
     monkeypatch.setattr(
-        eval_dbos_harness,
+        shared_repair,
         "fetch_pending_scoring_prediction_ids",
         fake_fetch_pending_scoring_prediction_ids,
     )
@@ -2052,10 +2062,10 @@ def test_apply_repair_reconciles_before_selecting_retries(
         eval_dbos_harness, "enqueue_score_jobs", fake_enqueue_score_jobs
     )
     monkeypatch.setattr(
-        eval_dbos_harness, "mark_scoring_queued", fake_mark_scoring_queued
+        shared_repair, "mark_scoring_queued", fake_mark_scoring_queued
     )
     monkeypatch.setattr(
-        eval_dbos_harness,
+        shared_repair,
         "fetch_score_error_prediction_ids",
         fake_fetch_score_error_prediction_ids,
     )

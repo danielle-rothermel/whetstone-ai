@@ -89,8 +89,7 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
   --experiment-name encdec-smoke \
-  --sample-count 2 \
-  --apply
+  --sample-count 2
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py worker \
   --queue both \
@@ -100,8 +99,9 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py analyze \
   --experiment-name encdec-smoke
 ```
 
-Use `status` for database counts and `repair` to re-enqueue pending or failed
-generation/scoring work with fresh workflow IDs.
+Use `status` for database counts, `enqueue-scores` to backfill score workflows
+for generated rows, and `repair` to reconcile stranded DBOS workflows and
+re-enqueue failed generation/scoring work with fresh workflow IDs.
 
 ## Repository Shape
 
@@ -118,6 +118,9 @@ in one place.
 - `dbos_runtime.py`: shared DBOS/Postgres runtime, queue, workflow, and
   connection-pool helpers.
 - `dspy_runner.py`: shared logged LM construction and DSPy predictor execution.
+- `eval_logging.py`: shared operator and detailed worker logging helpers.
+- `eval_repair.py`: shared DBOS/Postgres repair planning and apply sequence.
+- `eval_reporting.py`: shared status, analysis, enqueue, and repair reporting.
 - `human_eval_sampling.py`: HumanEval Plus loading, parsing, and seeded
   sampling.
 - `humaneval_direct_dbos.py`: direct-decoder HumanEval DBOS/Postgres adapter.

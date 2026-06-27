@@ -20,7 +20,8 @@ Check the encoder-decoder DBOS eval CLI:
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py --help
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
   --experiment-name encdec-dry-run \
-  --sample-count 2
+  --sample-count 2 \
+  --dry-run
 ```
 
 For a local DBOS/Postgres direct-eval smoke, run these commands from `dr-dspy/`
@@ -45,8 +46,7 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
   --experiment-name local-encdec-smoke \
-  --sample-count 2 \
-  --apply
+  --sample-count 2
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py worker \
   --queue both \
