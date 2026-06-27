@@ -1638,24 +1638,32 @@ def test_generate_code_for_job_stores_empty_raw_generation_for_null_response(
 def test_score_generated_code_records_pass_and_failure(
     eval_dbos_harness,
 ) -> None:
+    test = (
+        "def check(candidate):\n"
+        "    inputs = [(1, 2)]\n"
+        "    results = [3]\n"
+        "    for inp, exp in zip(inputs, results):\n"
+        "        assert candidate(*inp) == exp\n"
+    )
     passing = eval_dbos_harness.ScoringTarget(
         prediction_id="pass",
         task_id="task/add",
         raw_generation="def add(a, b):\n    return a + b\n",
-        test=(
-            "def check(candidate):\n"
-            "    assert candidate(1, 2) == 3\n"
-        ),
+        test=test,
         entry_point="add",
     )
     failing = eval_dbos_harness.ScoringTarget(
         prediction_id="fail",
         task_id="task/add",
         raw_generation="def add(a, b):\n    return a - b\n",
-        test=(
-            "def check(candidate):\n"
-            "    assert candidate(1, 2) == 3\n"
-        ),
+        test=test,
+        entry_point="add",
+    )
+    differently_named = eval_dbos_harness.ScoringTarget(
+        prediction_id="renamed",
+        task_id="task/add",
+        raw_generation="def solve(a, b):\n    return a + b\n",
+        test=test,
         entry_point="add",
     )
 
@@ -1665,14 +1673,20 @@ def test_score_generated_code_records_pass_and_failure(
     fail_result = eval_dbos_harness.score_generated_code(
         failing, timeout=5.0
     )
+    renamed_result = eval_dbos_harness.score_generated_code(
+        differently_named, timeout=5.0
+    )
 
     assert pass_result.score == 1.0
     assert pass_result.error is None
     assert pass_result.raw_code == "def add(a, b):\n    return a + b"
     assert pass_result.raw_compile_ok is True
     assert pass_result.extracted_compile_ok is True
+    assert renamed_result.score == 1.0
+    assert renamed_result.error is None
+    assert renamed_result.raw_code == "def solve(a, b):\n    return a + b"
     assert fail_result.score == 0.0
-    assert "AssertionError" in fail_result.error
+    assert fail_result.error == "HumanEval tests failed"
 
 
 def test_score_generated_code_recovers_raw_compile_failure_by_extraction(
@@ -1688,7 +1702,13 @@ def test_score_generated_code_recovers_raw_compile_failure_by_extraction(
             "    return a + b\n"
             "```"
         ),
-        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        test=(
+            "def check(candidate):\n"
+            "    inputs = [(1, 2)]\n"
+            "    results = [3]\n"
+            "    for inp, exp in zip(inputs, results):\n"
+            "        assert candidate(*inp) == exp\n"
+        ),
         entry_point="add",
     )
 
@@ -1709,7 +1729,13 @@ def test_score_generated_code_scores_zero_when_no_candidate_compiles(
         prediction_id="fail",
         task_id="task/add",
         raw_generation="def broken(:\n    pass\n",
-        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        test=(
+            "def check(candidate):\n"
+            "    inputs = [(1, 2)]\n"
+            "    results = [3]\n"
+            "    for inp, exp in zip(inputs, results):\n"
+            "        assert candidate(*inp) == exp\n"
+        ),
         entry_point="add",
     )
 
@@ -1731,7 +1757,13 @@ def test_score_generated_code_scores_zero_for_empty_raw_generation(
         prediction_id="empty",
         task_id="task/add",
         raw_generation="",
-        test="def check(candidate):\n    assert candidate(1, 2) == 3\n",
+        test=(
+            "def check(candidate):\n"
+            "    inputs = [(1, 2)]\n"
+            "    results = [3]\n"
+            "    for inp, exp in zip(inputs, results):\n"
+            "        assert candidate(*inp) == exp\n"
+        ),
         entry_point="add",
     )
 

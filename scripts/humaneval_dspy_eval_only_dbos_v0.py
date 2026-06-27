@@ -43,18 +43,25 @@ import dspy
 from dr_dspy.code_eval import (
     DEFAULT_CAPTURE_LIMIT_BYTES,
     extract_dspy_code,
-    run_python_check,
 )
-from dr_dspy.code_extraction import apply_cleaning, validate_python_source
-from dr_dspy.event_log import DATABASE_URL_ENV
+from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_logging import LoggingCallableLM
+from dr_dspy.lm_utils import (
+    LmEventBuffer,
+    ModelConfig,
+    provider_cost_from_response,
+    stable_json,
+    usage_metadata_from_response,
+)
 from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
-from dr_dspy.run_metadata import FieldSignature
 from dr_dspy.runtime import configure_multiprocessing, load_env_file
+from dr_dspy.scoring import score_generated_code_for_humaneval
+from dr_dspy.signatures import FieldSignature
 from dspy.signatures.signature import make_signature
 
 # Configuration
 
+DATABASE_URL_ENV = "DATABASE_URL"
 SCRIPT_KIND = "humaneval_eval_only_dbos_v0"
 DBOS_APP_NAME = "dr-dspy-humaneval-eval-only"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
@@ -303,13 +310,6 @@ class DbPoolConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_size: StrictInt
-
-
-class ModelConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: StrictStr
-    reasoning: dict[str, Any] = Field(default_factory=dict)
 
 
 class HumanEvalSample(BaseModel):
@@ -566,80 +566,6 @@ Solve = make_signature(
     instructions=SOLVE_INSTRUCTIONS,
     signature_name=SOLVE_NAME,
 )
-
-
-class LmEventBuffer:
-    def __init__(self) -> None:
-        self.events: list[dict[str, Any]] = []
-
-    def put_event(self, event_type: str, **kwargs: Any) -> None:
-        self.events.append({"event_type": event_type, **kwargs})
-
-    def latest_response_metadata(self) -> dict[str, Any]:
-        for event in reversed(self.events):
-            if event["event_type"] == "lm.response":
-                payload = event.get("payload")
-                if isinstance(payload, dict):
-                    response = payload.get("response")
-                    if isinstance(response, dict):
-                        return response
-        return {}
-
-    def has_latest_response(self) -> bool:
-        for event in reversed(self.events):
-            if event["event_type"] == "lm.response":
-                return True
-        return False
-
-    def latest_response_text(self) -> str | None:
-        for event in reversed(self.events):
-            if event["event_type"] != "lm.response":
-                continue
-            payload = event.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            text = response_text(payload.get("response"))
-            if text:
-                return text
-        return None
-
-
-def response_text(response: Any) -> str | None:
-    if isinstance(response, str):
-        return response
-    if not isinstance(response, Mapping):
-        return None
-    choices = response.get("choices")
-    if not isinstance(choices, Sequence) or isinstance(choices, str | bytes):
-        return None
-    for choice in choices:
-        if not isinstance(choice, Mapping):
-            continue
-        message = choice.get("message")
-        if isinstance(message, Mapping):
-            content_text = content_to_text(message.get("content"))
-            if content_text:
-                return content_text
-        text = choice.get("text")
-        if isinstance(text, str) and text:
-            return text
-    return None
-
-
-def content_to_text(content: Any) -> str | None:
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, Sequence) or isinstance(content, str | bytes):
-        return None
-    parts: list[str] = []
-    for part in content:
-        if isinstance(part, str):
-            parts.append(part)
-        elif isinstance(part, Mapping):
-            text = part.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "".join(parts) or None
 
 
 def resolve_database_url(database_url: str | None) -> str:
@@ -1106,10 +1032,6 @@ def configure_dbos_runtime(
     DBOS.launch()
     register_eval_queues(config, experiment_name=experiment_name)
     operator_log(queue_config_line(config, experiment_name=experiment_name))
-
-
-def stable_json(data: Any) -> str:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
 
 def stable_prediction_id(
@@ -2005,57 +1927,16 @@ def record_score_error(
 def score_generated_code(
     target: ScoringTarget, *, timeout: float
 ) -> ScoreResult:
-    if not target.raw_generation.strip():
-        extraction_error = "empty raw generation"
-        return ScoreResult(
-            prediction_id=target.prediction_id,
-            score=0.0,
-            error=extraction_error,
-            raw_code=None,
-            raw_compile_ok=False,
-            raw_compile_error=extraction_error,
-            extraction_candidate_count=0,
-            extracted_compile_ok=False,
-            extracted_compile_error=None,
-            extraction_error=extraction_error,
-        )
-
-    raw_validation = validate_python_source(target.raw_generation)
-    candidates = apply_cleaning(target.raw_generation, apply_dedent=True)
-    selected_code: str | None = None
-    extracted_compile_error: str | None = None
-    for candidate in candidates:
-        candidate_validation = validate_python_source(candidate)
-        if candidate_validation.compile_ok:
-            selected_code = candidate
-            extracted_compile_error = None
-            break
-        if extracted_compile_error is None:
-            extracted_compile_error = candidate_validation.compile_error
-
-    if selected_code is None:
-        extraction_error = (
-            "no code candidates extracted"
-            if not candidates
-            else "no compilable extracted candidate"
-        )
-        return ScoreResult(
-            prediction_id=target.prediction_id,
-            score=0.0,
-            error=extraction_error,
-            raw_code=None,
-            raw_compile_ok=raw_validation.compile_ok,
-            raw_compile_error=raw_validation.compile_error,
-            extraction_candidate_count=len(candidates),
-            extracted_compile_ok=False,
-            extracted_compile_error=extracted_compile_error,
-            extraction_error=extraction_error,
-        )
-
-    result = run_python_check(
-        code=selected_code,
+    task = HumanEvalTask(
+        task_id=target.task_id,
+        prompt="",
+        canonical_solution="",
         test=target.test,
         entry_point=target.entry_point,
+    )
+    result = score_generated_code_for_humaneval(
+        raw_generation=target.raw_generation,
+        task=task,
         timeout=timeout,
         capture_limit_bytes=DEFAULT_CAPTURE_LIMIT_BYTES,
     )
@@ -2063,13 +1944,13 @@ def score_generated_code(
         prediction_id=target.prediction_id,
         score=result.score,
         error=result.error,
-        raw_code=selected_code,
-        raw_compile_ok=raw_validation.compile_ok,
-        raw_compile_error=raw_validation.compile_error,
-        extraction_candidate_count=len(candidates),
-        extracted_compile_ok=True,
-        extracted_compile_error=None,
-        extraction_error=None,
+        raw_code=result.raw_code,
+        raw_compile_ok=result.raw_compile_ok,
+        raw_compile_error=result.raw_compile_error,
+        extraction_candidate_count=result.extraction_candidate_count,
+        extracted_compile_ok=result.extracted_compile_ok,
+        extracted_compile_error=result.extracted_compile_error,
+        extraction_error=result.extraction_error,
         stdout=result.stdout,
         stderr=result.stderr,
         stdout_truncated=result.stdout_truncated,
@@ -2161,28 +2042,6 @@ def build_generation_lm(
         max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
         temperature=job.temperature,
     )
-
-
-def usage_metadata_from_response(
-    response_metadata: Mapping[str, Any]
-) -> dict[str, Any]:
-    usage = response_metadata.get("usage")
-    return dict(usage) if isinstance(usage, Mapping) else {}
-
-
-def provider_cost_from_response(
-    response_metadata: Mapping[str, Any]
-) -> float | None:
-    for key in ("cost", "total_cost"):
-        value = response_metadata.get(key)
-        if isinstance(value, int | float):
-            return float(value)
-    usage = response_metadata.get("usage")
-    if isinstance(usage, Mapping):
-        value = usage.get("cost")
-        if isinstance(value, int | float):
-            return float(value)
-    return None
 
 
 def run_temperature_probe(

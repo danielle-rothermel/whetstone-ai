@@ -8,19 +8,7 @@ uv run ty check
 uv run pytest tests
 ```
 
-Run the mock HumanEval bootstrap smoke harness:
-
-```sh
-uv run python scripts/mocks/humaneval_dspy_harness_bootstrap_v0_mock.py \
-  --compiled-path /tmp/dr-dspy-smoke.json
-```
-
-The smoke harness defaults to Postgres and reads `DATABASE_URL`; the repo-local
-`.env` sets it to `postgresql:///dr_dspy` when it is unset. The smoke harness
-should exit with status `0`, write the compiled JSON file, write events to
-Postgres, and print `baseline:  100.000` and `optimized: 100.000`.
-
-Check the DBOS eval-only harness CLI without making live model calls:
+Check the direct DBOS eval CLI without making live model calls:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py --help
@@ -30,15 +18,25 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py temperature-probe
 `temperature-probe` should exit with status `2` unless `--confirm-live` is
 passed. Do not pass `--confirm-live` in automated checks.
 
-Plan a small temperature sweep without writing rows or enqueueing workflows:
+Plan a small direct-eval temperature sweep without writing rows or enqueueing
+workflows:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py temperature-sweep \
   --experiment-name local-dry-run
 ```
 
-For a local DBOS/Postgres smoke, run these commands from `dr-dspy/` with
-`DATABASE_URL` set to a local Postgres database:
+Check the encoder-decoder DBOS eval CLI:
+
+```sh
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py --help
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
+  --experiment-name encdec-dry-run \
+  --sample-count 2
+```
+
+For a local DBOS/Postgres direct-eval smoke, run these commands from `dr-dspy/`
+with `DATABASE_URL` set to a local Postgres database:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py init-db
@@ -49,26 +47,31 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
   --mock-generation
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue generation \
-  --run-name local-mock-dbos-smoke
+  --queue both \
+  --experiment-name local-mock-dbos-smoke
 ```
 
-Stop the generation worker after jobs complete, then enqueue and run scoring:
+For a local encoder-decoder smoke:
 
 ```sh
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py enqueue-scores \
-  --experiment-name local-mock-dbos-smoke
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
 
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
-  --queue scoring \
-  --run-name local-mock-dbos-smoke
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
+  --experiment-name local-encdec-smoke \
+  --sample-count 2 \
+  --use-mock-lm \
+  --apply
 
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py status \
-  --experiment-name local-mock-dbos-smoke
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py worker \
+  --queue both \
+  --experiment-name local-encdec-smoke
 
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
-  --experiment-name local-mock-dbos-smoke
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py status \
+  --experiment-name local-encdec-smoke
+
+uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py analyze \
+  --experiment-name local-encdec-smoke
 ```
 
-The worker should print compact active/empty queue transitions to stdout and
-write detailed per-job logs under `logs/local-mock-dbos-smoke/`.
+The worker should print compact queue counts to stdout. Stop it manually after
+the generation and scoring queues drain.

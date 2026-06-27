@@ -7,17 +7,6 @@ from types import ModuleType
 
 import pytest
 
-HARNESS_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "humaneval_dspy_harness_bootstrap_v0.py"
-)
-MOCK_HARNESS_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "scripts"
-    / "mocks"
-    / "humaneval_dspy_harness_bootstrap_v0_mock.py"
-)
 EVAL_DBOS_HARNESS_PATH = (
     Path(__file__).resolve().parents[1]
     / "scripts"
@@ -36,26 +25,6 @@ def _load_script_module(name: str, path: Path) -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-@pytest.fixture(scope="session")
-def humaneval_harness() -> ModuleType:
-    return _load_script_module(
-        "humaneval_dspy_harness_bootstrap_v0",
-        HARNESS_PATH,
-    )
-
-
-@pytest.fixture(scope="session")
-def humaneval_mock_harness() -> ModuleType:
-    sys.path.insert(0, str(HARNESS_PATH.parent))
-    try:
-        return _load_script_module(
-            "humaneval_dspy_harness_bootstrap_v0_mock",
-            MOCK_HARNESS_PATH,
-        )
-    finally:
-        sys.path.remove(str(HARNESS_PATH.parent))
 
 
 @pytest.fixture(scope="session")

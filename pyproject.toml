@@ -21,6 +21,7 @@ dependencies = [
     "ruff>=0.15.10",
     "ty>=0.0.54",
     "typer>=0.26.7",
+    "zstandard>=0.25.0",
 ]
 
 [build-system]
