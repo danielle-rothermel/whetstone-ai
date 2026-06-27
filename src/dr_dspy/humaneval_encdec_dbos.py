@@ -6,10 +6,10 @@ import threading
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Protocol, cast
+from typing import Annotated, Any
 
 import typer
-from dbos import DBOS, DBOSConfig, SetWorkflowID
+from dbos import DBOS, SetWorkflowID
 from psycopg.types.json import Jsonb
 from pydantic import (
     BaseModel,
@@ -31,7 +31,6 @@ from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import worker_monitor as shared_worker_monitor
-from dr_dspy.compression import CompressionMetric, compression_metrics
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -39,36 +38,30 @@ from dr_dspy.lm_utils import (
     provider_cost_from_response,
     usage_metadata_from_response,
 )
-from dr_dspy.runtime import configure_multiprocessing, load_env_file
-from dr_dspy.scoring import (
-    GeneratedCodeScore,
-    score_generated_code_for_humaneval,
+from dr_dspy.runtime import (
+    configure_multiprocessing,
+    load_env_file,
 )
-from dr_dspy.signatures import FieldSignature
+from dr_dspy.scoring import (
+    HumanEvalScoreResult,
+    score_humaneval_prediction,
+)
+from dr_dspy.signatures import DspySignatureConfig
 from dspy.signatures.signature import make_signature
 
 DATABASE_URL_ENV = "DATABASE_URL"
-SCRIPT_KIND = "humaneval_eval_only_encdec_dbos_v0"
 DBOS_APP_NAME = "dr-dspy-humaneval-encdec-eval"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
 GENERATION_QUEUE_NAME = "dr_dspy_humaneval_encdec_generation"
 SCORING_QUEUE_NAME = "dr_dspy_humaneval_encdec_scoring"
 DEFAULT_GENERATION_CONCURRENCY = 64
 DEFAULT_SCORING_CONCURRENCY = 32
-DEFAULT_SAMPLE_COUNT = 10
-DEFAULT_SEED = 0
-DEFAULT_TEMPERATURE = 0.0
-DEFAULT_REPETITIONS = 1
-DEFAULT_MAX_COMPLETION_TOKENS = 2000
-DEFAULT_SUBPROCESS_TIMEOUT = 15.0
 DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_REPAIR_GENERATION_LIMIT = 1000
 DEFAULT_REPAIR_SCORING_LIMIT = 1000
-DATASET_NAME = "evalplus/humanevalplus"
-DATASET_SPLIT = "test"
 PREDICTION_TABLE_NAME = "dr_dspy_encdec_eval_predictions"
 REPAIR_DIMENSION_COLUMNS = (
     "encoder_model",
@@ -89,31 +82,6 @@ DEFAULT_WORKER_LOG_ROOT = Path(__file__).resolve().parents[1] / "logs"
 DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_encdec_worker"
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 CONSOLE = Console(soft_wrap=True)
-
-ENCODER_FIELDS = [
-    FieldSignature(name="code", type=str, role=dspy.InputField()),
-    FieldSignature(name="description", type=str, role=dspy.OutputField()),
-]
-DECODER_FIELDS = [
-    FieldSignature(name="description", type=str, role=dspy.InputField()),
-    FieldSignature(name="code", type=dspy.Code, role=dspy.OutputField()),
-]
-ENCODER_INSTRUCTIONS = (
-    "Encode this Python function implementation into a complete lossless "
-    "description. Preserve all behavior needed to reconstruct the code, but "
-    "do not output Python code."
-)
-DECODER_INSTRUCTIONS = (
-    "Decode the description into functional Python code. "
-    "Output only Python code."
-)
-
-DEFAULT_MODEL_PAIRS: tuple[dict[str, Any], ...] = (
-    {
-        "encoder": {"model": "openai/gpt-5.1-codex-mini", "reasoning": {}},
-        "decoder": {"model": "openai/gpt-5.1-codex-mini", "reasoning": {}},
-    },
-)
 
 EXPERIMENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS dr_dspy_encdec_eval_experiments (
@@ -218,10 +186,22 @@ class EncDecPair(BaseModel):
     decoder: ModelConfig
 
 
-class HumanEvalDataset(Protocol):
-    def __len__(self) -> int: ...
+class EncDecHumanEvalExperimentConfig(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    def __getitem__(self, index: int) -> Mapping[str, Any]: ...
+    script_kind: StrictStr
+    dataset_name: StrictStr
+    dataset_split: StrictStr
+    encoder_signature: DspySignatureConfig
+    decoder_signature: DspySignatureConfig
+    default_model_pairs: tuple[EncDecPair, ...]
+    default_sample_count: StrictInt
+    default_seed: StrictInt
+    default_encoder_temperatures: tuple[float, ...]
+    default_decoder_temperatures: tuple[float, ...]
+    default_repetitions: StrictInt
+    default_max_completion_tokens: StrictInt
+    default_subprocess_timeout: float
 
 
 class EncDecSample(BaseModel):
@@ -316,27 +296,7 @@ class ScoringTarget(BaseModel):
         )
 
 
-class ScoreResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prediction_id: StrictStr
-    score: float
-    error: str | None
-    raw_code: str | None = None
-    raw_compile_ok: bool
-    raw_compile_error: str | None = None
-    extraction_candidate_count: int
-    selected_candidate_index: int | None = None
-    extracted_compile_ok: bool
-    extracted_compile_error: str | None = None
-    extraction_error: str | None = None
-    evaluation_function_names: list[str] = Field(default_factory=list)
-    evaluation_total_cases: int | None = None
-    evaluation_failure_count: int | None = None
-    evaluation_status_counts: dict[str, int] = Field(default_factory=dict)
-    compression_metrics: list[CompressionMetric] = Field(default_factory=list)
-    best_compression_ratio: float | None = None
-    best_compression_percent_reduction: float | None = None
+ScoreResult = HumanEvalScoreResult
 
 
 class AnalysisRecord(BaseModel):
@@ -372,18 +332,55 @@ class AnalysisSummary(BaseModel):
     raw_compile_pass_count: StrictInt
     extracted_compile_pass_count: StrictInt
     extraction_lift: StrictInt
+    avg_best_compression_ratio: float | None = None
+    avg_best_compression_percent_reduction: float | None = None
 
 
-EncodeCode = make_signature(
-    {field.name: (field.type, field.role) for field in ENCODER_FIELDS},
-    instructions=ENCODER_INSTRUCTIONS,
-    signature_name="EncodeCode",
-)
-DecodeCode = make_signature(
-    {field.name: (field.type, field.role) for field in DECODER_FIELDS},
-    instructions=DECODER_INSTRUCTIONS,
-    signature_name="DecodeCode",
-)
+_EXPERIMENT_CONFIG: EncDecHumanEvalExperimentConfig | None = None
+_ENCODER_SIGNATURE: type[dspy.Signature] | None = None
+_DECODER_SIGNATURE: type[dspy.Signature] | None = None
+
+
+def build_dspy_signature(config: DspySignatureConfig) -> type[dspy.Signature]:
+    return make_signature(
+        {field.name: (field.type, field.role) for field in config.fields},
+        instructions=config.instructions,
+        signature_name=config.name,
+    )
+
+
+def configure_experiment(config: EncDecHumanEvalExperimentConfig) -> None:
+    global _EXPERIMENT_CONFIG, _ENCODER_SIGNATURE, _DECODER_SIGNATURE
+    _EXPERIMENT_CONFIG = config
+    _ENCODER_SIGNATURE = build_dspy_signature(config.encoder_signature)
+    _DECODER_SIGNATURE = build_dspy_signature(config.decoder_signature)
+
+
+def experiment_config() -> EncDecHumanEvalExperimentConfig:
+    if _EXPERIMENT_CONFIG is None:
+        raise RuntimeError(
+            "HumanEval enc-dec experiment is not configured; call "
+            "create_app(config) from the experiment script first."
+        )
+    return _EXPERIMENT_CONFIG
+
+
+def encoder_signature() -> type[dspy.Signature]:
+    if _ENCODER_SIGNATURE is None:
+        raise RuntimeError(
+            "HumanEval enc-dec encoder signature is not configured; call "
+            "create_app(config) from the experiment script first."
+        )
+    return _ENCODER_SIGNATURE
+
+
+def decoder_signature() -> type[dspy.Signature]:
+    if _DECODER_SIGNATURE is None:
+        raise RuntimeError(
+            "HumanEval enc-dec decoder signature is not configured; call "
+            "create_app(config) from the experiment script first."
+        )
+    return _DECODER_SIGNATURE
 
 
 def operator_log(message: str, *, style: str | None = None) -> None:
@@ -463,7 +460,10 @@ def load_optional_env_file(env_file: Path | None) -> None:
 
 def parse_model_pairs(raw: str | None) -> list[EncDecPair]:
     if raw is None:
-        return [EncDecPair(**pair) for pair in DEFAULT_MODEL_PAIRS]
+        return [
+            EncDecPair(**pair.model_dump(mode="python"))
+            for pair in experiment_config().default_model_pairs
+        ]
     if raw.startswith("@"):
         raw = Path(raw[1:]).read_text(encoding="utf-8")
     value = json.loads(raw)
@@ -576,11 +576,11 @@ def upsert_experiment(
                 """,
                 (
                     experiment_name,
-                    SCRIPT_KIND,
+                    experiment_config().script_kind,
                     seed,
                     sample_count,
-                    ENCODER_INSTRUCTIONS,
-                    DECODER_INSTRUCTIONS,
+                    experiment_config().encoder_signature.instructions,
+                    experiment_config().decoder_signature.instructions,
                     Jsonb(dict(metadata)),
                 ),
             )
@@ -595,7 +595,7 @@ def insert_prediction_jobs(
         (
             job.prediction_id,
             job.experiment_name,
-            SCRIPT_KIND,
+            experiment_config().script_kind,
             job.submission_id,
             job.task_id,
             job.sample_index,
@@ -660,7 +660,7 @@ def generate_code_for_job(job: EncDecJob) -> GenerationResult:
         event_buffer=encoder_events,
     )
     encoded_description = run_predictor(
-        signature=EncodeCode,
+        signature=encoder_signature(),
         input_kwargs={"code": job.ground_truth_code},
         output_field="description",
         lm=encoder_lm,
@@ -673,7 +673,7 @@ def generate_code_for_job(job: EncDecJob) -> GenerationResult:
         event_buffer=decoder_events,
     )
     decoded_generation = run_predictor(
-        signature=DecodeCode,
+        signature=decoder_signature(),
         input_kwargs={"description": encoded_description},
         output_field="code",
         lm=decoder_lm,
@@ -890,63 +890,16 @@ def fetch_scoring_target(
     )
 
 
-def best_metric(
-    metrics: Sequence[CompressionMetric],
-) -> CompressionMetric | None:
-    comparable = [
-        metric
-        for metric in metrics
-        if metric.ratio_to_ground_truth is not None
-    ]
-    if not comparable:
-        return None
-    return min(
-        comparable,
-        key=lambda metric: cast(float, metric.ratio_to_ground_truth),
-    )
-
-
 def score_generated_code(
     target: ScoringTarget, *, timeout: float
 ) -> ScoreResult:
-    generated_score: GeneratedCodeScore = score_generated_code_for_humaneval(
+    return score_humaneval_prediction(
+        prediction_id=target.prediction_id,
         raw_generation=target.raw_generation,
         task=target.task(),
-        timeout=timeout,
-    )
-    metrics = compression_metrics(
+        compression_input=target.encoded_description,
         ground_truth_code=target.ground_truth_code,
-        encoded_description=target.encoded_description,
-    )
-    best = best_metric(metrics)
-    evaluation = generated_score.evaluation
-    return ScoreResult(
-        prediction_id=target.prediction_id,
-        score=generated_score.score,
-        error=generated_score.error,
-        raw_code=generated_score.raw_code,
-        raw_compile_ok=generated_score.raw_compile_ok,
-        raw_compile_error=generated_score.raw_compile_error,
-        extraction_candidate_count=generated_score.extraction_candidate_count,
-        selected_candidate_index=generated_score.selected_candidate_index,
-        extracted_compile_ok=generated_score.extracted_compile_ok,
-        extracted_compile_error=generated_score.extracted_compile_error,
-        extraction_error=generated_score.extraction_error,
-        evaluation_function_names=evaluation.function_names
-        if evaluation
-        else [],
-        evaluation_total_cases=evaluation.total_cases if evaluation else None,
-        evaluation_failure_count=len(evaluation.failures)
-        if evaluation
-        else None,
-        evaluation_status_counts=evaluation.status_counts
-        if evaluation
-        else {},
-        compression_metrics=metrics,
-        best_compression_ratio=best.ratio_to_ground_truth if best else None,
-        best_compression_percent_reduction=(
-            best.percent_reduction_vs_ground_truth if best else None
-        ),
+        timeout=timeout,
     )
 
 
@@ -1144,7 +1097,7 @@ def generate_prediction_workflow(
     database_url: str,
     prediction_id: str,
     experiment_name: str,
-    score_timeout: float = DEFAULT_SUBPROCESS_TIMEOUT,
+    score_timeout: float,
 ) -> str:
     return shared_flow.run_generation_workflow(
         database_url=database_url,
@@ -1419,10 +1372,6 @@ def build_eval_dbos_config(
     )
 
 
-def build_dbos_config(config: EvalDbosConfig) -> DBOSConfig:
-    return shared_dbos.build_dbos_config(config, app_name=DBOS_APP_NAME)
-
-
 def raise_open_file_limit(requested: int) -> OpenFileLimitResult:
     return shared_dbos.raise_open_file_limit(requested)
 
@@ -1456,6 +1405,7 @@ def parse_temperatures(raw: str) -> list[float]:
 def build_humaneval_samples(
     *, seed: int, sample_count: int
 ) -> list[EncDecSample]:
+    config = experiment_config()
     return [
         EncDecSample(
             task_id=sample.task.task_id,
@@ -1472,8 +1422,8 @@ def build_humaneval_samples(
         for sample in shared_human_eval_sampling.sample_human_eval_tasks(
             seed=seed,
             sample_count=sample_count,
-            dataset_name=DATASET_NAME,
-            dataset_split=DATASET_SPLIT,
+            dataset_name=config.dataset_name,
+            dataset_split=config.dataset_split,
         )
     ]
 
@@ -1490,7 +1440,7 @@ def build_lm(
         reasoning=reasoning,
         temperature=temperature,
         event_buffer=event_buffer,
-        max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
+        max_completion_tokens=experiment_config().default_max_completion_tokens,
     )
 
 
@@ -1512,22 +1462,6 @@ def run_predictor(
         lm=lm,
         event_buffer=event_buffer,
     )
-
-
-def experiment_name_hash(experiment_name: str) -> str:
-    return shared_dbos.experiment_hash(experiment_name)
-
-
-def generation_queue(experiment_name: str) -> str:
-    return shared_dbos.eval_queue_names(
-        experiment_name, QUEUE_NAME_CONFIG
-    ).generation
-
-
-def scoring_queue(experiment_name: str) -> str:
-    return shared_dbos.eval_queue_names(
-        experiment_name, QUEUE_NAME_CONFIG
-    ).scoring
 
 
 def configure_dbos_runtime(
@@ -1829,6 +1763,10 @@ def summarize_analysis_records(
         provider_cost=lambda record: record.provider_cost,
         raw_compile_ok=lambda record: record.raw_compile_ok,
         extracted_compile_ok=lambda record: record.extracted_compile_ok,
+        best_compression_ratio=lambda record: record.best_compression_ratio,
+        best_compression_percent_reduction=(
+            lambda record: record.best_compression_percent_reduction
+        ),
         summary_factory=AnalysisSummary,
     )
 
@@ -1902,10 +1840,15 @@ def start_worker_monitor(
     )
 
 
-app = typer.Typer(no_args_is_help=True)
+_APP = typer.Typer(no_args_is_help=True)
 
 
-@app.command("init-db")
+def create_app(config: EncDecHumanEvalExperimentConfig) -> typer.Typer:
+    configure_experiment(config)
+    return _APP
+
+
+@_APP.command("init-db")
 def init_db(
     database_url: Annotated[str | None, typer.Option()] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
@@ -1915,30 +1858,24 @@ def init_db(
     operator_log("initialized enc-dec eval schema")
 
 
-@app.command()
+@_APP.command()
 def submit(
     experiment_name: Annotated[str, typer.Option()],
     database_url: Annotated[str | None, typer.Option()] = None,
     dbos_system_database_url: Annotated[str | None, typer.Option()] = None,
     model_pairs_json: Annotated[str | None, typer.Option()] = None,
-    sample_count: Annotated[int, typer.Option()] = DEFAULT_SAMPLE_COUNT,
-    seed: Annotated[int, typer.Option()] = DEFAULT_SEED,
-    encoder_temperatures: Annotated[str, typer.Option()] = str(
-        DEFAULT_TEMPERATURE
-    ),
-    decoder_temperatures: Annotated[str, typer.Option()] = str(
-        DEFAULT_TEMPERATURE
-    ),
-    repetitions: Annotated[int, typer.Option()] = DEFAULT_REPETITIONS,
+    sample_count: Annotated[int | None, typer.Option()] = None,
+    seed: Annotated[int | None, typer.Option()] = None,
+    encoder_temperatures: Annotated[str | None, typer.Option()] = None,
+    decoder_temperatures: Annotated[str | None, typer.Option()] = None,
+    repetitions: Annotated[int | None, typer.Option()] = None,
     generation_concurrency: Annotated[
         int, typer.Option()
     ] = DEFAULT_GENERATION_CONCURRENCY,
     scoring_concurrency: Annotated[
         int, typer.Option()
     ] = DEFAULT_SCORING_CONCURRENCY,
-    score_timeout: Annotated[
-        float, typer.Option()
-    ] = DEFAULT_SUBPROCESS_TIMEOUT,
+    score_timeout: Annotated[float | None, typer.Option()] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -1948,6 +1885,21 @@ def submit(
     ] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
+    experiment = experiment_config()
+    sample_count = sample_count or experiment.default_sample_count
+    seed = seed if seed is not None else experiment.default_seed
+    encoder_temperatures = encoder_temperatures or ",".join(
+        str(value) for value in experiment.default_encoder_temperatures
+    )
+    decoder_temperatures = decoder_temperatures or ",".join(
+        str(value) for value in experiment.default_decoder_temperatures
+    )
+    repetitions = repetitions or experiment.default_repetitions
+    score_timeout = (
+        score_timeout
+        if score_timeout is not None
+        else experiment.default_subprocess_timeout
+    )
     load_optional_env_file(env_file)
     config = build_eval_dbos_config(
         database_url=database_url,
@@ -2016,7 +1968,7 @@ def submit(
     )
 
 
-@app.command()
+@_APP.command()
 def worker(
     experiment_name: Annotated[str, typer.Option()],
     database_url: Annotated[str | None, typer.Option()] = None,
@@ -2107,7 +2059,7 @@ def worker(
     )
 
 
-@app.command()
+@_APP.command()
 def status(
     experiment_name: Annotated[str | None, typer.Option()] = None,
     database_url: Annotated[str | None, typer.Option()] = None,
@@ -2124,15 +2076,15 @@ def status(
     )
 
 
-@app.command("enqueue-scores")
+@_APP.command("enqueue-scores")
 def enqueue_scores_command(
     experiment_name: Annotated[str, typer.Option()],
     limit: Annotated[
         int, typer.Option("--limit", min=1)
     ] = DEFAULT_SCORE_ENQUEUE_LIMIT,
     timeout: Annotated[
-        float, typer.Option("--timeout", min=0.1)
-    ] = DEFAULT_SUBPROCESS_TIMEOUT,
+        float | None, typer.Option("--timeout", min=0.1)
+    ] = None,
     database_url: Annotated[str | None, typer.Option()] = None,
     dbos_system_database_url: Annotated[str | None, typer.Option()] = None,
     generation_concurrency: Annotated[
@@ -2143,6 +2095,11 @@ def enqueue_scores_command(
     ] = DEFAULT_SCORING_CONCURRENCY,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
+    timeout = (
+        timeout
+        if timeout is not None
+        else experiment_config().default_subprocess_timeout
+    )
     load_optional_env_file(env_file)
     config = build_eval_dbos_config(
         database_url=database_url,
@@ -2181,7 +2138,7 @@ def enqueue_scores_command(
     )
 
 
-@app.command()
+@_APP.command()
 def analyze(
     experiment_name: Annotated[str, typer.Option()],
     csv_path: Annotated[
@@ -2216,7 +2173,7 @@ def analyze(
     )
 
 
-@app.command()
+@_APP.command()
 def repair(
     experiment_name: Annotated[str, typer.Option()],
     database_url: Annotated[str | None, typer.Option()] = None,
@@ -2233,12 +2190,15 @@ def repair(
     scoring_concurrency: Annotated[
         int, typer.Option()
     ] = DEFAULT_SCORING_CONCURRENCY,
-    score_timeout: Annotated[
-        float, typer.Option()
-    ] = DEFAULT_SUBPROCESS_TIMEOUT,
+    score_timeout: Annotated[float | None, typer.Option()] = None,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
+    score_timeout = (
+        score_timeout
+        if score_timeout is not None
+        else experiment_config().default_subprocess_timeout
+    )
     load_optional_env_file(env_file)
     config = build_eval_dbos_config(
         database_url=database_url,
@@ -2267,7 +2227,3 @@ def repair(
         ),
         operator_log=operator_log,
     )
-
-
-if __name__ == "__main__":
-    app()

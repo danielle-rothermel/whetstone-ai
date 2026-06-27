@@ -32,6 +32,8 @@ class AnalysisSummary(BaseModel):
     raw_compile_pass_count: StrictInt
     extracted_compile_pass_count: StrictInt
     extraction_lift: StrictInt
+    avg_best_compression_ratio: float | None = None
+    avg_best_compression_percent_reduction: float | None = None
 
 
 def parse_float_csv(raw: str, *, value_name: str = "value") -> list[float]:
@@ -514,6 +516,12 @@ def summarize_analysis_records[RecordT, SummaryT](
     provider_cost: Callable[[RecordT], float | None],
     raw_compile_ok: Callable[[RecordT], bool | None],
     extracted_compile_ok: Callable[[RecordT], bool | None],
+    best_compression_ratio: Callable[[RecordT], float | None] = (
+        lambda _record: None
+    ),
+    best_compression_percent_reduction: Callable[
+        [RecordT], float | None
+    ] = (lambda _record: None),
     summary_factory: Callable[..., SummaryT],
 ) -> list[SummaryT]:
     grouped: dict[object, list[RecordT]] = {}
@@ -546,6 +554,19 @@ def summarize_analysis_records[RecordT, SummaryT](
             1 for record in group if extracted_compile_ok(record) is True
         )
         total_price = sum(costs) if costs else None
+        compression_ratios = [
+            ratio
+            for ratio in (best_compression_ratio(record) for record in group)
+            if ratio is not None
+        ]
+        compression_reductions = [
+            reduction
+            for reduction in (
+                best_compression_percent_reduction(record)
+                for record in group
+            )
+            if reduction is not None
+        ]
         summaries.append(
             summary_factory(
                 model=model_label(group[0]),
@@ -568,6 +589,12 @@ def summarize_analysis_records[RecordT, SummaryT](
                 extracted_compile_pass_count=extracted_compile_pass_count,
                 extraction_lift=(
                     extracted_compile_pass_count - raw_compile_pass_count
+                ),
+                avg_best_compression_ratio=analysis.average_or_none(
+                    compression_ratios
+                ),
+                avg_best_compression_percent_reduction=(
+                    analysis.average_or_none(compression_reductions)
                 ),
             )
         )

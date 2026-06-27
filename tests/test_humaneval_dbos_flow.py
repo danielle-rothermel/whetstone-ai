@@ -62,6 +62,33 @@ def test_stable_prediction_id_helper_preserves_flow_contracts() -> None:
     assert len(encdec_id) == 64
 
 
+def test_encdec_experiment_definitions_are_not_in_library_adapter() -> None:
+    removed_names = [
+        "DATASET_NAME",
+        "DATASET_SPLIT",
+        "ENCODER_FIELDS",
+        "DECODER_FIELDS",
+        "ENCODER_INSTRUCTIONS",
+        "DECODER_INSTRUCTIONS",
+        "DEFAULT_MODEL_PAIRS",
+        "DEFAULT_SAMPLE_COUNT",
+        "DEFAULT_SEED",
+        "DEFAULT_TEMPERATURE",
+        "DEFAULT_REPETITIONS",
+        "DEFAULT_MAX_COMPLETION_TOKENS",
+        "DEFAULT_SUBPROCESS_TIMEOUT",
+        "EncodeCode",
+        "DecodeCode",
+        "app",
+        "build_dbos_config",
+        "experiment_name_hash",
+        "generation_queue",
+        "scoring_queue",
+        "HumanEvalDataset",
+    ]
+    assert not [name for name in removed_names if hasattr(encdec, name)]
+
+
 def test_parse_float_csv_rejects_empty_input() -> None:
     assert flow.parse_float_csv("0, 0.2") == [0.0, 0.2]
     with pytest.raises(ValueError, match="temperature"):

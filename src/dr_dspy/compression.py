@@ -24,7 +24,7 @@ class CompressionMetric(BaseModel):
 
     method: CompressionMethod
     ground_truth_bytes: int
-    encoded_bytes: int
+    representation_bytes: int
     compressed_bytes: int
     ratio_to_ground_truth: float | None
     percent_reduction_vs_ground_truth: float | None
@@ -49,21 +49,21 @@ def compressed_bytes(value: bytes, method: CompressionMethod) -> bytes:
 def compression_metrics(
     *,
     ground_truth_code: str,
-    encoded_description: str,
+    representation_text: str,
     methods: tuple[CompressionMethod, ...] = tuple(CompressionMethod),
 ) -> list[CompressionMetric]:
     ground_truth_bytes = len(ground_truth_code.encode("utf-8"))
-    encoded = encoded_description.encode("utf-8")
-    encoded_bytes = len(encoded)
+    representation = representation_text.encode("utf-8")
+    representation_bytes = len(representation)
     metrics: list[CompressionMetric] = []
     for method in methods:
-        size = len(compressed_bytes(encoded, method))
+        size = len(compressed_bytes(representation, method))
         ratio = size / ground_truth_bytes if ground_truth_bytes else None
         metrics.append(
             CompressionMetric(
                 method=method,
                 ground_truth_bytes=ground_truth_bytes,
-                encoded_bytes=encoded_bytes,
+                representation_bytes=representation_bytes,
                 compressed_bytes=size,
                 ratio_to_ground_truth=ratio,
                 percent_reduction_vs_ground_truth=(
@@ -72,4 +72,3 @@ def compression_metrics(
             )
         )
     return metrics
-

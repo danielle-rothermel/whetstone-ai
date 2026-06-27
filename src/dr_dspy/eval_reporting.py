@@ -39,6 +39,8 @@ class AnalysisSummaryLike(Protocol):
     raw_compile_pass_count: int
     extracted_compile_pass_count: int
     extraction_lift: int
+    avg_best_compression_ratio: float | None
+    avg_best_compression_percent_reduction: float | None
 
     def model_dump(self, *, mode: str) -> dict[str, Any]: ...
 
@@ -158,9 +160,9 @@ def analysis_markdown(
         "",
         "| Model | Temp | Samples | Scored | Total Price | "
         "Avg Price/1k Samples | Avg Perf | Raw Compile | "
-        "Extracted Compile | Extraction Lift | Price Var | Perf Var | "
-        "Rep Var |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Extracted Compile | Extraction Lift | Avg Compression Ratio | "
+        "Avg Compression Reduction | Price Var | Perf Var | Rep Var |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     total_price_values = [summary.total_price for summary in summaries]
     total_price_sum = analysis.sum_present_float(total_price_values)
@@ -188,7 +190,8 @@ def analysis_markdown(
             "| {model} | {temperature} | {sample_count} | {scored_count} | "
             "{total_price} | {avg_price_per_sample} | {avg_performance} | "
             "{raw_compile_pass_count} | {extracted_compile_pass_count} | "
-            "{extraction_lift} | {price_variance} | "
+            "{extraction_lift} | {avg_best_compression_ratio} | "
+            "{avg_best_compression_percent_reduction} | {price_variance} | "
             "{performance_variance} | {avg_repetition_variance} |".format(
                 model=summary.model,
                 temperature=analysis.format_float(summary.temperature),
@@ -204,6 +207,14 @@ def analysis_markdown(
                     summary.extracted_compile_pass_count
                 ),
                 extraction_lift=summary.extraction_lift,
+                avg_best_compression_ratio=analysis.format_float(
+                    summary.avg_best_compression_ratio
+                ),
+                avg_best_compression_percent_reduction=(
+                    analysis.format_float(
+                        summary.avg_best_compression_percent_reduction
+                    )
+                ),
                 price_variance=analysis.format_float(
                     summary.price_variance
                 ),
@@ -221,7 +232,7 @@ def analysis_markdown(
                 "| {model} |  | {sample_count} | {scored_count} | "
                 "{total_price} |  |  | {raw_compile_pass_count} | "
                 "{extracted_compile_pass_count} | {extraction_lift} | "
-                " |  |  |"
+                " |  |  |  |  |"
             ).format(
                 model=ANALYSIS_TOTAL_LABEL,
                 sample_count=sum(
@@ -263,6 +274,8 @@ def analysis_table(
     performance_table.add_column("Raw Compile", justify="right")
     performance_table.add_column("Extracted Compile", justify="right")
     performance_table.add_column("Lift", justify="right")
+    performance_table.add_column("Comp Ratio", justify="right")
+    performance_table.add_column("Comp Reduction", justify="right")
 
     cost_table = Table(
         title="Cost",
@@ -318,6 +331,15 @@ def analysis_table(
     repetition_variances = analysis.format_float_column(
         [summary.avg_repetition_variance for summary in summaries]
     )
+    compression_ratios = analysis.format_float_column(
+        [summary.avg_best_compression_ratio for summary in summaries]
+    )
+    compression_reductions = analysis.format_float_column(
+        [
+            summary.avg_best_compression_percent_reduction
+            for summary in summaries
+        ]
+    )
 
     for (
         summary,
@@ -328,6 +350,8 @@ def analysis_table(
         price_variance,
         performance_variance,
         repetition_variance,
+        compression_ratio,
+        compression_reduction,
     ) in zip(
         summaries,
         temperatures,
@@ -337,6 +361,8 @@ def analysis_table(
         price_variances,
         performance_variances,
         repetition_variances,
+        compression_ratios,
+        compression_reductions,
         strict=True,
     ):
         performance_table.add_row(
@@ -348,6 +374,8 @@ def analysis_table(
             str(summary.raw_compile_pass_count),
             str(summary.extracted_compile_pass_count),
             str(summary.extraction_lift),
+            compression_ratio,
+            compression_reduction,
         )
         cost_table.add_row(
             summary.model,
@@ -377,6 +405,8 @@ def analysis_table(
                 )
             ),
             str(sum(summary.extraction_lift for summary in summaries)),
+            "",
+            "",
             style=TABLE_TOTAL_ROW_STYLE,
         )
         cost_table.add_row(

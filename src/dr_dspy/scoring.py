@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from dr_dspy.code_eval import DEFAULT_CAPTURE_LIMIT_BYTES
 from dr_dspy.code_extraction import apply_cleaning, validate_python_source
+from dr_dspy.compression import CompressionMetric, compression_metrics
 from dr_dspy.human_eval import (
     EvaluationTaskResult,
     HumanEvalTask,
@@ -29,6 +30,49 @@ class GeneratedCodeScore(BaseModel):
     stderr: str = ""
     stdout_truncated: bool = False
     stderr_truncated: bool = False
+
+
+class HumanEvalScoreResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: str
+    score: float
+    error: str | None
+    raw_code: str | None = None
+    raw_compile_ok: bool
+    raw_compile_error: str | None = None
+    extraction_candidate_count: int
+    selected_candidate_index: int | None = None
+    extracted_compile_ok: bool
+    extracted_compile_error: str | None = None
+    extraction_error: str | None = None
+    evaluation_function_names: list[str] = Field(default_factory=list)
+    evaluation_total_cases: int | None = None
+    evaluation_failure_count: int | None = None
+    evaluation_status_counts: dict[str, int] = Field(default_factory=dict)
+    compression_metrics: list[CompressionMetric] = Field(default_factory=list)
+    best_compression_ratio: float | None = None
+    best_compression_percent_reduction: float | None = None
+    stdout: str = ""
+    stderr: str = ""
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
+
+
+def best_compression_metric(
+    metrics: list[CompressionMetric],
+) -> CompressionMetric | None:
+    comparable = [
+        metric
+        for metric in metrics
+        if metric.ratio_to_ground_truth is not None
+    ]
+    if not comparable:
+        return None
+    return min(
+        comparable,
+        key=lambda metric: metric.ratio_to_ground_truth or 0,
+    )
 
 
 def score_generated_code_for_humaneval(
@@ -108,4 +152,60 @@ def score_generated_code_for_humaneval(
         extracted_compile_error=None,
         extraction_error=None,
         evaluation=evaluation,
+    )
+
+
+def score_humaneval_prediction(
+    *,
+    prediction_id: str,
+    raw_generation: str,
+    task: HumanEvalTask,
+    compression_input: str,
+    ground_truth_code: str,
+    timeout: float,
+    capture_limit_bytes: int = DEFAULT_CAPTURE_LIMIT_BYTES,
+) -> HumanEvalScoreResult:
+    generated_score = score_generated_code_for_humaneval(
+        raw_generation=raw_generation,
+        task=task,
+        timeout=timeout,
+        capture_limit_bytes=capture_limit_bytes,
+    )
+    metrics = compression_metrics(
+        ground_truth_code=ground_truth_code,
+        representation_text=compression_input,
+    )
+    best = best_compression_metric(metrics)
+    evaluation = generated_score.evaluation
+    return HumanEvalScoreResult(
+        prediction_id=prediction_id,
+        score=generated_score.score,
+        error=generated_score.error,
+        raw_code=generated_score.raw_code,
+        raw_compile_ok=generated_score.raw_compile_ok,
+        raw_compile_error=generated_score.raw_compile_error,
+        extraction_candidate_count=generated_score.extraction_candidate_count,
+        selected_candidate_index=generated_score.selected_candidate_index,
+        extracted_compile_ok=generated_score.extracted_compile_ok,
+        extracted_compile_error=generated_score.extracted_compile_error,
+        extraction_error=generated_score.extraction_error,
+        evaluation_function_names=evaluation.function_names
+        if evaluation
+        else [],
+        evaluation_total_cases=evaluation.total_cases if evaluation else None,
+        evaluation_failure_count=len(evaluation.failures)
+        if evaluation
+        else None,
+        evaluation_status_counts=evaluation.status_counts
+        if evaluation
+        else {},
+        compression_metrics=metrics,
+        best_compression_ratio=best.ratio_to_ground_truth if best else None,
+        best_compression_percent_reduction=(
+            best.percent_reduction_vs_ground_truth if best else None
+        ),
+        stdout=generated_score.stdout,
+        stderr=generated_score.stderr,
+        stdout_truncated=generated_score.stdout_truncated,
+        stderr_truncated=generated_score.stderr_truncated,
     )

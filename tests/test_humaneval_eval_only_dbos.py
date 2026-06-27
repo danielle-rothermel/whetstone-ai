@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from rich.console import Console
 
+from dr_dspy import analysis as shared_analysis
 from dspy.utils.dummies import dotdict  # type: ignore[attr-defined]
 
 
@@ -102,7 +103,9 @@ def test_build_eval_dbos_config_uses_database_url_for_dbos_default(
     assert config.dbos_system_database_url == "postgresql:///app"
     assert config.generation_concurrency == 7
     assert config.scoring_concurrency == 3
-    assert eval_dbos_harness.build_dbos_config(config) == {
+    assert eval_dbos_harness.shared_dbos.build_dbos_config(
+        config, app_name=eval_dbos_harness.DBOS_APP_NAME
+    ) == {
         "name": eval_dbos_harness.DBOS_APP_NAME,
         "system_database_url": "postgresql:///app",
     }
@@ -140,8 +143,80 @@ def test_create_eval_schema_executes_expected_statements(
     statements = fake_conn.cursor_instance.statements
     assert statements[0] == eval_dbos_harness.EXPERIMENTS_TABLE_SQL
     assert statements[1] == eval_dbos_harness.PREDICTIONS_TABLE_SQL
-    assert statements[2:13] == list(eval_dbos_harness.PREDICTION_MIGRATION_SQL)
-    assert statements[13:] == list(eval_dbos_harness.PREDICTION_INDEX_SQL)
+    migration_end = 2 + len(eval_dbos_harness.PREDICTION_MIGRATION_SQL)
+    assert statements[2:migration_end] == list(
+        eval_dbos_harness.PREDICTION_MIGRATION_SQL
+    )
+    assert statements[migration_end:] == list(
+        eval_dbos_harness.PREDICTION_INDEX_SQL
+    )
+
+
+def test_backfill_prompt_compression_metrics_updates_scored_rows(
+    eval_dbos_harness,
+    monkeypatch,
+) -> None:
+    class BackfillCursor(FakeCursor):
+        def __init__(self) -> None:
+            super().__init__()
+            self.update_params: Any = None
+
+        def execute(self, statement: str, params: Any = None) -> None:
+            self.statements.append(statement)
+            if statement.lstrip().startswith("SELECT"):
+                self.params = params
+                return
+            self.update_params = params
+            self.rowcount = 1
+
+        def fetchall(self) -> list[tuple[str, str, str]]:
+            return [("pred-1", "task/add", "def add(a, b):\n")]
+
+    class BackfillConnection(FakeConnection):
+        def __init__(self) -> None:
+            self.cursor_instance = BackfillCursor()
+
+    fake_conn = BackfillConnection()
+    task = eval_dbos_harness.HumanEvalTask(
+        task_id="task/add",
+        prompt="def add(a, b):\n",
+        canonical_solution="    return a + b\n",
+        test=(
+            "def check(candidate):\n"
+            "    inputs = [(1, 2)]\n"
+            "    results = [3]\n"
+            "    for inp, exp in zip(inputs, results):\n"
+            "        assert candidate(*inp) == exp\n"
+        ),
+        entry_point="add",
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness.psycopg,
+        "connect",
+        lambda _database_url: fake_conn,
+    )
+    monkeypatch.setattr(
+        eval_dbos_harness.shared_human_eval_sampling,
+        "load_human_eval_tasks_by_id",
+        lambda **_kwargs: {"task/add": task},
+    )
+
+    updated_count = eval_dbos_harness.backfill_prompt_compression_metrics(
+        "postgresql:///unit",
+        experiment_name="exp",
+    )
+
+    assert updated_count == 1
+    assert fake_conn.cursor_instance.params == ("exp",)
+    params = fake_conn.cursor_instance.update_params
+    assert params[0] == "    return a + b\n"
+    assert params[1] == task.ground_truth_code_without_comments
+    assert params[2].obj[0]["representation_bytes"] == len(
+        b"def add(a, b):\n"
+    )
+    assert params[3] is not None
+    assert params[4] is not None
+    assert params[5] == "pred-1"
 
 
 def test_unconfigured_connect_db_uses_psycopg_connect(
@@ -166,7 +241,7 @@ def test_unconfigured_connect_db_uses_psycopg_connect(
 
 def test_db_pool_auto_size_follows_queue_selection(eval_dbos_harness) -> None:
     assert (
-        eval_dbos_harness.auto_db_pool_max_size(
+        eval_dbos_harness.shared_dbos.auto_db_pool_max_size(
             queue=eval_dbos_harness.QueueSelection.GENERATION,
             generation_concurrency=11,
             scoring_concurrency=5,
@@ -174,7 +249,7 @@ def test_db_pool_auto_size_follows_queue_selection(eval_dbos_harness) -> None:
         == 19
     )
     assert (
-        eval_dbos_harness.auto_db_pool_max_size(
+        eval_dbos_harness.shared_dbos.auto_db_pool_max_size(
             queue=eval_dbos_harness.QueueSelection.SCORING,
             generation_concurrency=11,
             scoring_concurrency=5,
@@ -182,7 +257,7 @@ def test_db_pool_auto_size_follows_queue_selection(eval_dbos_harness) -> None:
         == 13
     )
     assert (
-        eval_dbos_harness.auto_db_pool_max_size(
+        eval_dbos_harness.shared_dbos.auto_db_pool_max_size(
             queue=eval_dbos_harness.QueueSelection.BOTH,
             generation_concurrency=11,
             scoring_concurrency=5,
@@ -396,16 +471,21 @@ def test_worker_queue_selection_and_log_path(eval_dbos_harness) -> None:
     ) == (queue_names.generation, queue_names.scoring)
 
     experiment_name = "local mock/dbos smoke"
-    path = eval_dbos_harness.default_worker_log_path(
+    path = eval_dbos_harness.shared_eval_logging.default_worker_log_path(
+        log_root=eval_dbos_harness.DEFAULT_WORKER_LOG_ROOT,
         experiment_name=experiment_name,
         queue=eval_dbos_harness.QueueSelection.GENERATION,
+        hash_length=eval_dbos_harness.EXPERIMENT_QUEUE_HASH_LENGTH,
         now=datetime(2026, 1, 2, 3, 4, 5),
         pid=123,
     )
 
     assert path == (
         eval_dbos_harness.DEFAULT_WORKER_LOG_ROOT
-        / eval_dbos_harness.hashed_experiment_log_name(experiment_name)
+        / eval_dbos_harness.shared_eval_logging.hashed_experiment_log_name(
+            experiment_name,
+            hash_length=eval_dbos_harness.EXPERIMENT_QUEUE_HASH_LENGTH,
+        )
         / "20260102-030405-generation-pid123.log"
     )
 
@@ -548,7 +628,7 @@ def test_worker_monitor_line_has_aligned_metrics(
         dbos_status_counts={"ENQUEUED": 3, "SUCCESS": 2},
         generation_status_counts={"generated": 2, "started": 3},
     )
-    line = eval_dbos_harness.worker_monitor_line(
+    line = eval_dbos_harness.shared_worker_monitor.worker_monitor_line(
         snapshot,
         was_active=None,
         initial_success_total=2,
@@ -571,7 +651,7 @@ def test_worker_monitor_line_can_force_empty_summary(
         scoring_status_counts={"pending": 2, "scored": 5},
     )
 
-    line = eval_dbos_harness.worker_monitor_line(
+    line = eval_dbos_harness.shared_worker_monitor.worker_monitor_line(
         snapshot,
         was_active=False,
         initial_success_total=2,
@@ -586,9 +666,10 @@ def test_worker_monitor_line_can_force_empty_summary(
 
 
 def test_timestamped_operator_lines(eval_dbos_harness) -> None:
-    line = eval_dbos_harness.timestamped_line(
+    line = eval_dbos_harness.shared_eval_logging.timestamped_line(
         "Queue Empty  | active=   0",
         now=datetime(2026, 1, 2, 3, 4, 5),
+        timestamp_format=eval_dbos_harness.OPERATOR_TIMESTAMP_FORMAT,
     )
 
     assert line == "03:04:05 | Queue Empty  | active=   0"
@@ -664,10 +745,16 @@ def test_fetch_started_generation_repair_candidates(
 
     monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
 
-    candidates = eval_dbos_harness.fetch_started_generation_repair_candidates(
-        "postgresql:///app",
-        dbos_system_database_url="postgresql:///dbos",
-        experiment_name="exp",
+    candidates = (
+        eval_dbos_harness.shared_eval_repair
+        .fetch_started_generation_repair_candidates(
+            "postgresql:///app",
+            dbos_system_database_url="postgresql:///dbos",
+            prediction_table=eval_dbos_harness.PREDICTION_TABLE_NAME,
+            experiment_name="exp",
+            dimension_columns=eval_dbos_harness.REPAIR_DIMENSION_COLUMNS,
+            order_columns=eval_dbos_harness.REPAIR_ORDER_COLUMNS,
+        )
     )
 
     assert [candidate.prediction_id for candidate in candidates] == ["pred-2"]
@@ -675,7 +762,7 @@ def test_fetch_started_generation_repair_candidates(
     assert app_conn.cursor_instance.params == ("exp",)
     assert dbos_conn.cursor_instance.params == (
         ["generate:pred-1", "generate:pred-2"],
-        list(eval_dbos_harness.DBOS_FAILED_WORKFLOW_STATUSES),
+        list(eval_dbos_harness.shared_dbos.DBOS_FAILED_WORKFLOW_STATUSES),
     )
 
 
@@ -774,11 +861,17 @@ def test_fetch_stranded_scoring_repair_candidates_finds_failed_and_missing(
 
     monkeypatch.setattr(eval_dbos_harness.psycopg, "connect", fake_connect)
 
-    candidates = eval_dbos_harness.fetch_stranded_scoring_repair_candidates(
-        "postgresql:///app",
-        dbos_system_database_url="postgresql:///dbos",
-        experiment_name="exp",
-        limit=1000,
+    candidates = (
+        eval_dbos_harness.shared_eval_repair
+        .fetch_stranded_scoring_repair_candidates(
+            "postgresql:///app",
+            dbos_system_database_url="postgresql:///dbos",
+            prediction_table=eval_dbos_harness.PREDICTION_TABLE_NAME,
+            experiment_name="exp",
+            dimension_columns=eval_dbos_harness.REPAIR_DIMENSION_COLUMNS,
+            order_columns=eval_dbos_harness.REPAIR_ORDER_COLUMNS,
+            limit=1000,
+        )
     )
 
     assert [candidate.prediction_id for candidate in candidates] == [
@@ -787,7 +880,7 @@ def test_fetch_stranded_scoring_repair_candidates_finds_failed_and_missing(
     ]
     assert [candidate.dbos_status for candidate in candidates] == [
         "ERROR",
-        eval_dbos_harness.MISSING_DBOS_WORKFLOW_STATUS,
+        eval_dbos_harness.shared_dbos.MISSING_DBOS_WORKFLOW_STATUS,
     ]
 
 
@@ -861,60 +954,52 @@ def test_reset_generation_errors_for_retry(
     assert fake_conn.cursor_instance.params == (["pred-1", "pred-2"],)
 
 
-def test_repair_generation_started_line_is_fixed_width(
+def test_direct_compatibility_helpers_are_removed(
     eval_dbos_harness,
 ) -> None:
-    line = eval_dbos_harness.repair_generation_started_line(
-        experiment_name="temp-sweep-002",
-        selected_count=7,
-        applied_count=None,
-    )
-
-    assert line == (
-        "Repair Gen     | selected=    7 | applied=    - | "
-        "experiment=temp-sweep-002"
-    )
-    assert (
-        eval_dbos_harness.repair_generation_started_style(
-            selected_count=7, applied_count=None
-        )
-        == "cyan"
-    )
-    assert (
-        eval_dbos_harness.repair_generation_started_style(
-            selected_count=7, applied_count=7
-        )
-        == "green"
-    )
-
-
-def test_retry_generation_errors_line_is_fixed_width(
-    eval_dbos_harness,
-) -> None:
-    line = eval_dbos_harness.retry_generation_errors_line(
-        experiment_name="temp-sweep-002",
-        selected_count=12,
-        reset_count=None,
-        limit=1000,
-        retry_token=None,
-    )
-
-    assert line == (
-        "Retry Gen      | selected=   12 | reset=    - | "
-        "limit= 1000 | token=- | experiment=temp-sweep-002"
-    )
-    assert (
-        eval_dbos_harness.retry_generation_errors_style(
-            selected_count=12, reset_count=None
-        )
-        == "cyan"
-    )
-    assert (
-        eval_dbos_harness.retry_generation_errors_style(
-            selected_count=12, reset_count=12
-        )
-        == "green"
-    )
+    removed_names = [
+        "GenerationRepairCandidate",
+        "ScoringRepairCandidate",
+        "RepairPlan",
+        "RepairApplyResult",
+        "fetch_started_generation_repair_candidates",
+        "fetch_stranded_scoring_repair_candidates",
+        "repair_generation_started_line",
+        "repair_generation_started_style",
+        "retry_generation_errors_line",
+        "retry_generation_errors_style",
+        "SOLVE_FIELDS",
+        "SOLVE_INSTRUCTIONS",
+        "DEFAULT_MODEL_CONFIGS",
+        "DEFAULT_SAMPLE_COUNT",
+        "DEFAULT_SEED",
+        "DEFAULT_TEMPERATURE",
+        "DEFAULT_TEMPERATURES",
+        "DEFAULT_MAX_COMPLETION_TOKENS",
+        "DEFAULT_SUBPROCESS_TIMEOUT",
+        "DATASET_NAME",
+        "DATASET_SPLIT",
+        "app",
+        "default_worker_log_path",
+        "hashed_experiment_log_name",
+        "timestamped_line",
+        "format_cost",
+        "format_cost_column",
+        "format_float_column",
+        "generation_workflow_id",
+        "score_workflow_id",
+        "worker_monitor_line",
+        "worker_monitor_style",
+        "build_dbos_config",
+        "configure_db_connection_pools",
+        "auto_db_pool_max_size",
+        "resolve_db_pool_config",
+    ]
+    assert not [
+        name
+        for name in removed_names
+        if hasattr(eval_dbos_harness, name)
+    ]
 
 
 def test_worker_detail_log_writes_prediction_context(
@@ -965,7 +1050,7 @@ def test_configure_dbos_runtime_syncs_before_launch_and_registers_after(
             calls.append("register")
 
     def fake_sync_existing_dbos_queue_concurrency(
-        _config: object, *, experiment_name: str
+        _config: object, *, experiment_name: str, **_kwargs: object
     ) -> int:
         assert experiment_name == "exp"
         calls.append("sync")
@@ -973,7 +1058,7 @@ def test_configure_dbos_runtime_syncs_before_launch_and_registers_after(
 
     monkeypatch.setattr(eval_dbos_harness, "DBOS", FakeDBOS())
     monkeypatch.setattr(
-        eval_dbos_harness,
+        eval_dbos_harness.shared_dbos,
         "sync_existing_dbos_queue_concurrency",
         fake_sync_existing_dbos_queue_concurrency,
     )
@@ -1295,7 +1380,10 @@ def test_enqueue_generation_jobs_can_use_retry_workflow_ids(
     )
 
     assert workflow_ids == ["generate-retry:retry-1:abc"]
-    assert eval_dbos_harness.generation_workflow_id("abc") == "generate:abc"
+    assert (
+        eval_dbos_harness.shared_dbos.generation_workflow_id("abc")
+        == "generate:abc"
+    )
 
 
 def test_generation_workflow_enqueues_scoring_after_success(
@@ -1541,11 +1629,12 @@ def test_build_generation_lm_passes_temperature_and_reasoning(
 
     assert client.chat.completions.calls == [
         {
-            "model": "openai/gpt-5-nano",
-            "messages": [{"role": "user", "content": "hello"}],
-            "max_completion_tokens": (
-                eval_dbos_harness.DEFAULT_MAX_COMPLETION_TOKENS
-            ),
+                "model": "openai/gpt-5-nano",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_completion_tokens": (
+                    eval_dbos_harness.experiment_config()
+                    .default_max_completion_tokens
+                ),
             "temperature": 0.2,
             "extra_body": {
                 "reasoning": {"effort": "minimal", "exclude": False}
@@ -1609,9 +1698,15 @@ def test_score_generated_code_records_pass_and_failure(
         "    for inp, exp in zip(inputs, results):\n"
         "        assert candidate(*inp) == exp\n"
     )
+    prompt = "def add(a, b):\n"
+    canonical_solution = "    return a + b\n"
+    ground_truth_code = prompt + canonical_solution
     passing = eval_dbos_harness.ScoringTarget(
         prediction_id="pass",
         task_id="task/add",
+        prompt=prompt,
+        canonical_solution=canonical_solution,
+        ground_truth_code=ground_truth_code,
         raw_generation="def add(a, b):\n    return a + b\n",
         test=test,
         entry_point="add",
@@ -1619,6 +1714,9 @@ def test_score_generated_code_records_pass_and_failure(
     failing = eval_dbos_harness.ScoringTarget(
         prediction_id="fail",
         task_id="task/add",
+        prompt=prompt,
+        canonical_solution=canonical_solution,
+        ground_truth_code=ground_truth_code,
         raw_generation="def add(a, b):\n    return a - b\n",
         test=test,
         entry_point="add",
@@ -1626,6 +1724,9 @@ def test_score_generated_code_records_pass_and_failure(
     differently_named = eval_dbos_harness.ScoringTarget(
         prediction_id="renamed",
         task_id="task/add",
+        prompt=prompt,
+        canonical_solution=canonical_solution,
+        ground_truth_code=ground_truth_code,
         raw_generation="def solve(a, b):\n    return a + b\n",
         test=test,
         entry_point="add",
@@ -1646,6 +1747,14 @@ def test_score_generated_code_records_pass_and_failure(
     assert pass_result.raw_code == "def add(a, b):\n    return a + b"
     assert pass_result.raw_compile_ok is True
     assert pass_result.extracted_compile_ok is True
+    assert pass_result.compression_metrics
+    assert pass_result.compression_metrics[0].representation_bytes == len(
+        prompt.encode("utf-8")
+    )
+    assert pass_result.compression_metrics[0].ground_truth_bytes == len(
+        ground_truth_code.encode("utf-8")
+    )
+    assert pass_result.best_compression_ratio is not None
     assert renamed_result.score == 1.0
     assert renamed_result.error is None
     assert renamed_result.raw_code == "def solve(a, b):\n    return a + b"
@@ -1776,22 +1885,25 @@ def test_record_score_success_persists_extraction_metrics(
     assert "raw_code = %s" in statement
     assert "raw_compile_ok = %s" in statement
     assert "score_stdout = %s" in statement
-    assert fake_conn.cursor_instance.params == (
+    params = fake_conn.cursor_instance.params
+    assert params[:10] == (
         0.0,
         "AssertionError",
         "def add(a, b):\n    return a - b",
         False,
         "SyntaxError: invalid syntax",
         1,
+        None,
         True,
         None,
         None,
-        "out",
-        "err",
-        True,
-        False,
-        "pred-1",
     )
+    assert params[10].obj == []
+    assert params[11:13] == (None, None)
+    assert params[13].obj == {}
+    assert params[14].obj == []
+    assert params[15:17] == (None, None)
+    assert params[17:] == ("out", "err", True, False, "pred-1")
 
 
 def test_enqueue_score_jobs_uses_stable_workflow_ids(
@@ -1885,7 +1997,10 @@ def test_enqueue_score_jobs_can_use_retry_workflow_ids(
     )
 
     assert workflow_ids == ["score-retry:repair-1:abc"]
-    assert eval_dbos_harness.score_workflow_id("abc") == "score:abc"
+    assert (
+        eval_dbos_harness.shared_dbos.score_workflow_id("abc")
+        == "score:abc"
+    )
 
 
 def test_apply_repair_reconciles_before_selecting_retries(
@@ -2210,18 +2325,24 @@ def test_analysis_markdown_and_csv(eval_dbos_harness, tmp_path) -> None:
 
 
 def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
-    assert eval_dbos_harness.format_float_column(
+    assert shared_analysis.format_float_column(
         [1.0, 2 / 3, 0.0, None]
     ) == ["1.000000", "0.666667", "0.000000", ""]
-    assert eval_dbos_harness.format_float_column(
+    assert shared_analysis.format_float_column(
         [4.50062e-08, 0.333333, 5e-08]
     ) == ["    4.50062e-08", "    0.333333000", "5e-08          "]
-    assert eval_dbos_harness.format_cost(5.0862e-05) == "0.000050862"
-    assert eval_dbos_harness.format_cost(0.0007023) == "0.0007023"
-    assert eval_dbos_harness.format_cost(47.12) == "47.12"
-    assert eval_dbos_harness.format_cost(0.0) == "0"
-    assert eval_dbos_harness.format_cost(None) == ""
-    assert eval_dbos_harness.format_cost_column(
+    assert (
+        shared_analysis.format_cost(5.0862e-05)
+        == "0.000050862"
+    )
+    assert (
+        shared_analysis.format_cost(0.0007023)
+        == "0.0007023"
+    )
+    assert shared_analysis.format_cost(47.12) == "47.12"
+    assert shared_analysis.format_cost(0.0) == "0"
+    assert shared_analysis.format_cost(None) == ""
+    assert shared_analysis.format_cost_column(
         [5.0862e-05, 0.0007023, 0.00011185, 5.492e-05, 4.712e-05]
     ) == [
         "0.000050862",
@@ -2230,7 +2351,7 @@ def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
         "0.000054920",
         "0.000047120",
     ]
-    assert eval_dbos_harness.format_cost_column(
+    assert shared_analysis.format_cost_column(
         [0.050862, 0.7023, 0.11185, 0.05492, 0.04712]
     ) == [
         "0.050862",
@@ -2239,11 +2360,13 @@ def test_cost_formatting_uses_fixed_decimal(eval_dbos_harness) -> None:
         "0.054920",
         "0.047120",
     ]
-    assert eval_dbos_harness.format_cost_column([0.0, 0.1]) == [
+    assert shared_analysis.format_cost_column(
+        [0.0, 0.1]
+    ) == [
         "0.0",
         "0.1",
     ]
-    assert eval_dbos_harness.price_per_thousand_samples(
+    assert shared_analysis.price_per_thousand_samples(
         5.0862e-05
     ) == pytest.approx(0.050862)
 
