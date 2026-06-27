@@ -524,29 +524,15 @@ def insert_prediction_jobs(
             return cur.rowcount
 
 
-def generate_code_for_job(
-    job: EncDecJob, *, use_mock_lm: bool
-) -> GenerationResult:
+def generate_code_for_job(job: EncDecJob) -> GenerationResult:
     encoder_events = LmEventBuffer()
     decoder_events = LmEventBuffer()
-
-    def mock_encoder(
-        _messages: list[dict[str, Any]], _kwargs: dict[str, Any]
-    ) -> dict[str, str]:
-        return {"description": job.ground_truth_code}
-
-    def mock_decoder(
-        _messages: list[dict[str, Any]], _kwargs: dict[str, Any]
-    ) -> dict[str, str]:
-        return {"code": job.ground_truth_code}
 
     encoder_lm = build_lm(
         model=job.encoder_model,
         reasoning=job.encoder_reasoning,
         temperature=job.encoder_temperature,
-        use_mock_lm=use_mock_lm,
         event_buffer=encoder_events,
-        mock_solver=mock_encoder,
     )
     encoded_description = run_predictor(
         signature=EncodeCode,
@@ -559,9 +545,7 @@ def generate_code_for_job(
         model=job.decoder_model,
         reasoning=job.decoder_reasoning,
         temperature=job.decoder_temperature,
-        use_mock_lm=use_mock_lm,
         event_buffer=decoder_events,
-        mock_solver=mock_decoder,
     )
     decoded_generation = run_predictor(
         signature=DecodeCode,
@@ -916,12 +900,11 @@ def record_score_error(
     interval_seconds=2.0,
 )
 def generate_prediction_step(
-    database_url: str, prediction_id: str, use_mock_lm: bool
+    database_url: str, prediction_id: str
 ) -> GenerationResult:
     mark_generation_started(database_url, prediction_id)
     return generate_code_for_job(
-        fetch_prediction_job(database_url, prediction_id),
-        use_mock_lm=use_mock_lm,
+        fetch_prediction_job(database_url, prediction_id)
     )
 
 
@@ -972,13 +955,10 @@ def generate_prediction_workflow(
     database_url: str,
     prediction_id: str,
     experiment_name: str,
-    use_mock_lm: bool = False,
     score_timeout: float = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> str:
     try:
-        result = generate_prediction_step(
-            database_url, prediction_id, use_mock_lm
-        )
+        result = generate_prediction_step(database_url, prediction_id)
         record_generation_success_step(database_url, result)
     except Exception as e:
         record_generation_error_step(database_url, prediction_id, repr(e))
@@ -1169,17 +1149,13 @@ def build_lm(
     model: str,
     reasoning: Mapping[str, Any],
     temperature: float | None,
-    use_mock_lm: bool,
     event_buffer: LmEventBuffer,
-    mock_solver: Any,
 ) -> dspy.BaseLM:
     return shared_dspy_runner.build_logged_lm(
         model=model,
         reasoning=reasoning,
         temperature=temperature,
-        use_mock_lm=use_mock_lm,
         event_buffer=event_buffer,
-        mock_solver=mock_solver,
         max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
     )
 
@@ -1242,7 +1218,6 @@ def enqueue_generation_jobs(
     *,
     database_url: str,
     experiment_name: str,
-    use_mock_lm: bool,
     score_timeout: float,
     retry_token: str | None = None,
 ) -> None:
@@ -1254,7 +1229,6 @@ def enqueue_generation_jobs(
         jobs,
         queue_config=QUEUE_NAME_CONFIG,
         workflow=generate_prediction_workflow,
-        use_mock_lm=use_mock_lm,
         score_timeout=score_timeout,
         retry_token=retry_token,
     )
@@ -1318,7 +1292,6 @@ def submit(
     score_timeout: Annotated[
         float, typer.Option()
     ] = DEFAULT_SUBPROCESS_TIMEOUT,
-    use_mock_lm: Annotated[bool, typer.Option()] = False,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
@@ -1365,7 +1338,6 @@ def submit(
         jobs,
         database_url=config.database_url,
         experiment_name=experiment_name,
-        use_mock_lm=use_mock_lm,
         score_timeout=score_timeout,
     )
     operator_log(
@@ -1498,7 +1470,6 @@ def repair(
     score_timeout: Annotated[
         float, typer.Option()
     ] = DEFAULT_SUBPROCESS_TIMEOUT,
-    use_mock_lm: Annotated[bool, typer.Option()] = False,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
@@ -1531,7 +1502,6 @@ def repair(
         generation_jobs,
         database_url=config.database_url,
         experiment_name=experiment_name,
-        use_mock_lm=use_mock_lm,
         score_timeout=score_timeout,
         retry_token=retry_token,
     )

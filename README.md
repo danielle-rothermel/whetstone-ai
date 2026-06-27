@@ -72,8 +72,7 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py init-db
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
   --experiment-name direct-smoke \
-  --sample-count 2 \
-  --mock-generation
+  --sample-count 2
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
   --queue both \
@@ -91,7 +90,6 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
   --experiment-name encdec-smoke \
   --sample-count 2 \
-  --use-mock-lm \
   --apply
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py worker \

@@ -7,7 +7,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 import dspy
-from dr_dspy.lm_logging import LoggingCallableLM
 from dr_dspy.lm_utils import (
     LmEventBuffer,
     provider_cost_from_response,
@@ -32,18 +31,10 @@ def build_logged_lm(
     model: str,
     reasoning: Mapping[str, Any],
     temperature: float | None,
-    use_mock_lm: bool,
     event_buffer: LmEventBuffer,
-    mock_solver: Callable[..., Any],
     max_completion_tokens: int,
     client: Any = None,
 ) -> dspy.BaseLM:
-    if use_mock_lm:
-        return LoggingCallableLM(
-            mock_solver,
-            log=event_buffer.put_event,
-            model="callable/mock",
-        )
     if not os.environ.get(OPENROUTER_API_KEY_ENV) and client is None:
         raise ValueError(f"{OPENROUTER_API_KEY_ENV} is not set")
     return LoggingOpenRouterLM(

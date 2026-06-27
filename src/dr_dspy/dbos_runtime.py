@@ -508,7 +508,6 @@ def enqueue_generation_workflows(
     *,
     queue_config: QueueNameConfig,
     workflow: Callable[..., str],
-    use_mock_lm: bool,
     score_timeout: float,
     retry_token: str | None = None,
 ) -> None:
@@ -524,7 +523,6 @@ def enqueue_generation_workflows(
                 database_url,
                 job.prediction_id,
                 job.experiment_name,
-                use_mock_lm,
                 score_timeout,
             )
 

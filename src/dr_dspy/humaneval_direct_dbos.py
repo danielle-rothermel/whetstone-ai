@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import json
 import logging
 import os
 import re
@@ -431,16 +430,6 @@ class AnalysisSummary(BaseModel):
     extraction_lift: StrictInt
 
 
-class TemperatureProbeResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: StrictStr
-    temperature: float
-    accepted: bool
-    error: str | None = None
-    response_metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 HumanEvalRow = Mapping[str, Any]
 
 
@@ -557,13 +546,10 @@ def generate_prediction_workflow(
     database_url: str,
     prediction_id: str,
     experiment_name: str,
-    use_mock_lm: bool = False,
     score_timeout: float = DEFAULT_SUBPROCESS_TIMEOUT,
 ) -> str:
     try:
-        result = generate_prediction_step(
-            database_url, prediction_id, use_mock_lm
-        )
+        result = generate_prediction_step(database_url, prediction_id)
         record_generation_success_step(database_url, result)
     except Exception as e:
         record_generation_error_step(database_url, prediction_id, repr(e))
@@ -618,13 +604,6 @@ def parse_temperatures(raw: str) -> list[float]:
     if not values:
         raise ValueError("at least one temperature is required")
     return [float(value) for value in values]
-
-
-def parse_reasoning_json(raw: str) -> dict[str, Any]:
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise ValueError("reasoning JSON must be an object")
-    return value
 
 
 def default_model_configs() -> list[ModelConfig]:
@@ -1515,96 +1494,17 @@ def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
     mark_scoring_queued(database_url, [prediction_id])
 
 
-def mock_solver(
-    messages: list[dict[str, Any]], _kwargs: dict[str, Any]
-) -> dict[str, str]:
-    text = "\n".join(str(message.get("content", "")) for message in messages)
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("def ") and "(" in stripped:
-            signature = stripped.split(":", 1)[0]
-            return {"code": f"{signature}:\n    return None\n"}
-    return {"code": "def solution():\n    return None\n"}
-
-
-def run_temperature_probe(
-    *,
-    model: str,
-    reasoning: Mapping[str, Any],
-    temperatures: Sequence[float],
-    client: Any = None,
-) -> list[TemperatureProbeResult]:
-    results: list[TemperatureProbeResult] = []
-    for temperature in temperatures:
-        job = PredictionJob(
-            prediction_id=stable_prediction_id(
-                experiment_name="temperature-probe",
-                task_id="probe",
-                model=model,
-                temperature=temperature,
-                repetition_seed=0,
-            ),
-            experiment_name="temperature-probe",
-            submission_id="probe",
-            task_id="probe",
-            sample_index=0,
-            model=model,
-            temperature=temperature,
-            repetition_seed=0,
-            prompt="Return exactly the word ok.",
-            test="",
-            entry_point="",
-            reasoning=dict(reasoning),
-        )
-        event_buffer = LmEventBuffer()
-        try:
-            lm = build_generation_lm(
-                job,
-                use_mock_lm=False,
-                event_buffer=event_buffer,
-                client=client,
-            )
-            lm.forward(
-                messages=[
-                    {
-                        "role": "user",
-                        "content": "Return exactly the word ok.",
-                    }
-                ]
-            )
-        except Exception as e:
-            results.append(
-                TemperatureProbeResult(
-                    model=model,
-                    temperature=temperature,
-                    accepted=False,
-                    error=repr(e),
-                )
-            )
-            continue
-        results.append(
-            TemperatureProbeResult(
-                model=model,
-                temperature=temperature,
-                accepted=True,
-                response_metadata=event_buffer.latest_response_metadata(),
-            )
-        )
-    return results
-
-
 @DBOS.step(retries_allowed=True, max_attempts=3, interval_seconds=2.0)
 def generate_prediction_step(
-    database_url: str, prediction_id: str, use_mock_lm: bool
+    database_url: str, prediction_id: str
 ) -> GenerationResult:
     mark_generation_started(database_url, prediction_id)
     job = fetch_prediction_job(database_url, prediction_id)
     emit_prediction_log_event(
         "generation_started",
         prediction_context_from_job(job),
-        extra={"use_mock_lm": use_mock_lm},
     )
-    return generate_code_for_job(job, use_mock_lm=use_mock_lm)
+    return generate_code_for_job(job)
 
 
 @DBOS.step()
@@ -1681,7 +1581,6 @@ def apply_repair(
     generation_limit: int,
     scoring_limit: int,
     score_timeout: float,
-    mock_generation: bool,
     repair_token: str | None = None,
 ) -> RepairApplyResult:
     resolved_repair_token = repair_token or uuid.uuid4().hex
@@ -1712,7 +1611,6 @@ def apply_repair(
     enqueue_generation_jobs(
         config.database_url,
         generation_retry_jobs,
-        use_mock_lm=mock_generation,
         score_timeout=score_timeout,
         retry_token=resolved_repair_token,
     )
@@ -2633,7 +2531,6 @@ def build_humaneval_samples(
 def build_generation_lm(
     job: PredictionJob,
     *,
-    use_mock_lm: bool,
     event_buffer: LmEventBuffer,
     client: Any = None,
 ) -> dspy.BaseLM:
@@ -2641,9 +2538,7 @@ def build_generation_lm(
         model=job.model,
         reasoning=job.reasoning,
         temperature=job.temperature,
-        use_mock_lm=use_mock_lm,
         event_buffer=event_buffer,
-        mock_solver=mock_solver,
         max_completion_tokens=DEFAULT_MAX_COMPLETION_TOKENS,
         client=client,
     )
@@ -2652,13 +2547,11 @@ def build_generation_lm(
 def generate_code_for_job(
     job: PredictionJob,
     *,
-    use_mock_lm: bool,
     client: Any = None,
 ) -> GenerationResult:
     event_buffer = LmEventBuffer()
     lm = build_generation_lm(
         job,
-        use_mock_lm=use_mock_lm,
         event_buffer=event_buffer,
         client=client,
     )
@@ -2687,7 +2580,6 @@ def enqueue_generation_jobs(
     database_url: str,
     jobs: Sequence[PredictionJob],
     *,
-    use_mock_lm: bool,
     score_timeout: float,
     retry_token: str | None = None,
 ) -> None:
@@ -2698,7 +2590,6 @@ def enqueue_generation_jobs(
         jobs,
         queue_config=QUEUE_NAME_CONFIG,
         workflow=generate_prediction_workflow,
-        use_mock_lm=use_mock_lm,
         score_timeout=score_timeout,
         retry_token=retry_token,
     )
@@ -2860,13 +2751,6 @@ def submit(
             help="Plan jobs without writing or enqueueing.",
         ),
     ] = False,
-    mock_generation: Annotated[
-        bool,
-        typer.Option(
-            "--mock-generation",
-            help="Enqueue generation jobs that use the deterministic mock LM.",
-        ),
-    ] = False,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -2949,7 +2833,6 @@ def submit(
     enqueue_generation_jobs(
         config.database_url,
         jobs,
-        use_mock_lm=mock_generation,
         score_timeout=score_timeout,
     )
     operator_log(
@@ -3088,13 +2971,6 @@ def repair_command(
     score_timeout: Annotated[
         float, typer.Option("--score-timeout", min=0.1)
     ] = DEFAULT_SUBPROCESS_TIMEOUT,
-    mock_generation: Annotated[
-        bool,
-        typer.Option(
-            "--mock-generation",
-            help="Retry generation with the deterministic mock LM.",
-        ),
-    ] = False,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -3147,7 +3023,6 @@ def repair_command(
             generation_limit=generation_limit,
             scoring_limit=scoring_limit,
             score_timeout=score_timeout,
-            mock_generation=mock_generation,
         )
         operator_log(
             repair_apply_line(experiment_name=experiment_name, result=result),
@@ -3218,128 +3093,6 @@ def analyze(
     if csv_path is not None:
         write_analysis_csv(summaries, csv_path=csv_path)
         operator_log(f"wrote {csv_path}", style="green")
-
-
-@app.command("temperature-probe")
-def temperature_probe(
-    model: Annotated[
-        str,
-        typer.Option("--model", help="OpenRouter model ID to probe."),
-    ] = "openai/gpt-5.4-nano",
-    temperatures: Annotated[
-        str,
-        typer.Option(
-            "--temperatures",
-            help="Comma-separated temperature values.",
-        ),
-    ] = "0.0,0.2,1.0",
-    reasoning_json: Annotated[
-        str,
-        typer.Option(
-            "--reasoning-json",
-            help="OpenRouter reasoning JSON object.",
-        ),
-    ] = '{"enabled": false}',
-    confirm_live: Annotated[
-        bool,
-        typer.Option(
-            "--confirm-live",
-            help="Required because this command calls OpenRouter.",
-        ),
-    ] = False,
-) -> None:
-    load_env_file()
-    if not confirm_live:
-        typer.echo(
-            "temperature-probe calls OpenRouter; rerun with --confirm-live",
-            err=True,
-        )
-        raise typer.Exit(2)
-    results = run_temperature_probe(
-        model=model,
-        reasoning=parse_reasoning_json(reasoning_json),
-        temperatures=parse_temperatures(temperatures),
-    )
-    for result in results:
-        status_text = "accepted" if result.accepted else "rejected"
-        typer.echo(
-            f"{result.model} temp={result.temperature}: {status_text}"
-        )
-        if result.error:
-            typer.echo(f"  error={result.error}")
-
-
-@app.command("temperature-sweep")
-def temperature_sweep(
-    experiment_name: Annotated[
-        str,
-        typer.Option(
-            "--experiment-name",
-            help="Human-readable experiment key.",
-        ),
-    ],
-    sample_count: Annotated[
-        int, typer.Option("--sample-count", min=1)
-    ] = 20,
-    seed: Annotated[int, typer.Option("--seed")] = DEFAULT_SEED,
-    temperatures: Annotated[
-        str,
-        typer.Option(
-            "--temperatures",
-            help="Comma-separated temperature values.",
-        ),
-    ] = "0.0,0.1,0.2,0.4",
-    enqueue: Annotated[
-        bool,
-        typer.Option(
-            "--enqueue",
-            help="Actually write rows and enqueue generation workflows.",
-        ),
-    ] = False,
-    mock_generation: Annotated[
-        bool,
-        typer.Option(
-            "--mock-generation",
-            help="Enqueue generation jobs that use the deterministic mock LM.",
-        ),
-    ] = False,
-    database_url: Annotated[
-        str | None,
-        typer.Option(
-            "--database-url",
-            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
-        ),
-    ] = None,
-    dbos_system_database_url: Annotated[
-        str | None,
-        typer.Option(
-            "--dbos-system-database-url",
-            help=(
-                "DBOS system database URL; defaults to "
-                f"{DBOS_SYSTEM_DATABASE_URL_ENV} or DATABASE_URL."
-            ),
-        ),
-    ] = None,
-    generation_concurrency: Annotated[
-        int, typer.Option("--generation-concurrency")
-    ] = DEFAULT_GENERATION_CONCURRENCY,
-    scoring_concurrency: Annotated[
-        int, typer.Option("--scoring-concurrency")
-    ] = DEFAULT_SCORING_CONCURRENCY,
-) -> None:
-    submit(
-        experiment_name=experiment_name,
-        sample_count=sample_count,
-        seed=seed,
-        temperatures=temperatures,
-        repetitions=1,
-        dry_run=not enqueue,
-        mock_generation=mock_generation,
-        database_url=database_url,
-        dbos_system_database_url=dbos_system_database_url,
-        generation_concurrency=generation_concurrency,
-        scoring_concurrency=scoring_concurrency,
-    )
 
 
 @app.command()

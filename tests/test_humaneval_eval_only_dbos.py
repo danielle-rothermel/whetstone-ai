@@ -50,17 +50,12 @@ class FakeCompletions:
         self,
         *,
         content: str | None = "ok",
-        reject_temperatures: set[float] | None = None,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
         self.content = content
-        self.reject_temperatures = reject_temperatures or set()
 
     def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
-        temperature = kwargs.get("temperature")
-        if temperature in self.reject_temperatures:
-            raise ValueError(f"temperature rejected: {temperature}")
         return dotdict(
             model=kwargs["model"],
             choices=[
@@ -83,13 +78,9 @@ class FakeClient:
         self,
         *,
         content: str | None = "ok",
-        reject_temperatures: set[float] | None = None,
     ) -> None:
         self.chat = dotdict(
-            completions=FakeCompletions(
-                content=content,
-                reject_temperatures=reject_temperatures
-            )
+            completions=FakeCompletions(content=content)
         )
 
 
@@ -944,7 +935,6 @@ def test_worker_detail_log_writes_prediction_context(
     eval_dbos_harness.emit_prediction_log_event(
         "generation_started",
         context,
-        extra={"use_mock_lm": True},
     )
     for handler in logger.handlers:
         handler.flush()
@@ -953,7 +943,6 @@ def test_worker_detail_log_writes_prediction_context(
     assert '"event":"generation_started"' in text
     assert '"prediction_id":"pred-1"' in text
     assert '"task_id":"HumanEval/1"' in text
-    assert '"use_mock_lm":true' in text
 
 
 def test_configure_dbos_runtime_syncs_before_launch_and_registers_after(
@@ -1209,7 +1198,6 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
         database_url: str,
         prediction_id: str,
         experiment_name: str,
-        use_mock_lm: bool,
         score_timeout: float,
     ) -> None:
         enqueued.append(
@@ -1219,7 +1207,6 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
                 "database_url": database_url,
                 "prediction_id": prediction_id,
                 "experiment_name": experiment_name,
-                "use_mock_lm": use_mock_lm,
                 "score_timeout": score_timeout,
             }
         )
@@ -1245,7 +1232,6 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
     eval_dbos_harness.enqueue_generation_jobs(
         "postgresql:///unit",
         [job],
-        use_mock_lm=True,
         score_timeout=7.0,
     )
 
@@ -1259,7 +1245,6 @@ def test_enqueue_generation_jobs_uses_stable_workflow_ids(
             "database_url": "postgresql:///unit",
             "prediction_id": "abc",
             "experiment_name": "exp",
-            "use_mock_lm": True,
             "score_timeout": 7.0,
         }
     ]
@@ -1305,7 +1290,6 @@ def test_enqueue_generation_jobs_can_use_retry_workflow_ids(
     eval_dbos_harness.enqueue_generation_jobs(
         "postgresql:///unit",
         [job],
-        use_mock_lm=True,
         score_timeout=7.0,
         retry_token="retry-1",
     )
@@ -1325,7 +1309,7 @@ def test_generation_workflow_enqueues_scoring_after_success(
     )
 
     def fake_generate_prediction_step(
-        database_url: str, prediction_id: str, use_mock_lm: bool
+        database_url: str, prediction_id: str
     ) -> object:
         calls.append(
             (
@@ -1333,7 +1317,6 @@ def test_generation_workflow_enqueues_scoring_after_success(
                 {
                     "database_url": database_url,
                     "prediction_id": prediction_id,
-                    "use_mock_lm": use_mock_lm,
                 },
             )
         )
@@ -1419,7 +1402,6 @@ def test_generation_workflow_enqueues_scoring_after_success(
         "postgresql:///unit",
         "abc",
         "exp",
-        True,
         9.0,
     )
 
@@ -1430,7 +1412,6 @@ def test_generation_workflow_enqueues_scoring_after_success(
             {
                 "database_url": "postgresql:///unit",
                 "prediction_id": "abc",
-                "use_mock_lm": True,
             },
         ),
         (
@@ -1460,7 +1441,7 @@ def test_generation_workflow_does_not_enqueue_scoring_after_failure(
     calls: list[tuple[str, object]] = []
 
     def fake_generate_prediction_step(
-        _database_url: str, _prediction_id: str, _use_mock_lm: bool
+        _database_url: str, _prediction_id: str
     ) -> object:
         raise RuntimeError("generation failed")
 
@@ -1517,7 +1498,6 @@ def test_generation_workflow_does_not_enqueue_scoring_after_failure(
         "postgresql:///unit",
         "abc",
         "exp",
-        True,
         9.0,
     )
 
@@ -1555,7 +1535,7 @@ def test_build_generation_lm_passes_temperature_and_reasoning(
     buffer = eval_dbos_harness.LmEventBuffer()
 
     lm = eval_dbos_harness.build_generation_lm(
-        job, use_mock_lm=False, event_buffer=buffer, client=client
+        job, event_buffer=buffer, client=client
     )
     lm.forward(messages=[{"role": "user", "content": "hello"}])
 
@@ -1593,29 +1573,6 @@ def test_lm_event_buffer_extracts_latest_response_text(
     assert buffer.has_latest_response() is True
 
 
-def test_generate_code_for_job_uses_mock_lm(eval_dbos_harness) -> None:
-    job = eval_dbos_harness.PredictionJob(
-        prediction_id="abc",
-        experiment_name="exp",
-        submission_id="sub",
-        task_id="task/add",
-        sample_index=0,
-        model="callable/mock",
-        temperature=0.0,
-        repetition_seed=0,
-        prompt="def add(a, b):\n    pass\n",
-        test="def check(candidate): pass",
-        entry_point="add",
-    )
-
-    result = eval_dbos_harness.generate_code_for_job(
-        job, use_mock_lm=True
-    )
-
-    assert result.prediction_id == "abc"
-    assert "def add" in result.raw_generation
-
-
 def test_generate_code_for_job_stores_empty_raw_generation_for_null_response(
     eval_dbos_harness,
 ) -> None:
@@ -1634,7 +1591,7 @@ def test_generate_code_for_job_stores_empty_raw_generation_for_null_response(
     )
 
     result = eval_dbos_harness.generate_code_for_job(
-        job, use_mock_lm=False, client=FakeClient(content=None)
+        job, client=FakeClient(content=None)
     )
 
     assert result.prediction_id == "abc"
@@ -2109,7 +2066,6 @@ def test_apply_repair_reconciles_before_selecting_retries(
         generation_limit=1000,
         scoring_limit=1000,
         score_timeout=7.0,
-        mock_generation=True,
         repair_token="repair-token",
     )
 
@@ -2386,27 +2342,3 @@ def test_status_and_analysis_tables_render(eval_dbos_harness) -> None:
     assert "Total" in text
     assert "0.000753162" in text
     assert "Variance" in text
-
-
-def test_run_temperature_probe_records_accept_and_reject(
-    eval_dbos_harness,
-) -> None:
-    client = FakeClient(reject_temperatures={1.0})
-
-    results = eval_dbos_harness.run_temperature_probe(
-        model="openai/gpt-5.4-nano",
-        reasoning={"enabled": False},
-        temperatures=[0.0, 1.0],
-        client=client,
-    )
-
-    assert [result.accepted for result in results] == [True, False]
-    assert results[0].response_metadata["usage"]["cost"] == 0.01
-    assert "temperature rejected" in results[1].error
-    assert [
-        call["temperature"] for call in client.chat.completions.calls
-    ] == [0.0, 1.0]
-    assert all(
-        call["extra_body"]["reasoning"] == {"enabled": False}
-        for call in client.chat.completions.calls
-    )

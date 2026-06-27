@@ -12,18 +12,6 @@ Check the direct DBOS eval CLI without making live model calls:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py --help
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py temperature-probe
-```
-
-`temperature-probe` should exit with status `2` unless `--confirm-live` is
-passed. Do not pass `--confirm-live` in automated checks.
-
-Plan a small direct-eval temperature sweep without writing rows or enqueueing
-workflows:
-
-```sh
-uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py temperature-sweep \
-  --experiment-name local-dry-run
 ```
 
 Check the encoder-decoder DBOS eval CLI:
@@ -42,13 +30,12 @@ with `DATABASE_URL` set to a local Postgres database:
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py init-db
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
-  --experiment-name local-mock-dbos-smoke \
-  --sample-count 2 \
-  --mock-generation
+  --experiment-name local-dbos-smoke \
+  --sample-count 2
 
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
   --queue both \
-  --experiment-name local-mock-dbos-smoke
+  --experiment-name local-dbos-smoke
 ```
 
 For a local encoder-decoder smoke:
@@ -59,7 +46,6 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
   --experiment-name local-encdec-smoke \
   --sample-count 2 \
-  --use-mock-lm \
   --apply
 
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py worker \
