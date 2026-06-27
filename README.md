@@ -1,8 +1,9 @@
 # dr-dspy
 
-This package holds reusable helpers and experiment scripts for DSPy work in
-this workspace. The repo is intentionally split between readable experiment
-entrypoints in `scripts/` and stable infrastructure in `src/dr_dspy/`.
+This package holds reusable helpers and experiment entrypoints for DSPy work in
+this workspace. The repo is intentionally split between small executable
+wrappers in `scripts/` and stable experiment/runtime infrastructure in
+`src/dr_dspy/`.
 
 ## Experiments
 
@@ -105,9 +106,9 @@ re-enqueue failed generation/scoring work with fresh workflow IDs.
 
 ## Repository Shape
 
-`scripts/` contains experiment entrypoints. A script should make the exact
-dataset, signature, model, queue, persistence, and CLI choices easy to inspect
-in one place.
+`scripts/` contains executable experiment entrypoints. Scripts should stay
+small: they import the matching experiment flow from `src/dr_dspy/` and expose
+it as a CLI.
 
 `src/dr_dspy/` contains behavior expected to remain stable across experiments:
 
@@ -123,9 +124,12 @@ in one place.
 - `eval_reporting.py`: shared status, analysis, enqueue, and repair reporting.
 - `human_eval_sampling.py`: HumanEval Plus loading, parsing, and seeded
   sampling.
+- `humaneval_dbos_flow.py`: shared HumanEval DBOS lifecycle, command bodies,
+  stable workflow IDs, and analysis aggregation.
 - `humaneval_direct_dbos.py`: direct-decoder HumanEval DBOS/Postgres adapter.
 - `humaneval_encdec_dbos.py`: encoder-decoder HumanEval DBOS/Postgres adapter.
 - `human_eval.py`: HumanEval task parsing and name-independent evaluation.
+- `import_inference.py`: Python import inference helpers for extracted code.
 - `lm_logging.py`: logging LM wrappers.
 - `lm_utils.py`: model config and LM response helpers.
 - `openrouter_lm.py`: direct OpenRouter chat-completions LM wrapper.
@@ -137,18 +141,18 @@ in one place.
 - `signatures.py`: reusable signature field model.
 - `worker_monitor.py`: shared two-phase generation/scoring worker monitor.
 
-`tests/` covers reusable library behavior and the direct DBOS eval planning,
-generation, scoring, and analysis helpers.
+`tests/` covers reusable library behavior, the shared HumanEval DBOS flow, and
+the direct DBOS eval planning, generation, scoring, and analysis helpers.
 
 ## Design Decisions
 
-Default to a script first. Move code into `src/dr_dspy/` only when it is likely
-to be reused unchanged by multiple experiments and centralizing it reduces setup
-bugs.
+Default to a readable experiment flow first. Move mechanics into shared
+library modules only when they are likely to be reused unchanged by multiple
+experiments and centralizing them reduces setup bugs.
 
-Keep experiment-defining decisions in the script. The library should not hide
-which dataset, signature, optimizer, metric, model, or artifact path makes an
-experiment what it is.
+Keep experiment-defining decisions in the experiment flow or script wrapper.
+The library should not hide which dataset, signature, optimizer, metric, model,
+or artifact path makes an experiment what it is.
 
 The HumanEval ground truth for encoder/compression experiments is
 `prompt + canonical_solution` with comments and docstrings stripped. This keeps

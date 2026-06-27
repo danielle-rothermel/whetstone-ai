@@ -12,6 +12,10 @@ Check the direct DBOS eval CLI without making live model calls:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py --help
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
+  --experiment-name direct-dry-run \
+  --sample-count 2 \
+  --dry-run
 ```
 
 Check the encoder-decoder DBOS eval CLI:
@@ -25,7 +29,8 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py submit \
 ```
 
 For a local DBOS/Postgres direct-eval smoke, run these commands from `dr-dspy/`
-with `DATABASE_URL` set to a local Postgres database:
+with `DATABASE_URL` set to a local Postgres database. Live generation also
+requires `OPENROUTER_API_KEY`.
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py init-db
@@ -37,9 +42,15 @@ uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py submit \
 uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py worker \
   --queue both \
   --experiment-name local-dbos-smoke
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py status \
+  --experiment-name local-dbos-smoke
+
+uv run python scripts/humaneval_dspy_eval_only_dbos_v0.py analyze \
+  --experiment-name local-dbos-smoke
 ```
 
-For a local encoder-decoder smoke:
+For a local encoder-decoder smoke, use the same environment requirements:
 
 ```sh
 uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py init-db
