@@ -64,17 +64,41 @@ DECODER_SIGNATURE = DspySignatureConfig(
     ),
 )
 
-DEFAULT_MODEL_PAIRS = (
-    EncDecPair(
-        encoder=ModelConfig(
-            model="openai/gpt-5.1-codex-mini",
-            reasoning={},
-        ),
-        decoder=ModelConfig(
-            model="openai/gpt-5.1-codex-mini",
-            reasoning={},
-        ),
+DEFAULT_MODEL_CONFIGS = (
+    ModelConfig(model="openai/gpt-5.1-codex-mini", reasoning={}),
+    ModelConfig(model="moonshotai/kimi-k2-0905", reasoning={}),
+    ModelConfig(model="qwen/qwen3-coder-next", reasoning={}),
+    ModelConfig(
+        model="deepseek/deepseek-v3.1-terminus",
+        reasoning={"enabled": False},
     ),
+    ModelConfig(model="moonshotai/kimi-k2", reasoning={}),
+    ModelConfig(model="z-ai/glm-4.7", reasoning={"enabled": False}),
+    ModelConfig(model="z-ai/glm-5", reasoning={"enabled": False}),
+    ModelConfig(
+        model="deepseek/deepseek-v4-pro",
+        reasoning={"enabled": False},
+    ),
+    ModelConfig(
+        model="deepseek/deepseek-v4-flash",
+        reasoning={"enabled": False},
+    ),
+    ModelConfig(model="mistralai/mistral-large-2512", reasoning={}),
+    ModelConfig(model="openai/gpt-oss-120b", reasoning={"effort": "low"}),
+    ModelConfig(model="mistralai/codestral-2508", reasoning={}),
+    ModelConfig(model="qwen/qwen3-coder-flash", reasoning={}),
+    ModelConfig(model="openai/gpt-5-nano", reasoning={"effort": "low"}),
+    ModelConfig(
+        model="deepseek/deepseek-chat-v3.1",
+        reasoning={"enabled": False},
+    ),
+    ModelConfig(model="openai/gpt-5.4-nano", reasoning={"effort": "none"}),
+)
+
+# Each model encodes and decodes its own output (self-pairs).
+DEFAULT_MODEL_PAIRS = tuple(
+    EncDecPair(encoder=config, decoder=config)
+    for config in DEFAULT_MODEL_CONFIGS
 )
 
 EXPERIMENT_CONFIG = EncDecHumanEvalExperimentConfig(

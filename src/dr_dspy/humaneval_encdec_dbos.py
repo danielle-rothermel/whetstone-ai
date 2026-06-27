@@ -62,6 +62,7 @@ DBOS_APP_NAME = "dr-dspy-humaneval-encdec-eval"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
 GENERATION_QUEUE_NAME = "dr_dspy_humaneval_encdec_generation"
 SCORING_QUEUE_NAME = "dr_dspy_humaneval_encdec_scoring"
+MIN_ENCODER_CHAR_BUDGET = 50
 DEFAULT_GENERATION_CONCURRENCY = 64
 DEFAULT_SCORING_CONCURRENCY = 32
 DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
@@ -783,7 +784,13 @@ def generate_code_for_job(job: EncDecJob) -> GenerationResult:
         encoder_program = encoder_signature()
         encoder_inputs: dict[str, Any] = {"code": job.ground_truth_code}
     else:
-        encoder_char_budget = round(job.budget_ratio * len(job.prompt))
+        # Budget is a character-length ratio against the ground-truth code
+        # the encoder is shown (already stripped of comments/docstrings),
+        # floored so tiny functions stay describable.
+        encoder_char_budget = max(
+            MIN_ENCODER_CHAR_BUDGET,
+            round(job.budget_ratio * len(job.ground_truth_code)),
+        )
         encoder_program = budgeted_encoder_signature()
         encoder_inputs = {
             "code": job.ground_truth_code,

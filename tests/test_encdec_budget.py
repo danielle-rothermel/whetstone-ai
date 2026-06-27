@@ -95,10 +95,27 @@ def test_budget_uses_budgeted_encoder_with_derived_chars(
     encdec_configured: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls = _stub_lms(monkeypatch)
-    job = _job(2.0)
-    expected = round(2.0 * len(job.prompt))
+    job = _job(5.0)
+    expected = round(5.0 * len(job.ground_truth_code))
+    assert expected > encdec.MIN_ENCODER_CHAR_BUDGET
     result = encdec.generate_code_for_job(job)
     encoder_call = calls[0]
     assert encoder_call["signature"] is encdec.budgeted_encoder_signature()
     assert encoder_call["input_kwargs"]["max_characters"] == expected
     assert result.encoder_char_budget == expected
+
+
+def test_budget_respects_min_floor(
+    encdec_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _stub_lms(monkeypatch)
+    job = _job(0.1)
+    assert round(0.1 * len(job.ground_truth_code)) < (
+        encdec.MIN_ENCODER_CHAR_BUDGET
+    )
+    result = encdec.generate_code_for_job(job)
+    assert (
+        calls[0]["input_kwargs"]["max_characters"]
+        == encdec.MIN_ENCODER_CHAR_BUDGET
+    )
+    assert result.encoder_char_budget == encdec.MIN_ENCODER_CHAR_BUDGET
