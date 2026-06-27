@@ -32,11 +32,12 @@ build-backend = "hatchling.build"
 dspy = { workspace = true }
 
 [tool.ruff]
-include = ["src/**/*.py", "scripts/**/*.py"]
-exclude = ["tests/**/*.py"]
-force-exclude = true
+include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 line-length = 79
 target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
@@ -48,4 +49,4 @@ known-first-party = ["dr_dspy", "dspy"]
 extra-paths = [".."]
 
 [tool.ty.src]
-include = ["src/**/*.py", "scripts/**/*.py"]
+include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
