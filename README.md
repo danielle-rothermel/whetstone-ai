@@ -103,9 +103,6 @@ uv run python scripts/humaneval_dspy_eval_only_encdec_dbos_v0.py analyze \
 Use `status` for database counts, `enqueue-scores` to backfill score workflows
 for generated rows, and `repair` to reconcile stranded DBOS workflows and
 re-enqueue failed generation/scoring work with fresh workflow IDs.
-For direct-decoder runs, use `backfill-compression` to populate prompt
-compression metrics for existing scored rows without rerunning generation or
-scoring.
 
 ## Repository Shape
 

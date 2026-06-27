@@ -68,16 +68,3 @@ def sample_human_eval_tasks(
         sample_count=sample_count,
     )
 
-
-def load_human_eval_tasks_by_id(
-    *,
-    dataset_name: str,
-    dataset_split: str,
-) -> dict[str, HumanEvalTask]:
-    tasks = parse_human_eval_dataset(
-        load_human_eval_rows(
-            dataset_name=dataset_name,
-            dataset_split=dataset_split,
-        )
-    )
-    return {task.task_id: task for task in tasks}

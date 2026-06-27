@@ -33,7 +33,6 @@ from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy.code_eval import extract_dspy_code
-from dr_dspy.compression import compression_metrics
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -42,7 +41,6 @@ from dr_dspy.lm_utils import (
 from dr_dspy.runtime import load_env_file
 from dr_dspy.scoring import (
     HumanEvalScoreResult,
-    best_compression_metric,
     score_humaneval_prediction,
 )
 from dr_dspy.signatures import DspySignatureConfig
@@ -1564,84 +1562,6 @@ def create_eval_schema(database_url: str) -> None:
     )
 
 
-def backfill_prompt_compression_metrics(
-    database_url: str, *, experiment_name: str | None = None
-) -> int:
-    config = experiment_config()
-    tasks_by_id = shared_human_eval_sampling.load_human_eval_tasks_by_id(
-        dataset_name=config.dataset_name,
-        dataset_split=config.dataset_split,
-    )
-    where_experiment = ""
-    params: list[Any] = []
-    if experiment_name is not None:
-        where_experiment = "AND experiment_name = %s"
-        params.append(experiment_name)
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"""
-                SELECT prediction_id, task_id, prompt
-                FROM dr_dspy_eval_predictions
-                WHERE
-                    scoring_status = 'scored'
-                    {where_experiment}
-                    AND (
-                        ground_truth_code = ''
-                        OR compression_metrics = '[]'::jsonb
-                        OR best_compression_ratio IS NULL
-                    )
-                ORDER BY experiment_name, task_id, prediction_id
-                """,
-                tuple(params),
-            )
-            rows = cur.fetchall()
-            updated_count = 0
-            for prediction_id, task_id, prompt in rows:
-                task = tasks_by_id.get(task_id)
-                if task is None:
-                    continue
-                ground_truth_code = (
-                    task.ground_truth_code_without_comments
-                    or task.ground_truth_code
-                )
-                metrics = compression_metrics(
-                    ground_truth_code=ground_truth_code,
-                    representation_text=prompt,
-                )
-                best = best_compression_metric(metrics)
-                cur.execute(
-                    """
-                    UPDATE dr_dspy_eval_predictions
-                    SET
-                        canonical_solution = %s,
-                        ground_truth_code = %s,
-                        compression_metrics = %s,
-                        best_compression_ratio = %s,
-                        best_compression_percent_reduction = %s,
-                        updated_at = now()
-                    WHERE prediction_id = %s
-                    """,
-                    (
-                        task.canonical_solution,
-                        ground_truth_code,
-                        Jsonb(
-                            [
-                                metric.model_dump(mode="json")
-                                for metric in metrics
-                            ]
-                        ),
-                        best.ratio_to_ground_truth if best else None,
-                        best.percent_reduction_vs_ground_truth
-                        if best
-                        else None,
-                        prediction_id,
-                    ),
-                )
-                updated_count += cur.rowcount or 0
-    return updated_count
-
-
 def experiment_hash(experiment_name: str) -> str:
     return shared_dbos.experiment_hash(
         experiment_name, hash_length=EXPERIMENT_QUEUE_HASH_LENGTH
@@ -1983,42 +1903,6 @@ def init_db(
     )
     create_eval_schema(config.database_url)
     operator_log("initialized dr-dspy eval tables", style="green")
-
-
-@_APP.command("backfill-compression")
-def backfill_compression_command(
-    experiment_name: Annotated[
-        str | None,
-        typer.Option(
-            "--experiment-name",
-            help="Limit prompt-compression backfill to one experiment.",
-        ),
-    ] = None,
-    database_url: Annotated[
-        str | None,
-        typer.Option(
-            "--database-url",
-            help=f"Postgres URL; defaults to {DATABASE_URL_ENV}.",
-        ),
-    ] = None,
-    env_file: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    config = common_config(
-        database_url=database_url,
-        dbos_system_database_url=None,
-        generation_concurrency=DEFAULT_GENERATION_CONCURRENCY,
-        scoring_concurrency=DEFAULT_SCORING_CONCURRENCY,
-        env_file=env_file,
-    )
-    create_eval_schema(config.database_url)
-    updated_count = backfill_prompt_compression_metrics(
-        config.database_url,
-        experiment_name=experiment_name,
-    )
-    operator_log(
-        f"backfilled prompt-compression metrics for {updated_count} rows",
-        style="green" if updated_count else "yellow",
-    )
 
 
 @_APP.command()
