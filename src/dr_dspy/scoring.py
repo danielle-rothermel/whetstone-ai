@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dr_dspy.code_eval import DEFAULT_CAPTURE_LIMIT_BYTES
 from dr_dspy.code_extraction import apply_cleaning, validate_python_source
 from dr_dspy.compression import CompressionMetric, compression_metrics
 from dr_dspy.human_eval import (
@@ -26,10 +25,6 @@ class GeneratedCodeScore(BaseModel):
     extracted_compile_error: str | None = None
     extraction_error: str | None = None
     evaluation: EvaluationTaskResult | None = None
-    stdout: str = ""
-    stderr: str = ""
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
 
 
 class HumanEvalScoreResult(BaseModel):
@@ -53,10 +48,6 @@ class HumanEvalScoreResult(BaseModel):
     compression_metrics: list[CompressionMetric] = Field(default_factory=list)
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
-    stdout: str = ""
-    stderr: str = ""
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
 
 
 def best_compression_metric(
@@ -80,9 +71,7 @@ def score_generated_code_for_humaneval(
     raw_generation: str,
     task: HumanEvalTask,
     timeout: float,
-    capture_limit_bytes: int = DEFAULT_CAPTURE_LIMIT_BYTES,
 ) -> GeneratedCodeScore:
-    _ = capture_limit_bytes
     if not raw_generation.strip():
         extraction_error = "empty raw generation"
         return GeneratedCodeScore(
@@ -163,13 +152,11 @@ def score_humaneval_prediction(
     compression_input: str,
     ground_truth_code: str,
     timeout: float,
-    capture_limit_bytes: int = DEFAULT_CAPTURE_LIMIT_BYTES,
 ) -> HumanEvalScoreResult:
     generated_score = score_generated_code_for_humaneval(
         raw_generation=raw_generation,
         task=task,
         timeout=timeout,
-        capture_limit_bytes=capture_limit_bytes,
     )
     metrics = compression_metrics(
         ground_truth_code=ground_truth_code,
@@ -204,8 +191,4 @@ def score_humaneval_prediction(
         best_compression_percent_reduction=(
             best.percent_reduction_vs_ground_truth if best else None
         ),
-        stdout=generated_score.stdout,
-        stderr=generated_score.stderr,
-        stdout_truncated=generated_score.stdout_truncated,
-        stderr_truncated=generated_score.stderr_truncated,
     )

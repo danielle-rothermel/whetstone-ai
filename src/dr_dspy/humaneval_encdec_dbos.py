@@ -39,7 +39,6 @@ from dr_dspy.lm_utils import (
     usage_metadata_from_response,
 )
 from dr_dspy.runtime import (
-    configure_multiprocessing,
     load_env_file,
 )
 from dr_dspy.scoring import (
@@ -788,6 +787,7 @@ def record_generation_success(
                     encoder_provider_cost = %s,
                     decoder_provider_cost = %s,
                     provider_cost = %s,
+                    raw_code = NULL,
                     generated_at = now(),
                     updated_at = now()
                 WHERE prediction_id = %s
@@ -818,6 +818,10 @@ def record_generation_error(
                 UPDATE dr_dspy_encdec_eval_predictions
                 SET generation_status = 'generation_error',
                     generation_error = %s,
+                    encoded_description = NULL,
+                    decoded_generation = NULL,
+                    raw_generation = NULL,
+                    raw_code = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -866,7 +870,8 @@ def fetch_scoring_target(
                     test,
                     entry_point,
                     encoded_description,
-                    raw_generation
+                    raw_generation,
+                    generation_status
                 FROM dr_dspy_encdec_eval_predictions
                 WHERE prediction_id = %s
                 """,
@@ -875,14 +880,22 @@ def fetch_scoring_target(
             row = cur.fetchone()
     if row is None:
         raise ValueError(f"prediction_id not found: {prediction_id}")
-    if row[7] is None or row[8] is None:
+    if row[9] != "generated":
         raise ValueError(f"prediction_id is not generated: {prediction_id}")
+    if row[7] is None:
+        raise ValueError(
+            f"prediction_id has no encoded description: {prediction_id}"
+        )
+    if row[8] is None:
+        raise ValueError(
+            f"prediction_id has no raw generation: {prediction_id}"
+        )
     return ScoringTarget(
         prediction_id=row[0],
         task_id=row[1],
         prompt=row[2],
         canonical_solution=row[3],
-        ground_truth_code=row[4],
+        ground_truth_code=row[4] or row[2],
         test=row[5],
         entry_point=row[6],
         encoded_description=row[7],
@@ -1979,7 +1992,6 @@ def worker(
     ] = DB_POOL_AUTO,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
-    configure_multiprocessing()
     load_optional_env_file(env_file)
     config = build_eval_dbos_config(
         database_url=database_url,

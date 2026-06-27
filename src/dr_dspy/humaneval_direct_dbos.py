@@ -165,14 +165,6 @@ PREDICTION_MIGRATION_SQL = (
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS extraction_error TEXT",
     "ALTER TABLE dr_dspy_eval_predictions "
-    "ADD COLUMN IF NOT EXISTS score_stdout TEXT",
-    "ALTER TABLE dr_dspy_eval_predictions "
-    "ADD COLUMN IF NOT EXISTS score_stderr TEXT",
-    "ALTER TABLE dr_dspy_eval_predictions "
-    "ADD COLUMN IF NOT EXISTS score_stdout_truncated BOOLEAN",
-    "ALTER TABLE dr_dspy_eval_predictions "
-    "ADD COLUMN IF NOT EXISTS score_stderr_truncated BOOLEAN",
-    "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS canonical_solution TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS ground_truth_code TEXT NOT NULL DEFAULT ''",
@@ -797,7 +789,8 @@ def fetch_scoring_target(
                     ground_truth_code,
                     raw_generation,
                     test,
-                    entry_point
+                    entry_point,
+                    generation_status
                 FROM dr_dspy_eval_predictions
                 WHERE prediction_id = %s
                 """,
@@ -806,6 +799,8 @@ def fetch_scoring_target(
             row = cur.fetchone()
     if row is None:
         raise ValueError(f"prediction_id not found: {prediction_id}")
+    if row[8] != "generated":
+        raise ValueError(f"prediction_id is not generated: {prediction_id}")
     if row[5] is None:
         raise ValueError(
             f"prediction_id has no raw generation: {prediction_id}"
@@ -917,10 +912,6 @@ def reset_generation_errors_for_retry(
                     scoring_status = 'pending',
                     scoring_error = NULL,
                     score = NULL,
-                    score_stdout = NULL,
-                    score_stderr = NULL,
-                    score_stdout_truncated = NULL,
-                    score_stderr_truncated = NULL,
                     evaluation_function_names = '[]'::jsonb,
                     evaluation_total_cases = NULL,
                     evaluation_failure_count = NULL,
@@ -990,10 +981,6 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     compression_metrics = %s,
                     best_compression_ratio = %s,
                     best_compression_percent_reduction = %s,
-                    score_stdout = %s,
-                    score_stderr = %s,
-                    score_stdout_truncated = %s,
-                    score_stderr_truncated = %s,
                     updated_at = now(),
                     scored_at = now()
                 WHERE prediction_id = %s
@@ -1021,10 +1008,6 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     ),
                     result.best_compression_ratio,
                     result.best_compression_percent_reduction,
-                    result.stdout,
-                    result.stderr,
-                    result.stdout_truncated,
-                    result.stderr_truncated,
                     result.prediction_id,
                 ),
             )
