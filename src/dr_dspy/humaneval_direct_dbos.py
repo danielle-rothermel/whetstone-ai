@@ -30,7 +30,7 @@ from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import worker_monitor as shared_worker_monitor
-from dr_dspy.code_eval import extract_dspy_code
+from dr_dspy.code_extraction import extract_dspy_code
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -74,7 +74,7 @@ CONSOLE = Console(soft_wrap=True)
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 PREDICTION_TABLE_NAME = "dr_dspy_eval_predictions"
 PREDICTION_ID_DIGEST_LENGTH = 32
-REPAIR_DIMENSION_COLUMNS = ("model", "temperature")
+REPAIR_DIMENSION_COLUMNS = ("model", "temperature", "reasoning")
 REPAIR_ORDER_COLUMNS = (
     "model",
     "temperature",
@@ -127,11 +127,12 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     generated_at         TIMESTAMPTZ,
     scored_at            TIMESTAMPTZ,
-    UNIQUE (
+    CONSTRAINT dr_dspy_eval_predictions_identity_key UNIQUE (
         experiment_name,
         task_id,
         model,
         temperature,
+        reasoning,
         repetition_seed
     )
 )
@@ -181,12 +182,66 @@ PREDICTION_MIGRATION_SQL = (
     "NOT NULL DEFAULT '{}'::jsonb",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS compression_metrics JSONB "
-    "NOT NULL DEFAULT '[]'::jsonb",
+    "NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ALTER COLUMN compression_metrics SET DEFAULT '{}'::jsonb",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS best_compression_ratio DOUBLE PRECISION",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS best_compression_percent_reduction "
     "DOUBLE PRECISION",
+)
+PREDICTION_CONSTRAINT_MIGRATION_SQL = (
+    """
+    DO $$
+    DECLARE old_constraint_name text;
+    BEGIN
+        SELECT c.conname INTO old_constraint_name
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'dr_dspy_eval_predictions'
+          AND c.contype = 'u'
+          AND ARRAY(
+              SELECT a.attname
+              FROM unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord)
+              JOIN pg_attribute a
+                ON a.attrelid = c.conrelid
+               AND a.attnum = cols.attnum
+              ORDER BY cols.ord
+          ) = ARRAY[
+              'experiment_name',
+              'task_id',
+              'model',
+              'temperature',
+              'repetition_seed'
+          ];
+
+        IF old_constraint_name IS NOT NULL THEN
+            EXECUTE format(
+                'ALTER TABLE dr_dspy_eval_predictions DROP CONSTRAINT %I',
+                old_constraint_name
+            );
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = 'dr_dspy_eval_predictions'
+              AND c.conname = 'dr_dspy_eval_predictions_identity_key'
+        ) THEN
+            ALTER TABLE dr_dspy_eval_predictions
+            ADD CONSTRAINT dr_dspy_eval_predictions_identity_key UNIQUE (
+                experiment_name,
+                task_id,
+                model,
+                temperature,
+                reasoning,
+                repetition_seed
+            );
+        END IF;
+    END $$;
+    """,
 )
 
 class HumanEvalSample(BaseModel):
@@ -386,6 +441,7 @@ def prediction_context_from_job(
         dimensions={
             "model": job.model,
             "temperature": job.temperature,
+            "reasoning": job.reasoning,
         },
     )
 
@@ -451,12 +507,17 @@ def stable_prediction_id(
     task_id: str,
     model: str,
     temperature: float,
+    reasoning: Mapping[str, Any],
     repetition_seed: int,
 ) -> str:
     return shared_flow.stable_prediction_id_from_dimensions(
         experiment_name=experiment_name,
         task_id=task_id,
-        dimensions={"model": model, "temperature": temperature},
+        dimensions={
+            "model": model,
+            "temperature": temperature,
+            "reasoning": dict(reasoning),
+        },
         repetition_seed=repetition_seed,
         digest_length=PREDICTION_ID_DIGEST_LENGTH,
     )
@@ -501,6 +562,7 @@ def build_prediction_jobs(
                                 task_id=sample.task_id,
                                 model=model_config.model,
                                 temperature=temperature,
+                                reasoning=model_config.reasoning,
                                 repetition_seed=repetition_seed,
                             ),
                             experiment_name=experiment_name,
@@ -885,7 +947,7 @@ def reset_generation_errors_for_retry(
                     evaluation_total_cases = NULL,
                     evaluation_failure_count = NULL,
                     evaluation_status_counts = '{}'::jsonb,
-                    compression_metrics = '[]'::jsonb,
+                    compression_metrics = '{}'::jsonb,
                     best_compression_ratio = NULL,
                     best_compression_percent_reduction = NULL,
                     scored_at = NULL,
@@ -970,10 +1032,12 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     result.evaluation_failure_count,
                     Jsonb(result.evaluation_status_counts),
                     Jsonb(
-                        [
-                            metric.model_dump(mode="json")
-                            for metric in result.compression_metrics
-                        ]
+                        {
+                            method.value: metric.model_dump(mode="json")
+                            for method, metric in (
+                                result.compression_metrics.items()
+                            )
+                        }
                     ),
                     result.best_compression_ratio,
                     result.best_compression_percent_reduction,
@@ -1467,6 +1531,7 @@ def create_eval_schema(database_url: str) -> None:
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
             *PREDICTION_MIGRATION_SQL,
+            *PREDICTION_CONSTRAINT_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
         ),
     )

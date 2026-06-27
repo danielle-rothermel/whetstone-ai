@@ -30,6 +30,9 @@ class CompressionMetric(BaseModel):
     percent_reduction_vs_ground_truth: float | None
 
 
+CompressionMetrics = dict[CompressionMethod, CompressionMetric]
+
+
 def compressed_bytes(value: bytes, method: CompressionMethod) -> bytes:
     if method is CompressionMethod.RAW:
         return value
@@ -50,25 +53,22 @@ def compression_metrics(
     *,
     ground_truth_code: str,
     representation_text: str,
-    methods: tuple[CompressionMethod, ...] = tuple(CompressionMethod),
-) -> list[CompressionMetric]:
+) -> CompressionMetrics:
     ground_truth_bytes = len(ground_truth_code.encode("utf-8"))
     representation = representation_text.encode("utf-8")
     representation_bytes = len(representation)
-    metrics: list[CompressionMetric] = []
-    for method in methods:
+    metrics: CompressionMetrics = {}
+    for method in CompressionMethod:
         size = len(compressed_bytes(representation, method))
         ratio = size / ground_truth_bytes if ground_truth_bytes else None
-        metrics.append(
-            CompressionMetric(
-                method=method,
-                ground_truth_bytes=ground_truth_bytes,
-                representation_bytes=representation_bytes,
-                compressed_bytes=size,
-                ratio_to_ground_truth=ratio,
-                percent_reduction_vs_ground_truth=(
-                    (1.0 - ratio) * 100.0 if ratio is not None else None
-                ),
-            )
+        metrics[method] = CompressionMetric(
+            method=method,
+            ground_truth_bytes=ground_truth_bytes,
+            representation_bytes=representation_bytes,
+            compressed_bytes=size,
+            ratio_to_ground_truth=ratio,
+            percent_reduction_vs_ground_truth=(
+                (1.0 - ratio) * 100.0 if ratio is not None else None
+            ),
         )
     return metrics

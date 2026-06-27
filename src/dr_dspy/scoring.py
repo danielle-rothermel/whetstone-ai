@@ -3,7 +3,11 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from dr_dspy.code_extraction import apply_cleaning, validate_python_source
-from dr_dspy.compression import CompressionMetric, compression_metrics
+from dr_dspy.compression import (
+    CompressionMetric,
+    CompressionMetrics,
+    compression_metrics,
+)
 from dr_dspy.human_eval import (
     EvaluationTaskResult,
     HumanEvalTask,
@@ -45,17 +49,17 @@ class HumanEvalScoreResult(BaseModel):
     evaluation_total_cases: int | None = None
     evaluation_failure_count: int | None = None
     evaluation_status_counts: dict[str, int] = Field(default_factory=dict)
-    compression_metrics: list[CompressionMetric] = Field(default_factory=list)
+    compression_metrics: CompressionMetrics = Field(default_factory=dict)
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
 
 
 def best_compression_metric(
-    metrics: list[CompressionMetric],
+    metrics: CompressionMetrics,
 ) -> CompressionMetric | None:
     comparable = [
         metric
-        for metric in metrics
+        for metric in metrics.values()
         if metric.ratio_to_ground_truth is not None
     ]
     if not comparable:

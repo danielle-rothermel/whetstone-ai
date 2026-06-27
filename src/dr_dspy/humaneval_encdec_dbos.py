@@ -69,6 +69,8 @@ REPAIR_DIMENSION_COLUMNS = (
     "decoder_model",
     "encoder_temperature",
     "decoder_temperature",
+    "encoder_reasoning",
+    "decoder_reasoning",
 )
 REPAIR_ORDER_COLUMNS = (
     "encoder_model",
@@ -146,24 +148,90 @@ CREATE TABLE IF NOT EXISTS dr_dspy_encdec_eval_predictions (
     evaluation_total_cases INTEGER,
     evaluation_failure_count INTEGER,
     evaluation_status_counts JSONB NOT NULL DEFAULT '{}'::jsonb,
-    compression_metrics  JSONB       NOT NULL DEFAULT '[]'::jsonb,
+    compression_metrics  JSONB       NOT NULL DEFAULT '{}'::jsonb,
     best_compression_ratio DOUBLE PRECISION,
     best_compression_percent_reduction DOUBLE PRECISION,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     generated_at         TIMESTAMPTZ,
     scored_at            TIMESTAMPTZ,
-    UNIQUE (
+    CONSTRAINT dr_dspy_encdec_eval_predictions_identity_key UNIQUE (
         experiment_name,
         task_id,
         encoder_model,
         decoder_model,
         encoder_temperature,
         decoder_temperature,
+        encoder_reasoning,
+        decoder_reasoning,
         repetition_seed
     )
 )
 """
+PREDICTION_MIGRATION_SQL = (
+    "ALTER TABLE dr_dspy_encdec_eval_predictions "
+    "ALTER COLUMN compression_metrics SET DEFAULT '{}'::jsonb",
+)
+PREDICTION_CONSTRAINT_MIGRATION_SQL = (
+    """
+    DO $$
+    DECLARE old_constraint_name text;
+    BEGIN
+        SELECT c.conname INTO old_constraint_name
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        WHERE t.relname = 'dr_dspy_encdec_eval_predictions'
+          AND c.contype = 'u'
+          AND ARRAY(
+              SELECT a.attname
+              FROM unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord)
+              JOIN pg_attribute a
+                ON a.attrelid = c.conrelid
+               AND a.attnum = cols.attnum
+              ORDER BY cols.ord
+          ) = ARRAY[
+              'experiment_name',
+              'task_id',
+              'encoder_model',
+              'decoder_model',
+              'encoder_temperature',
+              'decoder_temperature',
+              'repetition_seed'
+          ];
+
+        IF old_constraint_name IS NOT NULL THEN
+            EXECUTE format(
+                'ALTER TABLE dr_dspy_encdec_eval_predictions '
+                'DROP CONSTRAINT %I',
+                old_constraint_name
+            );
+        END IF;
+
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            WHERE t.relname = 'dr_dspy_encdec_eval_predictions'
+              AND c.conname = 'dr_dspy_encdec_eval_predictions_identity_key'
+        ) THEN
+            ALTER TABLE dr_dspy_encdec_eval_predictions
+            ADD CONSTRAINT
+                dr_dspy_encdec_eval_predictions_identity_key
+            UNIQUE (
+                experiment_name,
+                task_id,
+                encoder_model,
+                decoder_model,
+                encoder_temperature,
+                decoder_temperature,
+                encoder_reasoning,
+                decoder_reasoning,
+                repetition_seed
+            );
+        END IF;
+    END $$;
+    """,
+)
 
 PREDICTION_INDEX_SQL = (
     "CREATE INDEX IF NOT EXISTS "
@@ -440,6 +508,8 @@ def prediction_context_from_job(
             "decoder_model": job.decoder_model,
             "encoder_temperature": job.encoder_temperature,
             "decoder_temperature": job.decoder_temperature,
+            "encoder_reasoning": job.encoder_reasoning,
+            "decoder_reasoning": job.decoder_reasoning,
         },
     )
 
@@ -487,6 +557,8 @@ def stable_prediction_id(
     decoder_model: str,
     encoder_temperature: float,
     decoder_temperature: float,
+    encoder_reasoning: Mapping[str, Any],
+    decoder_reasoning: Mapping[str, Any],
     repetition_seed: int,
 ) -> str:
     return shared_flow.stable_prediction_id_from_dimensions(
@@ -497,6 +569,8 @@ def stable_prediction_id(
             "decoder_model": decoder_model,
             "encoder_temperature": encoder_temperature,
             "decoder_temperature": decoder_temperature,
+            "encoder_reasoning": dict(encoder_reasoning),
+            "decoder_reasoning": dict(decoder_reasoning),
         },
         repetition_seed=repetition_seed,
         digest_length=PREDICTION_ID_DIGEST_LENGTH,
@@ -528,6 +602,8 @@ def build_prediction_jobs(
                                     decoder_model=pair.decoder.model,
                                     encoder_temperature=encoder_temperature,
                                     decoder_temperature=decoder_temperature,
+                                    encoder_reasoning=pair.encoder.reasoning,
+                                    decoder_reasoning=pair.decoder.reasoning,
                                     repetition_seed=repetition_seed,
                                 ),
                                 experiment_name=experiment_name,
@@ -969,10 +1045,12 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     result.evaluation_failure_count,
                     Jsonb(result.evaluation_status_counts),
                     Jsonb(
-                        [
-                            metric.model_dump(mode="json")
-                            for metric in result.compression_metrics
-                        ]
+                        {
+                            method.value: metric.model_dump(mode="json")
+                            for method, metric in (
+                                result.compression_metrics.items()
+                            )
+                        }
                     ),
                     result.best_compression_ratio,
                     result.best_compression_percent_reduction,
@@ -1215,7 +1293,7 @@ def reset_generation_errors_for_retry(
                     evaluation_total_cases = NULL,
                     evaluation_failure_count = NULL,
                     evaluation_status_counts = '{}'::jsonb,
-                    compression_metrics = '[]'::jsonb,
+                    compression_metrics = '{}'::jsonb,
                     best_compression_ratio = NULL,
                     best_compression_percent_reduction = NULL,
                     scored_at = NULL,
@@ -1411,6 +1489,8 @@ def create_eval_schema(database_url: str) -> None:
         statements=(
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
+            *PREDICTION_MIGRATION_SQL,
+            *PREDICTION_CONSTRAINT_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
         ),
     )

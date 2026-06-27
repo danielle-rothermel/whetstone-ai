@@ -5,6 +5,7 @@ import re
 import textwrap
 import unicodedata
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -97,6 +98,28 @@ def validate_python_source(source: str) -> PythonSourceValidation:
         compile_ok=compile_ok,
         compile_error=compile_error,
     )
+
+
+def extract_dspy_code(pred: Any, *, field_name: str = "code") -> str:
+    """Pull Python source out of a DSPy prediction field."""
+    code_field = getattr(pred, field_name, None)
+    if code_field is None:
+        return ""
+    inner = getattr(code_field, "code", None)
+    if isinstance(inner, str):
+        return inner
+    if isinstance(code_field, str):
+        return code_field
+    try:
+        as_str = str(code_field)
+    except Exception:
+        return ""
+    if as_str.startswith("code="):
+        try:
+            return as_str.split("=", 1)[1].strip().strip("'\"")
+        except Exception:
+            return as_str
+    return as_str
 
 
 def _normalize_text(raw: str, tab_width: int = DEFAULT_TAB_WIDTH) -> str:
