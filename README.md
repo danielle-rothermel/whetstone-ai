@@ -113,9 +113,17 @@ in one place.
 
 `src/dr_dspy/` contains behavior expected to remain stable across experiments:
 
+- `analysis.py`: shared numeric summaries and report formatting helpers.
 - `code_eval.py`: legacy generated-code subprocess evaluation.
 - `code_extraction.py`: generated-code extraction and syntax validation.
 - `compression.py`: encoded-description compression metrics.
+- `dbos_runtime.py`: shared DBOS/Postgres runtime, queue, workflow, and
+  connection-pool helpers.
+- `dspy_runner.py`: shared logged LM construction and DSPy predictor execution.
+- `human_eval_sampling.py`: HumanEval Plus loading, parsing, and seeded
+  sampling.
+- `humaneval_direct_dbos.py`: direct-decoder HumanEval DBOS/Postgres adapter.
+- `humaneval_encdec_dbos.py`: encoder-decoder HumanEval DBOS/Postgres adapter.
 - `human_eval.py`: HumanEval task parsing and name-independent evaluation.
 - `lm_logging.py`: logging LM wrappers.
 - `lm_utils.py`: model config and LM response helpers.
@@ -126,6 +134,7 @@ in one place.
 - `scoring.py`: reusable generated-code scoring over `HumanEvalTask`.
 - `serialization.py`: DSPy-aware JSON-safe serialization.
 - `signatures.py`: reusable signature field model.
+- `worker_monitor.py`: shared two-phase generation/scoring worker monitor.
 
 `tests/` covers reusable library behavior and the direct DBOS eval planning,
 generation, scoring, and analysis helpers.

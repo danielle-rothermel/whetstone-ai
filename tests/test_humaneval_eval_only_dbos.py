@@ -1072,8 +1072,15 @@ def test_build_humaneval_samples_from_rows_is_seeded(
     rows = [
         {
             "task_id": f"task/{index}",
-            "prompt": f"def f_{index}(): pass",
-            "test": "def check(candidate): pass",
+            "prompt": f"def f_{index}():\n",
+            "canonical_solution": "\n    return 1\n",
+            "test": (
+                "def check(candidate):\n"
+                "    inputs = [()]\n"
+                "    results = [1]\n"
+                "    for inp, exp in zip(inputs, results):\n"
+                "        assert candidate(*inp) == exp\n"
+            ),
             "entry_point": f"f_{index}",
         }
         for index in range(6)
