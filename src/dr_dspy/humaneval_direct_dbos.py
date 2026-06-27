@@ -60,7 +60,7 @@ DEFAULT_REPAIR_SCORING_LIMIT = 1000
 DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
-DB_POOL_AUTO = "auto"
+DB_POOL_AUTO = shared_dbos.DB_POOL_AUTO
 DEFAULT_COST_SIGNIFICANT_DIGITS = 6
 PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER = 1000.0
 ANALYSIS_TOTAL_LABEL = "Total"
@@ -73,6 +73,7 @@ DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_eval_only_worker"
 CONSOLE = Console(soft_wrap=True)
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 PREDICTION_TABLE_NAME = "dr_dspy_eval_predictions"
+PREDICTION_ID_DIGEST_LENGTH = 32
 REPAIR_DIMENSION_COLUMNS = ("model", "temperature")
 REPAIR_ORDER_COLUMNS = (
     "model",
@@ -214,18 +215,6 @@ class DirectHumanEvalExperimentConfig(BaseModel):
     default_repetitions: StrictInt
     default_max_completion_tokens: StrictInt
     default_subprocess_timeout: float
-
-
-class PredictionLogContext(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prediction_id: StrictStr
-    experiment_name: StrictStr
-    task_id: StrictStr
-    sample_index: StrictInt
-    model: StrictStr
-    temperature: float | None
-    repetition_seed: StrictInt
 
 
 class PredictionJob(BaseModel):
@@ -385,28 +374,34 @@ def emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
     )
 
 
-def prediction_context_from_job(job: PredictionJob) -> PredictionLogContext:
-    return PredictionLogContext(
+def prediction_context_from_job(
+    job: PredictionJob,
+) -> shared_eval_logging.PredictionLogContext:
+    return shared_eval_logging.PredictionLogContext(
         prediction_id=job.prediction_id,
         experiment_name=job.experiment_name,
         task_id=job.task_id,
         sample_index=job.sample_index,
-        model=job.model,
-        temperature=job.temperature,
         repetition_seed=job.repetition_seed,
+        dimensions={
+            "model": job.model,
+            "temperature": job.temperature,
+        },
     )
 
 
 def emit_prediction_log_event(
     event: str,
-    context: PredictionLogContext,
+    context: shared_eval_logging.PredictionLogContext,
     *,
     extra: Mapping[str, Any] | None = None,
 ) -> None:
-    payload = context.model_dump(mode="json")
-    if extra is not None:
-        payload.update(extra)
-    emit_worker_detail_log(event, payload)
+    shared_eval_logging.emit_prediction_log_event(
+        event,
+        context,
+        logger_name=DETAILED_WORKER_LOGGER_NAME,
+        extra=extra,
+    )
 
 
 @DBOS.workflow(name="humaneval_eval_generate_prediction_v0")
@@ -463,7 +458,7 @@ def stable_prediction_id(
         task_id=task_id,
         dimensions={"model": model, "temperature": temperature},
         repetition_seed=repetition_seed,
-        digest_length=32,
+        digest_length=PREDICTION_ID_DIGEST_LENGTH,
     )
 
 
@@ -676,35 +671,9 @@ def fetch_prediction_job(
 
 def fetch_prediction_log_context(
     database_url: str, prediction_id: str
-) -> PredictionLogContext:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    prediction_id,
-                    experiment_name,
-                    task_id,
-                    sample_index,
-                    model,
-                    temperature,
-                    repetition_seed
-                FROM dr_dspy_eval_predictions
-                WHERE prediction_id = %s
-                """,
-                (prediction_id,),
-            )
-            row = cur.fetchone()
-    if row is None:
-        raise ValueError(f"prediction_id not found: {prediction_id}")
-    return PredictionLogContext(
-        prediction_id=row[0],
-        experiment_name=row[1],
-        task_id=row[2],
-        sample_index=row[3],
-        model=row[4],
-        temperature=row[5],
-        repetition_seed=row[6],
+) -> shared_eval_logging.PredictionLogContext:
+    return prediction_context_from_job(
+        fetch_prediction_job(database_url, prediction_id)
     )
 
 
@@ -1044,7 +1013,7 @@ def score_generated_code(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_score_prediction_step_v0")
 def score_prediction_step(
     database_url: str, prediction_id: str, timeout: float
 ) -> ScoreResult:
@@ -1064,7 +1033,7 @@ def score_prediction_step(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_record_score_success_step_v0")
 def record_score_success_step(
     database_url: str, result: ScoreResult
 ) -> None:
@@ -1080,7 +1049,7 @@ def record_score_success_step(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_record_score_error_step_v0")
 def record_score_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
@@ -1094,7 +1063,7 @@ def record_score_error_step(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_mark_scoring_queued_step_v0")
 def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
     shared_flow.run_mark_scoring_queued_step(
         database_url=database_url,
@@ -1105,7 +1074,12 @@ def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
     )
 
 
-@DBOS.step(retries_allowed=True, max_attempts=3, interval_seconds=2.0)
+@DBOS.step(
+    name="humaneval_direct_generate_prediction_step_v0",
+    retries_allowed=True,
+    max_attempts=3,
+    interval_seconds=2.0,
+)
 def generate_prediction_step(
     database_url: str, prediction_id: str
 ) -> GenerationResult:
@@ -1120,7 +1094,7 @@ def generate_prediction_step(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_record_generation_success_step_v0")
 def record_generation_success_step(
     database_url: str, result: GenerationResult
 ) -> None:
@@ -1138,7 +1112,7 @@ def record_generation_success_step(
     )
 
 
-@DBOS.step()
+@DBOS.step(name="humaneval_direct_record_generation_error_step_v0")
 def record_generation_error_step(
     database_url: str, prediction_id: str, error: str
 ) -> None:
@@ -1400,7 +1374,7 @@ def fetch_status_counts(
     return shared_eval_reporting.fetch_status_counts(
         database_url,
         prediction_table=PREDICTION_TABLE_NAME,
-        dimension_columns=("model", "temperature"),
+        dimension_columns=REPAIR_DIMENSION_COLUMNS,
         experiment_name=experiment_name,
     )
 

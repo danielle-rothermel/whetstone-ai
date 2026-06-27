@@ -5,6 +5,7 @@ import logging
 import threading
 import uuid
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -62,6 +63,7 @@ DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_REPAIR_GENERATION_LIMIT = 1000
 DEFAULT_REPAIR_SCORING_LIMIT = 1000
 PREDICTION_TABLE_NAME = "dr_dspy_encdec_eval_predictions"
+PREDICTION_ID_DIGEST_LENGTH = 32
 REPAIR_DIMENSION_COLUMNS = (
     "encoder_model",
     "decoder_model",
@@ -382,11 +384,17 @@ def decoder_signature() -> type[dspy.Signature]:
     return _DECODER_SIGNATURE
 
 
-def operator_log(message: str, *, style: str | None = None) -> None:
+def operator_log(
+    line: str,
+    *,
+    style: str | None = None,
+    now: datetime | None = None,
+) -> None:
     shared_eval_logging.operator_log(
         CONSOLE,
-        message,
+        line,
         style=style,
+        now=now,
         timestamp_format=OPERATOR_TIMESTAMP_FORMAT,
     )
 
@@ -491,6 +499,7 @@ def stable_prediction_id(
             "decoder_temperature": decoder_temperature,
         },
         repetition_seed=repetition_seed,
+        digest_length=PREDICTION_ID_DIGEST_LENGTH,
     )
 
 
@@ -1319,9 +1328,8 @@ def apply_repair(
             consume_queues=False,
         ),
         enqueue_generation_jobs=lambda jobs, token: enqueue_generation_jobs(
+            config.database_url,
             jobs,
-            database_url=config.database_url,
-            experiment_name=experiment_name,
             score_timeout=score_timeout,
             retry_token=token,
         ),
@@ -1517,14 +1525,12 @@ def configure_pooled_worker_runtime(
 
 
 def enqueue_generation_jobs(
+    database_url: str,
     jobs: Sequence[EncDecJob],
     *,
-    database_url: str,
-    experiment_name: str,
     score_timeout: float,
     retry_token: str | None = None,
 ) -> None:
-    _ = experiment_name
     shared_dbos.enqueue_generation_workflows(
         database_url,
         jobs,
@@ -1876,19 +1882,21 @@ def submit(
     )
     model_pairs = parse_model_pairs(model_pairs_json)
     samples = build_humaneval_samples(seed=seed, sample_count=sample_count)
+    parsed_encoder_temperatures = parse_temperatures(encoder_temperatures)
+    parsed_decoder_temperatures = parse_temperatures(decoder_temperatures)
     jobs = build_prediction_jobs(
         experiment_name=experiment_name,
         submission_id=uuid.uuid4().hex,
         samples=samples,
         model_pairs=model_pairs,
-        encoder_temperatures=parse_temperatures(encoder_temperatures),
-        decoder_temperatures=parse_temperatures(decoder_temperatures),
+        encoder_temperatures=parsed_encoder_temperatures,
+        decoder_temperatures=parsed_decoder_temperatures,
         repetitions=repetitions,
     )
     metadata = {
         "model_pairs": [pair.model_dump(mode="json") for pair in model_pairs],
-        "encoder_temperatures": parse_temperatures(encoder_temperatures),
-        "decoder_temperatures": parse_temperatures(decoder_temperatures),
+        "encoder_temperatures": parsed_encoder_temperatures,
+        "decoder_temperatures": parsed_decoder_temperatures,
         "repetitions": repetitions,
     }
     operator_log(
@@ -1925,9 +1933,8 @@ def submit(
         ),
         enqueue_generation_jobs=(
             lambda db_url, generation_jobs, timeout: enqueue_generation_jobs(
+                db_url,
                 generation_jobs,
-                database_url=db_url,
-                experiment_name=experiment_name,
                 score_timeout=timeout,
             )
         ),
