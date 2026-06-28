@@ -52,3 +52,9 @@ def test_direct_module_does_not_reexport_shared_runtime_api() -> None:
 
 def test_encdec_module_does_not_reexport_shared_runtime_api() -> None:
     _assert_removed_shared_api_names(encdec)
+
+
+def test_direct_constraint_migration_compares_text_arrays() -> None:
+    migration_sql = "\n".join(direct.PREDICTION_CONSTRAINT_MIGRATION_SQL)
+
+    assert "SELECT a.attname::text" in migration_sql

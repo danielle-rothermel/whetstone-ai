@@ -41,19 +41,18 @@ class RepairRetryCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     prediction_id: StrictStr
-    failure_class: str | None = None
+    failure_class: StrictStr
 
 
 class RepairRetrySummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    legacy_count: StrictInt = 0
     recoverable_count: StrictInt = 0
     excluded_count: StrictInt = 0
 
     @property
     def retryable_count(self) -> int:
-        return self.legacy_count + self.recoverable_count
+        return self.recoverable_count
 
 
 class RepairRetrySelection(BaseModel):
@@ -68,14 +67,8 @@ class RepairRetrySelection(BaseModel):
 
     @property
     def summary(self) -> RepairRetrySummary:
-        legacy_count = sum(
-            1
-            for candidate in self.candidates
-            if candidate.failure_class is None
-        )
         return RepairRetrySummary(
-            legacy_count=legacy_count,
-            recoverable_count=len(self.candidates) - legacy_count,
+            recoverable_count=len(self.candidates),
             excluded_count=self.excluded_count,
         )
 
@@ -236,10 +229,7 @@ def fetch_prediction_retry_selection(
         WHERE
             experiment_name = %s
             AND {status_column} = ANY(%s)
-            AND (
-                {failure_class_column} IS NULL
-                OR {failure_class_column} = ANY(%s)
-            )
+            AND {failure_class_column} = ANY(%s)
             {generation_clause}
         ORDER BY {order_clause(order_columns)}
         LIMIT %s
@@ -257,8 +247,10 @@ def fetch_prediction_retry_selection(
         WHERE
             experiment_name = %s
             AND {status_column} = ANY(%s)
-            AND {failure_class_column} IS NOT NULL
-            AND NOT ({failure_class_column} = ANY(%s))
+            AND (
+                {failure_class_column} IS NULL
+                OR NOT ({failure_class_column} = ANY(%s))
+            )
             {generation_clause}
     """
     with dbos_runtime.connect_db(database_url) as conn:

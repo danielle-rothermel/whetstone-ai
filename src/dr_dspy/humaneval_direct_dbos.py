@@ -261,7 +261,7 @@ PREDICTION_CONSTRAINT_MIGRATION_SQL = (
         WHERE t.relname = 'dr_dspy_eval_predictions'
           AND c.contype = 'u'
           AND ARRAY(
-              SELECT a.attname
+              SELECT a.attname::text
               FROM unnest(c.conkey) WITH ORDINALITY AS cols(attnum, ord)
               JOIN pg_attribute a
                 ON a.attrelid = c.conrelid

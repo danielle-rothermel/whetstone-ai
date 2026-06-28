@@ -72,7 +72,6 @@ def run_repair_command(
     counts = {
         "gen_stranded": len(plan.stranded_generations),
         "gen_errors": len(plan.generation_retry_prediction_ids),
-        "gen_legacy_errors": plan.generation_retry_summary.legacy_count,
         "gen_recoverable_errors": (
             plan.generation_retry_summary.recoverable_count
         ),
@@ -80,7 +79,6 @@ def run_repair_command(
         "score_pending": len(plan.pending_scoring_prediction_ids),
         "score_stranded": len(plan.stranded_scoring),
         "score_errors": len(plan.scoring_retry_prediction_ids),
-        "score_legacy_errors": plan.scoring_retry_summary.legacy_count,
         "score_recoverable_errors": (
             plan.scoring_retry_summary.recoverable_count
         ),
