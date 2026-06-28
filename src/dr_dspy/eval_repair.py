@@ -515,7 +515,7 @@ def apply_repair(
     fetch_generation_jobs: Callable[[Sequence[str]], Sequence[Any]],
     reset_generation_errors: Callable[[Sequence[str]], int],
     configure_runtime: Callable[[], None],
-    enqueue_generation_jobs: Callable[[Sequence[Any], str], None],
+    enqueue_generation_jobs: Callable[[Sequence[Any], str], object],
     enqueue_score_jobs: Callable[[Sequence[str], float, str | None], None],
     repair_token: str | None = None,
 ) -> RepairApplyResult:

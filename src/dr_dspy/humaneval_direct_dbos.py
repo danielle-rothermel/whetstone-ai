@@ -29,6 +29,7 @@ from dr_dspy import eval_repair as shared_eval_repair
 from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
+from dr_dspy import submission_dispatch as shared_submit
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy.experiment_dimensions import (
     Dimension,
@@ -65,6 +66,7 @@ DEFAULT_REPAIR_SCORING_LIMIT = 1000
 DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
+DEFAULT_SUBMIT_BATCH_SIZE = 512
 DB_POOL_AUTO = shared_dbos.DB_POOL_AUTO
 DEFAULT_COST_SIGNIFICANT_DIGITS = 6
 PRICE_PER_THOUSAND_SAMPLE_MULTIPLIER = 1000.0
@@ -74,9 +76,11 @@ TABLE_TOTAL_ROW_STYLE = "bold black on green3"
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_WORKER_LOG_ROOT = PACKAGE_ROOT / "logs"
 DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_eval_only_worker"
+SUBMIT_LOGGER_NAME = "dr_dspy.humaneval_eval_only_submit"
 CONSOLE = Console(soft_wrap=True)
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 PREDICTION_TABLE_NAME = "dr_dspy_eval_predictions"
+SUBMISSION_TABLE_NAME = "dr_dspy_eval_submissions"
 PREDICTION_ID_DIGEST_LENGTH = 32
 DIMENSIONS: tuple[Dimension, ...] = (
     Dimension(
@@ -302,6 +306,27 @@ class DirectHumanEvalExperimentConfig(BaseModel):
     default_subprocess_timeout: float
 
 
+class DirectSubmitSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    script_kind: StrictStr
+    experiment_name: StrictStr
+    seed: StrictInt
+    sample_count: StrictInt
+    model_configs: list[ModelConfig]
+    temperatures: list[float]
+    repetitions: StrictInt
+    score_timeout: float
+
+    def total_jobs(self) -> int:
+        return (
+            self.sample_count
+            * len(self.model_configs)
+            * len(self.temperatures)
+            * self.repetitions
+        )
+
+
 class PredictionJob(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -456,6 +481,29 @@ def configure_worker_file_logging(log_file: Path) -> logging.Logger:
     )
 
 
+def resolve_submit_log_path(
+    *, experiment_name: str, log_file: Path | None = None
+) -> Path:
+    return shared_submit.resolve_submit_log_path(
+        log_root=DEFAULT_WORKER_LOG_ROOT,
+        experiment_name=experiment_name,
+        log_file=log_file,
+        hash_length=EXPERIMENT_QUEUE_HASH_LENGTH,
+    )
+
+
+def configure_submit_file_logging(log_file: Path) -> None:
+    shared_submit.configure_submit_file_logging(
+        log_file, logger_name=SUBMIT_LOGGER_NAME
+    )
+
+
+def emit_submit_log(event: str, payload: Mapping[str, Any]) -> None:
+    shared_submit.emit_submit_log(
+        event, payload, logger_name=SUBMIT_LOGGER_NAME
+    )
+
+
 def emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
     shared_eval_logging.emit_worker_detail_log(
         event, payload, logger_name=DETAILED_WORKER_LOGGER_NAME
@@ -527,6 +575,137 @@ def score_prediction_workflow(
     except Exception as error:
         record_score_error_step(database_url, prediction_id, repr(error))
         return "score_error"
+
+
+@DBOS.workflow(
+    name="humaneval_direct_submit_dispatcher_v0",
+    max_recovery_attempts=1,
+)
+def submit_dispatcher_workflow(database_url: str, submit_key: str) -> str:
+    progress = shared_submit.fetch_submission_progress(
+        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+    )
+    configure_submit_file_logging(Path(progress.log_file))
+    emit_submit_log(
+        "submit_dispatcher_started",
+        {
+            "submit_key": submit_key,
+            "workflow_id": progress.workflow_id,
+            "attempt": progress.attempt,
+            "next_offset": progress.next_offset,
+            "total_jobs": progress.total_jobs,
+        },
+    )
+    shared_submit.mark_submission_running(
+        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+    )
+    try:
+        while True:
+            progress = shared_submit.fetch_submission_progress(
+                database_url,
+                table_name=SUBMISSION_TABLE_NAME,
+                key=submit_key,
+            )
+            if progress.next_offset >= progress.total_jobs:
+                shared_submit.mark_submission_completed(
+                    database_url,
+                    table_name=SUBMISSION_TABLE_NAME,
+                    key=submit_key,
+                )
+                emit_submit_log(
+                    "submit_dispatcher_completed",
+                    {
+                        "submit_key": submit_key,
+                        "total_jobs": progress.total_jobs,
+                        "batch_count": progress.batch_count,
+                    },
+                )
+                return "completed"
+            submit_batch_step(database_url, submit_key)
+    except Exception as error:
+        error_text = repr(error)
+        shared_submit.mark_submission_failed(
+            database_url,
+            table_name=SUBMISSION_TABLE_NAME,
+            key=submit_key,
+            error=error_text,
+        )
+        emit_submit_log(
+            "submit_dispatcher_failed",
+            {"submit_key": submit_key, "error": error_text},
+        )
+        raise
+
+
+@DBOS.step(
+    name="humaneval_direct_submit_batch_step_v0",
+    retries_allowed=True,
+    max_attempts=3,
+    interval_seconds=2.0,
+)
+def submit_batch_step(
+    database_url: str, submit_key: str
+) -> shared_submit.SubmitBatchResult:
+    progress = shared_submit.fetch_submission_progress(
+        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+    )
+    spec = DirectSubmitSpec(
+        **shared_submit.fetch_submission_spec(
+            database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+        )
+    )
+    samples = build_humaneval_samples(
+        seed=spec.seed, sample_count=spec.sample_count
+    )
+    jobs = build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id=progress.submission_id,
+        samples=samples,
+        start_offset=progress.next_offset,
+        limit=DEFAULT_SUBMIT_BATCH_SIZE,
+    )
+    emit_submit_log(
+        "submit_batch_started",
+        {
+            "submit_key": submit_key,
+            "start_offset": progress.next_offset,
+            "batch_size": len(jobs),
+        },
+    )
+    try:
+        inserted = insert_prediction_jobs(database_url, jobs)
+        enqueue_result = enqueue_generation_jobs(
+            database_url, jobs, score_timeout=spec.score_timeout
+        )
+    except Exception as error:
+        emit_submit_log(
+            "submit_batch_failed",
+            {
+                "submit_key": submit_key,
+                "start_offset": progress.next_offset,
+                "batch_size": len(jobs),
+                "error": repr(error),
+            },
+        )
+        raise
+    result = shared_submit.SubmitBatchResult(
+        start_offset=progress.next_offset,
+        next_offset=progress.next_offset + len(jobs),
+        batch_size=len(jobs),
+        inserted=inserted,
+        enqueued=enqueue_result.enqueued,
+        existing_workflows=enqueue_result.existing,
+    )
+    shared_submit.record_batch_success(
+        database_url,
+        table_name=SUBMISSION_TABLE_NAME,
+        key=submit_key,
+        result=result,
+    )
+    emit_submit_log(
+        "submit_batch_succeeded", result.model_dump(mode="json")
+    )
+    return result
 
 
 def stable_prediction_id(
@@ -609,6 +788,82 @@ def build_prediction_jobs(
                             reasoning=dict(model_config.reasoning),
                         )
                     )
+    return jobs
+
+
+def build_submit_spec(
+    *,
+    experiment_name: str,
+    seed: int,
+    sample_count: int,
+    model_configs: Sequence[ModelConfig],
+    temperatures: Sequence[float],
+    repetitions: int,
+    score_timeout: float,
+) -> DirectSubmitSpec:
+    return DirectSubmitSpec(
+        script_kind=experiment_config().script_kind,
+        experiment_name=experiment_name,
+        seed=seed,
+        sample_count=sample_count,
+        model_configs=[
+            ModelConfig(**config.model_dump(mode="python"))
+            for config in model_configs
+        ],
+        temperatures=list(temperatures),
+        repetitions=repetitions,
+        score_timeout=score_timeout,
+    )
+
+
+def build_prediction_jobs_for_offsets(
+    *,
+    spec: DirectSubmitSpec,
+    submission_id: str,
+    samples: Sequence[HumanEvalSample],
+    start_offset: int,
+    limit: int,
+) -> list[PredictionJob]:
+    total_jobs = spec.total_jobs()
+    end_offset = min(start_offset + limit, total_jobs)
+    jobs: list[PredictionJob] = []
+    for offset in range(start_offset, end_offset):
+        remaining = offset
+        repetition_seed = remaining % spec.repetitions
+        remaining //= spec.repetitions
+        temperature = spec.temperatures[remaining % len(spec.temperatures)]
+        remaining //= len(spec.temperatures)
+        model_config = spec.model_configs[
+            remaining % len(spec.model_configs)
+        ]
+        remaining //= len(spec.model_configs)
+        sample = samples[remaining]
+        jobs.append(
+            PredictionJob(
+                prediction_id=stable_prediction_id(
+                    experiment_name=spec.experiment_name,
+                    task_id=sample.task_id,
+                    model=model_config.model,
+                    temperature=temperature,
+                    reasoning=model_config.reasoning,
+                    repetition_seed=repetition_seed,
+                ),
+                experiment_name=spec.experiment_name,
+                script_kind=spec.script_kind,
+                submission_id=submission_id,
+                task_id=sample.task_id,
+                sample_index=sample.sample_index,
+                model=model_config.model,
+                temperature=temperature,
+                repetition_seed=repetition_seed,
+                prompt=sample.prompt,
+                canonical_solution=sample.canonical_solution,
+                ground_truth_code=sample.ground_truth_code,
+                test=sample.test,
+                entry_point=sample.entry_point,
+                reasoning=dict(model_config.reasoning),
+            )
+        )
     return jobs
 
 
@@ -1481,9 +1736,11 @@ def create_eval_schema(database_url: str) -> None:
         statements=(
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
+            shared_submit.submission_table_sql(SUBMISSION_TABLE_NAME),
             *PREDICTION_MIGRATION_SQL,
             *PREDICTION_CONSTRAINT_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
+            *shared_submit.submission_index_sql(SUBMISSION_TABLE_NAME),
         ),
     )
 
@@ -1632,8 +1889,8 @@ def enqueue_generation_jobs(
     *,
     score_timeout: float,
     retry_token: str | None = None,
-) -> None:
-    shared_dbos.enqueue_generation_workflows(
+) -> shared_dbos.EnqueueWorkflowsResult:
+    return shared_dbos.enqueue_generation_workflows(
         database_url,
         jobs,
         queue_config=QUEUE_NAME_CONFIG,
@@ -1741,8 +1998,8 @@ class DirectExperiment:
         *,
         score_timeout: float,
         retry_token: str | None = None,
-    ) -> None:
-        enqueue_generation_jobs(
+    ) -> shared_dbos.EnqueueWorkflowsResult:
+        return enqueue_generation_jobs(
             database_url,
             jobs,
             score_timeout=score_timeout,
@@ -2115,16 +2372,21 @@ def submit(
     parsed_temperatures = parse_temperatures(temperatures)
     samples = build_humaneval_samples(seed=seed, sample_count=sample_count)
     submission_id = uuid.uuid4().hex
-    jobs = build_prediction_jobs(
+    submit_spec = build_submit_spec(
         experiment_name=experiment_name,
-        submission_id=submission_id,
-        samples=samples,
         model_configs=model_configs,
+        seed=seed,
+        sample_count=len(samples),
         temperatures=parsed_temperatures,
         repetitions=repetitions,
+        score_timeout=score_timeout,
+    )
+    total_jobs = submit_spec.total_jobs()
+    submit_key = shared_submit.submit_key(
+        submit_spec.model_dump(mode="json")
     )
     operator_log(
-        f"planned {len(jobs)} jobs: samples={len(samples)}, "
+        f"planned {total_jobs} jobs: samples={len(samples)}, "
         f"models={len(model_configs)}, "
         f"temperatures={len(parsed_temperatures)}, "
         f"repetitions={repetitions}",
@@ -2137,24 +2399,79 @@ def submit(
         )
         return
 
-    shared_flow.run_submit_jobs(
-        _BACKEND,
-        config=config,
+    resolved_log_file = resolve_submit_log_path(
+        experiment_name=experiment_name
+    )
+    metadata = {
+        "submission_id": submission_id,
+        "submit_key": submit_key,
+        "models": [model.model_dump(mode="json") for model in model_configs],
+        "temperatures": parsed_temperatures,
+        "repetitions": repetitions,
+        "score_timeout": score_timeout,
+    }
+    create_eval_schema(config.database_url)
+    upsert_experiment(
+        config.database_url,
         experiment_name=experiment_name,
         seed=seed,
-        sample_count=sample_count,
-        metadata={
-            "submission_id": submission_id,
-            "models": [
-                model.model_dump(mode="json") for model in model_configs
-            ],
-            "temperatures": parsed_temperatures,
-            "repetitions": repetitions,
-            "score_timeout": score_timeout,
-        },
-        jobs=jobs,
-        score_timeout=score_timeout,
+        sample_count=len(samples),
+        metadata=metadata,
     )
+    progress = shared_submit.prepare_submission(
+        config.database_url,
+        table_name=SUBMISSION_TABLE_NAME,
+        key=submit_key,
+        experiment_name=experiment_name,
+        script_kind=experiment.script_kind,
+        submission_id=submission_id,
+        spec=submit_spec.model_dump(mode="json"),
+        metadata=metadata,
+        total_jobs=total_jobs,
+        log_file=resolved_log_file,
+    )
+    active_log_file = Path(progress.log_file)
+    configure_submit_file_logging(active_log_file)
+    metadata["submission_id"] = progress.submission_id
+    emit_submit_log(
+        "submit_planned",
+        {
+            "submit_key": submit_key,
+            "submission_id": progress.submission_id,
+            "experiment_name": experiment_name,
+            "total_jobs": total_jobs,
+            "metadata": metadata,
+        },
+    )
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
+    launched = shared_submit.ensure_submit_workflow(
+        workflow_id=progress.workflow_id,
+        workflow=submit_dispatcher_workflow,
+        database_url=config.database_url,
+        submit_key=submit_key,
+    )
+    emit_submit_log(
+        "submit_dispatcher_enqueued",
+        {
+            "submit_key": submit_key,
+            "workflow_id": progress.workflow_id,
+            "launched": launched,
+            "log_file": str(active_log_file),
+        },
+    )
+    operator_log(f"submit detail log: {active_log_file}", style="cyan")
+    final_progress = shared_submit.tail_submission_progress(
+        database_url=config.database_url,
+        table_name=SUBMISSION_TABLE_NAME,
+        submit_key=submit_key,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        operator_log=operator_log,
+    )
+    if final_progress.status is shared_submit.SubmissionStatus.FAILED:
+        raise typer.Exit(code=1)
 
 
 @_APP.command()

@@ -66,6 +66,12 @@ Both DBOS scripts use `DATABASE_URL` for application tables and
 `DBOS_SYSTEM_DATABASE_URL` for DBOS system tables. When
 `DBOS_SYSTEM_DATABASE_URL` is unset, they use `DATABASE_URL` for both.
 
+For non-dry-run submissions, `submit` stores a deterministic submission record,
+launches a durable DBOS dispatcher workflow, and tails dispatcher progress while
+jobs are inserted and generation workflows are enqueued in batches. Workers can
+start before the full Cartesian sweep has been submitted. Submit and worker
+detail logs are written under `src/logs/<experiment>-<hash>/`.
+
 Common direct eval flow:
 
 ```sh

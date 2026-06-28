@@ -45,11 +45,11 @@ def hashed_experiment_log_name(
     )
 
 
-def default_worker_log_path(
+def default_detail_log_path(
     *,
     log_root: Path,
     experiment_name: str,
-    queue: dbos_runtime.QueueSelection,
+    log_kind: str,
     hash_length: int,
     now: datetime | None = None,
     pid: int | None = None,
@@ -57,7 +57,7 @@ def default_worker_log_path(
     resolved_now = now or datetime.now()
     resolved_pid = pid if pid is not None else os.getpid()
     filename = (
-        f"{resolved_now:%Y%m%d-%H%M%S}-{queue.value}-pid"
+        f"{resolved_now:%Y%m%d-%H%M%S}-{log_kind}-pid"
         f"{resolved_pid}.log"
     )
     return (
@@ -69,25 +69,25 @@ def default_worker_log_path(
     )
 
 
-def resolve_worker_log_path(
+def resolve_detail_log_path(
     *,
     log_root: Path,
     experiment_name: str,
-    queue: dbos_runtime.QueueSelection,
+    log_kind: str,
     log_file: Path | None,
     hash_length: int,
 ) -> Path:
     if log_file is not None:
         return log_file
-    return default_worker_log_path(
+    return default_detail_log_path(
         log_root=log_root,
         experiment_name=experiment_name,
-        queue=queue,
+        log_kind=log_kind,
         hash_length=hash_length,
     )
 
 
-def configure_worker_file_logging(
+def configure_detail_file_logging(
     log_file: Path, *, logger_name: str
 ) -> logging.Logger:
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -105,13 +105,61 @@ def configure_worker_file_logging(
     return logger
 
 
-def emit_worker_detail_log(
+def emit_detail_log(
     event: str, payload: Mapping[str, Any], *, logger_name: str
 ) -> None:
     logger = logging.getLogger(logger_name)
     if not logger.handlers:
         return
     logger.info(stable_json({"event": event, **payload}))
+
+
+def default_worker_log_path(
+    *,
+    log_root: Path,
+    experiment_name: str,
+    queue: dbos_runtime.QueueSelection,
+    hash_length: int,
+    now: datetime | None = None,
+    pid: int | None = None,
+) -> Path:
+    return default_detail_log_path(
+        log_root=log_root,
+        experiment_name=experiment_name,
+        log_kind=queue.value,
+        hash_length=hash_length,
+        now=now,
+        pid=pid,
+    )
+
+
+def resolve_worker_log_path(
+    *,
+    log_root: Path,
+    experiment_name: str,
+    queue: dbos_runtime.QueueSelection,
+    log_file: Path | None,
+    hash_length: int,
+) -> Path:
+    return resolve_detail_log_path(
+        log_root=log_root,
+        experiment_name=experiment_name,
+        log_kind=queue.value,
+        log_file=log_file,
+        hash_length=hash_length,
+    )
+
+
+def configure_worker_file_logging(
+    log_file: Path, *, logger_name: str
+) -> logging.Logger:
+    return configure_detail_file_logging(log_file, logger_name=logger_name)
+
+
+def emit_worker_detail_log(
+    event: str, payload: Mapping[str, Any], *, logger_name: str
+) -> None:
+    emit_detail_log(event, payload, logger_name=logger_name)
 
 
 def emit_prediction_log_event(

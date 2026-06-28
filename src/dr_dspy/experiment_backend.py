@@ -19,7 +19,11 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Protocol
 
-from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
+from dr_dspy.dbos_runtime import (
+    EnqueueWorkflowsResult,
+    EvalDbosConfig,
+    QueueSelection,
+)
 from dr_dspy.eval_logging import PredictionLogContext
 from dr_dspy.eval_repair import RepairApplyResult, RepairPlan
 from dr_dspy.experiment_dimensions import Dimension
@@ -62,7 +66,7 @@ class ExperimentBackend(Protocol):
         *,
         score_timeout: float,
         retry_token: str | None = None,
-    ) -> None: ...
+    ) -> EnqueueWorkflowsResult: ...
 
     # --- generation step ops ---
     def mark_generation_started(

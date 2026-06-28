@@ -71,6 +71,13 @@ class EvalQueueNames(BaseModel):
     scoring: StrictStr
 
 
+class EnqueueWorkflowsResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enqueued: StrictInt
+    existing: StrictInt
+
+
 class QueueNameConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -510,21 +517,34 @@ def enqueue_generation_workflows(
     workflow: Callable[..., str],
     score_timeout: float,
     retry_token: str | None = None,
-) -> None:
+) -> EnqueueWorkflowsResult:
+    enqueued = 0
+    existing = 0
     for job in jobs:
         workflow_id = generation_workflow_id(
             job.prediction_id, retry_token=retry_token
         )
         queue_names = eval_queue_names(job.experiment_name, queue_config)
+        if DBOS.get_workflow_status(workflow_id) is not None:
+            existing += 1
+            continue
         with SetWorkflowID(workflow_id):
-            DBOS.enqueue_workflow(
-                queue_names.generation,
-                workflow,
-                database_url,
-                job.prediction_id,
-                job.experiment_name,
-                score_timeout,
-            )
+            try:
+                DBOS.enqueue_workflow(
+                    queue_names.generation,
+                    workflow,
+                    database_url,
+                    job.prediction_id,
+                    job.experiment_name,
+                    score_timeout,
+                )
+            except Exception:
+                if DBOS.get_workflow_status(workflow_id) is not None:
+                    existing += 1
+                    continue
+                raise
+        enqueued += 1
+    return EnqueueWorkflowsResult(enqueued=enqueued, existing=existing)
 
 
 def enqueue_score_workflow(
