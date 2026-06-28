@@ -3,7 +3,7 @@
 A `Dimension` is one axis of an experiment sweep (model, temperature,
 reasoning, budget ratio, ...). The spec is the single source of truth that
 drives identity (prediction-id hash + UNIQUE constraint + table columns) and
-reporting (status / analysis columns), so adding a sweep axis is a one-line
+reporting columns, so adding a sweep axis is a one-line
 change instead of edits scattered across schema, SQL, and reporting.
 
 Payload columns (generation output, scores, metadata) stay explicit

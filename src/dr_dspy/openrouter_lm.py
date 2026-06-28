@@ -10,6 +10,10 @@ from openai import OpenAI
 
 import dspy
 from dr_dspy.lm_logging import PutEventFn, _LoggingMixin
+from dspy.clients.openai_format import (
+    completion_to_lm_response,
+    to_openai_chat_request,
+)
 
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -19,14 +23,13 @@ __all__ = [
     "OPENROUTER_API_KEY_ENV",
     "OPENROUTER_BASE_URL",
     "LoggingOpenRouterLM",
-    "OpenRouterLM",
 ]
 
 
-class OpenRouterLM(dspy.BaseLM):
-    """DSPy legacy LM that calls OpenRouter chat completions directly."""
+class _OpenRouterLM(dspy.BaseLM):
+    """DSPy typed LM that calls OpenRouter chat completions directly."""
 
-    forward_contract = "legacy"
+    forward_contract = "typed_lm"
 
     def __init__(
         self,
@@ -85,42 +88,66 @@ class OpenRouterLM(dspy.BaseLM):
 
     def _request_kwargs(
         self,
-        messages: list[dict[str, Any]],
-        kwargs: dict[str, Any],
+        request: dspy.LMRequest,
     ) -> dict[str, Any]:
         request_kwargs = {
             key: value
-            for key, value in {**self.kwargs, **kwargs}.items()
+            for key, value in to_openai_chat_request(request).items()
             if key not in DSPY_ONLY_KWARGS and value is not None
         }
         if self.reasoning:
             extra_body = dict(request_kwargs.pop("extra_body", {}) or {})
             extra_body["reasoning"] = dict(self.reasoning)
             request_kwargs["extra_body"] = extra_body
-        return {"model": self.model, "messages": messages, **request_kwargs}
+        return request_kwargs
+
+    def _create_completion(self, request_kwargs: dict[str, Any]) -> Any:
+        return self._get_client().chat.completions.create(**request_kwargs)
+
+    def _provider_completion(self, request: dspy.LMRequest) -> Any:
+        return self._create_completion(self._request_kwargs(request))
+
+    def _forward_request(
+        self,
+        prompt: str | dspy.LMRequest | None,
+        messages: list[dict[str, Any]] | None,
+        kwargs: dict[str, Any],
+    ) -> dspy.LMRequest:
+        if (
+            isinstance(prompt, dspy.LMRequest)
+            and messages is None
+            and not kwargs
+        ):
+            return prompt
+        raise TypeError(
+            f"{type(self).__name__}.forward() requires a dspy.LMRequest; "
+            "call the LM object instead of calling forward() directly."
+        )
 
     def forward(
         self,
-        prompt: Any = None,
+        prompt: str | dspy.LMRequest | None = None,
         messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> Any:
-        messages = messages or [{"role": "user", "content": prompt}]
-        return self._get_client().chat.completions.create(
-            **self._request_kwargs(messages, kwargs)
+    ) -> dspy.LMResponse:
+        request = self._forward_request(prompt, messages, kwargs)
+        return completion_to_lm_response(
+            self._provider_completion(request), request
         )
 
     async def aforward(
         self,
-        prompt: Any = None,
+        prompt: str | dspy.LMRequest | None = None,
         messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> dspy.LMResponse:
         return self.forward(prompt=prompt, messages=messages, **kwargs)
 
 
-class LoggingOpenRouterLM(_LoggingMixin, OpenRouterLM):
-    """OpenRouterLM with lm.request/response/error logging."""
+class LoggingOpenRouterLM(_LoggingMixin, _OpenRouterLM):
+    """OpenRouter typed LM with lm.request/response/error logging."""
+
+    forward_contract = "typed_lm"
 
     def __init__(self, model: str, *, log: PutEventFn, **kwargs: Any) -> None:
         super().__init__(model, **kwargs)
@@ -128,22 +155,27 @@ class LoggingOpenRouterLM(_LoggingMixin, OpenRouterLM):
 
     def forward(
         self,
-        prompt: Any = None,
+        prompt: str | dspy.LMRequest | None = None,
         messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> Any:
-        return self._run_logged_forward(
-            lambda: super(LoggingOpenRouterLM, self).forward(
-                prompt=prompt, messages=messages, **kwargs
-            ),
-            messages=messages,
-            kwargs=kwargs,
+    ) -> dspy.LMResponse:
+        request = self._forward_request(prompt, messages, kwargs)
+        request_kwargs = self._request_kwargs(request)
+        completion = self._run_logged_forward(
+            lambda: self._create_completion(request_kwargs),
+            messages=request_kwargs.get("messages"),
+            kwargs={
+                key: value
+                for key, value in request_kwargs.items()
+                if key != "messages"
+            },
         )
+        return completion_to_lm_response(completion, request)
 
     async def aforward(
         self,
-        prompt: Any = None,
+        prompt: str | dspy.LMRequest | None = None,
         messages: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> Any:
+    ) -> dspy.LMResponse:
         return self.forward(prompt=prompt, messages=messages, **kwargs)
