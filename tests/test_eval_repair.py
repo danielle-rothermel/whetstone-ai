@@ -3,22 +3,9 @@ from __future__ import annotations
 from dr_dspy.eval_repair import (
     RepairRetryCandidate,
     RepairRetrySelection,
-    is_retryable_failure_class,
     unique_prediction_ids,
 )
 from dr_dspy.failure_policy import FailureClass
-
-
-def test_retryable_failure_class_includes_legacy_and_recoverable() -> None:
-    assert is_retryable_failure_class(None)
-    assert is_retryable_failure_class(FailureClass.TRANSIENT.value)
-    assert is_retryable_failure_class(FailureClass.RATE_LIMITED.value)
-    assert is_retryable_failure_class(FailureClass.RESOURCE_EXHAUSTION.value)
-
-
-def test_retryable_failure_class_excludes_permanent_and_unknown() -> None:
-    assert not is_retryable_failure_class(FailureClass.PERMANENT.value)
-    assert not is_retryable_failure_class(FailureClass.UNKNOWN.value)
 
 
 def test_retry_selection_summary_separates_retry_categories() -> None:

@@ -205,12 +205,6 @@ def recoverable_failure_class_values() -> list[str]:
     ]
 
 
-def is_retryable_failure_class(failure_class: str | None) -> bool:
-    if failure_class is None:
-        return True
-    return failure_class in recoverable_failure_class_values()
-
-
 def fetch_prediction_retry_selection(
     database_url: str,
     *,
@@ -286,23 +280,6 @@ def fetch_prediction_retry_selection(
     )
 
 
-def fetch_generation_error_prediction_ids(
-    database_url: str,
-    *,
-    prediction_table: str,
-    experiment_name: str,
-    order_columns: Sequence[str],
-    limit: int,
-) -> list[str]:
-    return fetch_generation_retry_selection(
-        database_url,
-        prediction_table=prediction_table,
-        experiment_name=experiment_name,
-        order_columns=order_columns,
-        limit=limit,
-    ).prediction_ids
-
-
 def fetch_generation_retry_selection(
     database_url: str,
     *,
@@ -340,23 +317,6 @@ def fetch_pending_scoring_prediction_ids(
         order_columns=order_columns,
         limit=limit,
     )
-
-
-def fetch_score_error_prediction_ids(
-    database_url: str,
-    *,
-    prediction_table: str,
-    experiment_name: str,
-    order_columns: Sequence[str],
-    limit: int,
-) -> list[str]:
-    return fetch_scoring_retry_selection(
-        database_url,
-        prediction_table=prediction_table,
-        experiment_name=experiment_name,
-        order_columns=order_columns,
-        limit=limit,
-    ).prediction_ids
 
 
 def fetch_scoring_retry_selection(
