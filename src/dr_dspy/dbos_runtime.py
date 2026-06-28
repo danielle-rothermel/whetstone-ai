@@ -560,17 +560,25 @@ def enqueue_score_workflow(
     workflow: Callable[..., str],
     timeout: float,
     retry_token: str | None = None,
-) -> None:
+) -> bool:
     workflow_id = score_workflow_id(prediction_id, retry_token=retry_token)
     queue_names = eval_queue_names(experiment_name, queue_config)
+    if DBOS.get_workflow_status(workflow_id) is not None:
+        return False
     with SetWorkflowID(workflow_id):
-        DBOS.enqueue_workflow(
-            queue_names.scoring,
-            workflow,
-            database_url,
-            prediction_id,
-            timeout,
-        )
+        try:
+            DBOS.enqueue_workflow(
+                queue_names.scoring,
+                workflow,
+                database_url,
+                prediction_id,
+                timeout,
+            )
+        except Exception:
+            if DBOS.get_workflow_status(workflow_id) is not None:
+                return False
+            raise
+    return True
 
 
 def enqueue_score_workflows(
@@ -582,9 +590,11 @@ def enqueue_score_workflows(
     workflow: Callable[..., str],
     timeout: float,
     retry_token: str | None = None,
-) -> None:
+) -> EnqueueWorkflowsResult:
+    enqueued = 0
+    existing = 0
     for prediction_id in prediction_ids:
-        enqueue_score_workflow(
+        if enqueue_score_workflow(
             database_url,
             prediction_id,
             experiment_name=experiment_name,
@@ -592,4 +602,8 @@ def enqueue_score_workflows(
             workflow=workflow,
             timeout=timeout,
             retry_token=retry_token,
-        )
+        ):
+            enqueued += 1
+        else:
+            existing += 1
+    return EnqueueWorkflowsResult(enqueued=enqueued, existing=existing)

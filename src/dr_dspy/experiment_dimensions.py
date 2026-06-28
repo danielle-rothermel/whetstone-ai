@@ -18,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
-from dr_dspy.eval_reporting import StatusDimension, validate_sql_identifier
+from dr_dspy.eval_reporting import validate_sql_identifier
 
 ReportJustify = Literal["default", "left", "center", "right", "full"]
 
@@ -84,18 +84,3 @@ def identity_constraint_columns(
     for column in columns:
         validate_sql_identifier(column)
     return columns
-
-
-def status_dimensions(
-    dimensions: Sequence[Dimension],
-) -> list[StatusDimension]:
-    """StatusDimension list for reporting columns (status + analysis)."""
-    return [
-        StatusDimension(
-            key=d.name,
-            title=d.report_title,
-            justify=d.report_justify,
-        )
-        for d in dimensions
-        if d.in_reporting
-    ]

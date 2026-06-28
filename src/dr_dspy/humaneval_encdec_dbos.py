@@ -21,17 +21,15 @@ from pydantic import (
     StrictStr,
 )
 from rich.console import Console
-from rich.table import Table
 
 import dspy
+from dr_dspy import batch_operation as shared_batch
 from dr_dspy import dbos_runtime as shared_dbos
 from dr_dspy import dspy_runner as shared_dspy_runner
 from dr_dspy import eval_logging as shared_eval_logging
 from dr_dspy import eval_repair as shared_eval_repair
-from dr_dspy import eval_reporting as shared_eval_reporting
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
-from dr_dspy import submission_dispatch as shared_submit
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy import worker_resources as shared_worker_resources
 from dr_dspy.experiment_dimensions import (
@@ -39,8 +37,6 @@ from dr_dspy.experiment_dimensions import (
     dimension_columns_ddl,
     identity_constraint_columns,
     identity_dimension_names,
-    reporting_dimension_names,
-    status_dimensions,
 )
 from dr_dspy.failure_policy import (
     FailureSummary,
@@ -83,11 +79,11 @@ DEFAULT_WORKER_OPEN_FILE_LIMIT = shared_worker_resources.OPEN_FILE_LIMIT_AUTO
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
 DEFAULT_SUBMIT_BATCH_SIZE = 512
+DEFAULT_OPERATION_BATCH_SIZE = 512
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_REPAIR_GENERATION_LIMIT = 1000
 DEFAULT_REPAIR_SCORING_LIMIT = 1000
 PREDICTION_TABLE_NAME = "dr_dspy_encdec_eval_predictions"
-SUBMISSION_TABLE_NAME = "dr_dspy_encdec_eval_submissions"
 PREDICTION_ID_DIGEST_LENGTH = 32
 DIMENSIONS: tuple[Dimension, ...] = (
     Dimension(
@@ -138,7 +134,6 @@ DIMENSIONS: tuple[Dimension, ...] = (
     ),
 )
 REPAIR_DIMENSION_COLUMNS = identity_dimension_names(DIMENSIONS)
-REPORTING_DIMENSION_COLUMNS = reporting_dimension_names(DIMENSIONS)
 REPAIR_ORDER_COLUMNS = (
     "encoder_model",
     "decoder_model",
@@ -151,6 +146,7 @@ EXPERIMENT_QUEUE_HASH_LENGTH = 8
 DEFAULT_WORKER_LOG_ROOT = Path(__file__).resolve().parents[1] / "logs"
 DETAILED_WORKER_LOGGER_NAME = "dr_dspy.humaneval_encdec_worker"
 SUBMIT_LOGGER_NAME = "dr_dspy.humaneval_encdec_submit"
+OPERATION_LOGGER_NAME = "dr_dspy.humaneval_encdec_operations"
 OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 CONSOLE = Console(soft_wrap=True)
 
@@ -416,45 +412,6 @@ class ScoringTarget(BaseModel):
 ScoreResult = HumanEvalScoreResult
 
 
-class AnalysisRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    encoder_model: StrictStr
-    decoder_model: StrictStr
-    encoder_temperature: float | None
-    decoder_temperature: float | None
-    budget_ratio: float | None
-    task_id: StrictStr
-    repetition_seed: StrictInt
-    score: float
-    provider_cost: float | None
-    raw_compile_ok: bool | None = None
-    extracted_compile_ok: bool | None = None
-    raw_compression_ratio: float | None = None
-    best_compression_ratio: float | None = None
-    best_compression_percent_reduction: float | None = None
-
-
-class AnalysisSummary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    dimensions: dict[str, Any]
-    sample_count: StrictInt
-    scored_count: StrictInt
-    total_price: float | None
-    avg_price_per_sample: float | None
-    price_variance: float | None
-    avg_performance: float
-    performance_variance: float | None
-    avg_repetition_variance: float | None
-    raw_compile_pass_count: StrictInt
-    extracted_compile_pass_count: StrictInt
-    extraction_lift: StrictInt
-    avg_raw_compression_ratio: float | None = None
-    avg_best_compression_ratio: float | None = None
-    avg_best_compression_percent_reduction: float | None = None
-
-
 _EXPERIMENT_CONFIG: EncDecHumanEvalExperimentConfig | None = None
 _ENCODER_SIGNATURE: type[dspy.Signature] | None = None
 _BUDGETED_ENCODER_SIGNATURE: type[dspy.Signature] | None = None
@@ -552,25 +509,51 @@ def configure_worker_file_logging(log_file: Path) -> logging.Logger:
     )
 
 
-def resolve_submit_log_path(
-    *, experiment_name: str, log_file: Path | None = None
+def resolve_operation_log_path(
+    *,
+    experiment_name: str,
+    operation_kind: shared_batch.BatchOperationKind,
+    log_file: Path | None = None,
 ) -> Path:
-    return shared_submit.resolve_submit_log_path(
+    return shared_batch.resolve_operation_log_path(
         log_root=DEFAULT_WORKER_LOG_ROOT,
         experiment_name=experiment_name,
+        operation_kind=operation_kind,
         log_file=log_file,
         hash_length=EXPERIMENT_QUEUE_HASH_LENGTH,
     )
 
 
+def configure_operation_file_logging(log_file: Path) -> None:
+    shared_batch.configure_operation_file_logging(
+        log_file, logger_name=OPERATION_LOGGER_NAME
+    )
+
+
+def emit_operation_log(event: str, payload: Mapping[str, Any]) -> None:
+    shared_batch.emit_operation_log(
+        event, payload, logger_name=OPERATION_LOGGER_NAME
+    )
+
+
+def resolve_submit_log_path(
+    *, experiment_name: str, log_file: Path | None = None
+) -> Path:
+    return resolve_operation_log_path(
+        experiment_name=experiment_name,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        log_file=log_file,
+    )
+
+
 def configure_submit_file_logging(log_file: Path) -> None:
-    shared_submit.configure_submit_file_logging(
+    shared_batch.configure_operation_file_logging(
         log_file, logger_name=SUBMIT_LOGGER_NAME
     )
 
 
 def emit_submit_log(event: str, payload: Mapping[str, Any]) -> None:
-    shared_submit.emit_submit_log(
+    shared_batch.emit_operation_log(
         event, payload, logger_name=SUBMIT_LOGGER_NAME
     )
 
@@ -680,74 +663,6 @@ def stable_prediction_id(
         repetition_seed=repetition_seed,
         digest_length=PREDICTION_ID_DIGEST_LENGTH,
     )
-
-
-def build_prediction_jobs(
-    *,
-    experiment_name: str,
-    submission_id: str,
-    samples: Sequence[EncDecSample],
-    model_pairs: Sequence[EncDecPair],
-    encoder_temperatures: Sequence[float],
-    decoder_temperatures: Sequence[float],
-    budget_ratios: Sequence[float | None],
-    repetitions: int,
-) -> list[EncDecJob]:
-    jobs: list[EncDecJob] = []
-    for sample in samples:
-        for pair in model_pairs:
-            for encoder_temperature in encoder_temperatures:
-                for decoder_temperature in decoder_temperatures:
-                    for budget_ratio in budget_ratios:
-                        for repetition_seed in range(repetitions):
-                            jobs.append(
-                                EncDecJob(
-                                    prediction_id=stable_prediction_id(
-                                        experiment_name=experiment_name,
-                                        task_id=sample.task_id,
-                                        encoder_model=pair.encoder.model,
-                                        decoder_model=pair.decoder.model,
-                                        encoder_temperature=(
-                                            encoder_temperature
-                                        ),
-                                        decoder_temperature=(
-                                            decoder_temperature
-                                        ),
-                                        budget_ratio=budget_ratio,
-                                        encoder_reasoning=(
-                                            pair.encoder.reasoning
-                                        ),
-                                        decoder_reasoning=(
-                                            pair.decoder.reasoning
-                                        ),
-                                        repetition_seed=repetition_seed,
-                                    ),
-                                    experiment_name=experiment_name,
-                                    submission_id=submission_id,
-                                    task_id=sample.task_id,
-                                    sample_index=sample.sample_index,
-                                    encoder_model=pair.encoder.model,
-                                    decoder_model=pair.decoder.model,
-                                    encoder_temperature=encoder_temperature,
-                                    decoder_temperature=decoder_temperature,
-                                    budget_ratio=budget_ratio,
-                                    repetition_seed=repetition_seed,
-                                    prompt=sample.prompt,
-                                    canonical_solution=(
-                                        sample.canonical_solution
-                                    ),
-                                    ground_truth_code=sample.ground_truth_code,
-                                    test=sample.test,
-                                    entry_point=sample.entry_point,
-                                    encoder_reasoning=dict(
-                                        pair.encoder.reasoning
-                                    ),
-                                    decoder_reasoning=dict(
-                                        pair.decoder.reasoning
-                                    ),
-                                )
-                            )
-    return jobs
 
 
 def build_submit_spec(
@@ -1521,58 +1436,64 @@ def score_prediction_workflow(
     name="humaneval_encdec_submit_dispatcher_v0",
     max_recovery_attempts=1,
 )
-def submit_dispatcher_workflow(database_url: str, submit_key: str) -> str:
-    progress = shared_submit.fetch_submission_progress(
-        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+def submit_dispatcher_workflow(
+    database_url: str, operation_key: str
+) -> str:
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
     )
     configure_submit_file_logging(Path(progress.log_file))
     emit_submit_log(
         "submit_dispatcher_started",
         {
-            "submit_key": submit_key,
+            "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
             "next_offset": progress.next_offset,
-            "total_jobs": progress.total_jobs,
+            "total_jobs": progress.total_items,
         },
     )
-    shared_submit.mark_submission_running(
-        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+    shared_batch.mark_operation_running(
+        database_url,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
     )
     try:
         while True:
-            progress = shared_submit.fetch_submission_progress(
+            progress = shared_batch.fetch_operation_progress(
                 database_url,
-                table_name=SUBMISSION_TABLE_NAME,
-                key=submit_key,
+                operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+                operation_key=operation_key,
             )
-            if progress.next_offset >= progress.total_jobs:
-                shared_submit.mark_submission_completed(
+            if progress.next_offset >= progress.total_items:
+                shared_batch.mark_operation_completed(
                     database_url,
-                    table_name=SUBMISSION_TABLE_NAME,
-                    key=submit_key,
+                    operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+                    operation_key=operation_key,
                 )
                 emit_submit_log(
                     "submit_dispatcher_completed",
                     {
-                        "submit_key": submit_key,
-                        "total_jobs": progress.total_jobs,
+                        "operation_key": operation_key,
+                        "total_jobs": progress.total_items,
                         "batch_count": progress.batch_count,
                     },
                 )
                 return "completed"
-            submit_batch_step(database_url, submit_key)
+            submit_batch_step(database_url, operation_key)
     except Exception as error:
         error_text = repr(error)
-        shared_submit.mark_submission_failed(
+        shared_batch.mark_operation_failed(
             database_url,
-            table_name=SUBMISSION_TABLE_NAME,
-            key=submit_key,
+            operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+            operation_key=operation_key,
             error=error_text,
         )
         emit_submit_log(
             "submit_dispatcher_failed",
-            {"submit_key": submit_key, "error": error_text},
+            {"operation_key": operation_key, "error": error_text},
         )
         raise
 
@@ -1584,14 +1505,18 @@ def submit_dispatcher_workflow(database_url: str, submit_key: str) -> str:
     interval_seconds=2.0,
 )
 def submit_batch_step(
-    database_url: str, submit_key: str
-) -> shared_submit.SubmitBatchResult:
-    progress = shared_submit.fetch_submission_progress(
-        database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+    database_url: str, operation_key: str
+) -> shared_batch.BatchOperationResult:
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
     )
     spec = EncDecSubmitSpec(
-        **shared_submit.fetch_submission_spec(
-            database_url, table_name=SUBMISSION_TABLE_NAME, key=submit_key
+        **shared_batch.fetch_operation_spec(
+            database_url,
+            operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+            operation_key=operation_key,
         )
     )
     samples = build_humaneval_samples(
@@ -1599,15 +1524,15 @@ def submit_batch_step(
     )
     jobs = build_prediction_jobs_for_offsets(
         spec=spec,
-        submission_id=progress.submission_id,
+        submission_id=str(progress.metadata["submission_id"]),
         samples=samples,
         start_offset=progress.next_offset,
-        limit=DEFAULT_SUBMIT_BATCH_SIZE,
+        limit=int(progress.metadata["batch_size"]),
     )
     emit_submit_log(
         "submit_batch_started",
         {
-            "submit_key": submit_key,
+            "operation_key": operation_key,
             "start_offset": progress.next_offset,
             "batch_size": len(jobs),
         },
@@ -1621,29 +1546,361 @@ def submit_batch_step(
         emit_submit_log(
             "submit_batch_failed",
             {
-                "submit_key": submit_key,
+                "operation_key": operation_key,
                 "start_offset": progress.next_offset,
                 "batch_size": len(jobs),
                 "error": repr(error),
             },
         )
         raise
-    result = shared_submit.SubmitBatchResult(
+    result = shared_batch.BatchOperationResult(
         start_offset=progress.next_offset,
         next_offset=progress.next_offset + len(jobs),
         batch_size=len(jobs),
+        processed=len(jobs),
         inserted=inserted,
         enqueued=enqueue_result.enqueued,
         existing_workflows=enqueue_result.existing,
     )
-    shared_submit.record_batch_success(
+    shared_batch.record_operation_batch_success(
         database_url,
-        table_name=SUBMISSION_TABLE_NAME,
-        key=submit_key,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
         result=result,
     )
     emit_submit_log(
         "submit_batch_succeeded", result.model_dump(mode="json")
+    )
+    return result
+
+
+@DBOS.workflow(
+    name="humaneval_encdec_enqueue_scores_dispatcher_v0",
+    max_recovery_attempts=1,
+)
+def enqueue_scores_dispatcher_workflow(
+    database_url: str, operation_key: str
+) -> str:
+    operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    configure_operation_file_logging(Path(progress.log_file))
+    emit_operation_log(
+        "enqueue_scores_dispatcher_started",
+        {
+            "operation_key": operation_key,
+            "workflow_id": progress.workflow_id,
+            "attempt": progress.attempt,
+            "limit": progress.total_items,
+        },
+    )
+    shared_batch.mark_operation_running(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    try:
+        while True:
+            progress = shared_batch.fetch_operation_progress(
+                database_url,
+                operation_kind=operation_kind,
+                operation_key=operation_key,
+            )
+            if progress.processed_count >= progress.total_items:
+                shared_batch.mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                )
+                return "completed"
+            result = enqueue_scores_batch_step(database_url, operation_key)
+            if result.processed == 0:
+                shared_batch.mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                )
+                return "completed"
+    except Exception as error:
+        error_text = repr(error)
+        shared_batch.mark_operation_failed(
+            database_url,
+            operation_kind=operation_kind,
+            operation_key=operation_key,
+            error=error_text,
+        )
+        emit_operation_log(
+            "enqueue_scores_dispatcher_failed",
+            {"operation_key": operation_key, "error": error_text},
+        )
+        raise
+
+
+@DBOS.step(
+    name="humaneval_encdec_enqueue_scores_batch_step_v0",
+    retries_allowed=True,
+    max_attempts=3,
+    interval_seconds=2.0,
+)
+def enqueue_scores_batch_step(
+    database_url: str, operation_key: str
+) -> shared_batch.BatchOperationResult:
+    operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    spec = shared_batch.fetch_operation_spec(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    remaining = max(progress.total_items - progress.processed_count, 0)
+    limit = min(int(spec["batch_size"]), remaining)
+    prediction_ids = fetch_scoreable_prediction_ids(
+        database_url,
+        experiment_name=str(spec["experiment_name"]),
+        limit=limit,
+    )
+    emit_operation_log(
+        "enqueue_scores_batch_started",
+        {
+            "operation_key": operation_key,
+            "selected": len(prediction_ids),
+            "remaining": remaining,
+        },
+    )
+    enqueue_result = enqueue_score_jobs(
+        database_url,
+        prediction_ids,
+        experiment_name=str(spec["experiment_name"]),
+        timeout=float(spec["timeout"]),
+    )
+    marked = mark_scoring_queued(database_url, prediction_ids)
+    result = shared_batch.BatchOperationResult(
+        start_offset=progress.processed_count,
+        next_offset=progress.processed_count + len(prediction_ids),
+        batch_size=len(prediction_ids),
+        processed=len(prediction_ids),
+        enqueued=enqueue_result.enqueued,
+        existing_workflows=enqueue_result.existing,
+        marked=marked,
+        counters={"score_selected": len(prediction_ids)},
+    )
+    shared_batch.record_operation_batch_success(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+        result=result,
+    )
+    emit_operation_log(
+        "enqueue_scores_batch_succeeded", result.model_dump(mode="json")
+    )
+    return result
+
+
+@DBOS.workflow(
+    name="humaneval_encdec_repair_dispatcher_v0",
+    max_recovery_attempts=1,
+)
+def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
+    operation_kind = shared_batch.BatchOperationKind.REPAIR
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    configure_operation_file_logging(Path(progress.log_file))
+    emit_operation_log(
+        "repair_dispatcher_started",
+        {
+            "operation_key": operation_key,
+            "workflow_id": progress.workflow_id,
+            "attempt": progress.attempt,
+            "limit": progress.total_items,
+        },
+    )
+    shared_batch.mark_operation_running(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    try:
+        while True:
+            progress = shared_batch.fetch_operation_progress(
+                database_url,
+                operation_kind=operation_kind,
+                operation_key=operation_key,
+            )
+            if progress.processed_count >= progress.total_items:
+                shared_batch.mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                )
+                return "completed"
+            result = repair_batch_step(database_url, operation_key)
+            if result.processed == 0:
+                shared_batch.mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                )
+                return "completed"
+    except Exception as error:
+        error_text = repr(error)
+        shared_batch.mark_operation_failed(
+            database_url,
+            operation_kind=operation_kind,
+            operation_key=operation_key,
+            error=error_text,
+        )
+        emit_operation_log(
+            "repair_dispatcher_failed",
+            {"operation_key": operation_key, "error": error_text},
+        )
+        raise
+
+
+@DBOS.step(
+    name="humaneval_encdec_repair_batch_step_v0",
+    retries_allowed=True,
+    max_attempts=3,
+    interval_seconds=2.0,
+)
+def repair_batch_step(
+    database_url: str, operation_key: str
+) -> shared_batch.BatchOperationResult:
+    operation_kind = shared_batch.BatchOperationKind.REPAIR
+    progress = shared_batch.fetch_operation_progress(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    spec = shared_batch.fetch_operation_spec(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+    )
+    generation_limit = int(spec["generation_limit"])
+    scoring_limit = int(spec["scoring_limit"])
+    generation_processed = int(
+        progress.counters.get("generation_processed", 0)
+    )
+    scoring_processed = int(progress.counters.get("scoring_processed", 0))
+    remaining_generation = max(generation_limit - generation_processed, 0)
+    remaining_scoring = max(scoring_limit - scoring_processed, 0)
+    emit_operation_log(
+        "repair_batch_started",
+        {
+            "operation_key": operation_key,
+            "remaining_generation": remaining_generation,
+            "remaining_scoring": remaining_scoring,
+        },
+    )
+    config = build_eval_dbos_config(
+        database_url=database_url,
+        dbos_system_database_url=str(spec["dbos_system_database_url"]),
+        generation_concurrency=int(spec["generation_concurrency"]),
+        scoring_concurrency=int(spec["scoring_concurrency"]),
+    )
+    repair_result = shared_eval_repair.apply_repair_batch(
+        config,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=str(spec["experiment_name"]),
+        dimension_columns=REPAIR_DIMENSION_COLUMNS,
+        order_columns=REPAIR_ORDER_COLUMNS,
+        generation_limit=remaining_generation,
+        scoring_limit=remaining_scoring,
+        batch_size=int(spec["batch_size"]),
+        score_timeout=float(spec["score_timeout"]),
+        fetch_generation_jobs=lambda prediction_ids: [
+            fetch_prediction_job(config.database_url, prediction_id)
+            for prediction_id in prediction_ids
+        ],
+        reset_generation_errors=lambda prediction_ids: (
+            reset_generation_errors_for_retry(
+                config.database_url,
+                prediction_ids=prediction_ids,
+            )
+        ),
+        enqueue_generation_jobs=lambda jobs, token: enqueue_generation_jobs(
+            config.database_url,
+            jobs,
+            score_timeout=float(spec["score_timeout"]),
+            retry_token=token,
+        ),
+        enqueue_score_jobs=lambda prediction_ids, timeout, token: (
+            enqueue_score_jobs(
+                config.database_url,
+                prediction_ids,
+                experiment_name=str(spec["experiment_name"]),
+                timeout=timeout,
+                retry_token=token,
+            )
+        ),
+        repair_token=operation_key,
+    )
+    generation_batch_count = repair_result.generation_retries_selected
+    scoring_batch_count = (
+        repair_result.pending_scoring_selected
+        + repair_result.scoring_retries_selected
+    )
+    processed = generation_batch_count + scoring_batch_count
+    result = shared_batch.BatchOperationResult(
+        start_offset=progress.processed_count,
+        next_offset=progress.processed_count + processed,
+        batch_size=int(spec["batch_size"]),
+        processed=processed,
+        enqueued=(
+            repair_result.generation_retries_enqueued
+            + repair_result.pending_scoring_enqueued
+            + repair_result.scoring_retries_enqueued
+        ),
+        existing_workflows=(
+            repair_result.generation_retries_existing
+            + repair_result.pending_scoring_existing
+            + repair_result.scoring_retries_existing
+        ),
+        marked=(
+            repair_result.stranded_generations_marked
+            + repair_result.generation_retries_reset
+            + repair_result.stranded_scoring_marked
+            + repair_result.pending_scoring_marked_queued
+            + repair_result.scoring_retries_marked_queued
+        ),
+        counters={
+            "generation_processed": generation_batch_count,
+            "scoring_processed": scoring_batch_count,
+            "stranded_generations_marked": (
+                repair_result.stranded_generations_marked
+            ),
+            "generation_retries_reset": (
+                repair_result.generation_retries_reset
+            ),
+            "stranded_scoring_marked": (
+                repair_result.stranded_scoring_marked
+            ),
+            "pending_scoring_marked_queued": (
+                repair_result.pending_scoring_marked_queued
+            ),
+            "scoring_retries_marked_queued": (
+                repair_result.scoring_retries_marked_queued
+            ),
+        },
+    )
+    shared_batch.record_operation_batch_success(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+        result=result,
+    )
+    emit_operation_log(
+        "repair_batch_succeeded", result.model_dump(mode="json")
     )
     return result
 
@@ -1750,60 +2007,6 @@ def build_repair_plan(
     )
 
 
-def apply_repair(
-    config: EvalDbosConfig,
-    *,
-    experiment_name: str,
-    generation_limit: int,
-    scoring_limit: int,
-    score_timeout: float,
-    repair_token: str | None = None,
-    plan: shared_eval_repair.RepairPlan | None = None,
-) -> shared_eval_repair.RepairApplyResult:
-    return shared_eval_repair.apply_repair(
-        config,
-        prediction_table=PREDICTION_TABLE_NAME,
-        experiment_name=experiment_name,
-        dimension_columns=REPAIR_DIMENSION_COLUMNS,
-        order_columns=REPAIR_ORDER_COLUMNS,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
-        score_timeout=score_timeout,
-        fetch_generation_jobs=lambda prediction_ids: [
-            fetch_prediction_job(config.database_url, prediction_id)
-            for prediction_id in prediction_ids
-        ],
-        reset_generation_errors=lambda prediction_ids: (
-            reset_generation_errors_for_retry(
-                config.database_url,
-                prediction_ids=prediction_ids,
-            )
-        ),
-        configure_runtime=lambda: configure_dbos_runtime(
-            config,
-            experiment_name=experiment_name,
-            consume_queues=False,
-        ),
-        enqueue_generation_jobs=lambda jobs, token: enqueue_generation_jobs(
-            config.database_url,
-            jobs,
-            score_timeout=score_timeout,
-            retry_token=token,
-        ),
-        enqueue_score_jobs=lambda prediction_ids, timeout, token: (
-            enqueue_score_jobs(
-                config.database_url,
-                prediction_ids,
-                experiment_name=experiment_name,
-                timeout=timeout,
-                retry_token=token,
-            )
-        ),
-        repair_token=repair_token,
-        plan=plan,
-    )
-
-
 QUEUE_NAME_CONFIG = shared_dbos.QueueNameConfig(
     generation_base_name=GENERATION_QUEUE_NAME,
     scoring_base_name=SCORING_QUEUE_NAME,
@@ -1869,10 +2072,10 @@ def create_eval_schema(database_url: str) -> None:
         statements=(
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
-            shared_submit.submission_table_sql(SUBMISSION_TABLE_NAME),
+            shared_batch.operation_table_sql(),
             *PREDICTION_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
-            *shared_submit.submission_index_sql(SUBMISSION_TABLE_NAME),
+            *shared_batch.operation_index_sql(),
         ),
     )
 
@@ -2025,8 +2228,8 @@ def enqueue_score_jobs(
     experiment_name: str,
     timeout: float,
     retry_token: str | None = None,
-) -> None:
-    shared_dbos.enqueue_score_workflows(
+) -> shared_dbos.EnqueueWorkflowsResult:
+    return shared_dbos.enqueue_score_workflows(
         database_url,
         prediction_ids,
         experiment_name=experiment_name,
@@ -2034,160 +2237,6 @@ def enqueue_score_jobs(
         workflow=score_prediction_workflow,
         timeout=timeout,
         retry_token=retry_token,
-    )
-
-
-def fetch_status_counts(
-    database_url: str, *, experiment_name: str | None
-) -> list[dict[str, Any]]:
-    return shared_eval_reporting.fetch_status_counts(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        dimension_columns=REPORTING_DIMENSION_COLUMNS,
-        experiment_name=experiment_name,
-    )
-
-
-def status_counts_table(
-    rows: Sequence[Mapping[str, Any]],
-    *,
-    experiment_name: str | None,
-) -> Table:
-    return shared_eval_reporting.status_counts_table(
-        rows,
-        title="Enc-Dec Eval Status",
-        dimensions=status_dimensions(DIMENSIONS),
-        experiment_name=experiment_name,
-    )
-
-
-def fetch_analysis_records(
-    database_url: str, *, experiment_name: str
-) -> list[AnalysisRecord]:
-    with connect_db(database_url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    encoder_model,
-                    decoder_model,
-                    encoder_temperature,
-                    decoder_temperature,
-                    budget_ratio,
-                    task_id,
-                    repetition_seed,
-                    score,
-                    provider_cost,
-                    raw_compile_ok,
-                    extracted_compile_ok,
-                    raw_compression_ratio,
-                    best_compression_ratio,
-                    best_compression_percent_reduction
-                FROM dr_dspy_encdec_eval_predictions
-                WHERE
-                    experiment_name = %s
-                    AND scoring_status = 'scored'
-                    AND score IS NOT NULL
-                ORDER BY
-                    encoder_model,
-                    decoder_model,
-                    encoder_temperature,
-                    decoder_temperature,
-                    budget_ratio,
-                    task_id,
-                    repetition_seed
-                """,
-                (experiment_name,),
-            )
-            rows = cur.fetchall()
-    return [
-        AnalysisRecord(
-            encoder_model=row[0],
-            decoder_model=row[1],
-            encoder_temperature=row[2],
-            decoder_temperature=row[3],
-            budget_ratio=row[4],
-            task_id=row[5],
-            repetition_seed=row[6],
-            score=row[7],
-            provider_cost=row[8],
-            raw_compile_ok=row[9],
-            extracted_compile_ok=row[10],
-            raw_compression_ratio=row[11],
-            best_compression_ratio=row[12],
-            best_compression_percent_reduction=row[13],
-        )
-        for row in rows
-    ]
-
-
-def summarize_analysis_records(
-    records: Sequence[AnalysisRecord],
-) -> list[AnalysisSummary]:
-    return shared_flow.summarize_analysis_records(
-        records,
-        group_key=lambda record: (
-            record.encoder_model,
-            record.decoder_model,
-            str(record.encoder_temperature),
-            str(record.decoder_temperature),
-            str(record.budget_ratio),
-        ),
-        dimension_values=lambda record: {
-            "encoder_model": record.encoder_model,
-            "decoder_model": record.decoder_model,
-            "encoder_temperature": record.encoder_temperature,
-            "decoder_temperature": record.decoder_temperature,
-            "budget_ratio": record.budget_ratio,
-        },
-        task_id=lambda record: record.task_id,
-        score=lambda record: record.score,
-        provider_cost=lambda record: record.provider_cost,
-        raw_compile_ok=lambda record: record.raw_compile_ok,
-        extracted_compile_ok=lambda record: record.extracted_compile_ok,
-        raw_compression_ratio=lambda record: record.raw_compression_ratio,
-        best_compression_ratio=lambda record: record.best_compression_ratio,
-        best_compression_percent_reduction=(
-            lambda record: record.best_compression_percent_reduction
-        ),
-        summary_factory=AnalysisSummary,
-    )
-
-
-def analysis_markdown(
-    *, experiment_name: str, summaries: Sequence[AnalysisSummary]
-) -> str:
-    return shared_eval_reporting.analysis_markdown(
-        experiment_name=experiment_name,
-        summaries=summaries,
-        dimensions=status_dimensions(DIMENSIONS),
-    )
-
-
-def analysis_table(
-    *, experiment_name: str, summaries: Sequence[AnalysisSummary]
-) -> object:
-    return shared_eval_reporting.analysis_table(
-        experiment_name=experiment_name,
-        summaries=summaries,
-        dimensions=status_dimensions(DIMENSIONS),
-    )
-
-
-def write_analysis_csv(
-    summaries: Sequence[AnalysisSummary], csv_path: Path
-) -> None:
-    shared_eval_reporting.write_analysis_csv(
-        summaries,
-        csv_path=csv_path,
-        fieldnames=[
-            *REPORTING_DIMENSION_COLUMNS,
-            *(
-                name
-                for name in AnalysisSummary.model_fields
-                if name != "dimensions"
-            ),
-        ],
     )
 
 
@@ -2207,32 +2256,9 @@ def start_worker_monitor(
 
 class EncDecExperiment:
     prediction_table = PREDICTION_TABLE_NAME
-    dimensions = DIMENSIONS
 
     def create_schema(self, database_url: str) -> None:
         create_eval_schema(database_url)
-
-    def upsert_experiment(
-        self,
-        database_url: str,
-        *,
-        experiment_name: str,
-        seed: int,
-        sample_count: int,
-        metadata: Mapping[str, Any],
-    ) -> None:
-        upsert_experiment(
-            database_url,
-            experiment_name=experiment_name,
-            seed=seed,
-            sample_count=sample_count,
-            metadata=metadata,
-        )
-
-    def insert_prediction_jobs(
-        self, database_url: str, jobs: Sequence[EncDecJob]
-    ) -> int:
-        return insert_prediction_jobs(database_url, jobs)
 
     def configure_runtime(
         self,
@@ -2247,145 +2273,6 @@ class EncDecExperiment:
             experiment_name=experiment_name,
             queue=queue,
             consume_queues=consume_queues,
-        )
-
-    def enqueue_generation_jobs(
-        self,
-        database_url: str,
-        jobs: Sequence[EncDecJob],
-        *,
-        score_timeout: float,
-        retry_token: str | None = None,
-    ) -> shared_dbos.EnqueueWorkflowsResult:
-        return enqueue_generation_jobs(
-            database_url,
-            jobs,
-            score_timeout=score_timeout,
-            retry_token=retry_token,
-        )
-
-    def mark_generation_started(
-        self, database_url: str, prediction_id: str
-    ) -> None:
-        mark_generation_started(database_url, prediction_id)
-
-    def fetch_prediction_job(
-        self, database_url: str, prediction_id: str
-    ) -> EncDecJob:
-        return fetch_prediction_job(database_url, prediction_id)
-
-    def generate_code_for_job(self, job: EncDecJob) -> GenerationResult:
-        return generate_code_for_job(job)
-
-    def record_generation_success(
-        self, database_url: str, result: GenerationResult
-    ) -> None:
-        record_generation_success(database_url, result)
-
-    def record_generation_error(
-        self,
-        database_url: str,
-        prediction_id: str,
-        summary: FailureSummary,
-    ) -> None:
-        record_generation_error(database_url, prediction_id, summary)
-
-    def generation_success_log_extra(
-        self, result: GenerationResult
-    ) -> Mapping[str, Any]:
-        return {
-            "provider_cost": result.provider_cost,
-            "encoder_usage_metadata": result.encoder_usage_metadata,
-            "decoder_usage_metadata": result.decoder_usage_metadata,
-        }
-
-    def prediction_context_from_job(
-        self, job: EncDecJob
-    ) -> shared_eval_logging.PredictionLogContext:
-        return prediction_context_from_job(job)
-
-    def fetch_prediction_log_context(
-        self, database_url: str, prediction_id: str
-    ) -> shared_eval_logging.PredictionLogContext:
-        return fetch_prediction_log_context(database_url, prediction_id)
-
-    def emit_prediction_log_event(
-        self,
-        event: str,
-        context: shared_eval_logging.PredictionLogContext,
-        *,
-        extra: Mapping[str, Any] | None = None,
-    ) -> None:
-        emit_prediction_log_event(event, context, extra=extra)
-
-    def mark_scoring_started(
-        self, database_url: str, prediction_id: str
-    ) -> None:
-        mark_scoring_started(database_url, prediction_id)
-
-    def mark_scoring_queued(
-        self, database_url: str, prediction_ids: Sequence[str]
-    ) -> int:
-        return mark_scoring_queued(database_url, prediction_ids)
-
-    def score_prediction(
-        self, database_url: str, prediction_id: str, timeout: float
-    ) -> ScoreResult:
-        return score_generated_code(
-            fetch_scoring_target(database_url, prediction_id),
-            timeout=timeout,
-        )
-
-    def record_score_success(
-        self, database_url: str, result: ScoreResult
-    ) -> None:
-        record_score_success(database_url, result)
-
-    def record_score_error(
-        self,
-        database_url: str,
-        prediction_id: str,
-        summary: FailureSummary,
-    ) -> None:
-        record_score_error(database_url, prediction_id, summary)
-
-    def enqueue_score(
-        self,
-        database_url: str,
-        prediction_id: str,
-        *,
-        experiment_name: str,
-        timeout: float,
-    ) -> None:
-        enqueue_score_job(
-            database_url,
-            prediction_id,
-            experiment_name=experiment_name,
-            timeout=timeout,
-        )
-
-    def enqueue_score_jobs(
-        self,
-        database_url: str,
-        prediction_ids: Sequence[str],
-        *,
-        experiment_name: str,
-        timeout: float,
-        retry_token: str | None = None,
-    ) -> None:
-        enqueue_score_jobs(
-            database_url,
-            prediction_ids,
-            experiment_name=experiment_name,
-            timeout=timeout,
-            retry_token=retry_token,
-        )
-
-    def fetch_scoreable_prediction_ids(
-        self, database_url: str, *, experiment_name: str, limit: int
-    ) -> list[str]:
-        return fetch_scoreable_prediction_ids(
-            database_url, experiment_name=experiment_name, limit=limit
         )
 
     def build_repair_plan(
@@ -2404,73 +2291,6 @@ class EncDecExperiment:
             generation_limit=generation_limit,
             scoring_limit=scoring_limit,
         )
-
-    def apply_repair(
-        self,
-        config: EvalDbosConfig,
-        *,
-        experiment_name: str,
-        generation_limit: int,
-        scoring_limit: int,
-        score_timeout: float,
-        repair_token: str | None = None,
-        plan: shared_eval_repair.RepairPlan | None = None,
-    ) -> shared_eval_repair.RepairApplyResult:
-        return apply_repair(
-            config,
-            experiment_name=experiment_name,
-            generation_limit=generation_limit,
-            scoring_limit=scoring_limit,
-            score_timeout=score_timeout,
-            repair_token=repair_token,
-            plan=plan,
-        )
-
-    def fetch_status_counts(
-        self, database_url: str, *, experiment_name: str | None
-    ) -> list[dict[str, Any]]:
-        return fetch_status_counts(
-            database_url, experiment_name=experiment_name
-        )
-
-    def status_counts_table(
-        self,
-        rows: Sequence[Mapping[str, Any]],
-        *,
-        experiment_name: str | None,
-    ) -> Table:
-        return status_counts_table(rows, experiment_name=experiment_name)
-
-    def fetch_analysis_records(
-        self, database_url: str, *, experiment_name: str
-    ) -> list[AnalysisRecord]:
-        return fetch_analysis_records(
-            database_url, experiment_name=experiment_name
-        )
-
-    def summarize_analysis_records(
-        self, records: Sequence[AnalysisRecord]
-    ) -> list[AnalysisSummary]:
-        return summarize_analysis_records(records)
-
-    def analysis_table(
-        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
-    ) -> object:
-        return analysis_table(
-            experiment_name=experiment_name, summaries=summaries
-        )
-
-    def analysis_markdown(
-        self, *, experiment_name: str, summaries: Sequence[AnalysisSummary]
-    ) -> str:
-        return analysis_markdown(
-            experiment_name=experiment_name, summaries=summaries
-        )
-
-    def write_analysis_csv(
-        self, summaries: Sequence[AnalysisSummary], csv_path: Path
-    ) -> None:
-        write_analysis_csv(summaries, csv_path)
 
     def configure_pooled_worker_runtime(
         self,
@@ -2565,6 +2385,9 @@ def submit(
         int, typer.Option()
     ] = DEFAULT_SCORING_CONCURRENCY,
     score_timeout: Annotated[float | None, typer.Option()] = None,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", min=1)
+    ] = DEFAULT_SUBMIT_BATCH_SIZE,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -2618,12 +2441,13 @@ def submit(
         score_timeout=score_timeout,
     )
     total_jobs = submit_spec.total_jobs()
-    submit_key = shared_submit.submit_key(
+    operation_key = shared_batch.operation_key(
         submit_spec.model_dump(mode="json")
     )
     metadata = {
         "submission_id": submission_id,
-        "submit_key": submit_key,
+        "operation_key": operation_key,
+        "batch_size": batch_size,
         "model_pairs": [pair.model_dump(mode="json") for pair in model_pairs],
         "encoder_temperatures": parsed_encoder_temperatures,
         "decoder_temperatures": parsed_decoder_temperatures,
@@ -2658,26 +2482,24 @@ def submit(
         sample_count=len(samples),
         metadata=metadata,
     )
-    progress = shared_submit.prepare_submission(
+    progress = shared_batch.prepare_operation(
         config.database_url,
-        table_name=SUBMISSION_TABLE_NAME,
-        key=submit_key,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
         experiment_name=experiment_name,
         script_kind=experiment.script_kind,
-        submission_id=submission_id,
         spec=submit_spec.model_dump(mode="json"),
         metadata=metadata,
-        total_jobs=total_jobs,
+        total_items=total_jobs,
         log_file=resolved_log_file,
     )
     active_log_file = Path(progress.log_file)
     configure_submit_file_logging(active_log_file)
-    metadata["submission_id"] = progress.submission_id
     emit_submit_log(
         "submit_planned",
         {
-            "submit_key": submit_key,
-            "submission_id": progress.submission_id,
+            "operation_key": operation_key,
+            "submission_id": progress.metadata["submission_id"],
             "experiment_name": experiment_name,
             "total_jobs": total_jobs,
             "metadata": metadata,
@@ -2686,31 +2508,31 @@ def submit(
     configure_dbos_runtime(
         config, experiment_name=experiment_name, consume_queues=False
     )
-    launched = shared_submit.ensure_submit_workflow(
+    launched = shared_batch.ensure_operation_workflow(
         workflow_id=progress.workflow_id,
         workflow=submit_dispatcher_workflow,
         database_url=config.database_url,
-        submit_key=submit_key,
+        operation_key=operation_key,
     )
     emit_submit_log(
         "submit_dispatcher_enqueued",
         {
-            "submit_key": submit_key,
+            "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "launched": launched,
             "log_file": str(active_log_file),
         },
     )
     operator_log(f"submit detail log: {active_log_file}", style="cyan")
-    final_progress = shared_submit.tail_submission_progress(
+    final_progress = shared_batch.tail_operation_progress(
         database_url=config.database_url,
-        table_name=SUBMISSION_TABLE_NAME,
-        submit_key=submit_key,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
         prediction_table=PREDICTION_TABLE_NAME,
         experiment_name=experiment_name,
         operator_log=operator_log,
     )
-    if final_progress.status is shared_submit.SubmissionStatus.FAILED:
+    if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
         raise typer.Exit(code=1)
 
 
@@ -2791,20 +2613,6 @@ def worker(
     )
 
 
-@_APP.command()
-def status(
-    experiment_name: Annotated[str | None, typer.Option()] = None,
-    database_url: Annotated[str | None, typer.Option()] = None,
-    env_file: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    load_optional_env_file(env_file)
-    shared_flow.run_status_command(
-        _BACKEND,
-        database_url=resolve_database_url(database_url),
-        experiment_name=experiment_name,
-    )
-
-
 @_APP.command("enqueue-scores")
 def enqueue_scores_command(
     experiment_name: Annotated[str, typer.Option()],
@@ -2822,6 +2630,10 @@ def enqueue_scores_command(
     scoring_concurrency: Annotated[
         int, typer.Option()
     ] = DEFAULT_SCORING_CONCURRENCY,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", min=1)
+    ] = DEFAULT_OPERATION_BATCH_SIZE,
+    operation_key: Annotated[str | None, typer.Option()] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     timeout = (
@@ -2836,40 +2648,59 @@ def enqueue_scores_command(
         generation_concurrency=generation_concurrency,
         scoring_concurrency=scoring_concurrency,
     )
-    shared_flow.run_enqueue_scores_command(
-        _BACKEND,
-        config=config,
+    create_eval_schema(config.database_url)
+    resolved_operation_key = operation_key or shared_batch.new_operation_key()
+    operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
+    spec = {
+        "experiment_name": experiment_name,
+        "limit": limit,
+        "timeout": timeout,
+        "batch_size": batch_size,
+    }
+    log_file = resolve_operation_log_path(
         experiment_name=experiment_name,
-        limit=limit,
-        timeout=timeout,
+        operation_kind=operation_kind,
     )
-
-
-@_APP.command()
-def analyze(
-    experiment_name: Annotated[str, typer.Option()],
-    csv_path: Annotated[
-        Path | None,
-        typer.Option("--csv-path", help="Optional CSV output path."),
-    ] = None,
-    database_url: Annotated[str | None, typer.Option()] = None,
-    markdown: Annotated[
-        bool,
-        typer.Option(
-            "--markdown",
-            help="Print the analysis table as Markdown.",
-        ),
-    ] = False,
-    env_file: Annotated[Path | None, typer.Option()] = None,
-) -> None:
-    load_optional_env_file(env_file)
-    shared_flow.run_analyze_command(
-        _BACKEND,
-        database_url=resolve_database_url(database_url),
+    progress = shared_batch.prepare_operation(
+        config.database_url,
+        operation_kind=operation_kind,
+        operation_key=resolved_operation_key,
         experiment_name=experiment_name,
-        csv_path=csv_path,
-        markdown=markdown,
+        script_kind=experiment_config().script_kind,
+        spec=spec,
+        metadata={"batch_size": batch_size},
+        total_items=limit,
+        log_file=log_file,
     )
+    configure_operation_file_logging(Path(progress.log_file))
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
+    launched = shared_batch.ensure_operation_workflow(
+        workflow_id=progress.workflow_id,
+        workflow=enqueue_scores_dispatcher_workflow,
+        database_url=config.database_url,
+        operation_key=resolved_operation_key,
+    )
+    emit_operation_log(
+        "enqueue_scores_dispatcher_enqueued",
+        {
+            "operation_key": resolved_operation_key,
+            "workflow_id": progress.workflow_id,
+            "launched": launched,
+            "log_file": progress.log_file,
+        },
+    )
+    final_progress = shared_batch.tail_operation_progress(
+        database_url=config.database_url,
+        operation_kind=operation_kind,
+        operation_key=resolved_operation_key,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        operator_log=operator_log,
+    )
+    if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
+        raise typer.Exit(code=1)
 
 
 @_APP.command()
@@ -2890,6 +2721,10 @@ def repair(
         int, typer.Option()
     ] = DEFAULT_SCORING_CONCURRENCY,
     score_timeout: Annotated[float | None, typer.Option()] = None,
+    batch_size: Annotated[
+        int, typer.Option("--batch-size", min=1)
+    ] = DEFAULT_OPERATION_BATCH_SIZE,
+    operation_key: Annotated[str | None, typer.Option()] = None,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
@@ -2905,12 +2740,72 @@ def repair(
         generation_concurrency=generation_concurrency,
         scoring_concurrency=scoring_concurrency,
     )
-    shared_flow.run_repair_command(
-        _BACKEND,
-        config=config,
+    if not apply:
+        shared_flow.run_repair_command(
+            _BACKEND,
+            config=config,
+            experiment_name=experiment_name,
+            generation_limit=generation_limit,
+            scoring_limit=scoring_limit,
+            score_timeout=score_timeout,
+        )
+        return
+
+    create_eval_schema(config.database_url)
+    operation_kind = shared_batch.BatchOperationKind.REPAIR
+    spec = {
+        "experiment_name": experiment_name,
+        "generation_limit": generation_limit,
+        "scoring_limit": scoring_limit,
+        "score_timeout": score_timeout,
+        "batch_size": batch_size,
+        "database_url": config.database_url,
+        "dbos_system_database_url": config.dbos_system_database_url,
+        "generation_concurrency": config.generation_concurrency,
+        "scoring_concurrency": config.scoring_concurrency,
+    }
+    resolved_operation_key = operation_key or shared_batch.operation_key(spec)
+    log_file = resolve_operation_log_path(
         experiment_name=experiment_name,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
-        score_timeout=score_timeout,
-        apply=apply,
+        operation_kind=operation_kind,
     )
+    progress = shared_batch.prepare_operation(
+        config.database_url,
+        operation_kind=operation_kind,
+        operation_key=resolved_operation_key,
+        experiment_name=experiment_name,
+        script_kind=experiment_config().script_kind,
+        spec=spec,
+        metadata={"batch_size": batch_size},
+        total_items=generation_limit + scoring_limit,
+        log_file=log_file,
+    )
+    configure_operation_file_logging(Path(progress.log_file))
+    configure_dbos_runtime(
+        config, experiment_name=experiment_name, consume_queues=False
+    )
+    launched = shared_batch.ensure_operation_workflow(
+        workflow_id=progress.workflow_id,
+        workflow=repair_dispatcher_workflow,
+        database_url=config.database_url,
+        operation_key=resolved_operation_key,
+    )
+    emit_operation_log(
+        "repair_dispatcher_enqueued",
+        {
+            "operation_key": resolved_operation_key,
+            "workflow_id": progress.workflow_id,
+            "launched": launched,
+            "log_file": progress.log_file,
+        },
+    )
+    final_progress = shared_batch.tail_operation_progress(
+        database_url=config.database_url,
+        operation_kind=operation_kind,
+        operation_key=resolved_operation_key,
+        prediction_table=PREDICTION_TABLE_NAME,
+        experiment_name=experiment_name,
+        operator_log=operator_log,
+    )
+    if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
+        raise typer.Exit(code=1)

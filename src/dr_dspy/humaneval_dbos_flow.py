@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import typer
 from rich.console import Console
 
-from dr_dspy import analysis, dbos_runtime, eval_reporting, worker_resources
+from dr_dspy import dbos_runtime, eval_reporting, worker_resources
 from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
 from dr_dspy.eval_logging import operator_log as _console_operator_log
 from dr_dspy.experiment_backend import ExperimentBackend
@@ -53,88 +52,6 @@ def stable_prediction_id_from_dimensions(
     return digest[:digest_length]
 
 
-def run_submit_jobs(
-    backend: ExperimentBackend,
-    *,
-    config: EvalDbosConfig,
-    experiment_name: str,
-    seed: int,
-    sample_count: int,
-    metadata: Mapping[str, Any],
-    jobs: Sequence[Any],
-    score_timeout: float,
-) -> None:
-    backend.create_schema(config.database_url)
-    backend.upsert_experiment(
-        config.database_url,
-        experiment_name=experiment_name,
-        seed=seed,
-        sample_count=sample_count,
-        metadata=metadata,
-    )
-    inserted = backend.insert_prediction_jobs(config.database_url, jobs)
-    backend.configure_runtime(config, experiment_name)
-    backend.enqueue_generation_jobs(
-        config.database_url, jobs, score_timeout=score_timeout
-    )
-    operator_log(
-        f"inserted {inserted} new prediction rows",
-        style="green" if inserted else "yellow",
-    )
-    operator_log(
-        f"enqueued {len(jobs)} generation workflows",
-        style="green" if jobs else "yellow",
-    )
-
-
-def run_status_command(
-    backend: ExperimentBackend,
-    *,
-    database_url: str,
-    experiment_name: str | None,
-) -> None:
-    rows = backend.fetch_status_counts(
-        database_url, experiment_name=experiment_name
-    )
-    if not rows:
-        operator_log("no prediction rows found", style="yellow")
-        return
-    _CONSOLE.print(
-        backend.status_counts_table(rows, experiment_name=experiment_name)
-    )
-
-
-def run_enqueue_scores_command(
-    backend: ExperimentBackend,
-    *,
-    config: EvalDbosConfig,
-    experiment_name: str,
-    limit: int,
-    timeout: float,
-) -> None:
-    backend.create_schema(config.database_url)
-    prediction_ids = backend.fetch_scoreable_prediction_ids(
-        config.database_url, experiment_name=experiment_name, limit=limit
-    )
-    backend.configure_runtime(config, experiment_name)
-    backend.enqueue_score_jobs(
-        config.database_url,
-        prediction_ids,
-        experiment_name=experiment_name,
-        timeout=timeout,
-    )
-    backend.mark_scoring_queued(config.database_url, prediction_ids)
-    operator_log(
-        eval_reporting.enqueue_scores_line(
-            experiment_name=experiment_name,
-            selected_count=len(prediction_ids),
-            limit=limit,
-            timeout=timeout,
-        ),
-        style=eval_reporting.enqueue_scores_style(len(prediction_ids)),
-    )
-
-
 def run_repair_command(
     backend: ExperimentBackend,
     *,
@@ -143,7 +60,6 @@ def run_repair_command(
     generation_limit: int,
     scoring_limit: int,
     score_timeout: float,
-    apply: bool,
 ) -> None:
     backend.create_schema(config.database_url)
     plan = backend.build_repair_plan(
@@ -172,74 +88,21 @@ def run_repair_command(
     }
     operator_log(
         eval_reporting.repair_plan_line(
-            experiment_name=experiment_name, apply=apply, **counts
+            experiment_name=experiment_name, apply=False, **counts
         ),
-        style=eval_reporting.repair_plan_style(apply=apply, **counts),
+        style=eval_reporting.repair_plan_style(apply=False, **counts),
     )
-    if not apply:
-        if (
-            counts["gen_stranded"]
-            or counts["gen_errors"]
-            or counts["score_pending"]
-            or counts["score_stranded"]
-            or counts["score_errors"]
-        ):
-            operator_log(
-                "dry run only; rerun with --apply to reconcile statuses and "
-                "enqueue fresh retry workflows",
-                style="yellow",
-            )
-        return
-    result = backend.apply_repair(
-        config,
-        experiment_name=experiment_name,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
-        score_timeout=score_timeout,
-        plan=plan,
-    )
-    operator_log(
-        eval_reporting.repair_apply_line(
-            experiment_name=experiment_name,
-            stranded_generations_marked=result.stranded_generations_marked,
-            generation_retries_enqueued=result.generation_retries_enqueued,
-            stranded_scoring_marked=result.stranded_scoring_marked,
-            pending_scoring_enqueued=result.pending_scoring_enqueued,
-            scoring_retries_enqueued=result.scoring_retries_enqueued,
-            repair_token=result.repair_token,
-        ),
-        style="green",
-    )
-
-
-def run_analyze_command(
-    backend: ExperimentBackend,
-    *,
-    database_url: str,
-    experiment_name: str,
-    csv_path: Path | None,
-    markdown: bool,
-) -> None:
-    records = backend.fetch_analysis_records(
-        database_url, experiment_name=experiment_name
-    )
-    summaries = backend.summarize_analysis_records(records)
-    if markdown:
-        typer.echo(
-            backend.analysis_markdown(
-                experiment_name=experiment_name, summaries=summaries
-            ),
-            nl=False,
+    if (
+        counts["gen_stranded"]
+        or counts["gen_errors"]
+        or counts["score_pending"]
+        or counts["score_stranded"]
+        or counts["score_errors"]
+    ):
+        operator_log(
+            "dry run only; rerun with --apply to run durable repair batches",
+            style="yellow",
         )
-    else:
-        _CONSOLE.print(
-            backend.analysis_table(
-                experiment_name=experiment_name, summaries=summaries
-            )
-        )
-    if csv_path is not None:
-        backend.write_analysis_csv(summaries, csv_path)
-        operator_log(f"wrote {csv_path}", style="green")
 
 
 def run_worker_command(
@@ -356,109 +219,3 @@ def run_worker_command(
         worker_resources.close_openrouter_client()
         dbos_runtime.destroy_dbos_runtime()
         dbos_runtime.close_db_connection_pools()
-
-
-def summarize_analysis_records[RecordT, SummaryT](
-    records: Sequence[RecordT],
-    *,
-    group_key: Callable[[RecordT], object],
-    dimension_values: Callable[[RecordT], Mapping[str, Any]],
-    task_id: Callable[[RecordT], str],
-    score: Callable[[RecordT], float],
-    provider_cost: Callable[[RecordT], float | None],
-    raw_compile_ok: Callable[[RecordT], bool | None],
-    extracted_compile_ok: Callable[[RecordT], bool | None],
-    raw_compression_ratio: Callable[[RecordT], float | None] = (
-        lambda _record: None
-    ),
-    best_compression_ratio: Callable[[RecordT], float | None] = (
-        lambda _record: None
-    ),
-    best_compression_percent_reduction: Callable[[RecordT], float | None] = (
-        lambda _record: None
-    ),
-    summary_factory: Callable[..., SummaryT],
-) -> list[SummaryT]:
-    grouped: dict[object, list[RecordT]] = {}
-    for record in records:
-        grouped.setdefault(group_key(record), []).append(record)
-
-    summaries: list[SummaryT] = []
-    # repr keeps the sort total-ordered even when a group key tuple mixes
-    # None and float (e.g. a swept budget_ratio of `none,0.5`).
-    for _key, group in sorted(grouped.items(), key=lambda item: repr(item[0])):
-        scores = [score(record) for record in group]
-        costs: list[float] = []
-        for record in group:
-            cost = provider_cost(record)
-            if cost is not None:
-                costs.append(cost)
-        by_task: dict[str, list[float]] = {}
-        for record in group:
-            by_task.setdefault(task_id(record), []).append(score(record))
-        repetition_variances = [
-            variance
-            for variance in (
-                analysis.variance_or_none(task_scores)
-                for task_scores in by_task.values()
-            )
-            if variance is not None
-        ]
-        raw_compile_pass_count = sum(
-            1 for record in group if raw_compile_ok(record) is True
-        )
-        extracted_compile_pass_count = sum(
-            1 for record in group if extracted_compile_ok(record) is True
-        )
-        total_price = sum(costs) if costs else None
-        raw_compression_ratios = [
-            ratio
-            for ratio in (raw_compression_ratio(record) for record in group)
-            if ratio is not None
-        ]
-        compression_ratios = [
-            ratio
-            for ratio in (best_compression_ratio(record) for record in group)
-            if ratio is not None
-        ]
-        compression_reductions = [
-            reduction
-            for reduction in (
-                best_compression_percent_reduction(record) for record in group
-            )
-            if reduction is not None
-        ]
-        summaries.append(
-            summary_factory(
-                dimensions=dict(dimension_values(group[0])),
-                sample_count=len(by_task),
-                scored_count=len(group),
-                total_price=total_price,
-                avg_price_per_sample=(
-                    total_price / len(group)
-                    if total_price is not None
-                    else None
-                ),
-                price_variance=analysis.variance_or_none(costs),
-                avg_performance=analysis.average_or_none(scores) or 0.0,
-                performance_variance=analysis.variance_or_none(scores),
-                avg_repetition_variance=analysis.average_or_none(
-                    repetition_variances
-                ),
-                raw_compile_pass_count=raw_compile_pass_count,
-                extracted_compile_pass_count=extracted_compile_pass_count,
-                extraction_lift=(
-                    extracted_compile_pass_count - raw_compile_pass_count
-                ),
-                avg_raw_compression_ratio=analysis.average_or_none(
-                    raw_compression_ratios
-                ),
-                avg_best_compression_ratio=analysis.average_or_none(
-                    compression_ratios
-                ),
-                avg_best_compression_percent_reduction=(
-                    analysis.average_or_none(compression_reductions)
-                ),
-            )
-        )
-    return summaries

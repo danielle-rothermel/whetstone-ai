@@ -3,9 +3,9 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+from dr_dspy import batch_operation
 from dr_dspy import humaneval_direct_dbos as direct
 from dr_dspy import humaneval_encdec_dbos as encdec
-from dr_dspy import submission_dispatch
 from dr_dspy.lm_utils import ModelConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,7 +18,7 @@ def _load_script(path: Path, module_name: str) -> None:
     spec.loader.exec_module(module)
 
 
-def test_direct_offset_jobs_match_full_cartesian_builder() -> None:
+def test_direct_offset_jobs_are_stable_across_chunk_sizes() -> None:
     _load_script(
         REPO_ROOT / "scripts" / "humaneval_dspy_eval_only_dbos_v0.py",
         "direct_script_for_submit_dispatch_test",
@@ -39,14 +39,6 @@ def test_direct_offset_jobs_match_full_cartesian_builder() -> None:
         ModelConfig(model="model/a", reasoning={}),
         ModelConfig(model="model/b", reasoning={"effort": "low"}),
     ]
-    full = direct.build_prediction_jobs(
-        experiment_name="exp",
-        submission_id="sub",
-        samples=samples,
-        model_configs=models,
-        temperatures=[0.0, 0.5],
-        repetitions=2,
-    )
     spec = direct.build_submit_spec(
         experiment_name="exp",
         seed=0,
@@ -55,6 +47,13 @@ def test_direct_offset_jobs_match_full_cartesian_builder() -> None:
         temperatures=[0.0, 0.5],
         repetitions=2,
         score_timeout=10.0,
+    )
+    one_chunk = direct.build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id="sub",
+        samples=samples,
+        start_offset=0,
+        limit=spec.total_jobs(),
     )
     chunked = []
     for offset in range(0, spec.total_jobs(), 3):
@@ -68,11 +67,11 @@ def test_direct_offset_jobs_match_full_cartesian_builder() -> None:
             )
         )
     assert [job.model_dump() for job in chunked] == [
-        job.model_dump() for job in full
+        job.model_dump() for job in one_chunk
     ]
 
 
-def test_encdec_offset_jobs_match_full_cartesian_builder(
+def test_encdec_offset_jobs_are_stable_across_chunk_sizes(
     encdec_configured: None,
 ) -> None:
     samples = [
@@ -97,16 +96,6 @@ def test_encdec_offset_jobs_match_full_cartesian_builder(
             decoder=ModelConfig(model="model/c", reasoning={"y": 2}),
         ),
     ]
-    full = encdec.build_prediction_jobs(
-        experiment_name="exp",
-        submission_id="sub",
-        samples=samples,
-        model_pairs=pairs,
-        encoder_temperatures=[0.0, 0.5],
-        decoder_temperatures=[0.0],
-        budget_ratios=[None, 0.5],
-        repetitions=2,
-    )
     spec = encdec.build_submit_spec(
         experiment_name="exp",
         seed=0,
@@ -117,6 +106,13 @@ def test_encdec_offset_jobs_match_full_cartesian_builder(
         budget_ratios=[None, 0.5],
         repetitions=2,
         score_timeout=10.0,
+    )
+    one_chunk = encdec.build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id="sub",
+        samples=samples,
+        start_offset=0,
+        limit=spec.total_jobs(),
     )
     chunked = []
     for offset in range(0, spec.total_jobs(), 5):
@@ -130,7 +126,7 @@ def test_encdec_offset_jobs_match_full_cartesian_builder(
             )
         )
     assert [job.model_dump() for job in chunked] == [
-        job.model_dump() for job in full
+        job.model_dump() for job in one_chunk
     ]
 
 
@@ -168,9 +164,9 @@ def test_submit_key_is_deterministic_and_changes_with_axes(
         score_timeout=config.default_subprocess_timeout,
     )
     changed = spec.model_copy(update={"budget_ratios": [0.5]})
-    assert submission_dispatch.submit_key(
+    assert batch_operation.operation_key(
         spec.model_dump(mode="json")
-    ) == submission_dispatch.submit_key(spec.model_dump(mode="json"))
-    assert submission_dispatch.submit_key(
+    ) == batch_operation.operation_key(spec.model_dump(mode="json"))
+    assert batch_operation.operation_key(
         spec.model_dump(mode="json")
-    ) != submission_dispatch.submit_key(changed.model_dump(mode="json"))
+    ) != batch_operation.operation_key(changed.model_dump(mode="json"))

@@ -27,16 +27,26 @@ def test_parse_budget_ratios_handles_none_and_floats() -> None:
     assert encdec.parse_budget_ratios("NONE") == [None]
 
 
-def test_build_prediction_jobs_cartesian_includes_budget() -> None:
-    jobs = encdec.build_prediction_jobs(
+def test_build_prediction_jobs_cartesian_includes_budget(
+    encdec_configured: None,
+) -> None:
+    spec = encdec.build_submit_spec(
         experiment_name="exp",
-        submission_id="sub",
-        samples=[SAMPLE],
+        seed=0,
+        sample_count=1,
         model_pairs=[PAIR],
         encoder_temperatures=[0.0],
         decoder_temperatures=[0.0],
         budget_ratios=[None, 0.5],
         repetitions=1,
+        score_timeout=10.0,
+    )
+    jobs = encdec.build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id="sub",
+        samples=[SAMPLE],
+        start_offset=0,
+        limit=spec.total_jobs(),
     )
     assert len(jobs) == 2
     assert {job.budget_ratio for job in jobs} == {None, 0.5}
@@ -67,15 +77,23 @@ def _stub_lms(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def _job(budget_ratio: float | None) -> encdec.EncDecJob:
-    (job,) = encdec.build_prediction_jobs(
+    spec = encdec.build_submit_spec(
         experiment_name="exp",
-        submission_id="sub",
-        samples=[SAMPLE],
+        seed=0,
+        sample_count=1,
         model_pairs=[PAIR],
         encoder_temperatures=[0.0],
         decoder_temperatures=[0.0],
         budget_ratios=[budget_ratio],
         repetitions=1,
+        score_timeout=10.0,
+    )
+    (job,) = encdec.build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id="sub",
+        samples=[SAMPLE],
+        start_offset=0,
+        limit=1,
     )
     return job
 

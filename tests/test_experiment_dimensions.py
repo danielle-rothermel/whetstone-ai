@@ -8,7 +8,6 @@ from dr_dspy.experiment_dimensions import (
     identity_constraint_columns,
     identity_dimension_names,
     reporting_dimension_names,
-    status_dimensions,
 )
 
 DIMENSIONS = (
@@ -78,12 +77,6 @@ def test_identity_vs_reporting_names() -> None:
         "temperature",
         "budget_ratio",
     )
-
-
-def test_status_dimensions_only_reporting() -> None:
-    dims = status_dimensions(DIMENSIONS)
-    assert [d.key for d in dims] == ["model", "temperature", "budget_ratio"]
-    assert dims[1].justify == "right"
 
 
 def test_bad_identifier_rejected() -> None:

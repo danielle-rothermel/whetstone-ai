@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable, Sequence
 from typing import Any, Protocol, cast
 
@@ -109,11 +108,30 @@ class RepairApplyResult(BaseModel):
     repair_token: StrictStr
     stranded_generations_marked: StrictInt
     generation_retries_enqueued: StrictInt
+    generation_retries_existing: StrictInt = 0
     generation_retries_reset: StrictInt
     stranded_scoring_marked: StrictInt
     pending_scoring_enqueued: StrictInt
+    pending_scoring_existing: StrictInt = 0
+    pending_scoring_marked_queued: StrictInt = 0
     scoring_retries_enqueued: StrictInt
+    scoring_retries_existing: StrictInt = 0
     scoring_retries_marked_queued: StrictInt
+
+    @property
+    def generation_retries_selected(self) -> int:
+        return (
+            self.generation_retries_enqueued
+            + self.generation_retries_existing
+        )
+
+    @property
+    def pending_scoring_selected(self) -> int:
+        return self.pending_scoring_enqueued + self.pending_scoring_existing
+
+    @property
+    def scoring_retries_selected(self) -> int:
+        return self.scoring_retries_enqueued + self.scoring_retries_existing
 
 
 class EvalDbosConfigLike(Protocol):
@@ -389,9 +407,15 @@ def fetch_started_generation_repair_candidates(
     experiment_name: str,
     dimension_columns: Sequence[str],
     order_columns: Sequence[str],
+    limit: int | None = None,
 ) -> list[RepairCandidate]:
     validate_prediction_table(prediction_table)
     select_dimensions = dimension_select_clause(dimension_columns)
+    limit_clause = ""
+    params: list[Any] = [experiment_name, GenerationStatus.STARTED.value]
+    if limit is not None:
+        limit_clause = "LIMIT %s"
+        params.append(limit)
     query = f"""
         SELECT
             prediction_id,
@@ -404,12 +428,13 @@ def fetch_started_generation_repair_candidates(
             experiment_name = %s
             AND generation_status = %s
         ORDER BY {order_clause(order_columns)}
+        {limit_clause}
     """
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 cast(Any, query),
-                (experiment_name, GenerationStatus.STARTED.value),
+                tuple(params),
             )
             app_rows = cur.fetchall()
 
@@ -716,6 +741,7 @@ def build_repair_plan(
             experiment_name=experiment_name,
             dimension_columns=dimension_columns,
             order_columns=order_columns,
+            limit=generation_limit,
         ),
         generation_retry_prediction_ids=(
             generation_retry_selection.prediction_ids
@@ -742,7 +768,7 @@ def build_repair_plan(
     )
 
 
-def apply_repair(
+def apply_repair_batch(
     config: EvalDbosConfigLike,
     *,
     prediction_table: str,
@@ -751,83 +777,129 @@ def apply_repair(
     order_columns: Sequence[str],
     generation_limit: int,
     scoring_limit: int,
+    batch_size: int,
     score_timeout: float,
     fetch_generation_jobs: Callable[[Sequence[str]], Sequence[Any]],
     reset_generation_errors: Callable[[Sequence[str]], int],
-    configure_runtime: Callable[[], None],
-    enqueue_generation_jobs: Callable[[Sequence[Any], str], object],
-    enqueue_score_jobs: Callable[[Sequence[str], float, str | None], None],
-    repair_token: str | None = None,
-    plan: RepairPlan | None = None,
+    enqueue_generation_jobs: Callable[
+        [Sequence[Any], str], dbos_runtime.EnqueueWorkflowsResult
+    ],
+    enqueue_score_jobs: Callable[
+        [Sequence[str], float, str | None], dbos_runtime.EnqueueWorkflowsResult
+    ],
+    repair_token: str,
 ) -> RepairApplyResult:
-    resolved_repair_token = repair_token or uuid.uuid4().hex
-    repair_plan = plan or build_repair_plan(
+    generation_capacity = min(generation_limit, batch_size)
+    stranded_generation_ids: list[str] = []
+    if generation_capacity > 0:
+        stranded_generations = fetch_started_generation_repair_candidates(
+            config.database_url,
+            dbos_system_database_url=config.dbos_system_database_url,
+            prediction_table=prediction_table,
+            experiment_name=experiment_name,
+            dimension_columns=dimension_columns,
+            order_columns=order_columns,
+            limit=generation_capacity,
+        )
+        stranded_generation_ids = [
+            candidate.prediction_id for candidate in stranded_generations
+        ]
+    stranded_generations_marked = mark_started_generations_as_repaired_errors(
         config.database_url,
-        dbos_system_database_url=config.dbos_system_database_url,
         prediction_table=prediction_table,
-        experiment_name=experiment_name,
-        dimension_columns=dimension_columns,
-        order_columns=order_columns,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
+        prediction_ids=stranded_generation_ids,
     )
 
-    stranded_generation_ids = [
-        candidate.prediction_id
-        for candidate in repair_plan.stranded_generations
-    ]
-    stranded_generations_marked = (
-        mark_started_generations_as_repaired_errors(
+    generation_retry_prediction_ids = stranded_generation_ids
+    remaining_generation_capacity = generation_capacity - len(
+        generation_retry_prediction_ids
+    )
+    if remaining_generation_capacity > 0:
+        retry_selection = fetch_generation_retry_selection(
             config.database_url,
             prediction_table=prediction_table,
-            prediction_ids=stranded_generation_ids,
+            experiment_name=experiment_name,
+            order_columns=order_columns,
+            limit=remaining_generation_capacity,
         )
-    )
-
-    generation_retry_prediction_ids = unique_prediction_ids(
-        [
-            *stranded_generation_ids,
-            *repair_plan.generation_retry_prediction_ids,
-        ]
-    )
+        generation_retry_prediction_ids = unique_prediction_ids(
+            [
+                *generation_retry_prediction_ids,
+                *retry_selection.prediction_ids,
+            ]
+        )
     generation_retry_jobs = fetch_generation_jobs(
         generation_retry_prediction_ids
     )
-    configure_runtime()
-    enqueue_generation_jobs(generation_retry_jobs, resolved_repair_token)
+    generation_enqueue_result = enqueue_generation_jobs(
+        generation_retry_jobs, repair_token
+    )
     generation_retries_reset = reset_generation_errors(
         generation_retry_prediction_ids
     )
 
-    stranded_scoring_ids = [
-        candidate.prediction_id for candidate in repair_plan.stranded_scoring
-    ]
+    scoring_capacity = min(scoring_limit, batch_size)
+    pending_scoring_prediction_ids: list[str] = []
+    if scoring_capacity > 0:
+        pending_scoring_prediction_ids = fetch_pending_scoring_prediction_ids(
+            config.database_url,
+            prediction_table=prediction_table,
+            experiment_name=experiment_name,
+            order_columns=order_columns,
+            limit=scoring_capacity,
+        )
+    pending_score_result = enqueue_score_jobs(
+        pending_scoring_prediction_ids, score_timeout, None
+    )
+    pending_scoring_marked = mark_scoring_queued(
+        config.database_url,
+        prediction_table=prediction_table,
+        prediction_ids=pending_scoring_prediction_ids,
+    )
+
+    remaining_scoring_capacity = scoring_capacity - len(
+        pending_scoring_prediction_ids
+    )
+    stranded_scoring_ids: list[str] = []
+    if remaining_scoring_capacity > 0:
+        stranded_scoring = fetch_stranded_scoring_repair_candidates(
+            config.database_url,
+            dbos_system_database_url=config.dbos_system_database_url,
+            prediction_table=prediction_table,
+            experiment_name=experiment_name,
+            dimension_columns=dimension_columns,
+            order_columns=order_columns,
+            limit=remaining_scoring_capacity,
+        )
+        stranded_scoring_ids = [
+            candidate.prediction_id for candidate in stranded_scoring
+        ]
     stranded_scoring_marked = mark_stranded_scoring_as_errors(
         config.database_url,
         prediction_table=prediction_table,
         prediction_ids=stranded_scoring_ids,
     )
 
-    pending_scoring_prediction_ids = (
-        repair_plan.pending_scoring_prediction_ids
-    )
-    enqueue_score_jobs(pending_scoring_prediction_ids, score_timeout, None)
-    pending_scoring_enqueued = mark_scoring_queued(
-        config.database_url,
-        prediction_table=prediction_table,
-        prediction_ids=pending_scoring_prediction_ids,
-    )
-
-    scoring_retry_prediction_ids = unique_prediction_ids(
-        [
-            *stranded_scoring_ids,
-            *repair_plan.scoring_retry_prediction_ids,
-        ]
-    )
-    enqueue_score_jobs(
+    scoring_retry_prediction_ids = stranded_scoring_ids
+    remaining_scoring_capacity -= len(scoring_retry_prediction_ids)
+    if remaining_scoring_capacity > 0:
+        retry_selection = fetch_scoring_retry_selection(
+            config.database_url,
+            prediction_table=prediction_table,
+            experiment_name=experiment_name,
+            order_columns=order_columns,
+            limit=remaining_scoring_capacity,
+        )
+        scoring_retry_prediction_ids = unique_prediction_ids(
+            [
+                *scoring_retry_prediction_ids,
+                *retry_selection.prediction_ids,
+            ]
+        )
+    scoring_retry_result = enqueue_score_jobs(
         scoring_retry_prediction_ids,
         score_timeout,
-        resolved_repair_token,
+        repair_token,
     )
     scoring_retries_marked_queued = mark_scoring_queued(
         config.database_url,
@@ -836,12 +908,16 @@ def apply_repair(
     )
 
     return RepairApplyResult(
-        repair_token=resolved_repair_token,
+        repair_token=repair_token,
         stranded_generations_marked=stranded_generations_marked,
-        generation_retries_enqueued=len(generation_retry_jobs),
+        generation_retries_enqueued=generation_enqueue_result.enqueued,
+        generation_retries_existing=generation_enqueue_result.existing,
         generation_retries_reset=generation_retries_reset,
         stranded_scoring_marked=stranded_scoring_marked,
-        pending_scoring_enqueued=pending_scoring_enqueued,
-        scoring_retries_enqueued=len(scoring_retry_prediction_ids),
+        pending_scoring_enqueued=pending_score_result.enqueued,
+        pending_scoring_existing=pending_score_result.existing,
+        pending_scoring_marked_queued=pending_scoring_marked,
+        scoring_retries_enqueued=scoring_retry_result.enqueued,
+        scoring_retries_existing=scoring_retry_result.existing,
         scoring_retries_marked_queued=scoring_retries_marked_queued,
     )
