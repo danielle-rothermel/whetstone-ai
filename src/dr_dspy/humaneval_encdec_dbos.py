@@ -304,15 +304,17 @@ class EncDecSubmitSpec(BaseModel):
     repetitions: StrictInt
     score_timeout: float
 
-    def total_jobs(self) -> int:
+    def jobs_per_sample(self) -> int:
         return (
-            self.sample_count
-            * len(self.model_pairs)
+            len(self.model_pairs)
             * len(self.encoder_temperatures)
             * len(self.decoder_temperatures)
             * len(self.budget_ratios)
             * self.repetitions
         )
+
+    def total_jobs(self) -> int:
+        return self.sample_count * self.jobs_per_sample()
 
 
 class EncDecSample(BaseModel):
@@ -704,6 +706,7 @@ def build_prediction_jobs_for_offsets(
 ) -> list[EncDecJob]:
     total_jobs = spec.total_jobs()
     end_offset = min(start_offset + limit, total_jobs)
+    samples_by_index = {sample.sample_index: sample for sample in samples}
     jobs: list[EncDecJob] = []
     for offset in range(start_offset, end_offset):
         remaining = offset
@@ -723,7 +726,12 @@ def build_prediction_jobs_for_offsets(
         remaining //= len(spec.encoder_temperatures)
         pair = spec.model_pairs[remaining % len(spec.model_pairs)]
         remaining //= len(spec.model_pairs)
-        sample = samples[remaining]
+        sample = samples_by_index.get(remaining)
+        if sample is None:
+            raise ValueError(
+                "missing submit sample manifest item: "
+                f"sample_index={remaining}"
+            )
         jobs.append(
             EncDecJob(
                 prediction_id=stable_prediction_id(
@@ -1487,9 +1495,29 @@ def submit_batch_step(
             operation_key=operation_key,
         )
     )
-    samples = build_humaneval_samples(
-        seed=spec.seed, sample_count=spec.sample_count
+    sample_window = shared_batch.operation_item_window(
+        start_offset=progress.next_offset,
+        limit=int(progress.metadata["batch_size"]),
+        total_items=spec.total_jobs(),
+        items_per_group=spec.jobs_per_sample(),
     )
+    sample_payloads = shared_batch.fetch_operation_items(
+        database_url,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
+        item_kind=shared_batch.BatchOperationItemKind.SAMPLE,
+        start_index=sample_window.start_index,
+        limit=sample_window.item_count,
+    )
+    if len(sample_payloads) != sample_window.item_count:
+        raise ValueError(
+            "submit sample manifest incomplete: "
+            f"operation_key={operation_key}, "
+            f"start_index={sample_window.start_index}, "
+            f"expected={sample_window.item_count}, "
+            f"actual={len(sample_payloads)}"
+        )
+    samples = [EncDecSample(**payload) for payload in sample_payloads]
     jobs = build_prediction_jobs_for_offsets(
         spec=spec,
         submission_id=str(progress.metadata["submission_id"]),
@@ -1895,9 +1923,11 @@ def _create_eval_schema(database_url: str) -> None:
             EXPERIMENTS_TABLE_SQL,
             PREDICTIONS_TABLE_SQL,
             shared_batch.operation_table_sql(),
+            shared_batch.operation_item_table_sql(),
             *PREDICTION_MIGRATION_SQL,
             *PREDICTION_INDEX_SQL,
             *shared_batch.operation_index_sql(),
+            *shared_batch.operation_item_index_sql(),
         ),
     )
 
@@ -2304,6 +2334,13 @@ def submit(
         metadata=metadata,
         total_items=total_jobs,
         log_file=resolved_log_file,
+    )
+    shared_batch.record_operation_items(
+        config.database_url,
+        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
+        operation_key=operation_key,
+        item_kind=shared_batch.BatchOperationItemKind.SAMPLE,
+        payloads=[sample.model_dump(mode="json") for sample in samples],
     )
     active_log_file = Path(progress.log_file)
     _configure_submit_file_logging(active_log_file)

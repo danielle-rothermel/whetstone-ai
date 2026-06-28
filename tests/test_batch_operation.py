@@ -1,12 +1,38 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
 from dr_dspy import batch_operation, eval_repair
+
+
+class _CursorContext:
+    def __init__(self, cursor: MagicMock) -> None:
+        self.cursor = cursor
+
+    def __enter__(self) -> MagicMock:
+        return self.cursor
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+class _Connection:
+    def __init__(self, cursor: MagicMock) -> None:
+        self._cursor = cursor
+
+    def cursor(self) -> _CursorContext:
+        return _CursorContext(self._cursor)
+
+
+@contextmanager
+def _connect_with_cursor(cursor: MagicMock) -> Iterator[_Connection]:
+    yield _Connection(cursor)
 
 
 def _progress(
@@ -57,6 +83,115 @@ def test_operation_workflow_id_includes_kind_key_and_attempt() -> None:
     )
 
     assert workflow_id == "repair:abc:2"
+
+
+def test_operation_item_table_sql_references_operation_table() -> None:
+    ddl = batch_operation.operation_item_table_sql()
+
+    assert "CREATE TABLE IF NOT EXISTS dr_dspy_batch_operation_items" in ddl
+    assert "REFERENCES dr_dspy_batch_operations" in ddl
+    assert "ON DELETE CASCADE" in ddl
+
+
+def test_record_operation_items_inserts_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = []
+    inserted: list[tuple[Any, ...]] = []
+
+    def executemany(_query: str, params: list[tuple[Any, ...]]) -> None:
+        inserted.extend(params)
+
+    cursor.executemany.side_effect = executemany
+    monkeypatch.setattr(
+        batch_operation.dbos_runtime,
+        "connect_db",
+        lambda _database_url: _connect_with_cursor(cursor),
+    )
+
+    batch_operation.record_operation_items(
+        "postgresql://x",
+        operation_kind=batch_operation.BatchOperationKind.SUBMIT,
+        operation_key="op-key",
+        item_kind=batch_operation.BatchOperationItemKind.SAMPLE,
+        payloads=[{"task_id": "a"}, {"task_id": "b"}],
+    )
+
+    assert [row[:4] for row in inserted] == [
+        ("submit", "op-key", "sample", 0),
+        ("submit", "op-key", "sample", 1),
+    ]
+
+
+def test_record_operation_items_accepts_matching_existing_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = [{"task_id": "a"}, {"task_id": "b"}]
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [
+        (index, batch_operation.payload_digest(payload))
+        for index, payload in enumerate(payloads)
+    ]
+    monkeypatch.setattr(
+        batch_operation.dbos_runtime,
+        "connect_db",
+        lambda _database_url: _connect_with_cursor(cursor),
+    )
+
+    batch_operation.record_operation_items(
+        "postgresql://x",
+        operation_kind=batch_operation.BatchOperationKind.SUBMIT,
+        operation_key="op-key",
+        item_kind=batch_operation.BatchOperationItemKind.SAMPLE,
+        payloads=payloads,
+    )
+
+    cursor.executemany.assert_not_called()
+
+
+def test_record_operation_items_rejects_mismatched_existing_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [(0, "wrong")]
+    monkeypatch.setattr(
+        batch_operation.dbos_runtime,
+        "connect_db",
+        lambda _database_url: _connect_with_cursor(cursor),
+    )
+
+    with pytest.raises(ValueError, match="operation item manifest mismatch"):
+        batch_operation.record_operation_items(
+            "postgresql://x",
+            operation_kind=batch_operation.BatchOperationKind.SUBMIT,
+            operation_key="op-key",
+            item_kind=batch_operation.BatchOperationItemKind.SAMPLE,
+            payloads=[{"task_id": "a"}],
+        )
+
+
+def test_fetch_operation_items_returns_ordered_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchall.return_value = [({"task_id": "a"},), ({"task_id": "b"},)]
+    monkeypatch.setattr(
+        batch_operation.dbos_runtime,
+        "connect_db",
+        lambda _database_url: _connect_with_cursor(cursor),
+    )
+
+    payloads = batch_operation.fetch_operation_items(
+        "postgresql://x",
+        operation_kind=batch_operation.BatchOperationKind.SUBMIT,
+        operation_key="op-key",
+        item_kind=batch_operation.BatchOperationItemKind.SAMPLE,
+        start_index=1,
+        limit=2,
+    )
+
+    assert payloads == [{"task_id": "a"}, {"task_id": "b"}]
 
 
 def test_merged_counters_adds_deltas_without_losing_existing_keys() -> None:

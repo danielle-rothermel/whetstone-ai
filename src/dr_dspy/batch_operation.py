@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -16,6 +16,7 @@ from dr_dspy.eval_reporting import validate_sql_identifier
 from dr_dspy.lm_utils import stable_json
 
 BATCH_OPERATION_TABLE_NAME = "dr_dspy_batch_operations"
+BATCH_OPERATION_ITEM_TABLE_NAME = "dr_dspy_batch_operation_items"
 OPERATION_KEY_DIGEST_LENGTH = 32
 DEFAULT_OPERATION_TAIL_INTERVAL_SECONDS = 2.0
 
@@ -31,6 +32,10 @@ class BatchOperationStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class BatchOperationItemKind(StrEnum):
+    SAMPLE = "sample"
 
 
 class BatchDispatcherCompletionMode(StrEnum):
@@ -74,6 +79,13 @@ class BatchOperationResult(BaseModel):
     existing_workflows: StrictInt = 0
     marked: StrictInt = 0
     counters: dict[StrictStr, StrictInt] = Field(default_factory=dict)
+
+
+class BatchOperationItemWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    start_index: StrictInt
+    item_count: StrictInt
 
 
 class RepairApplyResultLike(Protocol):
@@ -198,6 +210,185 @@ def operation_index_sql(
     return (
         f"CREATE INDEX IF NOT EXISTS {index_name} "
         f"ON {table_name}(experiment_name, operation_kind, status)",
+    )
+
+
+def operation_item_table_sql(
+    *,
+    table_name: str = BATCH_OPERATION_ITEM_TABLE_NAME,
+    operation_table_name: str = BATCH_OPERATION_TABLE_NAME,
+) -> str:
+    validate_operation_table(table_name)
+    validate_operation_table(operation_table_name)
+    return f"""
+CREATE TABLE IF NOT EXISTS {table_name} (
+    operation_kind TEXT        NOT NULL,
+    operation_key  TEXT        NOT NULL,
+    item_kind      TEXT        NOT NULL,
+    item_index     INTEGER     NOT NULL,
+    payload        JSONB       NOT NULL,
+    payload_digest TEXT        NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (operation_kind, operation_key, item_kind, item_index),
+    FOREIGN KEY (operation_kind, operation_key)
+        REFERENCES {operation_table_name}(operation_kind, operation_key)
+        ON DELETE CASCADE
+)
+"""
+
+
+def operation_item_index_sql(
+    table_name: str = BATCH_OPERATION_ITEM_TABLE_NAME,
+) -> tuple[str, ...]:
+    validate_operation_table(table_name)
+    index_name = f"idx_{table_name.replace('.', '_')}_operation_kind"
+    return (
+        f"CREATE INDEX IF NOT EXISTS {index_name} "
+        f"ON {table_name}(operation_kind, operation_key, item_kind)",
+    )
+
+
+def payload_digest(payload: Mapping[str, Any]) -> str:
+    raw = stable_json(dict(payload))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def record_operation_items(
+    database_url: str,
+    *,
+    operation_kind: BatchOperationKind,
+    operation_key: str,
+    item_kind: BatchOperationItemKind,
+    payloads: Sequence[Mapping[str, Any]],
+    table_name: str = BATCH_OPERATION_ITEM_TABLE_NAME,
+) -> None:
+    validate_operation_table(table_name)
+    expected_digests = [payload_digest(payload) for payload in payloads]
+    with dbos_runtime.connect_db(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                cast(
+                    Any,
+                    f"""
+                    SELECT item_index, payload_digest
+                    FROM {table_name}
+                    WHERE
+                        operation_kind = %s
+                        AND operation_key = %s
+                        AND item_kind = %s
+                    ORDER BY item_index
+                    """,
+                ),
+                (operation_kind.value, operation_key, item_kind.value),
+            )
+            existing_rows = cur.fetchall()
+            if existing_rows:
+                existing_digests = [row[1] for row in existing_rows]
+                expected_indexes = list(range(len(expected_digests)))
+                existing_indexes = [row[0] for row in existing_rows]
+                if (
+                    existing_indexes != expected_indexes
+                    or existing_digests != expected_digests
+                ):
+                    raise ValueError(
+                        "operation item manifest mismatch: "
+                        f"{operation_kind.value}:{operation_key}:"
+                        f"{item_kind.value}"
+                    )
+                return
+            if not expected_digests:
+                return
+            cur.executemany(
+                cast(
+                    Any,
+                    f"""
+                    INSERT INTO {table_name} (
+                        operation_kind,
+                        operation_key,
+                        item_kind,
+                        item_index,
+                        payload,
+                        payload_digest
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                ),
+                [
+                    (
+                        operation_kind.value,
+                        operation_key,
+                        item_kind.value,
+                        index,
+                        Jsonb(dict(payload)),
+                        digest,
+                    )
+                    for index, (payload, digest) in enumerate(
+                        zip(payloads, expected_digests, strict=True)
+                    )
+                ],
+            )
+
+
+def fetch_operation_items(
+    database_url: str,
+    *,
+    operation_kind: BatchOperationKind,
+    operation_key: str,
+    item_kind: BatchOperationItemKind,
+    start_index: int,
+    limit: int,
+    table_name: str = BATCH_OPERATION_ITEM_TABLE_NAME,
+) -> list[dict[str, Any]]:
+    validate_operation_table(table_name)
+    if limit <= 0:
+        return []
+    with dbos_runtime.connect_db(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                cast(
+                    Any,
+                    f"""
+                    SELECT payload
+                    FROM {table_name}
+                    WHERE
+                        operation_kind = %s
+                        AND operation_key = %s
+                        AND item_kind = %s
+                        AND item_index >= %s
+                    ORDER BY item_index
+                    LIMIT %s
+                    """,
+                ),
+                (
+                    operation_kind.value,
+                    operation_key,
+                    item_kind.value,
+                    start_index,
+                    limit,
+                ),
+            )
+            rows = cur.fetchall()
+    return [dict(row[0]) for row in rows]
+
+
+def operation_item_window(
+    *,
+    start_offset: int,
+    limit: int,
+    total_items: int,
+    items_per_group: int,
+) -> BatchOperationItemWindow:
+    if items_per_group <= 0:
+        raise ValueError("items_per_group must be positive")
+    if limit <= 0 or start_offset >= total_items:
+        return BatchOperationItemWindow(start_index=0, item_count=0)
+    end_offset = min(start_offset + limit, total_items)
+    start_index = start_offset // items_per_group
+    end_index = (end_offset - 1) // items_per_group
+    return BatchOperationItemWindow(
+        start_index=start_index,
+        item_count=end_index - start_index + 1,
     )
 
 
