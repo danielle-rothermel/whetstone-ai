@@ -987,6 +987,33 @@ def format_counters(counters: Mapping[str, int]) -> str:
     )
 
 
+def operation_progress_lines(
+    *,
+    operation_kind: BatchOperationKind,
+    progress: BatchOperationProgress,
+    counts: Mapping[str, int],
+) -> tuple[str, ...]:
+    main_line = (
+        f"{operation_kind.value} {progress.status.value:<9} | "
+        f"total={progress.total_items:>6} | "
+        f"offset={progress.next_offset:>6} | "
+        f"processed={progress.processed_count:>6} | "
+        f"inserted={progress.inserted_count:>6} | "
+        f"enqueued={progress.enqueued_count:>6} | "
+        f"existing={progress.existing_workflow_count:>6} | "
+        f"marked={progress.marked_count:>6} | "
+        f"batches={progress.batch_count:>4} | "
+        f"gen_done={counts.get('generated', 0):>6} | "
+        f"score_done={counts.get('scored', 0):>6}"
+    )
+    if progress.last_error:
+        main_line = f"{main_line} | error={progress.last_error}"
+    counter_line = format_counters(progress.counters)
+    if counter_line == "-":
+        return (main_line,)
+    return (main_line, f"{operation_kind.value} counters | {counter_line}")
+
+
 def tail_operation_progress(
     *,
     database_url: str,
@@ -998,7 +1025,7 @@ def tail_operation_progress(
     interval_seconds: float = DEFAULT_OPERATION_TAIL_INTERVAL_SECONDS,
     table_name: str = BATCH_OPERATION_TABLE_NAME,
 ) -> BatchOperationProgress:
-    last_line: str | None = None
+    last_lines: tuple[str, ...] = ()
     while True:
         progress = fetch_operation_progress(
             database_url,
@@ -1011,23 +1038,12 @@ def tail_operation_progress(
             prediction_table=prediction_table,
             experiment_name=experiment_name,
         )
-        line = (
-            f"{operation_kind.value} {progress.status.value:<9} | "
-            f"total={progress.total_items:>6} | "
-            f"offset={progress.next_offset:>6} | "
-            f"processed={progress.processed_count:>6} | "
-            f"inserted={progress.inserted_count:>6} | "
-            f"enqueued={progress.enqueued_count:>6} | "
-            f"existing={progress.existing_workflow_count:>6} | "
-            f"marked={progress.marked_count:>6} | "
-            f"batches={progress.batch_count:>4} | "
-            f"gen_done={counts.get('generated', 0):>6} | "
-            f"score_done={counts.get('scored', 0):>6} | "
-            f"counters={format_counters(progress.counters)}"
+        lines = operation_progress_lines(
+            operation_kind=operation_kind,
+            progress=progress,
+            counts=counts,
         )
-        if progress.last_error:
-            line = f"{line} | error={progress.last_error}"
-        if line != last_line:
+        if lines != last_lines:
             style = "green"
             if progress.status is BatchOperationStatus.FAILED:
                 style = "red"
@@ -1036,8 +1052,9 @@ def tail_operation_progress(
                 BatchOperationStatus.RUNNING,
             ):
                 style = "cyan"
-            operator_log(line, style=style)
-            last_line = line
+            for line in lines:
+                operator_log(line, style=style)
+            last_lines = lines
         if progress.status in (
             BatchOperationStatus.COMPLETED,
             BatchOperationStatus.FAILED,

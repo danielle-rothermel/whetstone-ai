@@ -85,6 +85,40 @@ def test_operation_workflow_id_includes_kind_key_and_attempt() -> None:
     assert workflow_id == "repair:abc:2"
 
 
+def test_operation_progress_lines_omit_empty_counters() -> None:
+    lines = batch_operation.operation_progress_lines(
+        operation_kind=batch_operation.BatchOperationKind.REPAIR,
+        progress=_progress(
+            operation_kind=batch_operation.BatchOperationKind.REPAIR
+        ),
+        counts={"generated": 10, "scored": 8},
+    )
+
+    assert len(lines) == 1
+    assert "counters=" not in lines[0]
+    assert "gen_done=    10" in lines[0]
+    assert "score_done=     8" in lines[0]
+
+
+def test_operation_progress_lines_split_non_empty_counters() -> None:
+    lines = batch_operation.operation_progress_lines(
+        operation_kind=batch_operation.BatchOperationKind.REPAIR,
+        progress=_progress(
+            operation_kind=batch_operation.BatchOperationKind.REPAIR,
+            counters={"scoring_processed": 344, "generation_processed": 512},
+        ),
+        counts={"generated": 6667, "scored": 6309},
+    )
+
+    assert lines == (
+        "repair pending   | total=    10 | offset=     0 | "
+        "processed=     0 | inserted=     0 | enqueued=     0 | "
+        "existing=     0 | marked=     0 | batches=   0 | "
+        "gen_done=  6667 | score_done=  6309",
+        "repair counters | generation_processed:512,scoring_processed:344",
+    )
+
+
 def test_operation_item_table_sql_references_operation_table() -> None:
     ddl = batch_operation.operation_item_table_sql()
 
