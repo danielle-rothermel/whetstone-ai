@@ -30,6 +30,7 @@ from dr_dspy import eval_logging as shared_eval_logging
 from dr_dspy import eval_repair as shared_eval_repair
 from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
+from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy import worker_resources as shared_worker_resources
 from dr_dspy.experiment_dimensions import (
@@ -1515,6 +1516,17 @@ def submit_batch_step(
         samples=samples,
         start_offset=progress.next_offset,
         limit=int(progress.metadata["batch_size"]),
+    )
+    jobs = shared_job_ordering.stable_shuffle(
+        jobs,
+        seed=shared_job_ordering.stable_order_key(
+            "submit",
+            spec.script_kind,
+            spec.experiment_name,
+            spec.seed,
+            progress.metadata["submission_id"],
+        ),
+        key=lambda job: job.prediction_id,
     )
     _emit_submit_log(
         "submit_batch_started",

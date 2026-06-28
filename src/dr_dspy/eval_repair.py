@@ -6,6 +6,7 @@ from typing import Any, Protocol, cast
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from dr_dspy import dbos_runtime
+from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy.eval_reporting import validate_sql_identifier
 from dr_dspy.failure_policy import RECOVERABLE_FAILURE_CLASSES, FailureClass
 from dr_dspy.prediction_status import (
@@ -134,9 +135,18 @@ def validate_columns(columns: Sequence[str]) -> None:
         validate_sql_identifier(column)
 
 
-def order_clause(order_columns: Sequence[str]) -> str:
+def order_clause(
+    order_columns: Sequence[str], *, shuffle_key: str | None = None
+) -> str:
     validate_columns(order_columns)
-    return ", ".join(order_columns)
+    ordered_columns = ", ".join(order_columns)
+    if shuffle_key is None:
+        return ordered_columns
+    return f"md5(prediction_id || %s), {ordered_columns}"
+
+
+def repair_order_shuffle_key(*parts: object) -> str:
+    return shared_job_ordering.stable_order_key("repair", *parts)
 
 
 def dimension_select_clause(dimension_columns: Sequence[str]) -> str:
@@ -164,7 +174,14 @@ def fetch_prediction_ids_by_status(
     if scoring_statuses is not None:
         scoring_clause = "AND scoring_status = ANY(%s)"
         params.append(list(scoring_statuses))
-    params.append(limit)
+    shuffle_key = repair_order_shuffle_key(
+        "status",
+        prediction_table,
+        experiment_name,
+        generation_status,
+        ",".join(scoring_statuses or ()),
+    )
+    params.extend([shuffle_key, limit])
     query = f"""
         SELECT prediction_id
         FROM {prediction_table}
@@ -172,7 +189,7 @@ def fetch_prediction_ids_by_status(
             experiment_name = %s
             AND generation_status = %s
             {scoring_clause}
-        ORDER BY {order_clause(order_columns)}
+        ORDER BY {order_clause(order_columns, shuffle_key=shuffle_key)}
         LIMIT %s
     """
     with dbos_runtime.connect_db(database_url) as conn:
@@ -215,7 +232,16 @@ def fetch_prediction_retry_selection(
     if generation_status is not None:
         generation_clause = "AND generation_status = %s"
         params.append(generation_status)
-    params.append(limit)
+    shuffle_key = repair_order_shuffle_key(
+        "retry",
+        prediction_table,
+        experiment_name,
+        status_column,
+        failure_class_column,
+        ",".join(retry_statuses),
+        generation_status or "",
+    )
+    params.extend([shuffle_key, limit])
     query = f"""
         SELECT prediction_id, {failure_class_column}
         FROM {prediction_table}
@@ -224,7 +250,7 @@ def fetch_prediction_retry_selection(
             AND {status_column} = ANY(%s)
             AND {failure_class_column} = ANY(%s)
             {generation_clause}
-        ORDER BY {order_clause(order_columns)}
+        ORDER BY {order_clause(order_columns, shuffle_key=shuffle_key)}
         LIMIT %s
     """
     excluded_params: list[Any] = [
@@ -439,6 +465,12 @@ def fetch_started_generation_repair_candidates(
     limit_clause = ""
     offset_clause = ""
     params: list[Any] = [experiment_name, GenerationStatus.STARTED.value]
+    shuffle_key = repair_order_shuffle_key(
+        "stranded-generation",
+        prediction_table,
+        experiment_name,
+    )
+    params.append(shuffle_key)
     if limit is not None:
         limit_clause = "LIMIT %s"
         params.append(limit)
@@ -456,7 +488,7 @@ def fetch_started_generation_repair_candidates(
         WHERE
             experiment_name = %s
             AND generation_status = %s
-        ORDER BY {order_clause(order_columns)}
+        ORDER BY {order_clause(order_columns, shuffle_key=shuffle_key)}
         {limit_clause}
         {offset_clause}
     """
@@ -532,6 +564,12 @@ def fetch_stranded_scoring_repair_candidates(
         GenerationStatus.GENERATED.value,
         list(STRANDED_SCORING_STATUSES),
     ]
+    shuffle_key = repair_order_shuffle_key(
+        "stranded-scoring",
+        prediction_table,
+        experiment_name,
+    )
+    params.append(shuffle_key)
     if limit is not None:
         limit_clause = "LIMIT %s"
         params.append(limit)
@@ -551,7 +589,7 @@ def fetch_stranded_scoring_repair_candidates(
             experiment_name = %s
             AND generation_status = %s
             AND scoring_status = ANY(%s)
-        ORDER BY {order_clause(order_columns)}
+        ORDER BY {order_clause(order_columns, shuffle_key=shuffle_key)}
         {limit_clause}
         {offset_clause}
     """

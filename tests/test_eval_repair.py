@@ -100,9 +100,16 @@ def test_fetch_retry_selection_excludes_null_failure_classes(
     assert selection.summary.recoverable_count == 1
     assert selection.summary.excluded_count == 2
     retry_query = calls[0][0]
+    retry_params = calls[0][1]
     excluded_query = calls[1][0]
     assert "generation_failure_class = ANY(%s)" in retry_query
     assert "generation_failure_class IS NULL" not in retry_query
+    assert "ORDER BY md5(prediction_id || %s), prediction_id" in retry_query
+    assert retry_params[-2] == (
+        "repair\x1fretry\x1fpredictions\x1fexp\x1fgeneration_status\x1f"
+        "generation_failure_class\x1fgeneration_error,"
+        "generation_recoverable_error\x1f"
+    )
     assert "generation_failure_class IS NULL" in excluded_query
 
 

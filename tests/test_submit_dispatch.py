@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from dr_dspy import batch_operation
+from dr_dspy import batch_operation, job_ordering
 from dr_dspy import humaneval_direct_dbos as direct
 from dr_dspy import humaneval_encdec_dbos as encdec
 from dr_dspy.dbos_runtime import EnqueueWorkflowsResult
@@ -359,6 +359,7 @@ def test_direct_submit_batch_reads_manifest_not_dataset(
         total_items=spec.total_jobs(), next_offset=1, batch_size=3
     )
     fetched_items: list[dict[str, Any]] = []
+    enqueued_jobs: list[direct.PredictionJob] = []
     recorded_results: list[batch_operation.BatchOperationResult] = []
 
     def fetch_items(*_args: Any, **kwargs: Any) -> list[dict[str, Any]]:
@@ -402,8 +403,9 @@ def test_direct_submit_batch_reads_manifest_not_dataset(
     monkeypatch.setattr(
         direct,
         "_enqueue_generation_jobs",
-        lambda _url, jobs, *, score_timeout: EnqueueWorkflowsResult(
-            enqueued=len(jobs), existing=0
+        lambda _url, jobs, *, score_timeout: (
+            enqueued_jobs.extend(jobs)
+            or EnqueueWorkflowsResult(enqueued=len(jobs), existing=0)
         ),
     )
     monkeypatch.setattr(
@@ -416,6 +418,27 @@ def test_direct_submit_batch_reads_manifest_not_dataset(
 
     assert result.processed == 3
     assert result.next_offset == 4
+    raw_jobs = direct.build_prediction_jobs_for_offsets(
+        spec=spec,
+        submission_id=str(progress.metadata["submission_id"]),
+        samples=samples[:2],
+        start_offset=progress.next_offset,
+        limit=int(progress.metadata["batch_size"]),
+    )
+    expected_jobs = job_ordering.stable_shuffle(
+        raw_jobs,
+        seed=job_ordering.stable_order_key(
+            "submit",
+            spec.script_kind,
+            spec.experiment_name,
+            spec.seed,
+            progress.metadata["submission_id"],
+        ),
+        key=lambda job: job.prediction_id,
+    )
+    assert [job.prediction_id for job in enqueued_jobs] == [
+        job.prediction_id for job in expected_jobs
+    ]
     assert recorded_results == [result]
 
 
