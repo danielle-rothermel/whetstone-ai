@@ -1439,63 +1439,31 @@ def score_prediction_workflow(
 def submit_dispatcher_workflow(
     database_url: str, operation_key: str
 ) -> str:
-    progress = shared_batch.fetch_operation_progress(
+    completion_modes = shared_batch.BatchDispatcherCompletionMode
+    return shared_batch.run_operation_dispatcher(
         database_url,
         operation_kind=shared_batch.BatchOperationKind.SUBMIT,
         operation_key=operation_key,
-    )
-    _configure_submit_file_logging(Path(progress.log_file))
-    _emit_submit_log(
-        "submit_dispatcher_started",
-        {
+        configure_logging=_configure_submit_file_logging,
+        emit_log=_emit_submit_log,
+        started_event="submit_dispatcher_started",
+        started_payload=lambda progress: {
             "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
             "next_offset": progress.next_offset,
             "total_jobs": progress.total_items,
         },
+        failed_event="submit_dispatcher_failed",
+        batch_step=submit_batch_step,
+        completion_mode=completion_modes.OFFSET_TOTAL,
+        completed_event="submit_dispatcher_completed",
+        completed_payload=lambda progress: {
+            "operation_key": operation_key,
+            "total_jobs": progress.total_items,
+            "batch_count": progress.batch_count,
+        },
     )
-    shared_batch.mark_operation_running(
-        database_url,
-        operation_kind=shared_batch.BatchOperationKind.SUBMIT,
-        operation_key=operation_key,
-    )
-    try:
-        while True:
-            progress = shared_batch.fetch_operation_progress(
-                database_url,
-                operation_kind=shared_batch.BatchOperationKind.SUBMIT,
-                operation_key=operation_key,
-            )
-            if progress.next_offset >= progress.total_items:
-                shared_batch.mark_operation_completed(
-                    database_url,
-                    operation_kind=shared_batch.BatchOperationKind.SUBMIT,
-                    operation_key=operation_key,
-                )
-                _emit_submit_log(
-                    "submit_dispatcher_completed",
-                    {
-                        "operation_key": operation_key,
-                        "total_jobs": progress.total_items,
-                        "batch_count": progress.batch_count,
-                    },
-                )
-                return "completed"
-            submit_batch_step(database_url, operation_key)
-    except Exception as error:
-        error_text = repr(error)
-        shared_batch.mark_operation_failed(
-            database_url,
-            operation_kind=shared_batch.BatchOperationKind.SUBMIT,
-            operation_key=operation_key,
-            error=error_text,
-        )
-        _emit_submit_log(
-            "submit_dispatcher_failed",
-            {"operation_key": operation_key, "error": error_text},
-        )
-        raise
 
 
 @DBOS.step(
@@ -1582,61 +1550,24 @@ def enqueue_scores_dispatcher_workflow(
     database_url: str, operation_key: str
 ) -> str:
     operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
-    progress = shared_batch.fetch_operation_progress(
+    completion_modes = shared_batch.BatchDispatcherCompletionMode
+    return shared_batch.run_operation_dispatcher(
         database_url,
         operation_kind=operation_kind,
         operation_key=operation_key,
-    )
-    _configure_operation_file_logging(Path(progress.log_file))
-    _emit_operation_log(
-        "enqueue_scores_dispatcher_started",
-        {
+        configure_logging=_configure_operation_file_logging,
+        emit_log=_emit_operation_log,
+        started_event="enqueue_scores_dispatcher_started",
+        started_payload=lambda progress: {
             "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
             "limit": progress.total_items,
         },
+        failed_event="enqueue_scores_dispatcher_failed",
+        batch_step=enqueue_scores_batch_step,
+        completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
     )
-    shared_batch.mark_operation_running(
-        database_url,
-        operation_kind=operation_kind,
-        operation_key=operation_key,
-    )
-    try:
-        while True:
-            progress = shared_batch.fetch_operation_progress(
-                database_url,
-                operation_kind=operation_kind,
-                operation_key=operation_key,
-            )
-            if progress.processed_count >= progress.total_items:
-                shared_batch.mark_operation_completed(
-                    database_url,
-                    operation_kind=operation_kind,
-                    operation_key=operation_key,
-                )
-                return "completed"
-            result = enqueue_scores_batch_step(database_url, operation_key)
-            if result.processed == 0:
-                shared_batch.mark_operation_completed(
-                    database_url,
-                    operation_kind=operation_kind,
-                    operation_key=operation_key,
-                )
-                return "completed"
-    except Exception as error:
-        error_text = repr(error)
-        shared_batch.mark_operation_failed(
-            database_url,
-            operation_kind=operation_kind,
-            operation_key=operation_key,
-            error=error_text,
-        )
-        _emit_operation_log(
-            "enqueue_scores_dispatcher_failed",
-            {"operation_key": operation_key, "error": error_text},
-        )
-        raise
 
 
 @DBOS.step(
@@ -1709,61 +1640,24 @@ def enqueue_scores_batch_step(
 )
 def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
     operation_kind = shared_batch.BatchOperationKind.REPAIR
-    progress = shared_batch.fetch_operation_progress(
+    completion_modes = shared_batch.BatchDispatcherCompletionMode
+    return shared_batch.run_operation_dispatcher(
         database_url,
         operation_kind=operation_kind,
         operation_key=operation_key,
-    )
-    _configure_operation_file_logging(Path(progress.log_file))
-    _emit_operation_log(
-        "repair_dispatcher_started",
-        {
+        configure_logging=_configure_operation_file_logging,
+        emit_log=_emit_operation_log,
+        started_event="repair_dispatcher_started",
+        started_payload=lambda progress: {
             "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
             "limit": progress.total_items,
         },
+        failed_event="repair_dispatcher_failed",
+        batch_step=repair_batch_step,
+        completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
     )
-    shared_batch.mark_operation_running(
-        database_url,
-        operation_kind=operation_kind,
-        operation_key=operation_key,
-    )
-    try:
-        while True:
-            progress = shared_batch.fetch_operation_progress(
-                database_url,
-                operation_kind=operation_kind,
-                operation_key=operation_key,
-            )
-            if progress.processed_count >= progress.total_items:
-                shared_batch.mark_operation_completed(
-                    database_url,
-                    operation_kind=operation_kind,
-                    operation_key=operation_key,
-                )
-                return "completed"
-            result = repair_batch_step(database_url, operation_key)
-            if result.processed == 0:
-                shared_batch.mark_operation_completed(
-                    database_url,
-                    operation_kind=operation_kind,
-                    operation_key=operation_key,
-                )
-                return "completed"
-    except Exception as error:
-        error_text = repr(error)
-        shared_batch.mark_operation_failed(
-            database_url,
-            operation_kind=operation_kind,
-            operation_key=operation_key,
-            error=error_text,
-        )
-        _emit_operation_log(
-            "repair_dispatcher_failed",
-            {"operation_key": operation_key, "error": error_text},
-        )
-        raise
 
 
 @DBOS.step(
@@ -1845,53 +1739,10 @@ def repair_batch_step(
         ),
         repair_token=operation_key,
     )
-    generation_batch_count = repair_result.generation_retries_selected
-    scoring_batch_count = (
-        repair_result.pending_scoring_selected
-        + repair_result.scoring_retries_selected
-    )
-    processed = generation_batch_count + scoring_batch_count
-    result = shared_batch.BatchOperationResult(
-        start_offset=progress.processed_count,
-        next_offset=progress.processed_count + processed,
+    result = shared_batch.repair_batch_operation_result(
+        progress=progress,
         batch_size=int(spec["batch_size"]),
-        processed=processed,
-        enqueued=(
-            repair_result.generation_retries_enqueued
-            + repair_result.pending_scoring_enqueued
-            + repair_result.scoring_retries_enqueued
-        ),
-        existing_workflows=(
-            repair_result.generation_retries_existing
-            + repair_result.pending_scoring_existing
-            + repair_result.scoring_retries_existing
-        ),
-        marked=(
-            repair_result.stranded_generations_marked
-            + repair_result.generation_retries_reset
-            + repair_result.stranded_scoring_marked
-            + repair_result.pending_scoring_marked_queued
-            + repair_result.scoring_retries_marked_queued
-        ),
-        counters={
-            "generation_processed": generation_batch_count,
-            "scoring_processed": scoring_batch_count,
-            "stranded_generations_marked": (
-                repair_result.stranded_generations_marked
-            ),
-            "generation_retries_reset": (
-                repair_result.generation_retries_reset
-            ),
-            "stranded_scoring_marked": (
-                repair_result.stranded_scoring_marked
-            ),
-            "pending_scoring_marked_queued": (
-                repair_result.pending_scoring_marked_queued
-            ),
-            "scoring_retries_marked_queued": (
-                repair_result.scoring_retries_marked_queued
-            ),
-        },
+        repair_result=repair_result,
     )
     shared_batch.record_operation_batch_success(
         database_url,

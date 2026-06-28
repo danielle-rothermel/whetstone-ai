@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
@@ -31,6 +31,11 @@ class BatchOperationStatus(StrEnum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class BatchDispatcherCompletionMode(StrEnum):
+    OFFSET_TOTAL = "offset_total"
+    PROCESSED_TOTAL_OR_EMPTY_BATCH = "processed_total_or_empty_batch"
 
 
 class BatchOperationProgress(BaseModel):
@@ -69,6 +74,29 @@ class BatchOperationResult(BaseModel):
     existing_workflows: StrictInt = 0
     marked: StrictInt = 0
     counters: dict[StrictStr, StrictInt] = Field(default_factory=dict)
+
+
+class RepairApplyResultLike(Protocol):
+    stranded_generations_marked: int
+    generation_retries_enqueued: int
+    generation_retries_existing: int
+    generation_retries_reset: int
+    stranded_scoring_marked: int
+    pending_scoring_enqueued: int
+    pending_scoring_existing: int
+    pending_scoring_marked_queued: int
+    scoring_retries_enqueued: int
+    scoring_retries_existing: int
+    scoring_retries_marked_queued: int
+
+    @property
+    def generation_retries_selected(self) -> int: ...
+
+    @property
+    def pending_scoring_selected(self) -> int: ...
+
+    @property
+    def scoring_retries_selected(self) -> int: ...
 
 
 def operation_key(spec: Mapping[str, Any]) -> str:
@@ -532,6 +560,171 @@ def mark_operation_failed(
                 ),
                 (error, operation_kind.value, operation_key),
             )
+
+
+def _is_dispatcher_complete(
+    progress: BatchOperationProgress,
+    completion_mode: BatchDispatcherCompletionMode,
+) -> bool:
+    if completion_mode is BatchDispatcherCompletionMode.OFFSET_TOTAL:
+        return progress.next_offset >= progress.total_items
+    return progress.processed_count >= progress.total_items
+
+
+def _emit_completed_event(
+    *,
+    emit_log: Callable[[str, Mapping[str, Any]], None],
+    completed_event: str | None,
+    completed_payload: Callable[
+        [BatchOperationProgress], Mapping[str, Any]
+    ]
+    | None,
+    progress: BatchOperationProgress,
+) -> None:
+    if completed_event is None or completed_payload is None:
+        return
+    emit_log(completed_event, completed_payload(progress))
+
+
+def run_operation_dispatcher(
+    database_url: str,
+    *,
+    operation_kind: BatchOperationKind,
+    operation_key: str,
+    configure_logging: Callable[[Path], None],
+    emit_log: Callable[[str, Mapping[str, Any]], None],
+    started_event: str,
+    started_payload: Callable[[BatchOperationProgress], Mapping[str, Any]],
+    failed_event: str,
+    batch_step: Callable[[str, str], BatchOperationResult],
+    completion_mode: BatchDispatcherCompletionMode,
+    completed_event: str | None = None,
+    completed_payload: Callable[
+        [BatchOperationProgress], Mapping[str, Any]
+    ]
+    | None = None,
+    table_name: str = BATCH_OPERATION_TABLE_NAME,
+) -> str:
+    progress = fetch_operation_progress(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+        table_name=table_name,
+    )
+    configure_logging(Path(progress.log_file))
+    emit_log(started_event, started_payload(progress))
+    mark_operation_running(
+        database_url,
+        operation_kind=operation_kind,
+        operation_key=operation_key,
+        table_name=table_name,
+    )
+    try:
+        while True:
+            progress = fetch_operation_progress(
+                database_url,
+                operation_kind=operation_kind,
+                operation_key=operation_key,
+                table_name=table_name,
+            )
+            if _is_dispatcher_complete(progress, completion_mode):
+                mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                    table_name=table_name,
+                )
+                _emit_completed_event(
+                    emit_log=emit_log,
+                    completed_event=completed_event,
+                    completed_payload=completed_payload,
+                    progress=progress,
+                )
+                return "completed"
+            result = batch_step(database_url, operation_key)
+            if (
+                completion_mode
+                is BatchDispatcherCompletionMode.PROCESSED_TOTAL_OR_EMPTY_BATCH
+                and result.processed == 0
+            ):
+                mark_operation_completed(
+                    database_url,
+                    operation_kind=operation_kind,
+                    operation_key=operation_key,
+                    table_name=table_name,
+                )
+                _emit_completed_event(
+                    emit_log=emit_log,
+                    completed_event=completed_event,
+                    completed_payload=completed_payload,
+                    progress=progress,
+                )
+                return "completed"
+    except Exception as error:
+        error_text = repr(error)
+        mark_operation_failed(
+            database_url,
+            operation_kind=operation_kind,
+            operation_key=operation_key,
+            error=error_text,
+            table_name=table_name,
+        )
+        emit_log(
+            failed_event, {"operation_key": operation_key, "error": error_text}
+        )
+        raise
+
+
+def repair_batch_operation_result(
+    *,
+    progress: BatchOperationProgress,
+    batch_size: int,
+    repair_result: RepairApplyResultLike,
+) -> BatchOperationResult:
+    generation_batch_count = repair_result.generation_retries_selected
+    scoring_batch_count = (
+        repair_result.pending_scoring_selected
+        + repair_result.scoring_retries_selected
+    )
+    processed = generation_batch_count + scoring_batch_count
+    return BatchOperationResult(
+        start_offset=progress.processed_count,
+        next_offset=progress.processed_count + processed,
+        batch_size=batch_size,
+        processed=processed,
+        enqueued=(
+            repair_result.generation_retries_enqueued
+            + repair_result.pending_scoring_enqueued
+            + repair_result.scoring_retries_enqueued
+        ),
+        existing_workflows=(
+            repair_result.generation_retries_existing
+            + repair_result.pending_scoring_existing
+            + repair_result.scoring_retries_existing
+        ),
+        marked=(
+            repair_result.stranded_generations_marked
+            + repair_result.generation_retries_reset
+            + repair_result.stranded_scoring_marked
+            + repair_result.pending_scoring_marked_queued
+            + repair_result.scoring_retries_marked_queued
+        ),
+        counters={
+            "generation_processed": generation_batch_count,
+            "scoring_processed": scoring_batch_count,
+            "stranded_generations_marked": (
+                repair_result.stranded_generations_marked
+            ),
+            "generation_retries_reset": repair_result.generation_retries_reset,
+            "stranded_scoring_marked": repair_result.stranded_scoring_marked,
+            "pending_scoring_marked_queued": (
+                repair_result.pending_scoring_marked_queued
+            ),
+            "scoring_retries_marked_queued": (
+                repair_result.scoring_retries_marked_queued
+            ),
+        },
+    )
 
 
 def ensure_operation_workflow(
