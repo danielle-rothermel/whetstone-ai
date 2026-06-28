@@ -54,6 +54,25 @@ def test_encdec_module_does_not_reexport_shared_runtime_api() -> None:
     _assert_removed_shared_api_names(encdec)
 
 
+def test_batch_fanout_functions_are_not_dbos_steps() -> None:
+    batch_functions = (
+        direct.submit_batch_step,
+        direct.enqueue_scores_batch_step,
+        direct.repair_batch_step,
+        encdec.submit_batch_step,
+        encdec.enqueue_scores_batch_step,
+        encdec.repair_batch_step,
+    )
+
+    decorated_functions = [
+        function.__name__
+        for function in batch_functions
+        if hasattr(function, "dbos_function_name")
+    ]
+
+    assert decorated_functions == []
+
+
 def test_direct_constraint_migration_compares_text_arrays() -> None:
     migration_sql = "\n".join(direct.PREDICTION_CONSTRAINT_MIGRATION_SQL)
 

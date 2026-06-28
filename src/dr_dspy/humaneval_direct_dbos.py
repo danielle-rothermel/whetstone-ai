@@ -637,12 +637,6 @@ def submit_dispatcher_workflow(
     )
 
 
-@DBOS.step(
-    name="humaneval_direct_submit_batch_step_v0",
-    retries_allowed=True,
-    max_attempts=3,
-    interval_seconds=2.0,
-)
 def submit_batch_step(
     database_url: str, operation_key: str
 ) -> shared_batch.BatchOperationResult:
@@ -761,12 +755,6 @@ def enqueue_scores_dispatcher_workflow(
     )
 
 
-@DBOS.step(
-    name="humaneval_direct_enqueue_scores_batch_step_v0",
-    retries_allowed=True,
-    max_attempts=3,
-    interval_seconds=2.0,
-)
 def enqueue_scores_batch_step(
     database_url: str, operation_key: str
 ) -> shared_batch.BatchOperationResult:
@@ -851,12 +839,6 @@ def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
     )
 
 
-@DBOS.step(
-    name="humaneval_direct_repair_batch_step_v0",
-    retries_allowed=True,
-    max_attempts=3,
-    interval_seconds=2.0,
-)
 def repair_batch_step(
     database_url: str, operation_key: str
 ) -> shared_batch.BatchOperationResult:
