@@ -4,6 +4,7 @@ import errno
 from enum import StrEnum
 from typing import Any
 
+import httpx
 import psycopg
 from dbos._error import DBOSMaxStepRetriesExceeded
 from openai import (
@@ -91,6 +92,13 @@ def classify_exception(error: BaseException) -> FailureClass:
         if root.status_code == 429:
             return FailureClass.RATE_LIMITED
         if root.status_code >= 500 or root.status_code in {408, 409, 425}:
+            return FailureClass.TRANSIENT
+        return FailureClass.PERMANENT
+    if isinstance(root, httpx.HTTPStatusError):
+        status_code = root.response.status_code
+        if status_code == 429:
+            return FailureClass.RATE_LIMITED
+        if status_code >= 500 or status_code in {408, 409, 425}:
             return FailureClass.TRANSIENT
         return FailureClass.PERMANENT
     if isinstance(

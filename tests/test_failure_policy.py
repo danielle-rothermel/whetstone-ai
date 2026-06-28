@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import errno
 
+import httpx
 import psycopg
+import pytest
 from dbos._error import DBOSMaxStepRetriesExceeded
 
 from dr_dspy.failure_policy import (
@@ -41,6 +43,30 @@ def test_classifies_db_operational_error_as_retryable_transient() -> None:
 
     assert classify_exception(error) is FailureClass.TRANSIENT
     assert should_retry_step(error)
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    (
+        (429, FailureClass.RATE_LIMITED),
+        (504, FailureClass.TRANSIENT),
+        (400, FailureClass.PERMANENT),
+    ),
+)
+def test_classifies_httpx_status_errors(
+    status_code: int, expected: FailureClass
+) -> None:
+    request = httpx.Request(
+        "POST", "https://openrouter.ai/api/v1/chat/completions"
+    )
+    response = httpx.Response(status_code, request=request)
+    error = httpx.HTTPStatusError(
+        f"status {status_code}",
+        request=request,
+        response=response,
+    )
+
+    assert classify_exception(error) is expected
 
 
 def test_unknown_exceptions_are_not_recoverable_by_default() -> None:
