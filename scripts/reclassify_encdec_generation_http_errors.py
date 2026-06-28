@@ -8,7 +8,7 @@ import typer
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from dr_dspy.dbos_runtime import resolve_database_url
-from dr_dspy.failure_policy import FailureClass
+from dr_dspy.failures import FailureClass
 from dr_dspy.prediction_status import GenerationStatus
 from dr_dspy.runtime import load_env_file
 
@@ -54,7 +54,7 @@ def matching_row_count(
             experiment_name = %s
             AND generation_status = %s
             AND generation_failure_class = %s
-            AND generation_exception_type = %s
+            AND generation_underlying_exception_type = %s
             AND generation_exception_message LIKE %s
     """
     with conn.cursor() as cur:
@@ -88,7 +88,7 @@ def reclassify_matching_rows(
             generation_failure_class = %s,
             generation_error = %s
                 || ': '
-                || COALESCE(generation_exception_type, '')
+                || COALESCE(generation_underlying_exception_type, '')
                 || ': '
                 || COALESCE(generation_exception_message, ''),
             updated_at = now()
@@ -96,7 +96,7 @@ def reclassify_matching_rows(
             experiment_name = %s
             AND generation_status = %s
             AND generation_failure_class = %s
-            AND generation_exception_type = %s
+            AND generation_underlying_exception_type = %s
             AND generation_exception_message LIKE %s
     """
     with conn.cursor() as cur:

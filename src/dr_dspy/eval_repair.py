@@ -8,7 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from dr_dspy import dbos_runtime
 from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy.eval_reporting import validate_sql_identifier
-from dr_dspy.failure_policy import RECOVERABLE_FAILURE_CLASSES, FailureClass
+from dr_dspy.failures import (
+    RECOVERABLE_FAILURE_CLASSES,
+    FailureClass,
+    StrandedGenerationError,
+    StrandedScoringError,
+    exception_type_name,
+)
 from dr_dspy.prediction_status import (
     GENERATION_RETRY_STATUSES,
     SCORING_QUEUEABLE_STATUSES,
@@ -22,8 +28,6 @@ GENERATION_REPAIR_ERROR = "Reconciled from DBOS failed generation workflow."
 SCORING_REPAIR_ERROR = (
     "Reconciled from missing or failed DBOS scoring workflow."
 )
-GENERATION_REPAIR_EXCEPTION_TYPE = "dr_dspy.repair.stranded_generation"
-SCORING_REPAIR_EXCEPTION_TYPE = "dr_dspy.repair.stranded_scoring"
 REPAIR_PLAN_COUNT_PAGE_SIZE = 10_000
 
 
@@ -752,13 +756,18 @@ def mark_started_generations_as_repaired_errors(
             generation_status = %s,
             generation_error = %s,
             generation_failure_class = %s,
-            generation_exception_type = %s,
+            generation_failure_exception_type = %s,
+            generation_underlying_exception_type = %s,
             generation_exception_message = %s,
             updated_at = now()
         WHERE
             prediction_id = ANY(%s)
             AND generation_status = %s
     """
+    generation_repair_error = StrandedGenerationError(GENERATION_REPAIR_ERROR)
+    generation_failure_exception_type = exception_type_name(
+        generation_repair_error
+    )
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -767,7 +776,8 @@ def mark_started_generations_as_repaired_errors(
                     GenerationStatus.ERROR.value,
                     GENERATION_REPAIR_ERROR,
                     FailureClass.TRANSIENT.value,
-                    GENERATION_REPAIR_EXCEPTION_TYPE,
+                    generation_failure_exception_type,
+                    generation_failure_exception_type,
                     GENERATION_REPAIR_ERROR,
                     list(prediction_ids),
                     GenerationStatus.STARTED.value,
@@ -791,13 +801,16 @@ def mark_stranded_scoring_as_errors(
             scoring_status = %s,
             scoring_error = %s,
             scoring_failure_class = %s,
-            scoring_exception_type = %s,
+            scoring_failure_exception_type = %s,
+            scoring_underlying_exception_type = %s,
             scoring_exception_message = %s,
             updated_at = now()
         WHERE
             prediction_id = ANY(%s)
             AND scoring_status = ANY(%s)
     """
+    scoring_repair_error = StrandedScoringError(SCORING_REPAIR_ERROR)
+    scoring_failure_exception_type = exception_type_name(scoring_repair_error)
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -806,7 +819,8 @@ def mark_stranded_scoring_as_errors(
                     ScoringStatus.ERROR.value,
                     SCORING_REPAIR_ERROR,
                     FailureClass.TRANSIENT.value,
-                    SCORING_REPAIR_EXCEPTION_TYPE,
+                    scoring_failure_exception_type,
+                    scoring_failure_exception_type,
                     SCORING_REPAIR_ERROR,
                     list(prediction_ids),
                     list(STRANDED_SCORING_STATUSES),
@@ -830,7 +844,8 @@ def mark_scoring_queued(
             scoring_status = %s,
             scoring_error = NULL,
             scoring_failure_class = NULL,
-            scoring_exception_type = NULL,
+            scoring_failure_exception_type = NULL,
+            scoring_underlying_exception_type = NULL,
             scoring_exception_message = NULL,
             updated_at = now()
         WHERE prediction_id = ANY(%s)

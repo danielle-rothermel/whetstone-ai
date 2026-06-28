@@ -563,7 +563,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="tbl-group">generation</div>
         <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
-        <div class="col-row"><span class="cn">generation_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_failure_exception_type · generation_underlying_exception_type · _message</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>
         <div class="col-row extra"><span class="cn">response_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row extra"><span class="cn">usage_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
@@ -660,7 +660,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="tbl-group">generation</div>
         <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
-        <div class="col-row"><span class="cn">generation_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_failure_exception_type · generation_underlying_exception_type · _message</span><span class="ct">TEXT</span></div>
         <div class="col-row extra"><span class="cn">encoded_description<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
         <div class="col-row extra"><span class="cn">decoded_generation<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>

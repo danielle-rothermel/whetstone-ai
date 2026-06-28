@@ -35,7 +35,7 @@ from dr_dspy.experiment_dimensions import (
     Dimension,
     identity_dimension_names,
 )
-from dr_dspy.failure_policy import (
+from dr_dspy.failures import (
     FailureSummary,
     error_text,
     failure_summary_payload,
@@ -154,7 +154,8 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     generation_status    TEXT        NOT NULL DEFAULT 'pending',
     generation_error     TEXT,
     generation_failure_class TEXT,
-    generation_exception_type TEXT,
+    generation_failure_exception_type TEXT,
+    generation_underlying_exception_type TEXT,
     generation_exception_message TEXT,
     raw_code             TEXT,
     response_metadata    JSONB       NOT NULL DEFAULT '{}'::jsonb,
@@ -164,7 +165,8 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     score                DOUBLE PRECISION,
     scoring_error        TEXT,
     scoring_failure_class TEXT,
-    scoring_exception_type TEXT,
+    scoring_failure_exception_type TEXT,
+    scoring_underlying_exception_type TEXT,
     scoring_exception_message TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -247,6 +249,22 @@ PREDICTION_MIGRATION_SQL = (
     "DOUBLE PRECISION",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS raw_compression_ratio DOUBLE PRECISION",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_failure_exception_type TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_underlying_exception_type TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_failure_exception_type TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_underlying_exception_type TEXT",
+    "UPDATE dr_dspy_eval_predictions "
+    "SET generation_underlying_exception_type = generation_exception_type "
+    "WHERE generation_underlying_exception_type IS NULL "
+    "AND generation_exception_type IS NOT NULL",
+    "UPDATE dr_dspy_eval_predictions "
+    "SET scoring_underlying_exception_type = scoring_exception_type "
+    "WHERE scoring_underlying_exception_type IS NULL "
+    "AND scoring_exception_type IS NOT NULL",
 )
 PREDICTION_CONSTRAINT_MIGRATION_SQL = (
     """
@@ -1212,7 +1230,8 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
                     generation_status = 'started',
                     generation_error = NULL,
                     generation_failure_class = NULL,
-                    generation_exception_type = NULL,
+                    generation_failure_exception_type = NULL,
+                    generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
@@ -1233,7 +1252,8 @@ def record_generation_success(
                     generation_status = 'generated',
                     generation_error = NULL,
                     generation_failure_class = NULL,
-                    generation_exception_type = NULL,
+                    generation_failure_exception_type = NULL,
+                    generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
                     raw_generation = %s,
                     raw_code = NULL,
@@ -1273,7 +1293,8 @@ def record_generation_error(
                     generation_status = %s,
                     generation_error = %s,
                     generation_failure_class = %s,
-                    generation_exception_type = %s,
+                    generation_failure_exception_type = %s,
+                    generation_underlying_exception_type = %s,
                     generation_exception_message = %s,
                     raw_generation = NULL,
                     raw_code = NULL,
@@ -1284,7 +1305,8 @@ def record_generation_error(
                     status,
                     error_text(summary),
                     summary.failure_class.value,
-                    summary.exception_type,
+                    summary.failure_exception_type,
+                    summary.underlying_exception_type,
                     summary.message,
                     prediction_id,
                 ),
@@ -1365,7 +1387,8 @@ def reset_generation_errors_for_retry(
                     generation_status = %s,
                     generation_error = NULL,
                     generation_failure_class = NULL,
-                    generation_exception_type = NULL,
+                    generation_failure_exception_type = NULL,
+                    generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
                     raw_generation = NULL,
                     raw_code = NULL,
@@ -1383,7 +1406,8 @@ def reset_generation_errors_for_retry(
                     scoring_status = %s,
                     scoring_error = NULL,
                     scoring_failure_class = NULL,
-                    scoring_exception_type = NULL,
+                    scoring_failure_exception_type = NULL,
+                    scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
                     score = NULL,
                     evaluation_function_names = '[]'::jsonb,
@@ -1430,7 +1454,8 @@ def mark_scoring_started(database_url: str, prediction_id: str) -> None:
                     scoring_status = 'started',
                     scoring_error = NULL,
                     scoring_failure_class = NULL,
-                    scoring_exception_type = NULL,
+                    scoring_failure_exception_type = NULL,
+                    scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
@@ -1450,7 +1475,8 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     score = %s,
                     scoring_error = %s,
                     scoring_failure_class = NULL,
-                    scoring_exception_type = NULL,
+                    scoring_failure_exception_type = NULL,
+                    scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
                     raw_code = %s,
                     raw_compile_ok = %s,
@@ -1522,7 +1548,8 @@ def record_score_error(
                     scoring_status = %s,
                     scoring_error = %s,
                     scoring_failure_class = %s,
-                    scoring_exception_type = %s,
+                    scoring_failure_exception_type = %s,
+                    scoring_underlying_exception_type = %s,
                     scoring_exception_message = %s,
                     updated_at = now()
                 WHERE prediction_id = %s
@@ -1531,7 +1558,8 @@ def record_score_error(
                     status,
                     error_text(summary),
                     summary.failure_class.value,
-                    summary.exception_type,
+                    summary.failure_exception_type,
+                    summary.underlying_exception_type,
                     summary.message,
                     prediction_id,
                 ),
