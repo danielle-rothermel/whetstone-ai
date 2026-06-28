@@ -25,8 +25,6 @@ def test_run_repair_command_dry_run_does_not_apply() -> None:
         backend,
         config=_config(),
         experiment_name="exp",
-        generation_limit=10,
-        scoring_limit=10,
         score_timeout=10.0,
     )
     backend.create_schema.assert_called_once_with("postgresql://x")
@@ -37,8 +35,6 @@ def test_run_repair_command_dry_run_does_not_apply() -> None:
                 "postgresql://x",
                 dbos_system_database_url="postgresql://y",
                 experiment_name="exp",
-                generation_limit=10,
-                scoring_limit=10,
             )
         )
     )
@@ -59,8 +55,6 @@ def test_repair_plan_line_omits_legacy_retry_counts(
         backend,
         config=_config(),
         experiment_name="exp",
-        generation_limit=10,
-        scoring_limit=10,
         score_timeout=10.0,
     )
 

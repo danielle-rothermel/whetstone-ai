@@ -69,9 +69,6 @@ SCORING_QUEUE_NAME = "dr_dspy_humaneval_scoring"
 EXPERIMENT_QUEUE_HASH_LENGTH = 8
 DEFAULT_GENERATION_CONCURRENCY = 200
 DEFAULT_SCORING_CONCURRENCY = 32
-DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
-DEFAULT_REPAIR_GENERATION_LIMIT = 1000
-DEFAULT_REPAIR_SCORING_LIMIT = 1000
 DEFAULT_WORKER_OPEN_FILE_LIMIT = shared_worker_resources.OPEN_FILE_LIMIT_AUTO
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
@@ -747,11 +744,11 @@ def enqueue_scores_dispatcher_workflow(
             "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
-            "limit": progress.total_items,
+            "batch_size": progress.metadata["batch_size"],
         },
         failed_event="enqueue_scores_dispatcher_failed",
         batch_step=enqueue_scores_batch_step,
-        completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
+        completion_mode=completion_modes.EMPTY_BATCH,
     )
 
 
@@ -769,19 +766,17 @@ def enqueue_scores_batch_step(
         operation_kind=operation_kind,
         operation_key=operation_key,
     )
-    remaining = max(progress.total_items - progress.processed_count, 0)
-    limit = min(int(spec["batch_size"]), remaining)
     prediction_ids = fetch_scoreable_prediction_ids(
         database_url,
         experiment_name=str(spec["experiment_name"]),
-        limit=limit,
+        limit=int(spec["batch_size"]),
     )
     _emit_operation_log(
         "enqueue_scores_batch_started",
         {
             "operation_key": operation_key,
             "selected": len(prediction_ids),
-            "remaining": remaining,
+            "batch_size": int(spec["batch_size"]),
         },
     )
     enqueue_result = _enqueue_score_jobs(
@@ -831,11 +826,11 @@ def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
             "operation_key": operation_key,
             "workflow_id": progress.workflow_id,
             "attempt": progress.attempt,
-            "limit": progress.total_items,
+            "batch_size": progress.metadata["batch_size"],
         },
         failed_event="repair_dispatcher_failed",
         batch_step=repair_batch_step,
-        completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
+        completion_mode=completion_modes.EMPTY_BATCH,
     )
 
 
@@ -853,20 +848,11 @@ def repair_batch_step(
         operation_kind=operation_kind,
         operation_key=operation_key,
     )
-    generation_limit = int(spec["generation_limit"])
-    scoring_limit = int(spec["scoring_limit"])
-    generation_processed = int(
-        progress.counters.get("generation_processed", 0)
-    )
-    scoring_processed = int(progress.counters.get("scoring_processed", 0))
-    remaining_generation = max(generation_limit - generation_processed, 0)
-    remaining_scoring = max(scoring_limit - scoring_processed, 0)
     _emit_operation_log(
         "repair_batch_started",
         {
             "operation_key": operation_key,
-            "remaining_generation": remaining_generation,
-            "remaining_scoring": remaining_scoring,
+            "batch_size": int(spec["batch_size"]),
         },
     )
     config = _build_eval_dbos_config(
@@ -881,8 +867,6 @@ def repair_batch_step(
         experiment_name=str(spec["experiment_name"]),
         dimension_columns=REPAIR_DIMENSION_COLUMNS,
         order_columns=REPAIR_ORDER_COLUMNS,
-        generation_limit=remaining_generation,
-        scoring_limit=remaining_scoring,
         batch_size=int(spec["batch_size"]),
         score_timeout=float(spec["score_timeout"]),
         fetch_generation_jobs=lambda prediction_ids: [
@@ -1654,8 +1638,6 @@ def _build_repair_plan(
     *,
     dbos_system_database_url: str,
     experiment_name: str,
-    generation_limit: int,
-    scoring_limit: int,
 ) -> shared_eval_repair.RepairPlan:
     return shared_eval_repair.build_repair_plan(
         database_url,
@@ -1664,8 +1646,6 @@ def _build_repair_plan(
         experiment_name=experiment_name,
         dimension_columns=REPAIR_DIMENSION_COLUMNS,
         order_columns=REPAIR_ORDER_COLUMNS,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
     )
 
 
@@ -1947,15 +1927,11 @@ class DirectExperiment:
         *,
         dbos_system_database_url: str,
         experiment_name: str,
-        generation_limit: int,
-        scoring_limit: int,
     ) -> shared_eval_repair.RepairPlan:
         return _build_repair_plan(
             database_url,
             dbos_system_database_url=dbos_system_database_url,
             experiment_name=experiment_name,
-            generation_limit=generation_limit,
-            scoring_limit=scoring_limit,
         )
 
     def configure_pooled_worker_runtime(
@@ -2245,9 +2221,6 @@ def enqueue_scores_command(
         str,
         typer.Option("--experiment-name", help="Experiment to score."),
     ],
-    limit: Annotated[
-        int, typer.Option("--limit", min=1)
-    ] = DEFAULT_SCORE_ENQUEUE_LIMIT,
     timeout: Annotated[
         float | None, typer.Option("--timeout", min=0.1)
     ] = None,
@@ -2297,7 +2270,6 @@ def enqueue_scores_command(
     operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
     spec = {
         "experiment_name": experiment_name,
-        "limit": limit,
         "timeout": timeout,
         "batch_size": batch_size,
     }
@@ -2313,7 +2285,7 @@ def enqueue_scores_command(
         script_kind=experiment_config().script_kind,
         spec=spec,
         metadata={"batch_size": batch_size},
-        total_items=limit,
+        total_items=0,
         log_file=log_file,
     )
     _configure_operation_file_logging(Path(progress.log_file))
@@ -2363,12 +2335,6 @@ def repair_command(
             ),
         ),
     ] = False,
-    generation_limit: Annotated[
-        int, typer.Option("--generation-limit", min=1)
-    ] = DEFAULT_REPAIR_GENERATION_LIMIT,
-    scoring_limit: Annotated[
-        int, typer.Option("--scoring-limit", min=1)
-    ] = DEFAULT_REPAIR_SCORING_LIMIT,
     score_timeout: Annotated[
         float | None, typer.Option("--score-timeout", min=0.1)
     ] = None,
@@ -2426,18 +2392,14 @@ def repair_command(
             _BACKEND,
             config=config,
             experiment_name=experiment_name,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
-        score_timeout=score_timeout,
-    )
+            score_timeout=score_timeout,
+        )
         return
 
     _create_eval_schema(config.database_url)
     operation_kind = shared_batch.BatchOperationKind.REPAIR
     spec = {
         "experiment_name": experiment_name,
-        "generation_limit": generation_limit,
-        "scoring_limit": scoring_limit,
         "score_timeout": score_timeout,
         "batch_size": batch_size,
         "database_url": config.database_url,
@@ -2458,7 +2420,7 @@ def repair_command(
         script_kind=experiment_config().script_kind,
         spec=spec,
         metadata={"batch_size": batch_size},
-        total_items=generation_limit + scoring_limit,
+        total_items=0,
         log_file=log_file,
     )
     _configure_operation_file_logging(Path(progress.log_file))

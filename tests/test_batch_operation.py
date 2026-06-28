@@ -119,6 +119,19 @@ def test_operation_progress_lines_split_non_empty_counters() -> None:
     )
 
 
+def test_progress_lines_show_open_total_for_unbounded_repair() -> None:
+    lines = batch_operation.operation_progress_lines(
+        operation_kind=batch_operation.BatchOperationKind.REPAIR,
+        progress=_progress(
+            operation_kind=batch_operation.BatchOperationKind.REPAIR,
+            total_items=0,
+        ),
+        counts={},
+    )
+
+    assert lines[0].startswith("repair pending   | total=  open |")
+
+
 def test_operation_item_table_sql_references_operation_table() -> None:
     ddl = batch_operation.operation_item_table_sql()
 
@@ -347,10 +360,11 @@ def test_run_operation_dispatcher_completes_after_empty_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     marks: list[str] = []
+    batch_calls: list[str] = []
     completion_modes = batch_operation.BatchDispatcherCompletionMode
     progress = _progress(
         operation_kind=batch_operation.BatchOperationKind.ENQUEUE_SCORES,
-        total_items=10,
+        total_items=0,
         processed_count=0,
     )
 
@@ -379,19 +393,21 @@ def test_run_operation_dispatcher_completes_after_empty_batch(
         started_event="started",
         started_payload=lambda _progress: {},
         failed_event="failed",
-        batch_step=lambda _database_url, _operation_key: (
-            batch_operation.BatchOperationResult(
+        batch_step=lambda _database_url, operation_key: (
+            batch_calls.append(operation_key)
+            or batch_operation.BatchOperationResult(
                 start_offset=0,
                 next_offset=0,
                 batch_size=0,
                 processed=0,
             )
         ),
-        completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
+        completion_mode=completion_modes.EMPTY_BATCH,
     )
 
     assert status == "completed"
     assert marks == ["running", "completed"]
+    assert batch_calls == ["op-key"]
 
 
 def test_run_operation_dispatcher_marks_failed_and_reraises(
@@ -438,7 +454,7 @@ def test_run_operation_dispatcher_marks_failed_and_reraises(
             started_payload=lambda _progress: {},
             failed_event="failed",
             batch_step=batch_step,
-            completion_mode=completion_modes.PROCESSED_TOTAL_OR_EMPTY_BATCH,
+            completion_mode=completion_modes.EMPTY_BATCH,
         )
 
     assert failures == ["RuntimeError('batch failed')"]

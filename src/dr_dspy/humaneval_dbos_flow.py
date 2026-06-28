@@ -57,8 +57,6 @@ def run_repair_command(
     *,
     config: EvalDbosConfig,
     experiment_name: str,
-    generation_limit: int,
-    scoring_limit: int,
     score_timeout: float,
 ) -> None:
     backend.create_schema(config.database_url)
@@ -66,19 +64,17 @@ def run_repair_command(
         config.database_url,
         dbos_system_database_url=config.dbos_system_database_url,
         experiment_name=experiment_name,
-        generation_limit=generation_limit,
-        scoring_limit=scoring_limit,
     )
     counts = {
-        "gen_stranded": len(plan.stranded_generations),
-        "gen_errors": len(plan.generation_retry_prediction_ids),
+        "gen_stranded": plan.stranded_generation_count,
+        "gen_errors": plan.generation_retry_summary.retryable_count,
         "gen_recoverable_errors": (
             plan.generation_retry_summary.recoverable_count
         ),
         "gen_excluded_errors": plan.generation_retry_summary.excluded_count,
-        "score_pending": len(plan.pending_scoring_prediction_ids),
-        "score_stranded": len(plan.stranded_scoring),
-        "score_errors": len(plan.scoring_retry_prediction_ids),
+        "score_pending": plan.pending_scoring_count,
+        "score_stranded": plan.stranded_scoring_count,
+        "score_errors": plan.scoring_retry_summary.retryable_count,
         "score_recoverable_errors": (
             plan.scoring_retry_summary.recoverable_count
         ),

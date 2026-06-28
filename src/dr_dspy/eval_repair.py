@@ -23,6 +23,7 @@ SCORING_REPAIR_ERROR = (
 )
 GENERATION_REPAIR_EXCEPTION_TYPE = "dr_dspy.repair.stranded_generation"
 SCORING_REPAIR_EXCEPTION_TYPE = "dr_dspy.repair.stranded_scoring"
+REPAIR_PLAN_COUNT_PAGE_SIZE = 10_000
 
 
 class RepairCandidate(BaseModel):
@@ -76,20 +77,12 @@ class RepairRetrySelection(BaseModel):
 class RepairPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    stranded_generations: list[RepairCandidate] = Field(default_factory=list)
-    generation_retry_prediction_ids: list[StrictStr] = Field(
-        default_factory=list
-    )
+    stranded_generation_count: StrictInt = 0
     generation_retry_summary: RepairRetrySummary = Field(
         default_factory=RepairRetrySummary
     )
-    pending_scoring_prediction_ids: list[StrictStr] = Field(
-        default_factory=list
-    )
-    stranded_scoring: list[RepairCandidate] = Field(default_factory=list)
-    scoring_retry_prediction_ids: list[StrictStr] = Field(
-        default_factory=list
-    )
+    pending_scoring_count: StrictInt = 0
+    stranded_scoring_count: StrictInt = 0
     scoring_retry_summary: RepairRetrySummary = Field(
         default_factory=RepairRetrySummary
     )
@@ -272,6 +265,56 @@ def fetch_prediction_retry_selection(
     )
 
 
+def count_prediction_retry_candidates(
+    database_url: str,
+    *,
+    prediction_table: str,
+    experiment_name: str,
+    status_column: str,
+    failure_class_column: str,
+    retry_statuses: Sequence[str],
+    generation_status: str | None = None,
+) -> RepairRetrySummary:
+    validate_prediction_table(prediction_table)
+    validate_columns([status_column, failure_class_column])
+    generation_clause = ""
+    recoverable_failure_classes = recoverable_failure_class_values()
+    params: list[Any] = [
+        recoverable_failure_classes,
+        recoverable_failure_classes,
+        experiment_name,
+        list(retry_statuses),
+    ]
+    if generation_status is not None:
+        generation_clause = "AND generation_status = %s"
+        params.append(generation_status)
+    query = f"""
+        SELECT
+            COUNT(*) FILTER (
+                WHERE {failure_class_column} = ANY(%s)
+            ),
+            COUNT(*) FILTER (
+                WHERE {failure_class_column} IS NULL
+                    OR NOT ({failure_class_column} = ANY(%s))
+            )
+        FROM {prediction_table}
+        WHERE
+            experiment_name = %s
+            AND {status_column} = ANY(%s)
+            {generation_clause}
+    """
+    with dbos_runtime.connect_db(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(cast(Any, query), tuple(params))
+            row = cur.fetchone()
+    if row is None:
+        return RepairRetrySummary()
+    return RepairRetrySummary(
+        recoverable_count=int(row[0]),
+        excluded_count=int(row[1]),
+    )
+
+
 def fetch_generation_retry_selection(
     database_url: str,
     *,
@@ -290,6 +333,35 @@ def fetch_generation_retry_selection(
         order_columns=order_columns,
         limit=limit,
     )
+
+
+def count_prediction_ids_by_status(
+    database_url: str,
+    *,
+    prediction_table: str,
+    experiment_name: str,
+    generation_status: str,
+    scoring_statuses: Sequence[str] | None = None,
+) -> int:
+    validate_prediction_table(prediction_table)
+    scoring_clause = ""
+    params: list[Any] = [experiment_name, generation_status]
+    if scoring_statuses is not None:
+        scoring_clause = "AND scoring_status = ANY(%s)"
+        params.append(list(scoring_statuses))
+    query = f"""
+        SELECT COUNT(*)
+        FROM {prediction_table}
+        WHERE
+            experiment_name = %s
+            AND generation_status = %s
+            {scoring_clause}
+    """
+    with dbos_runtime.connect_db(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(cast(Any, query), tuple(params))
+            row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 def fetch_pending_scoring_prediction_ids(
@@ -360,14 +432,19 @@ def fetch_started_generation_repair_candidates(
     dimension_columns: Sequence[str],
     order_columns: Sequence[str],
     limit: int | None = None,
+    offset: int = 0,
 ) -> list[RepairCandidate]:
     validate_prediction_table(prediction_table)
     select_dimensions = dimension_select_clause(dimension_columns)
     limit_clause = ""
+    offset_clause = ""
     params: list[Any] = [experiment_name, GenerationStatus.STARTED.value]
     if limit is not None:
         limit_clause = "LIMIT %s"
         params.append(limit)
+    if offset:
+        offset_clause = "OFFSET %s"
+        params.append(offset)
     query = f"""
         SELECT
             prediction_id,
@@ -381,6 +458,7 @@ def fetch_started_generation_repair_candidates(
             AND generation_status = %s
         ORDER BY {order_clause(order_columns)}
         {limit_clause}
+        {offset_clause}
     """
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:
@@ -442,10 +520,24 @@ def fetch_stranded_scoring_repair_candidates(
     experiment_name: str,
     dimension_columns: Sequence[str],
     order_columns: Sequence[str],
-    limit: int,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[RepairCandidate]:
     validate_prediction_table(prediction_table)
     select_dimensions = dimension_select_clause(dimension_columns)
+    limit_clause = ""
+    offset_clause = ""
+    params: list[Any] = [
+        experiment_name,
+        GenerationStatus.GENERATED.value,
+        list(STRANDED_SCORING_STATUSES),
+    ]
+    if limit is not None:
+        limit_clause = "LIMIT %s"
+        params.append(limit)
+    if offset:
+        offset_clause = "OFFSET %s"
+        params.append(offset)
     query = f"""
         SELECT
             prediction_id,
@@ -460,18 +552,14 @@ def fetch_stranded_scoring_repair_candidates(
             AND generation_status = %s
             AND scoring_status = ANY(%s)
         ORDER BY {order_clause(order_columns)}
-        LIMIT %s
+        {limit_clause}
+        {offset_clause}
     """
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 cast(Any, query),
-                (
-                    experiment_name,
-                    GenerationStatus.GENERATED.value,
-                    list(STRANDED_SCORING_STATUSES),
-                    limit,
-                ),
+                tuple(params),
             )
             app_rows = cur.fetchall()
 
@@ -542,6 +630,73 @@ def fetch_stranded_scoring_repair_candidates(
             )
         )
     return candidates
+
+
+def count_started_generation_repair_candidates(
+    database_url: str,
+    *,
+    dbos_system_database_url: str,
+    prediction_table: str,
+    experiment_name: str,
+    dimension_columns: Sequence[str],
+    order_columns: Sequence[str],
+    page_size: int = REPAIR_PLAN_COUNT_PAGE_SIZE,
+) -> int:
+    app_count = count_prediction_ids_by_status(
+        database_url,
+        prediction_table=prediction_table,
+        experiment_name=experiment_name,
+        generation_status=GenerationStatus.STARTED.value,
+    )
+    total = 0
+    for offset in range(0, app_count, page_size):
+        total += len(
+            fetch_started_generation_repair_candidates(
+                database_url,
+                dbos_system_database_url=dbos_system_database_url,
+                prediction_table=prediction_table,
+                experiment_name=experiment_name,
+                dimension_columns=dimension_columns,
+                order_columns=order_columns,
+                limit=page_size,
+                offset=offset,
+            )
+        )
+    return total
+
+
+def count_stranded_scoring_repair_candidates(
+    database_url: str,
+    *,
+    dbos_system_database_url: str,
+    prediction_table: str,
+    experiment_name: str,
+    dimension_columns: Sequence[str],
+    order_columns: Sequence[str],
+    page_size: int = REPAIR_PLAN_COUNT_PAGE_SIZE,
+) -> int:
+    app_count = count_prediction_ids_by_status(
+        database_url,
+        prediction_table=prediction_table,
+        experiment_name=experiment_name,
+        generation_status=GenerationStatus.GENERATED.value,
+        scoring_statuses=STRANDED_SCORING_STATUSES,
+    )
+    total = 0
+    for offset in range(0, app_count, page_size):
+        total += len(
+            fetch_stranded_scoring_repair_candidates(
+                database_url,
+                dbos_system_database_url=dbos_system_database_url,
+                prediction_table=prediction_table,
+                experiment_name=experiment_name,
+                dimension_columns=dimension_columns,
+                order_columns=order_columns,
+                limit=page_size,
+                offset=offset,
+            )
+        )
+    return total
 
 
 def mark_started_generations_as_repaired_errors(
@@ -668,55 +823,50 @@ def build_repair_plan(
     experiment_name: str,
     dimension_columns: Sequence[str],
     order_columns: Sequence[str],
-    generation_limit: int,
-    scoring_limit: int,
 ) -> RepairPlan:
-    generation_retry_selection = fetch_generation_retry_selection(
+    generation_retry_summary = count_prediction_retry_candidates(
         database_url,
         prediction_table=prediction_table,
         experiment_name=experiment_name,
-        order_columns=order_columns,
-        limit=generation_limit,
+        status_column="generation_status",
+        failure_class_column="generation_failure_class",
+        retry_statuses=GENERATION_RETRY_STATUSES,
     )
-    scoring_retry_selection = fetch_scoring_retry_selection(
+    scoring_retry_summary = count_prediction_retry_candidates(
         database_url,
         prediction_table=prediction_table,
         experiment_name=experiment_name,
-        order_columns=order_columns,
-        limit=scoring_limit,
+        status_column="scoring_status",
+        failure_class_column="scoring_failure_class",
+        retry_statuses=SCORING_RETRY_STATUSES,
+        generation_status=GenerationStatus.GENERATED.value,
     )
     return RepairPlan(
-        stranded_generations=fetch_started_generation_repair_candidates(
+        stranded_generation_count=count_started_generation_repair_candidates(
             database_url,
             dbos_system_database_url=dbos_system_database_url,
             prediction_table=prediction_table,
             experiment_name=experiment_name,
             dimension_columns=dimension_columns,
             order_columns=order_columns,
-            limit=generation_limit,
         ),
-        generation_retry_prediction_ids=(
-            generation_retry_selection.prediction_ids
-        ),
-        generation_retry_summary=generation_retry_selection.summary,
-        pending_scoring_prediction_ids=fetch_pending_scoring_prediction_ids(
+        generation_retry_summary=generation_retry_summary,
+        pending_scoring_count=count_prediction_ids_by_status(
             database_url,
             prediction_table=prediction_table,
             experiment_name=experiment_name,
-            order_columns=order_columns,
-            limit=scoring_limit,
+            generation_status=GenerationStatus.GENERATED.value,
+            scoring_statuses=(ScoringStatus.PENDING.value,),
         ),
-        stranded_scoring=fetch_stranded_scoring_repair_candidates(
+        stranded_scoring_count=count_stranded_scoring_repair_candidates(
             database_url,
             dbos_system_database_url=dbos_system_database_url,
             prediction_table=prediction_table,
             experiment_name=experiment_name,
             dimension_columns=dimension_columns,
             order_columns=order_columns,
-            limit=scoring_limit,
         ),
-        scoring_retry_prediction_ids=scoring_retry_selection.prediction_ids,
-        scoring_retry_summary=scoring_retry_selection.summary,
+        scoring_retry_summary=scoring_retry_summary,
     )
 
 
@@ -727,8 +877,6 @@ def apply_repair_batch(
     experiment_name: str,
     dimension_columns: Sequence[str],
     order_columns: Sequence[str],
-    generation_limit: int,
-    scoring_limit: int,
     batch_size: int,
     score_timeout: float,
     fetch_generation_jobs: Callable[[Sequence[str]], Sequence[Any]],
@@ -741,7 +889,7 @@ def apply_repair_batch(
     ],
     repair_token: str,
 ) -> RepairApplyResult:
-    generation_capacity = min(generation_limit, batch_size)
+    generation_capacity = batch_size
     stranded_generation_ids: list[str] = []
     if generation_capacity > 0:
         stranded_generations = fetch_started_generation_repair_candidates(
@@ -790,7 +938,7 @@ def apply_repair_batch(
         generation_retry_prediction_ids
     )
 
-    scoring_capacity = min(scoring_limit, batch_size)
+    scoring_capacity = batch_size
     pending_scoring_prediction_ids: list[str] = []
     if scoring_capacity > 0:
         pending_scoring_prediction_ids = fetch_pending_scoring_prediction_ids(

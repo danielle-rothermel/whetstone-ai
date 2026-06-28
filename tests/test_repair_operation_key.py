@@ -60,8 +60,9 @@ def _patch_repair_dependencies(
     module: ModuleType,
     *,
     config_builder_name: str,
-) -> list[str]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     prepared_operation_keys: list[str] = []
+    operation_specs: list[dict[str, Any]] = []
 
     monkeypatch.setattr(
         module,
@@ -100,9 +101,11 @@ def _patch_repair_dependencies(
         *,
         operation_kind: batch_operation.BatchOperationKind,
         operation_key: str,
+        spec: dict[str, Any],
         **_kwargs: Any,
     ) -> batch_operation.BatchOperationProgress:
         prepared_operation_keys.append(operation_key)
+        operation_specs.append(spec)
         return _completed_progress(
             operation_kind=operation_kind,
             operation_key=operation_key,
@@ -125,7 +128,7 @@ def _patch_repair_dependencies(
     monkeypatch.setattr(
         module.shared_batch, "tail_operation_progress", tail_operation_progress
     )
-    return prepared_operation_keys
+    return prepared_operation_keys, operation_specs
 
 
 def _call_repair_command(
@@ -136,8 +139,6 @@ def _call_repair_command(
     command(
         experiment_name="repair-exp",
         apply=True,
-        generation_limit=2,
-        scoring_limit=3,
         score_timeout=1.5,
         database_url=None,
         dbos_system_database_url=None,
@@ -162,7 +163,7 @@ def test_repair_apply_uses_fresh_operation_key_by_default(
     command: Callable[..., None],
     config_builder_name: str,
 ) -> None:
-    prepared_operation_keys = _patch_repair_dependencies(
+    prepared_operation_keys, operation_specs = _patch_repair_dependencies(
         monkeypatch, module, config_builder_name=config_builder_name
     )
     monkeypatch.setattr(
@@ -179,6 +180,15 @@ def test_repair_apply_uses_fresh_operation_key_by_default(
     _call_repair_command(command, operation_key=None)
 
     assert prepared_operation_keys == ["fresh-key"]
+    assert operation_specs[0] == {
+        "experiment_name": "repair-exp",
+        "score_timeout": 1.5,
+        "batch_size": 11,
+        "database_url": "postgresql://db",
+        "dbos_system_database_url": "postgresql://sys",
+        "generation_concurrency": 7,
+        "scoring_concurrency": 8,
+    }
 
 
 @pytest.mark.parametrize(
@@ -194,7 +204,7 @@ def test_repair_apply_preserves_explicit_operation_key(
     command: Callable[..., None],
     config_builder_name: str,
 ) -> None:
-    prepared_operation_keys = _patch_repair_dependencies(
+    prepared_operation_keys, _operation_specs = _patch_repair_dependencies(
         monkeypatch, module, config_builder_name=config_builder_name
     )
 

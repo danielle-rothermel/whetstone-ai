@@ -40,7 +40,7 @@ class BatchOperationItemKind(StrEnum):
 
 class BatchDispatcherCompletionMode(StrEnum):
     OFFSET_TOTAL = "offset_total"
-    PROCESSED_TOTAL_OR_EMPTY_BATCH = "processed_total_or_empty_batch"
+    EMPTY_BATCH = "empty_batch"
 
 
 class BatchOperationProgress(BaseModel):
@@ -759,7 +759,7 @@ def _is_dispatcher_complete(
 ) -> bool:
     if completion_mode is BatchDispatcherCompletionMode.OFFSET_TOTAL:
         return progress.next_offset >= progress.total_items
-    return progress.processed_count >= progress.total_items
+    return False
 
 
 def _emit_completed_event(
@@ -834,8 +834,7 @@ def run_operation_dispatcher(
                 return "completed"
             result = batch_step(database_url, operation_key)
             if (
-                completion_mode
-                is BatchDispatcherCompletionMode.PROCESSED_TOTAL_OR_EMPTY_BATCH
+                completion_mode is BatchDispatcherCompletionMode.EMPTY_BATCH
                 and result.processed == 0
             ):
                 mark_operation_completed(
@@ -987,15 +986,28 @@ def format_counters(counters: Mapping[str, int]) -> str:
     )
 
 
+def format_operation_total(
+    operation_kind: BatchOperationKind, total_items: int
+) -> str:
+    if (
+        operation_kind
+        in (BatchOperationKind.ENQUEUE_SCORES, BatchOperationKind.REPAIR)
+        and total_items == 0
+    ):
+        return "open"
+    return str(total_items)
+
+
 def operation_progress_lines(
     *,
     operation_kind: BatchOperationKind,
     progress: BatchOperationProgress,
     counts: Mapping[str, int],
 ) -> tuple[str, ...]:
+    total_label = format_operation_total(operation_kind, progress.total_items)
     main_line = (
         f"{operation_kind.value} {progress.status.value:<9} | "
-        f"total={progress.total_items:>6} | "
+        f"total={total_label:>6} | "
         f"offset={progress.next_offset:>6} | "
         f"processed={progress.processed_count:>6} | "
         f"inserted={progress.inserted_count:>6} | "

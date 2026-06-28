@@ -33,8 +33,6 @@ class ExperimentBackend(Protocol):
         *,
         dbos_system_database_url: str,
         experiment_name: str,
-        generation_limit: int,
-        scoring_limit: int,
     ) -> RepairPlan: ...
     # --- worker ---
     def configure_pooled_worker_runtime(
