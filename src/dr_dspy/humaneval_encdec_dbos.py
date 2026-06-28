@@ -2538,7 +2538,15 @@ def repair(
     batch_size: Annotated[
         int, typer.Option("--batch-size", min=1)
     ] = DEFAULT_OPERATION_BATCH_SIZE,
-    operation_key: Annotated[str | None, typer.Option()] = None,
+    operation_key: Annotated[
+        str | None,
+        typer.Option(
+            help=(
+                "Existing repair operation key to resume or retry; omitted "
+                "runs use a fresh operation key."
+            )
+        ),
+    ] = None,
     apply: Annotated[bool, typer.Option("--apply")] = False,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
@@ -2578,7 +2586,7 @@ def repair(
         "generation_concurrency": config.generation_concurrency,
         "scoring_concurrency": config.scoring_concurrency,
     }
-    resolved_operation_key = operation_key or shared_batch.operation_key(spec)
+    resolved_operation_key = operation_key or shared_batch.new_operation_key()
     log_file = _resolve_operation_log_path(
         experiment_name=experiment_name,
         operation_kind=operation_kind,
