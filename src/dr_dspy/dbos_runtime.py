@@ -171,6 +171,10 @@ def close_db_connection_pools() -> None:
     DB_POOLS.clear()
 
 
+def destroy_dbos_runtime() -> None:
+    DBOS.destroy()
+
+
 def configure_db_connection_pools(
     database_urls: Sequence[str], *, max_size: int
 ) -> None:

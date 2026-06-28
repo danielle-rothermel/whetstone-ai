@@ -8,11 +8,17 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from dr_dspy import dbos_runtime
 from dr_dspy.eval_reporting import validate_sql_identifier
+from dr_dspy.failure_policy import FailureClass
 
 GENERATION_REPAIR_ERROR = "Reconciled from DBOS failed generation workflow."
 SCORING_REPAIR_ERROR = (
     "Reconciled from missing or failed DBOS scoring workflow."
 )
+GENERATION_ERROR_STATUSES = (
+    "generation_error",
+    "generation_recoverable_error",
+)
+SCORING_ERROR_STATUSES = ("score_error", "score_recoverable_error")
 
 
 class RepairCandidate(BaseModel):
@@ -118,6 +124,54 @@ def fetch_prediction_ids_by_status(
     return [row[0] for row in rows]
 
 
+def fetch_prediction_ids_for_retry(
+    database_url: str,
+    *,
+    prediction_table: str,
+    experiment_name: str,
+    status_column: str,
+    failure_class_column: str,
+    retry_statuses: Sequence[str],
+    generation_status: str | None = None,
+    order_columns: Sequence[str],
+    limit: int,
+) -> list[str]:
+    validate_prediction_table(prediction_table)
+    validate_columns([status_column, failure_class_column])
+    generation_clause = ""
+    params: list[Any] = [
+        experiment_name,
+        list(retry_statuses),
+        FailureClass.PERMANENT.value,
+    ]
+    if generation_status is not None:
+        generation_clause = "AND generation_status = %s"
+        params.append(generation_status)
+    params.append(limit)
+    query = f"""
+        SELECT prediction_id
+        FROM {prediction_table}
+        WHERE
+            experiment_name = %s
+            AND {status_column} = ANY(%s)
+            AND (
+                {failure_class_column} IS NULL
+                OR {failure_class_column} <> %s
+            )
+            {generation_clause}
+        ORDER BY {order_clause(order_columns)}
+        LIMIT %s
+    """
+    with dbos_runtime.connect_db(database_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                cast(Any, query),
+                tuple(params),
+            )
+            rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
 def fetch_generation_error_prediction_ids(
     database_url: str,
     *,
@@ -126,12 +180,13 @@ def fetch_generation_error_prediction_ids(
     order_columns: Sequence[str],
     limit: int,
 ) -> list[str]:
-    return fetch_prediction_ids_by_status(
+    return fetch_prediction_ids_for_retry(
         database_url,
         prediction_table=prediction_table,
         experiment_name=experiment_name,
-        generation_status="generation_error",
-        scoring_statuses=None,
+        status_column="generation_status",
+        failure_class_column="generation_failure_class",
+        retry_statuses=GENERATION_ERROR_STATUSES,
         order_columns=order_columns,
         limit=limit,
     )
@@ -164,12 +219,14 @@ def fetch_score_error_prediction_ids(
     order_columns: Sequence[str],
     limit: int,
 ) -> list[str]:
-    return fetch_prediction_ids_by_status(
+    return fetch_prediction_ids_for_retry(
         database_url,
         prediction_table=prediction_table,
         experiment_name=experiment_name,
+        status_column="scoring_status",
+        failure_class_column="scoring_failure_class",
+        retry_statuses=SCORING_ERROR_STATUSES,
         generation_status="generated",
-        scoring_statuses=("score_error",),
         order_columns=order_columns,
         limit=limit,
     )
@@ -439,9 +496,16 @@ def mark_scoring_queued(
         SET
             scoring_status = 'queued',
             scoring_error = NULL,
+            scoring_failure_class = NULL,
+            scoring_exception_type = NULL,
+            scoring_exception_message = NULL,
             updated_at = now()
         WHERE prediction_id = ANY(%s)
-            AND scoring_status IN ('pending', 'score_error')
+            AND scoring_status IN (
+                'pending',
+                'score_error',
+                'score_recoverable_error'
+            )
     """
     with dbos_runtime.connect_db(database_url) as conn:
         with conn.cursor() as cur:

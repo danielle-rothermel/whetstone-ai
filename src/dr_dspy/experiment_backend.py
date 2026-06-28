@@ -27,6 +27,7 @@ from dr_dspy.dbos_runtime import (
 from dr_dspy.eval_logging import PredictionLogContext
 from dr_dspy.eval_repair import RepairApplyResult, RepairPlan
 from dr_dspy.experiment_dimensions import Dimension
+from dr_dspy.failure_policy import FailureSummary
 from dr_dspy.scoring import HumanEvalScoreResult
 from dr_dspy.worker_monitor import WorkerMonitorConfig
 
@@ -57,6 +58,7 @@ class ExperimentBackend(Protocol):
         config: EvalDbosConfig,
         experiment_name: str,
         *,
+        queue: QueueSelection | None = None,
         consume_queues: bool = True,
     ) -> None: ...
     def enqueue_generation_jobs(
@@ -80,7 +82,10 @@ class ExperimentBackend(Protocol):
         self, database_url: str, result: Any
     ) -> None: ...
     def record_generation_error(
-        self, database_url: str, prediction_id: str, error: str
+        self,
+        database_url: str,
+        prediction_id: str,
+        summary: FailureSummary,
     ) -> None: ...
     def generation_success_log_extra(
         self, result: Any
@@ -115,7 +120,10 @@ class ExperimentBackend(Protocol):
         self, database_url: str, result: HumanEvalScoreResult
     ) -> None: ...
     def record_score_error(
-        self, database_url: str, prediction_id: str, error: str
+        self,
+        database_url: str,
+        prediction_id: str,
+        summary: FailureSummary,
     ) -> None: ...
 
     # --- enqueue ---
@@ -211,4 +219,5 @@ class ExperimentBackend(Protocol):
         self,
         monitor_config: WorkerMonitorConfig,
         stop_event: threading.Event,
+        halt_event: threading.Event,
     ) -> threading.Thread: ...

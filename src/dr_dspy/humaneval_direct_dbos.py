@@ -31,11 +31,19 @@ from dr_dspy import human_eval_sampling as shared_human_eval_sampling
 from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import submission_dispatch as shared_submit
 from dr_dspy import worker_monitor as shared_worker_monitor
+from dr_dspy import worker_resources as shared_worker_resources
 from dr_dspy.experiment_dimensions import (
     Dimension,
     identity_dimension_names,
     reporting_dimension_names,
     status_dimensions,
+)
+from dr_dspy.failure_policy import (
+    FailureSummary,
+    error_text,
+    failure_summary_payload,
+    should_retry_step,
+    summarize_exception,
 )
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
@@ -63,7 +71,7 @@ DEFAULT_SCORING_CONCURRENCY = 32
 DEFAULT_SCORE_ENQUEUE_LIMIT = 1000
 DEFAULT_REPAIR_GENERATION_LIMIT = 1000
 DEFAULT_REPAIR_SCORING_LIMIT = 1000
-DEFAULT_WORKER_OPEN_FILE_LIMIT = 8192
+DEFAULT_WORKER_OPEN_FILE_LIMIT = shared_worker_resources.OPEN_FILE_LIMIT_AUTO
 DEFAULT_WORKER_MONITOR_INTERVAL_SECONDS = 5.0
 DEFAULT_WORKER_MONITOR_SUMMARY_INTERVAL_SECONDS = 5.0
 DEFAULT_SUBMIT_BATCH_SIZE = 512
@@ -147,6 +155,9 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     reasoning            JSONB       NOT NULL DEFAULT '{}'::jsonb,
     generation_status    TEXT        NOT NULL DEFAULT 'pending',
     generation_error     TEXT,
+    generation_failure_class TEXT,
+    generation_exception_type TEXT,
+    generation_exception_message TEXT,
     raw_code             TEXT,
     response_metadata    JSONB       NOT NULL DEFAULT '{}'::jsonb,
     usage_metadata       JSONB       NOT NULL DEFAULT '{}'::jsonb,
@@ -154,6 +165,9 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     scoring_status       TEXT        NOT NULL DEFAULT 'pending',
     score                DOUBLE PRECISION,
     scoring_error        TEXT,
+    scoring_failure_class TEXT,
+    scoring_exception_type TEXT,
+    scoring_exception_message TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     generated_at         TIMESTAMPTZ,
@@ -183,6 +197,18 @@ PREDICTION_INDEX_SQL = (
 PREDICTION_MIGRATION_SQL = (
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS raw_generation TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_failure_class TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_exception_type TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_exception_message TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_failure_class TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_exception_type TEXT",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_exception_message TEXT",
     "ALTER TABLE dr_dspy_eval_predictions "
     "ADD COLUMN IF NOT EXISTS raw_compile_ok BOOLEAN",
     "ALTER TABLE dr_dspy_eval_predictions "
@@ -552,8 +578,13 @@ def generate_prediction_workflow(
         result = generate_prediction_step(database_url, prediction_id)
         record_generation_success_step(database_url, result)
     except Exception as error:
-        record_generation_error_step(database_url, prediction_id, repr(error))
-        return "generation_error"
+        summary = summarize_exception(error)
+        record_generation_error_step(database_url, prediction_id, summary)
+        return (
+            "generation_recoverable_error"
+            if summary.is_recoverable
+            else "generation_error"
+        )
     enqueue_score_job(
         database_url,
         prediction_id,
@@ -573,8 +604,13 @@ def score_prediction_workflow(
         record_score_success_step(database_url, result)
         return "scored"
     except Exception as error:
-        record_score_error_step(database_url, prediction_id, repr(error))
-        return "score_error"
+        summary = summarize_exception(error)
+        record_score_error_step(database_url, prediction_id, summary)
+        return (
+            "score_recoverable_error"
+            if summary.is_recoverable
+            else "score_error"
+        )
 
 
 @DBOS.workflow(
@@ -1031,6 +1067,9 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
                 SET
                     generation_status = 'started',
                     generation_error = NULL,
+                    generation_failure_class = NULL,
+                    generation_exception_type = NULL,
+                    generation_exception_message = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1049,6 +1088,9 @@ def record_generation_success(
                 SET
                     generation_status = 'generated',
                     generation_error = NULL,
+                    generation_failure_class = NULL,
+                    generation_exception_type = NULL,
+                    generation_exception_message = NULL,
                     raw_generation = %s,
                     raw_code = NULL,
                     response_metadata = %s,
@@ -1069,22 +1111,39 @@ def record_generation_success(
 
 
 def record_generation_error(
-    database_url: str, prediction_id: str, error: str
+    database_url: str,
+    prediction_id: str,
+    summary: FailureSummary,
 ) -> None:
+    status = (
+        "generation_recoverable_error"
+        if summary.is_recoverable
+        else "generation_error"
+    )
     with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE dr_dspy_eval_predictions
                 SET
-                    generation_status = 'generation_error',
+                    generation_status = %s,
                     generation_error = %s,
+                    generation_failure_class = %s,
+                    generation_exception_type = %s,
+                    generation_exception_message = %s,
                     raw_generation = NULL,
                     raw_code = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
-                (error, prediction_id),
+                (
+                    status,
+                    error_text(summary),
+                    summary.failure_class.value,
+                    summary.exception_type,
+                    summary.message,
+                    prediction_id,
+                ),
             )
 
 
@@ -1210,6 +1269,9 @@ def reset_generation_errors_for_retry(
                 SET
                     generation_status = 'pending',
                     generation_error = NULL,
+                    generation_failure_class = NULL,
+                    generation_exception_type = NULL,
+                    generation_exception_message = NULL,
                     raw_generation = NULL,
                     raw_code = NULL,
                     raw_compile_ok = NULL,
@@ -1225,6 +1287,9 @@ def reset_generation_errors_for_retry(
                     generated_at = NULL,
                     scoring_status = 'pending',
                     scoring_error = NULL,
+                    scoring_failure_class = NULL,
+                    scoring_exception_type = NULL,
+                    scoring_exception_message = NULL,
                     score = NULL,
                     evaluation_function_names = '[]'::jsonb,
                     evaluation_total_cases = NULL,
@@ -1238,7 +1303,10 @@ def reset_generation_errors_for_retry(
                     updated_at = now()
                 WHERE
                     prediction_id = ANY(%s)
-                    AND generation_status = 'generation_error'
+                    AND generation_status IN (
+                        'generation_error',
+                        'generation_recoverable_error'
+                    )
                 """,
                 (list(prediction_ids),),
             )
@@ -1264,6 +1332,9 @@ def mark_scoring_started(database_url: str, prediction_id: str) -> None:
                 SET
                     scoring_status = 'started',
                     scoring_error = NULL,
+                    scoring_failure_class = NULL,
+                    scoring_exception_type = NULL,
+                    scoring_exception_message = NULL,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1281,6 +1352,9 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     scoring_status = 'scored',
                     score = %s,
                     scoring_error = %s,
+                    scoring_failure_class = NULL,
+                    scoring_exception_type = NULL,
+                    scoring_exception_message = NULL,
                     raw_code = %s,
                     raw_compile_ok = %s,
                     raw_compile_error = %s,
@@ -1333,20 +1407,37 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
 
 
 def record_score_error(
-    database_url: str, prediction_id: str, error: str
+    database_url: str,
+    prediction_id: str,
+    summary: FailureSummary,
 ) -> None:
+    status = (
+        "score_recoverable_error"
+        if summary.is_recoverable
+        else "score_error"
+    )
     with connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE dr_dspy_eval_predictions
                 SET
-                    scoring_status = 'score_error',
+                    scoring_status = %s,
                     scoring_error = %s,
+                    scoring_failure_class = %s,
+                    scoring_exception_type = %s,
+                    scoring_exception_message = %s,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
-                (error, prediction_id),
+                (
+                    status,
+                    error_text(summary),
+                    summary.failure_class.value,
+                    summary.exception_type,
+                    summary.message,
+                    prediction_id,
+                ),
             )
 
 
@@ -1390,13 +1481,15 @@ def record_score_success_step(database_url: str, result: ScoreResult) -> None:
 
 @DBOS.step(name="humaneval_direct_record_score_error_step_v0")
 def record_score_error_step(
-    database_url: str, prediction_id: str, error: str
+    database_url: str, prediction_id: str, summary: FailureSummary
 ) -> None:
     context = fetch_prediction_log_context(database_url, prediction_id)
     emit_prediction_log_event(
-        "scoring_failed", context, extra={"error": error}
+        "scoring_failed",
+        context,
+        extra=failure_summary_payload(summary),
     )
-    record_score_error(database_url, prediction_id, error)
+    record_score_error(database_url, prediction_id, summary)
 
 
 @DBOS.step(name="humaneval_direct_mark_scoring_queued_step_v0")
@@ -1411,6 +1504,7 @@ def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
     retries_allowed=True,
     max_attempts=3,
     interval_seconds=2.0,
+    should_retry=should_retry_step,
 )
 def generate_prediction_step(
     database_url: str, prediction_id: str
@@ -1420,7 +1514,9 @@ def generate_prediction_step(
     emit_prediction_log_event(
         "generation_started", prediction_context_from_job(job)
     )
-    return generate_code_for_job(job)
+    return generate_code_for_job(
+        job, client=shared_worker_resources.openrouter_client()
+    )
 
 
 @DBOS.step(name="humaneval_direct_record_generation_success_step_v0")
@@ -1441,13 +1537,15 @@ def record_generation_success_step(
 
 @DBOS.step(name="humaneval_direct_record_generation_error_step_v0")
 def record_generation_error_step(
-    database_url: str, prediction_id: str, error: str
+    database_url: str, prediction_id: str, summary: FailureSummary
 ) -> None:
     context = fetch_prediction_log_context(database_url, prediction_id)
     emit_prediction_log_event(
-        "generation_failed", context, extra={"error": error}
+        "generation_failed",
+        context,
+        extra=failure_summary_payload(summary),
     )
-    record_generation_error(database_url, prediction_id, error)
+    record_generation_error(database_url, prediction_id, summary)
 
 
 def build_repair_plan(
@@ -1780,17 +1878,9 @@ def configure_pooled_worker_runtime(
     queue: QueueSelection,
     raw_db_pool_max_size: str,
 ) -> DbPoolConfig:
-    pool_config = configure_worker_db_connection_pools(
-        config,
-        queue=queue,
-        raw_max_size=raw_db_pool_max_size,
+    return configure_worker_db_connection_pools(
+        config, queue=queue, raw_max_size=raw_db_pool_max_size
     )
-    configure_dbos_runtime(
-        config,
-        experiment_name=experiment_name,
-        queue=queue,
-    )
-    return pool_config
 
 
 def build_humaneval_samples_from_rows(
@@ -1939,11 +2029,14 @@ def enqueue_score_jobs(
 
 
 def start_worker_monitor(
-    config: WorkerMonitorConfig, stop_event: threading.Event
+    config: WorkerMonitorConfig,
+    stop_event: threading.Event,
+    halt_event: threading.Event,
 ) -> threading.Thread:
     return shared_worker_monitor.start_worker_monitor(
         config,
         stop_event,
+        halt_event,
         operator_log=operator_log,
         emit_worker_detail_log=emit_worker_detail_log,
     )
@@ -1983,11 +2076,13 @@ class DirectExperiment:
         config: EvalDbosConfig,
         experiment_name: str,
         *,
+        queue: QueueSelection | None = None,
         consume_queues: bool = True,
     ) -> None:
         configure_dbos_runtime(
             config,
             experiment_name=experiment_name,
+            queue=queue,
             consume_queues=consume_queues,
         )
 
@@ -2025,9 +2120,12 @@ class DirectExperiment:
         record_generation_success(database_url, result)
 
     def record_generation_error(
-        self, database_url: str, prediction_id: str, error: str
+        self,
+        database_url: str,
+        prediction_id: str,
+        summary: FailureSummary,
     ) -> None:
-        record_generation_error(database_url, prediction_id, error)
+        record_generation_error(database_url, prediction_id, summary)
 
     def generation_success_log_extra(
         self, result: GenerationResult
@@ -2080,9 +2178,12 @@ class DirectExperiment:
         record_score_success(database_url, result)
 
     def record_score_error(
-        self, database_url: str, prediction_id: str, error: str
+        self,
+        database_url: str,
+        prediction_id: str,
+        summary: FailureSummary,
     ) -> None:
-        record_score_error(database_url, prediction_id, error)
+        record_score_error(database_url, prediction_id, summary)
 
     def enqueue_score(
         self,
@@ -2245,8 +2346,9 @@ class DirectExperiment:
         self,
         monitor_config: WorkerMonitorConfig,
         stop_event: threading.Event,
+        halt_event: threading.Event,
     ) -> threading.Thread:
-        return start_worker_monitor(monitor_config, stop_event)
+        return start_worker_monitor(monitor_config, stop_event, halt_event)
 
 
 _BACKEND = DirectExperiment()
@@ -2719,13 +2821,12 @@ def worker(
         int, typer.Option("--scoring-concurrency")
     ] = DEFAULT_SCORING_CONCURRENCY,
     open_file_limit: Annotated[
-        int,
+        str,
         typer.Option(
             "--open-file-limit",
-            min=1,
             help=(
-                "Requested worker soft open-file limit. The process can "
-                "raise this only up to the OS hard limit."
+                "Requested worker soft open-file limit, or 'auto'. The "
+                "process can raise this only up to the OS hard limit."
             ),
         ),
     ] = DEFAULT_WORKER_OPEN_FILE_LIMIT,

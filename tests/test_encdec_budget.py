@@ -119,3 +119,26 @@ def test_budget_respects_min_floor(
         == encdec.MIN_ENCODER_CHAR_BUDGET
     )
     assert result.encoder_char_budget == encdec.MIN_ENCODER_CHAR_BUDGET
+
+
+def test_generation_passes_client_to_encoder_and_decoder_lms(
+    encdec_configured: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clients: list[object] = []
+    shared_client = object()
+
+    def fake_build_lm(**kwargs: Any) -> object:
+        clients.append(kwargs["client"])
+        return object()
+
+    def fake_run_predictor(
+        *, output_field: str, **_kwargs: Any
+    ) -> str:
+        return "DESC" if output_field == "description" else "CODE"
+
+    monkeypatch.setattr(encdec, "build_lm", fake_build_lm)
+    monkeypatch.setattr(encdec, "run_predictor", fake_run_predictor)
+
+    encdec.generate_code_for_job_with_client(_job(None), client=shared_client)
+
+    assert clients == [shared_client, shared_client]
