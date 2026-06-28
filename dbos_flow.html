@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en" data-ha-style="default">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HumanEval DBOS flow — eval-only pipelines</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#eef1f6; --surface:#ffffff; --surface-2:#f5f7fb; --surface-3:#eef2f8;
+  --ink:#16202e; --ink-2:#46556a; --muted:#8593a6;
+  --border:#e4e9f1; --border-2:#cfd8e5;
+  --shadow-sm:0 1px 2px rgba(16,32,54,.05);
+  --shadow:0 4px 16px rgba(16,32,54,.07);
+  --shadow-lg:0 14px 36px rgba(16,32,54,.12);
+  --dot:rgba(70,100,150,.10);
+
+  --db:#0c7a5e;  --db-bg:#e4f5ef;  --db-bd:#a8ddcb;
+  --sys:#6d28d9; --sys-bg:#efe9fd; --sys-bd:#cdb6f4;
+  --llm:#b4530a; --llm-bg:#fdf1dd; --llm-bd:#f0cd95;
+  --proc:#be123c;--proc-bg:#fde7ec;--proc-bd:#f2adc0;
+  --q:#1d4ed8;   --q-bg:#e7edfd;   --q-bd:#b6caf6;
+
+  --wf:#5046e5;   --wf-bg:#ecebfe;
+  --queue:#1d4ed8;--queue-bg:#e7edfd;
+  --cli:#516074;  --cli-bg:#eef1f5;
+  --process:#b4530a;--process-bg:#fdf1dd;
+
+  --font-h:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;
+  --font-b:'Plus Jakarta Sans',ui-sans-serif,system-ui,sans-serif;
+  --font-m:'JetBrains Mono','SF Mono',Menlo,monospace;
+
+  /* fixed column widths so the two pipelines align vertically */
+  --sw:296px; --sww:420px; --conn:46px; --rowlabel:128px;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-b);font-size:14px;line-height:1.55;
+  padding:22px 26px 60px;max-width:2600px;margin:0 auto;-webkit-font-smoothing:antialiased;}
+code{font-family:var(--font-m);font-size:.86em;color:#0f2a45;background:var(--surface-3);
+  padding:.5px 4px;border-radius:4px;white-space:nowrap;}
+h1,h2,h3{font-family:var(--font-h);margin:0;letter-spacing:-.01em;}
+.dim{color:var(--muted);}
+.mono-num{font-family:var(--font-m);font-variant-numeric:tabular-nums;}
+
+/* ---- header ---- */
+.head{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:22px 26px;margin-bottom:18px;box-shadow:var(--shadow);}
+.eyebrow{font-family:var(--font-m);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:10px;}
+.eyebrow b{color:var(--wf);}
+.head h1{font-size:clamp(21px,2.4vw,32px);font-weight:700;line-height:1.1;}
+.head .sub{color:var(--ink-2);font-size:14.5px;max-width:1080px;margin-top:10px;}
+.head .sub .seq{font-family:var(--font-m);font-weight:600;color:var(--ink);}
+.head .sub .d{color:var(--q);font-weight:700;} .head .sub .e{color:var(--sys);font-weight:700;}
+.srcline{display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:14px;font-size:12.5px;color:var(--ink-2);}
+.srcline b{font-family:var(--font-m);font-weight:600;color:var(--ink);}
+
+/* ---- controls ---- */
+.controls{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:16px;}
+.ctl{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:11px 15px;box-shadow:var(--shadow-sm);flex:1 1 auto;}
+.ctl .label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:9px;display:block;font-weight:600;}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px;}
+button{font-family:var(--font-b);font-weight:600;font-size:12.5px;cursor:pointer;background:var(--surface);color:var(--ink-2);
+  border:1px solid var(--border-2);padding:7px 13px;border-radius:9px;transition:all .12s ease;}
+button:hover{border-color:var(--muted);color:var(--ink);box-shadow:var(--shadow-sm);}
+button:focus-visible{outline:2px solid var(--wf);outline-offset:2px;}
+.tag{display:inline-flex;align-items:center;gap:7px;}
+.tag .sw{width:10px;height:10px;border-radius:3px;background:var(--c);border:1px solid var(--cb);}
+.tag[aria-pressed="true"]{background:var(--cbg);border-color:var(--cb);color:var(--c);box-shadow:inset 0 0 0 1px var(--cb);}
+.tag.t-db{--c:var(--db);--cb:var(--db-bd);--cbg:var(--db-bg);}
+.tag.t-sys{--c:var(--sys);--cb:var(--sys-bd);--cbg:var(--sys-bg);}
+.tag.t-llm{--c:var(--llm);--cb:var(--llm-bd);--cbg:var(--llm-bg);}
+.tag.t-proc{--c:var(--proc);--cb:var(--proc-bd);--cbg:var(--proc-bg);}
+.tag.t-q{--c:var(--q);--cb:var(--q-bd);--cbg:var(--q-bg);}
+
+/* ---- legend ---- */
+.legend{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-sm);margin-bottom:18px;overflow:hidden;}
+.legend h3{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-2);padding:11px 18px;border-bottom:1px solid var(--border);background:var(--surface-2);font-weight:700;}
+.legend-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 36px;padding:16px 18px;}
+@media(max-width:920px){.legend-grid{grid-template-columns:1fr;}}
+.legend-grid .row{display:flex;gap:10px;align-items:flex-start;font-size:12.8px;color:var(--ink-2);padding:3px 0;}
+.legend-grid .row b{color:var(--ink);}
+
+/* kind badge + op chip */
+.kind{display:inline-block;font-family:var(--font-m);font-size:10px;font-weight:600;padding:1.5px 7px;border-radius:5px;
+  text-transform:uppercase;letter-spacing:.04em;vertical-align:1px;white-space:nowrap;background:var(--kbg,var(--surface-3));color:var(--kc,var(--ink-2));border:1px solid transparent;}
+.kind.wf{--kc:var(--wf);--kbg:var(--wf-bg);}
+.kind.step{--kc:var(--ink-2);--kbg:var(--surface-3);border-color:var(--border-2);}
+.kind.queue{--kc:var(--queue);--kbg:var(--queue-bg);}
+.kind.proc{--kc:var(--process);--kbg:var(--process-bg);}
+.kind.cli{--kc:var(--cli);--kbg:var(--cli-bg);}
+.op{display:inline-block;font-family:var(--font-m);font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;
+  text-transform:uppercase;letter-spacing:.03em;vertical-align:1px;white-space:nowrap;background:var(--cbg);color:var(--c);border:1px solid var(--cb);}
+.op.db{--c:var(--db);--cb:var(--db-bd);--cbg:var(--db-bg);}
+.op.sys{--c:var(--sys);--cb:var(--sys-bd);--cbg:var(--sys-bg);}
+.op.llm{--c:var(--llm);--cb:var(--llm-bd);--cbg:var(--llm-bg);}
+.op.proc{--c:var(--proc);--cb:var(--proc-bd);--cbg:var(--proc-bg);}
+.op.q{--c:var(--q);--cb:var(--q-bd);--cbg:var(--q-bg);}
+
+/* ============ COMPARISON PIPELINES ============ */
+.section-label{font-family:var(--font-m);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:30px 0 6px;font-weight:600;}
+.scroll-hint{font-size:12.5px;color:var(--muted);margin:0 0 14px;}
+.flow-scroll{overflow-x:auto;overflow-y:visible;padding:16px 14px 20px;border-radius:18px;background:var(--surface-2);border:1px solid var(--border);
+  background-image:radial-gradient(var(--dot) 1.1px,transparent 1.1px);background-size:22px 22px;background-position:14px 16px;}
+
+.prow{display:flex;align-items:stretch;width:max-content;border-radius:14px;padding:12px;margin-bottom:14px;}
+.prow.direct{background:rgba(29,78,216,.045);}
+.prow.encdec{background:rgba(109,40,217,.05);margin-bottom:0;}
+
+.rowlabel{flex:0 0 var(--rowlabel);width:var(--rowlabel);position:sticky;left:0;z-index:6;
+  display:flex;flex-direction:column;justify-content:flex-start;padding:64px 12px 0 4px;gap:6px;
+  background:linear-gradient(90deg,var(--rlbg) 78%,transparent);}
+.prow.direct .rowlabel{--rlbg:#eaeff9;} .prow.encdec .rowlabel{--rlbg:#efeafa;}
+.rowlabel .rl-name{font-family:var(--font-h);font-weight:700;font-size:17px;line-height:1;}
+.prow.direct .rl-name{color:var(--q);} .prow.encdec .rl-name{color:var(--sys);}
+.rowlabel .rl-sub{font-family:var(--font-m);font-size:10.5px;color:var(--ink-2);line-height:1.4;}
+.rowlabel .rl-pill{font-family:var(--font-m);font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
+  padding:2px 7px;border-radius:5px;align-self:flex-start;}
+.prow.direct .rl-pill{background:var(--q-bg);color:var(--q);border:1px solid var(--q-bd);}
+.prow.encdec .rl-pill{background:var(--sys-bg);color:var(--sys);border:1px solid var(--sys-bd);}
+
+.stage{display:flex;flex-direction:column;flex:0 0 var(--sw);width:var(--sw);}
+.stage.wide{flex:0 0 var(--sww);width:var(--sww);}
+.lane{background:var(--surface);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;height:100%;
+  box-shadow:var(--shadow);overflow:hidden;border-top:4px solid var(--accent,var(--border-2));}
+.lane.k-wf{--accent:var(--wf);} .lane.k-queue{--accent:var(--queue);} .lane.k-cli{--accent:var(--cli);} .lane.k-proc{--accent:var(--process);}
+.lane.differs{box-shadow:0 0 0 2px var(--llm),var(--shadow);}
+.lane-head{padding:12px 15px;border-bottom:1px solid var(--border);background:var(--surface);}
+.lane-head .title{font-family:var(--font-h);font-size:14px;font-weight:700;color:var(--ink);display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.lane-head .num{font-family:var(--font-m);font-weight:600;color:#fff;background:var(--accent,var(--muted));width:22px;height:22px;border-radius:6px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:12px;}
+.lane-head .meta{font-size:11.5px;color:var(--muted);display:block;margin-top:6px;line-height:1.45;}
+.diffpill{font-family:var(--font-m);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;
+  background:var(--llm-bg);color:var(--llm);border:1px solid var(--llm-bd);border-radius:5px;padding:1px 6px;}
+.samepill{font-family:var(--font-m);font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;
+  background:var(--surface-3);color:var(--muted);border:1px solid var(--border-2);border-radius:5px;padding:1px 6px;}
+.lane-body{padding:13px;flex:1;} .lane-body.steps{display:flex;flex-direction:column;}
+
+.connector-h{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:0 0 var(--conn);text-align:center;gap:5px;padding-top:60px;}
+.connector-h .arrow{color:var(--muted);font-size:20px;line-height:1;}
+.connector-h .lbl{font-family:var(--font-m);font-size:9px;color:var(--q);line-height:1.2;text-transform:uppercase;letter-spacing:.03em;}
+.connector-h.end .arrow{color:var(--db);}
+
+.step{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;border-left:3px solid var(--border-2);}
+.checkpoint{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:10px;letter-spacing:.04em;padding:7px 2px;text-transform:uppercase;font-family:var(--font-m);}
+.checkpoint .ln{flex:1;border-top:1px dashed var(--border-2);}
+.step .st-title{font-weight:700;font-size:12.5px;color:var(--ink);margin-bottom:5px;display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;}
+.step ul{margin:5px 0 0;padding-left:16px;} .step li{font-size:11.8px;color:var(--ink-2);margin:4px 0;}
+.step .note{color:var(--muted);font-size:11px;display:block;margin-top:2px;}
+
+body.filtering .step:not(.match){opacity:.3;}
+body.filtering .stage.has-no-match,body.filtering .pane.has-no-match{opacity:.4;}
+.step.match{border-left-color:var(--hl,var(--wf));box-shadow:0 0 0 2px var(--hlbg,rgba(80,70,229,.25));background:#fff;}
+
+/* reference panes */
+.gridN{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;align-items:start;}
+.pane{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-sm);overflow:hidden;border-top:4px solid var(--accent,var(--border-2));}
+.pane.k-proc{--accent:var(--process);} .pane.k-wf{--accent:var(--wf);} .pane.k-db{--accent:var(--db);} .pane.k-sys{--accent:var(--sys);} .pane.k-meta{--accent:var(--muted);}
+.pane .pane-title{font-family:var(--font-h);font-size:13px;font-weight:700;padding:11px 15px;border-bottom:1px solid var(--border);background:var(--surface-2);display:flex;align-items:center;gap:8px;}
+.pane .pane-body{padding:14px 15px;font-size:12.3px;color:var(--ink-2);}
+.pane .pane-body ul{margin:0;padding-left:16px;} .pane .pane-body li{margin:5px 0;}
+.pane .pane-body p{margin:0 0 8px;}
+.warn{color:var(--llm);font-weight:600;}
+.cbar-row{display:grid;grid-template-columns:96px 1fr 38px;gap:10px;align-items:center;margin:7px 0;font-size:12px;}
+.cbar-row .nm{color:var(--ink-2);}
+.cbar{height:11px;background:var(--surface-3);border-radius:6px;overflow:hidden;border:1px solid var(--border);}
+.cbar i{display:block;height:100%;border-radius:6px;background:var(--q);} .cbar i.amber{background:var(--llm);}
+.cbar-row .n{font-family:var(--font-m);font-weight:600;color:var(--ink);text-align:right;}
+.subtle{font-size:11px;color:var(--muted);margin-top:10px;}
+
+.copy-handoff{margin:30px 0 8px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+.copy-handoff button{font-size:13px;padding:11px 18px;border-radius:10px;background:var(--wf);color:#fff;border-color:var(--wf);}
+.copy-handoff button:hover{background:#4038c9;}
+#copyState{color:var(--db);font-size:12.5px;font-weight:600;}
+footer{margin-top:30px;border-top:1px solid var(--border);padding-top:14px;font-size:11.8px;color:var(--muted);}
+
+/* ============ SCHEMA COMPARISON ============ */
+.schema-intro{font-size:12.5px;color:var(--muted);margin:0 0 8px;}
+.ctag-legend{display:flex;flex-wrap:wrap;gap:8px 14px;margin:0 0 16px;font-size:11.5px;color:var(--ink-2);align-items:center;}
+.schema-wrap{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;}
+@media(max-width:1000px){.schema-wrap{grid-template-columns:1fr;}}
+.schema-col{display:flex;flex-direction:column;gap:14px;}
+.colhead{font-family:var(--font-h);font-weight:700;font-size:16px;display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:11px;}
+.schema-col.direct .colhead{background:rgba(29,78,216,.08);color:var(--q);}
+.schema-col.encdec .colhead{background:rgba(109,40,217,.08);color:var(--sys);}
+.colhead .cp{font-family:var(--font-m);font-size:10px;font-weight:600;padding:2px 8px;border-radius:6px;background:#fff;}
+.schema-col.direct .colhead .cp{color:var(--q);border:1px solid var(--q-bd);}
+.schema-col.encdec .colhead .cp{color:var(--sys);border:1px solid var(--sys-bd);}
+
+.tbl{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);overflow:hidden;}
+.tbl-head{font-family:var(--font-m);font-size:12.5px;font-weight:700;padding:10px 13px;background:var(--surface-2);border-bottom:1px solid var(--border);}
+.tbl-head .pkn{display:block;font-size:9.5px;font-weight:500;color:var(--muted);margin-top:3px;word-break:break-word;}
+.tbl-body{padding:5px 0 8px;}
+.tbl-group{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;padding:9px 13px 3px;}
+.col-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:baseline;padding:2.5px 13px;font-size:11.5px;}
+.col-row .cn{font-family:var(--font-m);color:var(--ink);}
+.col-row .ct{font-family:var(--font-m);font-size:9.5px;color:var(--muted);white-space:nowrap;}
+.col-row.dim{background:var(--wf-bg);} .col-row.dim .cn{color:var(--wf);font-weight:600;}
+.col-row.extra{background:var(--llm-bg);} .col-row.extra .cn{color:var(--llm);font-weight:600;}
+.ctag{font-family:var(--font-m);font-size:8.5px;font-weight:700;padding:0 5px;border-radius:4px;text-transform:uppercase;letter-spacing:.03em;margin-left:6px;vertical-align:1px;}
+.ctag.pk{background:var(--db-bg);color:var(--db);border:1px solid var(--db-bd);}
+.ctag.fk{background:var(--surface-3);color:var(--ink-2);border:1px solid var(--border-2);}
+.ctag.dim{background:var(--wf-bg);color:var(--wf);border:1px solid #cdb6f4;}
+.ctag.extra{background:var(--llm-bg);color:var(--llm);border:1px solid var(--llm-bd);}
+
+.schema-shared{margin-top:16px;}
+.schema-shared .tbl{border-top:4px solid var(--db);}
+
+/* accordion */
+details.ex{border-top:1px solid var(--border);}
+details.ex>summary{cursor:pointer;list-style:none;padding:9px 13px;font-size:11.5px;font-weight:700;color:var(--wf);background:var(--surface-2);display:flex;align-items:center;gap:8px;}
+details.ex>summary:hover{background:var(--surface-3);}
+details.ex>summary:focus-visible{outline:2px solid var(--wf);outline-offset:-2px;}
+details.ex>summary::-webkit-details-marker{display:none;}
+details.ex>summary::before{content:"\25B8";font-size:10px;transition:transform .12s ease;color:var(--muted);}
+details.ex[open]>summary::before{transform:rotate(90deg);}
+.ex-body{padding:12px 13px;background:#fff;border-top:1px dashed var(--border);}
+.ex-note{font-size:10.5px;color:var(--muted);margin:0 0 10px;font-style:italic;}
+.ex-rec{border:1px solid var(--border);border-radius:9px;padding:11px 12px;margin-bottom:10px;background:var(--surface-2);}
+.ex-rec:last-child{margin-bottom:0;}
+.ex-rec-h{font-family:var(--font-m);font-size:11px;font-weight:700;color:var(--ink);margin-bottom:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.kv{display:grid;grid-template-columns:165px 1fr;gap:3px 12px;font-size:11px;}
+@media(max-width:520px){.kv{grid-template-columns:1fr;}}
+.kv .k{font-family:var(--font-m);color:var(--ink-2);}
+.kv .v{font-family:var(--font-m);color:var(--ink);word-break:break-word;white-space:pre-wrap;}
+.kv .v .s{color:var(--db);} .kv .v .num{color:var(--q);} .kv .v .nul{color:var(--muted);font-style:italic;}
+.kv .v.diffv{color:var(--llm);}
+.kv .grp{grid-column:1/-1;font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-top:7px;padding-top:6px;border-top:1px dashed var(--border);}
+.kv .grp:first-child{margin-top:0;border-top:none;padding-top:0;}
+</style>
+</head>
+<body>
+
+<header class="head">
+  <div class="eyebrow"><b>dr-dspy</b> · humaneval eval-only · durable pipeline map</div>
+  <h1>HumanEval eval-only — DBOS control flow</h1>
+  <p class="sub">Two scripts, <b>one shared durable pipeline</b>, read left → right:
+    <span class="seq">submit ▸ generate ▸ score</span>, over DBOS workflows &amp; steps and two Postgres-backed queues.
+    The two rows below are stacked &amp; column-aligned so you can compare them directly — they are
+    <b>identical everywhere except stage 4</b> (<span class="d">Direct</span> = 1 LLM call,
+    <span class="e">Enc-Dec</span> = 2 sequential calls) and the generation-queue concurrency.</p>
+  <div class="srcline">
+    <span>scripts: <b>humaneval_dspy_eval_only_dbos_v0.py</b> · <b>…encdec_dbos_v0.py</b></span>
+    <span>impl: <b>humaneval_direct_dbos.py</b> · <b>humaneval_encdec_dbos.py</b></span>
+    <span>orchestrator: <b>DBOS</b> + Postgres · llm: <b>OpenRouter</b> via dspy</span>
+  </div>
+</header>
+
+<div class="controls">
+  <div class="ctl">
+    <span class="label">Highlight a touchpoint across both pipelines</span>
+    <div class="btnrow" role="group" aria-label="Filter flow by touchpoint type">
+      <button class="tag t-db"   aria-pressed="false" data-tag="db"   onclick="toggleTag('db',this)"><span class="sw"></span>App DB</button>
+      <button class="tag t-sys"  aria-pressed="false" data-tag="sys"  onclick="toggleTag('sys',this)"><span class="sw"></span>DBOS sys-DB</button>
+      <button class="tag t-llm"  aria-pressed="false" data-tag="llm"  onclick="toggleTag('llm',this)"><span class="sw"></span>OpenRouter</button>
+      <button class="tag t-proc" aria-pressed="false" data-tag="proc" onclick="toggleTag('proc',this)"><span class="sw"></span>Subprocess</button>
+      <button class="tag t-q"    aria-pressed="false" data-tag="q"    onclick="toggleTag('q',this)"><span class="sw"></span>Queue</button>
+      <button aria-pressed="false" onclick="clearTags()">Reset</button>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <h3>Legend · DBOS constructs &amp; touchpoints</h3>
+  <div class="legend-grid">
+    <div class="row"><span class="kind wf">WORKFLOW</span><span><b><code>@DBOS.workflow</code></b> — durable orchestration; every step result is checkpointed, so it recovers after a crash.</span></div>
+    <div class="row"><span class="op db">DB</span><span>read/write to the <b>app Postgres</b> (experiments / predictions / batch_operations).</span></div>
+    <div class="row"><span class="kind step">STEP</span><span><b><code>@DBOS.step</code></b> — durable unit of work &amp; retry boundary (most <code>max_attempts=3</code>).</span></div>
+    <div class="row"><span class="op sys">SYS</span><span>read/write to the <b>DBOS system DB</b> (<code>dbos.*</code> workflow + queue state).</span></div>
+    <div class="row"><span class="kind queue">QUEUE</span><span>DBOS queue with a <code>worker_concurrency</code> cap; rows live in the system DB.</span></div>
+    <div class="row"><span class="op llm">LLM</span><span>outbound <b>OpenRouter</b> request (<code>chat.completions.create</code>).</span></div>
+    <div class="row"><span class="kind proc">PROCESS</span><span>OS-level worker process / child subprocess.</span></div>
+    <div class="row"><span class="op proc">PROC</span><span><b><code>subprocess.run</code></b> — child Python that executes the generated code.</span></div>
+    <div class="row"><span class="diffpill">differs</span><span>this stage is <b>not</b> identical between the two pipelines.</span></div>
+    <div class="row"><span class="op q">Q</span><span><code>DBOS.enqueue_workflow</code> — place a workflow on a queue (idempotent).</span></div>
+  </div>
+</div>
+
+<div class="section-label">// two pipelines, stacked &amp; aligned · scroll →</div>
+<p class="scroll-hint">Same columns top &amp; bottom: read down a column to compare the two pipelines. Stages outlined in <span class="warn">orange</span> are where they differ. Click a touchpoint to light it up in both rows.</p>
+
+<div class="flow-scroll">
+
+  <!-- ================= DIRECT ROW ================= -->
+  <div class="prow direct">
+    <div class="rowlabel"><span class="rl-name">Direct</span><span class="rl-pill">baseline</span><span class="rl-sub">prompt → code<br>1 LLM call</span></div>
+
+    <div class="stage" data-stage>
+      <div class="lane k-cli">
+        <div class="lane-head"><span class="title"><span class="num">1</span>Driver <span class="kind cli">CLI</span></span>
+          <span class="meta"><code>submit</code> · <code>consume_queues=False</code></span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db"><div class="st-title">Record experiment <span class="op db">DB</span></div>
+            <ul><li><code>upsert_experiment()</code> → <code>*_eval_experiments</code></li>
+            <li><code>prepare_operation(SUBMIT)</code> → <code>dr_dspy_batch_operations</code> (<code>spec</code> + progress)</li></ul></div>
+          <div class="checkpoint"><span>then</span><span class="ln"></span></div>
+          <div class="step" data-tags="sys db"><div class="st-title">Launch dispatcher <span class="op sys">SYS</span></div>
+            <ul><li><code>start_workflow(submit_dispatcher)</code> under <code>SetWorkflowID</code> — launched, not queued</li>
+            <li><code>tail_operation_progress()</code> polls progress <span class="op db">DB read loop</span></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">starts</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf">
+        <div class="lane-head"><span class="title"><span class="num">2</span>Submit dispatcher <span class="kind wf">WORKFLOW</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>submit_dispatcher_workflow</code> · loop until <code>next_offset ≥ total_jobs</code> (OFFSET_TOTAL)</span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db"><div class="st-title">Loop <code>fetch_operation_progress</code> <span class="op db">DB</span></div>
+            <ul><li>complete → <code>mark_operation_completed</code>, else run a batch step ↓</li></ul></div>
+          <div class="checkpoint"><span>durable batch step · max_attempts=3</span><span class="ln"></span></div>
+          <div class="step" data-tags="db sys q"><div class="st-title"><code>submit_batch_step</code> <span class="kind step">STEP</span></div>
+            <ul>
+              <li><code>build_humaneval_samples(seed,n)</code> + <code>build_prediction_jobs_for_offsets()</code> (mixed-radix index → 1 job per sample×model×temp×…×rep; <code>prediction_id</code> = stable hash)</li>
+              <li><code>insert_prediction_jobs()</code> <code>ON CONFLICT DO NOTHING</code> <span class="op db">DB</span></li>
+              <li><code>_enqueue_generation_jobs()</code> → enqueue <code>generate_prediction_workflow</code> ×N <span class="op q">Q</span> <span class="op sys">SYS</span></li>
+              <li><code>record_operation_batch_success()</code> advances <code>next_offset</code> <span class="op db">DB</span></li>
+            </ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">enqueue ×N</span></div>
+
+    <div class="stage" data-stage data-tags="q">
+      <div class="lane k-queue differs">
+        <div class="lane-head"><span class="title"><span class="num">3</span>Generation queue <span class="kind queue">QUEUE</span> <span class="diffpill">differs</span></span>
+          <span class="meta"><code>…_generation_&lt;hash&gt;</code> · <code>worker_concurrency=</code><b style="color:var(--q)">200</b></span></div>
+        <div class="lane-body"><div class="step" data-tags="sys q"><div class="st-title">Worker pulls work</div>
+          <ul><li>up to <b>200</b> generation workflows in flight</li><li>queue rows in DBOS system DB <span class="op sys">SYS</span></li></ul></div></div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">dequeue</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf differs">
+        <div class="lane-head"><span class="title"><span class="num">4</span>Generation workflow <span class="kind wf">WORKFLOW</span> <span class="diffpill">differs</span></span>
+          <span class="meta"><code>generate_prediction_workflow</code> · one per prediction</span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db llm"><div class="st-title"><code>generate_prediction_step</code> <span class="kind step">STEP</span></div>
+            <span class="note">retries_allowed · max_attempts=3 · should_retry_step</span>
+            <ul>
+              <li><code>mark_generation_started()</code> <span class="op db">DB</span> · <code>fetch_prediction_job()</code> <span class="op db">DB</span></li>
+              <li><b>Direct</b> — <code>generate_code_for_job()</code>: one <code>run_predictor(solve, {prompt})</code></li>
+              <li><span class="op llm">LLM ×1</span> single OpenRouter call → <code>code</code><span class="note"><code>dspy.Predict</code> → <code>LoggingOpenRouterLM.forward</code> → <code>chat.completions.create</code></span></li>
+              <li>usage + provider_cost via <code>LmEventBuffer</code></li>
+            </ul></div>
+          <div class="checkpoint"><span>checkpoint · ok ↓ / err → error step</span><span class="ln"></span></div>
+          <div class="step" data-tags="db"><div class="st-title"><code>record_generation_success_step</code> <span class="kind step">STEP</span></div>
+            <ul><li>status → <code>generated</code>, store output/usage/cost <span class="op db">DB</span></li>
+            <li class="note">err: <code>record_generation_error_step</code> → <code>generation_(recoverable_)error</code>; no scoring enqueued</li></ul></div>
+          <div class="checkpoint"><span>checkpoint</span><span class="ln"></span></div>
+          <div class="step" data-tags="sys db q"><div class="st-title">Enqueue scoring</div>
+            <ul><li><code>_enqueue_score_job()</code> → <code>score_prediction_workflow</code> <span class="op q">Q</span> <span class="op sys">SYS</span></li>
+            <li><code>mark_scoring_queued_step()</code> → <code>scoring_queued</code> <span class="op db">DB</span></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">enqueue ×1</span></div>
+
+    <div class="stage" data-stage data-tags="q">
+      <div class="lane k-queue">
+        <div class="lane-head"><span class="title"><span class="num">5</span>Scoring queue <span class="kind queue">QUEUE</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>…_scoring_&lt;hash&gt;</code> · <code>worker_concurrency=</code><b>32</b></span></div>
+        <div class="lane-body"><div class="step" data-tags="proc q"><div class="st-title">Throttled lower</div>
+          <ul><li>same worker on <b>both</b> queues (<code>QueueSelection.BOTH</code>)</li><li>lower cap — each step spawns subprocesses <span class="op proc">PROC</span></li></ul></div></div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">dequeue</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf">
+        <div class="lane-head"><span class="title"><span class="num">6</span>Score workflow <span class="kind wf">WORKFLOW</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>score_prediction_workflow</code> · <b class="warn">offline — no network</b></span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db proc"><div class="st-title"><code>score_prediction_step</code> <span class="kind step">STEP</span></div>
+            <ul><li><code>mark_scoring_started()</code> <span class="op db">DB</span> · <code>fetch_scoring_target()</code> (needs <code>generated</code>) <span class="op db">DB</span></li></ul>
+            <div class="checkpoint"><span>score_humaneval_prediction (local)</span><span class="ln"></span></div>
+            <ul>
+              <li><b>a.</b> <code>validate_python_source(raw)</code> ⇒ <code>raw_compile_ok</code></li>
+              <li><b>b.</b> <code>apply_cleaning()</code> — strip fences, split blocks, infer imports ⇒ candidates</li>
+              <li><b>c.</b> select first compiling candidate</li>
+              <li><b>d.</b> <code>evaluate_human_eval_code()</code> → per fn name <code>run_subprocess_batch()</code>:
+                <span class="note"><span class="op proc">PROC spawn</span> <code>subprocess.run([sys.executable,"-c",runner], input=json, timeout)</code></span>
+                <span class="note">untrusted code runs only in the child (stdin JSON). <code>timeout</code>=15s; <code>TimeoutExpired</code>⇒timeout. Process-isolation only.</span></li>
+              <li><b>e.</b> pass/fail ⇒ <code>score</code> 1.0/0.0 + status counts</li>
+              <li><b>f.</b> <code>compression_metrics()</code> (zlib/gzip/bz2/lzma/zstd, local) ⇒ ratios<span class="note">direct compares prompt vs code</span></li>
+            </ul></div>
+          <div class="checkpoint"><span>checkpoint · ok ↓ / err → error step</span><span class="ln"></span></div>
+          <div class="step" data-tags="db"><div class="st-title"><code>record_score_success_step</code> <span class="kind step">STEP</span></div>
+            <ul><li>status → <code>scored</code>; writes score, eval counts, compression metrics <span class="op db">DB</span></li>
+            <li class="note">err: <code>record_score_error_step</code> → <code>score_(recoverable_)error</code></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h end"><span class="arrow">●</span><span class="lbl">scored</span></div>
+  </div>
+
+  <!-- ================= ENC-DEC ROW ================= -->
+  <div class="prow encdec">
+    <div class="rowlabel"><span class="rl-name">Enc-Dec</span><span class="rl-pill">round-trip</span><span class="rl-sub">code → desc → code<br>2 LLM calls</span></div>
+
+    <div class="stage" data-stage>
+      <div class="lane k-cli">
+        <div class="lane-head"><span class="title"><span class="num">1</span>Driver <span class="kind cli">CLI</span></span>
+          <span class="meta"><code>submit</code> · <code>consume_queues=False</code></span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db"><div class="st-title">Record experiment <span class="op db">DB</span></div>
+            <ul><li><code>upsert_experiment()</code> → <code>*_eval_experiments</code></li>
+            <li><code>prepare_operation(SUBMIT)</code> → <code>dr_dspy_batch_operations</code> (<code>spec</code> + progress)</li></ul></div>
+          <div class="checkpoint"><span>then</span><span class="ln"></span></div>
+          <div class="step" data-tags="sys db"><div class="st-title">Launch dispatcher <span class="op sys">SYS</span></div>
+            <ul><li><code>start_workflow(submit_dispatcher)</code> under <code>SetWorkflowID</code> — launched, not queued</li>
+            <li><code>tail_operation_progress()</code> polls progress <span class="op db">DB read loop</span></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">starts</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf">
+        <div class="lane-head"><span class="title"><span class="num">2</span>Submit dispatcher <span class="kind wf">WORKFLOW</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>submit_dispatcher_workflow</code> · loop until <code>next_offset ≥ total_jobs</code> (OFFSET_TOTAL)</span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db"><div class="st-title">Loop <code>fetch_operation_progress</code> <span class="op db">DB</span></div>
+            <ul><li>complete → <code>mark_operation_completed</code>, else run a batch step ↓</li></ul></div>
+          <div class="checkpoint"><span>durable batch step · max_attempts=3</span><span class="ln"></span></div>
+          <div class="step" data-tags="db sys q"><div class="st-title"><code>submit_batch_step</code> <span class="kind step">STEP</span></div>
+            <ul>
+              <li><code>build_humaneval_samples(seed,n)</code> + <code>build_prediction_jobs_for_offsets()</code> (here also sweeps <b>budget_ratio</b> &amp; encoder/decoder dims; <code>prediction_id</code> = stable hash)</li>
+              <li><code>insert_prediction_jobs()</code> <code>ON CONFLICT DO NOTHING</code> <span class="op db">DB</span></li>
+              <li><code>_enqueue_generation_jobs()</code> → enqueue <code>generate_prediction_workflow</code> ×N <span class="op q">Q</span> <span class="op sys">SYS</span></li>
+              <li><code>record_operation_batch_success()</code> advances <code>next_offset</code> <span class="op db">DB</span></li>
+            </ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">enqueue ×N</span></div>
+
+    <div class="stage" data-stage data-tags="q">
+      <div class="lane k-queue differs">
+        <div class="lane-head"><span class="title"><span class="num">3</span>Generation queue <span class="kind queue">QUEUE</span> <span class="diffpill">differs</span></span>
+          <span class="meta"><code>…_encdec_generation_&lt;hash&gt;</code> · <code>worker_concurrency=</code><b style="color:var(--sys)">64</b></span></div>
+        <div class="lane-body"><div class="step" data-tags="sys q"><div class="st-title">Worker pulls work</div>
+          <ul><li>up to <b>64</b> generation workflows in flight (lower — each does 2 calls)</li><li>queue rows in DBOS system DB <span class="op sys">SYS</span></li></ul></div></div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">dequeue</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf differs">
+        <div class="lane-head"><span class="title"><span class="num">4</span>Generation workflow <span class="kind wf">WORKFLOW</span> <span class="diffpill">differs</span></span>
+          <span class="meta"><code>generate_prediction_workflow</code> · one per prediction</span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db llm"><div class="st-title"><code>generate_prediction_step</code> <span class="kind step">STEP</span></div>
+            <span class="note">retries_allowed · max_attempts=3 · should_retry_step</span>
+            <ul>
+              <li><code>mark_generation_started()</code> <span class="op db">DB</span> · <code>fetch_prediction_job()</code> <span class="op db">DB</span></li>
+              <li><b>Enc-Dec</b> — <code>generate_code_for_job_with_client()</code>: two sequential predictors, separate LMs</li>
+              <li><span class="op llm">LLM ×1 · enc</span> <code>run_predictor(encode,{ground_truth_code[,max_characters]})</code> → <code>description</code><span class="note">budgeted vs plain encoder signature chosen by <code>budget_ratio</code></span></li>
+              <li><span class="op llm">LLM ×2 · dec</span> <code>run_predictor(decode,{description})</code> → <code>code</code><span class="note">decoder input = encoder output ⇒ strictly sequential</span></li>
+              <li>enc &amp; dec usage/cost in separate <code>LmEventBuffer</code>s</li>
+            </ul></div>
+          <div class="checkpoint"><span>checkpoint · ok ↓ / err → error step</span><span class="ln"></span></div>
+          <div class="step" data-tags="db"><div class="st-title"><code>record_generation_success_step</code> <span class="kind step">STEP</span></div>
+            <ul><li>status → <code>generated</code>, store enc/dec output/usage/cost <span class="op db">DB</span></li>
+            <li class="note">err: <code>record_generation_error_step</code> → <code>generation_(recoverable_)error</code>; no scoring enqueued</li></ul></div>
+          <div class="checkpoint"><span>checkpoint</span><span class="ln"></span></div>
+          <div class="step" data-tags="sys db q"><div class="st-title">Enqueue scoring</div>
+            <ul><li><code>_enqueue_score_job()</code> → <code>score_prediction_workflow</code> <span class="op q">Q</span> <span class="op sys">SYS</span></li>
+            <li><code>mark_scoring_queued_step()</code> → <code>scoring_queued</code> <span class="op db">DB</span></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">enqueue ×1</span></div>
+
+    <div class="stage" data-stage data-tags="q">
+      <div class="lane k-queue">
+        <div class="lane-head"><span class="title"><span class="num">5</span>Scoring queue <span class="kind queue">QUEUE</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>…_encdec_scoring_&lt;hash&gt;</code> · <code>worker_concurrency=</code><b>32</b></span></div>
+        <div class="lane-body"><div class="step" data-tags="proc q"><div class="st-title">Throttled lower</div>
+          <ul><li>same worker on <b>both</b> queues (<code>QueueSelection.BOTH</code>)</li><li>lower cap — each step spawns subprocesses <span class="op proc">PROC</span></li></ul></div></div>
+      </div>
+    </div>
+    <div class="connector-h"><span class="arrow">▶</span><span class="lbl">dequeue</span></div>
+
+    <div class="stage wide" data-stage>
+      <div class="lane k-wf">
+        <div class="lane-head"><span class="title"><span class="num">6</span>Score workflow <span class="kind wf">WORKFLOW</span> <span class="samepill">same</span></span>
+          <span class="meta"><code>score_prediction_workflow</code> · <b class="warn">offline — no network</b></span></div>
+        <div class="lane-body steps">
+          <div class="step" data-tags="db proc"><div class="st-title"><code>score_prediction_step</code> <span class="kind step">STEP</span></div>
+            <ul><li><code>mark_scoring_started()</code> <span class="op db">DB</span> · <code>fetch_scoring_target()</code> (needs <code>generated</code>) <span class="op db">DB</span></li></ul>
+            <div class="checkpoint"><span>score_humaneval_prediction (local)</span><span class="ln"></span></div>
+            <ul>
+              <li><b>a.</b> <code>validate_python_source(raw)</code> ⇒ <code>raw_compile_ok</code></li>
+              <li><b>b.</b> <code>apply_cleaning()</code> — strip fences, split blocks, infer imports ⇒ candidates</li>
+              <li><b>c.</b> select first compiling candidate</li>
+              <li><b>d.</b> <code>evaluate_human_eval_code()</code> → per fn name <code>run_subprocess_batch()</code>:
+                <span class="note"><span class="op proc">PROC spawn</span> <code>subprocess.run([sys.executable,"-c",runner], input=json, timeout)</code></span>
+                <span class="note">untrusted code runs only in the child (stdin JSON). <code>timeout</code>=15s; <code>TimeoutExpired</code>⇒timeout. Process-isolation only.</span></li>
+              <li><b>e.</b> pass/fail ⇒ <code>score</code> 1.0/0.0 + status counts</li>
+              <li><b>f.</b> <code>compression_metrics()</code> (zlib/gzip/bz2/lzma/zstd, local) ⇒ ratios<span class="note">enc-dec compares <code>description</code> vs code</span></li>
+            </ul></div>
+          <div class="checkpoint"><span>checkpoint · ok ↓ / err → error step</span><span class="ln"></span></div>
+          <div class="step" data-tags="db"><div class="st-title"><code>record_score_success_step</code> <span class="kind step">STEP</span></div>
+            <ul><li>status → <code>scored</code>; writes score, eval counts, compression metrics <span class="op db">DB</span></li>
+            <li class="note">err: <code>record_score_error_step</code> → <code>score_(recoverable_)error</code></li></ul></div>
+        </div>
+      </div>
+    </div>
+    <div class="connector-h end"><span class="arrow">●</span><span class="lbl">scored</span></div>
+  </div>
+
+</div>
+
+<!-- ============ SCHEMA COMPARISON ============ -->
+<div class="section-label">// database schemas · result logging · direct vs enc-dec</div>
+<p class="schema-intro">The orchestration tables are identical across both pipelines; the <b>result-logging</b> tables diverge in their experiment <b>axes</b> and their <b>generation outputs</b>. Differences are highlighted below.</p>
+<div class="ctag-legend">
+  <span><span class="ctag pk">PK</span> primary key</span>
+  <span><span class="ctag fk">FK</span> foreign key</span>
+  <span><span class="ctag dim">DIM</span> experiment axis (part of the identity key)</span>
+  <span><span class="ctag extra">+</span> exists only in this pipeline / differs</span>
+</div>
+
+<div class="schema-wrap">
+
+  <!-- ===== DIRECT column ===== -->
+  <div class="schema-col direct">
+    <div class="colhead">Direct <span class="cp">prompt → code</span></div>
+
+    <div class="tbl">
+      <div class="tbl-head">dr_dspy_eval_experiments</div>
+      <div class="tbl-body">
+        <div class="col-row"><span class="cn">experiment_name<span class="ctag pk">PK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">script_kind</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">seed</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">sample_count</span><span class="ct">INT</span></div>
+        <div class="col-row extra"><span class="cn">instruction<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">metadata</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">created_at · updated_at</span><span class="ct">TS</span></div>
+      </div>
+    </div>
+
+    <div class="tbl">
+      <div class="tbl-head">dr_dspy_eval_predictions
+        <span class="pkn">UNIQUE(experiment_name, task_id, model, temperature, reasoning, repetition_seed)</span></div>
+      <div class="tbl-body">
+        <div class="tbl-group">identity &amp; axes</div>
+        <div class="col-row"><span class="cn">prediction_id<span class="ctag pk">PK</span></span><span class="ct">TEXT · hash</span></div>
+        <div class="col-row"><span class="cn">experiment_name<span class="ctag fk">FK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row dim"><span class="cn">model<span class="ctag dim">DIM</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row dim"><span class="cn">temperature<span class="ctag dim">DIM</span></span><span class="ct">FLOAT8</span></div>
+        <div class="col-row dim"><span class="cn">reasoning<span class="ctag dim">DIM</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">repetition_seed</span><span class="ct">INT</span></div>
+        <div class="tbl-group">task &amp; provenance</div>
+        <div class="col-row"><span class="cn">script_kind · submission_id</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">task_id · sample_index</span><span class="ct">TEXT·INT</span></div>
+        <div class="col-row"><span class="cn">prompt · test · entry_point</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">canonical_solution · ground_truth_code</span><span class="ct">TEXT</span></div>
+        <div class="tbl-group">generation</div>
+        <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">response_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">usage_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">provider_cost<span class="ctag extra">+</span></span><span class="ct">FLOAT8</span></div>
+        <div class="tbl-group">scoring (shared shape)</div>
+        <div class="col-row"><span class="cn">scoring_status · score</span><span class="ct">TEXT·FLOAT8</span></div>
+        <div class="col-row"><span class="cn">scoring_error · _failure_class · _exception_*</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">raw_code · raw_compile_ok · raw_compile_error</span><span class="ct">TEXT·BOOL</span></div>
+        <div class="col-row"><span class="cn">extraction_candidate_count · selected_candidate_index</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">extracted_compile_ok · _error · extraction_error</span><span class="ct">BOOL·TEXT</span></div>
+        <div class="col-row"><span class="cn">evaluation_function_names</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">evaluation_total_cases · _failure_count</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">evaluation_status_counts</span><span class="ct">JSONB</span></div>
+        <div class="tbl-group">compression (shared shape)</div>
+        <div class="col-row"><span class="cn">compression_metrics</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">raw_compression_ratio</span><span class="ct">FLOAT8</span></div>
+        <div class="col-row"><span class="cn">best_compression_ratio · _percent_reduction</span><span class="ct">FLOAT8</span></div>
+        <div class="tbl-group">timestamps (shared)</div>
+        <div class="col-row"><span class="cn">created_at · updated_at · generated_at · scored_at</span><span class="ct">TS</span></div>
+      </div>
+      <details class="ex">
+        <summary>Example logged row</summary>
+        <div class="ex-body">
+          <p class="ex-note">Illustrative — synthesized from the schema to show field shapes, not a live DB dump.</p>
+          <div class="ex-rec">
+            <div class="ex-rec-h">dr_dspy_eval_predictions · <span class="v"><span class="s">scored</span></span></div>
+            <div class="kv">
+              <span class="grp">identity &amp; axes</span>
+              <span class="k">prediction_id</span><span class="v"><span class="s">"3e9c…a7"</span></span>
+              <span class="k">experiment_name</span><span class="v"><span class="s">"humaneval_eval_only_dbos_v0"</span></span>
+              <span class="k">model</span><span class="v diffv"><span class="s">"openai/gpt-5.1-codex-mini"</span></span>
+              <span class="k">temperature</span><span class="v diffv"><span class="num">0.0</span></span>
+              <span class="k">reasoning</span><span class="v diffv">{}</span>
+              <span class="k">task_id · sample_index</span><span class="v"><span class="s">"HumanEval/0"</span> · <span class="num">0</span></span>
+              <span class="grp">generation</span>
+              <span class="k">generation_status</span><span class="v"><span class="s">"generated"</span></span>
+              <span class="k">raw_generation</span><span class="v">```python\ndef has_close_elements(numbers, threshold):\n    for i in range(len(numbers)):\n        for j in range(i+1, len(numbers)):\n            if abs(numbers[i]-numbers[j]) &lt; threshold:\n                return True\n    return False\n```</span>
+              <span class="k">usage_metadata</span><span class="v diffv">{"prompt_tokens":312,"completion_tokens":96}</span>
+              <span class="k">provider_cost</span><span class="v diffv"><span class="num">0.00021</span></span>
+              <span class="grp">scoring</span>
+              <span class="k">scoring_status · score</span><span class="v"><span class="s">"scored"</span> · <span class="num">1.0</span></span>
+              <span class="k">selected_candidate_index</span><span class="v"><span class="num">0</span></span>
+              <span class="k">evaluation_function_names</span><span class="v">["has_close_elements"]</span>
+              <span class="k">evaluation_total_cases · _failure_count</span><span class="v"><span class="num">9</span> · <span class="num">0</span></span>
+              <span class="k">evaluation_status_counts</span><span class="v">{"passed":9}</span>
+              <span class="k">raw_compression_ratio</span><span class="v"><span class="num">1.94</span></span>
+              <span class="k">scored_at</span><span class="v"><span class="s">2026-06-28T14:03:11Z</span></span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ===== ENC-DEC column ===== -->
+  <div class="schema-col encdec">
+    <div class="colhead">Enc-Dec <span class="cp">code → desc → code</span></div>
+
+    <div class="tbl">
+      <div class="tbl-head">dr_dspy_encdec_eval_experiments</div>
+      <div class="tbl-body">
+        <div class="col-row"><span class="cn">experiment_name<span class="ctag pk">PK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">script_kind</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">seed</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">sample_count</span><span class="ct">INT</span></div>
+        <div class="col-row extra"><span class="cn">encoder_instruction<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">decoder_instruction<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">metadata</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">created_at · updated_at</span><span class="ct">TS</span></div>
+      </div>
+    </div>
+
+    <div class="tbl">
+      <div class="tbl-head">dr_dspy_encdec_eval_predictions
+        <span class="pkn">UNIQUE(experiment_name, task_id, encoder_model, decoder_model, encoder_temperature, decoder_temperature, budget_ratio, encoder_reasoning, decoder_reasoning, repetition_seed)</span></div>
+      <div class="tbl-body">
+        <div class="tbl-group">identity &amp; axes</div>
+        <div class="col-row"><span class="cn">prediction_id<span class="ctag pk">PK</span></span><span class="ct">TEXT · hash</span></div>
+        <div class="col-row"><span class="cn">experiment_name<span class="ctag fk">FK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row dim"><span class="cn">encoder_model<span class="ctag dim">DIM</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row dim"><span class="cn">decoder_model<span class="ctag dim">DIM</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row dim"><span class="cn">encoder_temperature<span class="ctag dim">DIM</span></span><span class="ct">FLOAT8</span></div>
+        <div class="col-row dim"><span class="cn">decoder_temperature<span class="ctag dim">DIM</span></span><span class="ct">FLOAT8</span></div>
+        <div class="col-row dim"><span class="cn">budget_ratio<span class="ctag dim">DIM</span><span class="ctag extra">+</span></span><span class="ct">FLOAT8</span></div>
+        <div class="col-row dim"><span class="cn">encoder_reasoning<span class="ctag dim">DIM</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row dim"><span class="cn">decoder_reasoning<span class="ctag dim">DIM</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">repetition_seed</span><span class="ct">INT</span></div>
+        <div class="tbl-group">task &amp; provenance</div>
+        <div class="col-row"><span class="cn">script_kind · submission_id</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">task_id · sample_index</span><span class="ct">TEXT·INT</span></div>
+        <div class="col-row"><span class="cn">prompt · test · entry_point</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">canonical_solution · ground_truth_code</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">encoder_char_budget<span class="ctag extra">+</span></span><span class="ct">INT</span></div>
+        <div class="tbl-group">generation</div>
+        <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">generation_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">encoded_description<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">decoded_generation<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">encoder_response_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">decoder_response_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">encoder_usage_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">decoder_usage_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
+        <div class="col-row extra"><span class="cn">encoder_provider_cost · decoder_provider_cost<span class="ctag extra">+</span></span><span class="ct">FLOAT8</span></div>
+        <div class="col-row"><span class="cn">provider_cost</span><span class="ct">FLOAT8</span></div>
+        <div class="tbl-group">scoring (shared shape)</div>
+        <div class="col-row"><span class="cn">scoring_status · score</span><span class="ct">TEXT·FLOAT8</span></div>
+        <div class="col-row"><span class="cn">scoring_error · _failure_class · _exception_*</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">raw_code · raw_compile_ok · raw_compile_error</span><span class="ct">TEXT·BOOL</span></div>
+        <div class="col-row"><span class="cn">extraction_candidate_count · selected_candidate_index</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">extracted_compile_ok · _error · extraction_error</span><span class="ct">BOOL·TEXT</span></div>
+        <div class="col-row"><span class="cn">evaluation_function_names</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">evaluation_total_cases · _failure_count</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">evaluation_status_counts</span><span class="ct">JSONB</span></div>
+        <div class="tbl-group">compression (shared shape)</div>
+        <div class="col-row"><span class="cn">compression_metrics</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">raw_compression_ratio</span><span class="ct">FLOAT8</span></div>
+        <div class="col-row"><span class="cn">best_compression_ratio · _percent_reduction</span><span class="ct">FLOAT8</span></div>
+        <div class="tbl-group">timestamps (shared)</div>
+        <div class="col-row"><span class="cn">created_at · updated_at · generated_at · scored_at</span><span class="ct">TS</span></div>
+      </div>
+      <details class="ex">
+        <summary>Example logged row</summary>
+        <div class="ex-body">
+          <p class="ex-note">Illustrative — synthesized from the schema to show field shapes, not a live DB dump.</p>
+          <div class="ex-rec">
+            <div class="ex-rec-h">dr_dspy_encdec_eval_predictions · <span class="v"><span class="s">scored</span></span></div>
+            <div class="kv">
+              <span class="grp">identity &amp; axes</span>
+              <span class="k">prediction_id</span><span class="v"><span class="s">"b1d4…f2"</span></span>
+              <span class="k">experiment_name</span><span class="v"><span class="s">"humaneval_eval_only_encdec_dbos_v0"</span></span>
+              <span class="k">encoder_model</span><span class="v diffv"><span class="s">"openai/gpt-5.1-codex-mini"</span></span>
+              <span class="k">decoder_model</span><span class="v diffv"><span class="s">"openai/gpt-5.1-codex-mini"</span> <span class="nul">(self-pair)</span></span>
+              <span class="k">encoder_temperature · decoder_temperature</span><span class="v diffv"><span class="num">0.0</span> · <span class="num">0.0</span></span>
+              <span class="k">budget_ratio</span><span class="v diffv"><span class="num">0.5</span></span>
+              <span class="k">task_id</span><span class="v"><span class="s">"HumanEval/0"</span></span>
+              <span class="grp">generation (two-call)</span>
+              <span class="k">encoder_char_budget</span><span class="v diffv"><span class="num">96</span> <span class="nul">= max(50, round(0.5·len(code)))</span></span>
+              <span class="k">encoded_description</span><span class="v diffv">"Return True if any two distinct elements of `numbers` are within `threshold` (absolute difference), else False. Compare all unordered pairs."</span>
+              <span class="k">decoded_generation</span><span class="v">```python\ndef has_close_elements(numbers, threshold):\n    for i, a in enumerate(numbers):\n        for b in numbers[i+1:]:\n            if abs(a-b) &lt; threshold:\n                return True\n    return False\n```</span>
+              <span class="k">encoder_provider_cost · decoder_provider_cost</span><span class="v diffv"><span class="num">0.00018</span> · <span class="num">0.00026</span></span>
+              <span class="k">provider_cost</span><span class="v"><span class="num">0.00044</span> <span class="nul">(enc+dec)</span></span>
+              <span class="grp">scoring</span>
+              <span class="k">scoring_status · score</span><span class="v"><span class="s">"scored"</span> · <span class="num">1.0</span></span>
+              <span class="k">evaluation_status_counts</span><span class="v">{"passed":9}</span>
+              <span class="k">best_compression_ratio</span><span class="v diffv"><span class="num">3.10</span></span>
+              <span class="k">best_compression_percent_reduction</span><span class="v diffv"><span class="num">67.7</span></span>
+              <span class="k">scored_at</span><span class="v"><span class="s">2026-06-28T14:05:42Z</span></span>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div>
+</div>
+
+<!-- ===== shared orchestration ===== -->
+<div class="schema-shared">
+  <div class="tbl">
+    <div class="tbl-head"><span class="op db">DB</span> dr_dspy_batch_operations
+      <span class="pkn">shared by both pipelines · PRIMARY KEY(operation_kind, operation_key) · one row per submit / enqueue-scores / repair run</span></div>
+    <div class="tbl-body" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:0 8px;">
+      <div><div class="tbl-group">identity</div>
+        <div class="col-row"><span class="cn">operation_kind<span class="ctag pk">PK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">operation_key<span class="ctag pk">PK</span></span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">experiment_name</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">script_kind · workflow_id</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">attempt</span><span class="ct">INT</span></div>
+      </div>
+      <div><div class="tbl-group">spec &amp; progress</div>
+        <div class="col-row dim"><span class="cn">spec</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">metadata</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">total_items · next_offset</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">processed_count · inserted_count</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">enqueued_count · existing_workflow_count</span><span class="ct">INT</span></div>
+      </div>
+      <div><div class="tbl-group">progress &amp; status</div>
+        <div class="col-row"><span class="cn">marked_count · batch_count</span><span class="ct">INT</span></div>
+        <div class="col-row"><span class="cn">counters</span><span class="ct">JSONB</span></div>
+        <div class="col-row"><span class="cn">status · last_error</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">log_file</span><span class="ct">TEXT</span></div>
+        <div class="col-row"><span class="cn">created_at · updated_at · completed_at</span><span class="ct">TS</span></div>
+      </div>
+    </div>
+    <details class="ex">
+      <summary>Example row + the DBOS system DB (durability layer)</summary>
+      <div class="ex-body">
+        <p class="ex-note">Illustrative — synthesized from the schema to show field shapes, not a live DB dump.</p>
+        <div class="ex-rec">
+          <div class="ex-rec-h">dr_dspy_batch_operations · <span class="v"><span class="s">submit · completed</span></span></div>
+          <div class="kv">
+            <span class="k">operation_kind · operation_key</span><span class="v"><span class="s">"submit"</span> · <span class="s">"9f2c…"</span></span>
+            <span class="k">experiment_name</span><span class="v"><span class="s">"humaneval_eval_only_dbos_v0"</span></span>
+            <span class="k">workflow_id</span><span class="v"><span class="s">"…submit_dispatcher_v0/9f2c…"</span></span>
+            <span class="k">total_items · next_offset</span><span class="v"><span class="num">160</span> · <span class="num">160</span></span>
+            <span class="k">processed_count · inserted_count · enqueued_count</span><span class="v"><span class="num">160</span> · <span class="num">160</span> · <span class="num">160</span></span>
+            <span class="k">status</span><span class="v"><span class="s">"completed"</span></span>
+            <span class="k">spec</span><span class="v">{"seed":0,"sample_count":10,"temperatures":[0.0],"repetitions":1,"model_configs":[…16…],"score_timeout":15.0}</span>
+          </div>
+        </div>
+        <div class="ex-rec">
+          <div class="ex-rec-h">DBOS system DB · <span class="nul">framework-managed (schema owned by the DBOS library)</span></div>
+          <div class="kv">
+            <span class="grp">what it stores (not our DDL)</span>
+            <span class="k">dbos.workflow_status</span><span class="v">one row per workflow: id, name, status (PENDING/SUCCESS/ERROR), input/output, recovery attempts</span>
+            <span class="k">dbos.operation_outputs</span><span class="v">per-step checkpoints — the durability that lets a workflow resume mid-flight</span>
+            <span class="k">dbos.workflow_queue</span><span class="v">queue membership + <span class="s">worker_concurrency</span> for the generation / scoring queues</span>
+            <span class="k">connection</span><span class="v diffv">separate from the app DB (<span class="s">DBOS_SYSTEM_DATABASE_URL</span>)</span>
+          </div>
+        </div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<!-- ============ REFERENCE ============ -->
+<div class="section-label">// shared across both · where the process lives · resources · other ops · storage</div>
+<div class="gridN">
+
+  <div class="pane k-proc" data-stage data-tags="proc llm sys">
+    <div class="pane-title"><span class="kind proc">PROCESS</span> Worker process (<code>worker</code>)</div>
+    <div class="pane-body">
+      <p><code>run_worker_command()</code> — one long-lived process, blocks until halt:</p>
+      <ul>
+        <li><code>raise_open_file_limit()</code> — FD budget = <code>scoring_concurrency × fds_per_worker</code></li>
+        <li><code>configure_dbos_runtime()</code> — register queues w/ concurrency, reconcile via <code>UPDATE dbos.queues</code> <span class="op sys">SYS</span>, launch DBOS, listen on selected queues</li>
+        <li><code>configure_openrouter_client()</code> — per-process cached <code>httpx.Client</code>+<code>OpenAI</code>; pool sized from gen concurrency <span class="op llm">LLM pool</span></li>
+        <li>Postgres pool + <code>start_worker_monitor()</code> thread (polls predictions + <code>dbos.*</code>)</li>
+      </ul>
+      <p class="warn" style="margin-bottom:0">⚠ No persistent scoring pool. Scoring parallelism = scoring-queue concurrency; each score step spawns short-lived <code>subprocess.run</code> children (one per top-level fn name) and reaps them.</p>
+    </div>
+  </div>
+
+  <div class="pane k-meta">
+    <div class="pane-title">Concurrency budget</div>
+    <div class="pane-body">
+      <div class="cbar-row"><span class="nm">gen · direct</span><span class="cbar"><i style="width:100%"></i></span><span class="n">200</span></div>
+      <div class="cbar-row"><span class="nm">gen · enc-dec</span><span class="cbar"><i style="width:32%"></i></span><span class="n">64</span></div>
+      <div class="cbar-row"><span class="nm">scoring · both</span><span class="cbar"><i class="amber" style="width:16%"></i></span><span class="n">32</span></div>
+      <p class="subtle">Per-queue <code>worker_concurrency</code> (bars relative to 200). Generation is network-bound; scoring is CPU/process-bound, so it's kept low.</p>
+      <div class="checkpoint"><span>defaults per script</span><span class="ln"></span></div>
+      <ul style="margin:0;font-size:11.5px;">
+        <li><b>direct:</b> 10 samples · temps {0.0} · 1 rep · 16 models · 1000 tok</li>
+        <li><b>enc-dec:</b> 164 tasks · 7 budget ratios · 3 reps · self-paired models · 2000 tok</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="pane k-wf" data-stage data-tags="q db sys">
+    <div class="pane-title"><span class="kind wf">WORKFLOW</span> enqueue-scores</div>
+    <div class="pane-body">
+      <p><code>enqueue_scores_dispatcher_workflow</code> → loops <code>enqueue_scores_batch_step</code>:</p>
+      <ul>
+        <li><code>fetch_scoreable_prediction_ids()</code> (generated, not yet scored) <span class="op db">DB</span></li>
+        <li>re-enqueue <code>score_prediction_workflow</code> + mark queued <span class="op q">Q</span> <span class="op db">DB</span></li>
+        <li>completion: <b>PROCESSED_TOTAL_OR_EMPTY_BATCH</b></li>
+      </ul>
+      <p class="subtle" style="margin-bottom:0">Backfills scoring if the in-workflow enqueue was missed.</p>
+    </div>
+  </div>
+
+  <div class="pane k-wf" data-stage data-tags="q db sys">
+    <div class="pane-title"><span class="kind wf">WORKFLOW</span> repair</div>
+    <div class="pane-body">
+      <p><code>repair_dispatcher_workflow</code> → <code>repair_batch_step</code> → <code>apply_repair_batch()</code>:</p>
+      <ul>
+        <li>find failed/stuck rows, <code>reset_generation_errors_for_retry()</code> <span class="op db">DB</span></li>
+        <li>re-enqueue generation and/or scoring w/ fresh retry token <span class="op q">Q</span> <span class="op sys">SYS</span></li>
+        <li>separate <code>generation_limit</code> / <code>scoring_limit</code>; drain-to-empty</li>
+      </ul>
+      <p class="subtle" style="margin-bottom:0"><code>--apply</code> launches it; dry-run only reports counts.</p>
+    </div>
+  </div>
+
+  <div class="pane k-db">
+    <div class="pane-title"><span class="op db">DB</span> App Postgres</div>
+    <div class="pane-body">
+      <ul>
+        <li><code>*_eval_experiments</code> — one row per experiment</li>
+        <li><code>*_eval_predictions</code> — one row per prediction; <code>generation_status</code> + <code>scoring_status</code> state machines, outputs, usage/cost, score, metrics. PK = <code>prediction_id</code></li>
+        <li><code>dr_dspy_batch_operations</code> — dispatcher progress + <code>spec</code> (PK <code>operation_kind, operation_key</code>)</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="pane k-sys">
+    <div class="pane-title"><span class="op sys">SYS</span> DBOS system DB</div>
+    <div class="pane-body">
+      <ul>
+        <li><code>dbos.*</code> — workflow status + step checkpoints, queue tables + <code>worker_concurrency</code></li>
+        <li>separate connection (<code>DBOS_SYSTEM_DATABASE_URL</code>)</li>
+        <li>this is what makes the pipeline <b>resumable</b>: kill a worker mid-flight and DBOS recovers each workflow, skipping checkpointed steps</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="copy-handoff">
+  <button id="copyBtn" onclick="copySummary()">Copy flow summary</button>
+  <span id="copyState" aria-live="polite"></span>
+</div>
+
+<footer>
+  Generated view · static HTML · no app data embedded · pipelines: humaneval direct + enc-dec eval-only (DBOS).
+  Labels grounded in the source modules; concurrency &amp; defaults reflect the constants in each script.
+</footer>
+
+<script>
+var activeTags = new Set();
+var TAG = {
+  db:{c:'var(--db)',bg:'rgba(12,122,94,.20)'},
+  sys:{c:'var(--sys)',bg:'rgba(109,40,217,.20)'},
+  llm:{c:'var(--llm)',bg:'rgba(180,83,10,.22)'},
+  proc:{c:'var(--proc)',bg:'rgba(190,18,60,.20)'},
+  q:{c:'var(--q)',bg:'rgba(29,78,216,.18)'}
+};
+function applyFilter(){
+  var filtering = activeTags.size>0;
+  document.body.classList.toggle('filtering', filtering);
+  document.querySelectorAll('.step').forEach(function(step){
+    var tags = (step.dataset.tags||'').split(/\s+/);
+    var match = filtering && tags.some(function(t){return activeTags.has(t);});
+    step.classList.toggle('match', match);
+    if(match){var first = tags.find(function(t){return activeTags.has(t);});
+      step.style.setProperty('--hl', TAG[first].c);
+      step.style.setProperty('--hlbg', TAG[first].bg);}
+  });
+  document.querySelectorAll('[data-stage]').forEach(function(stage){
+    if(!filtering){stage.classList.remove('has-no-match');return;}
+    var stTags = (stage.dataset.tags||'').split(/\s+/);
+    var stageMatch = stTags.some(function(t){return activeTags.has(t);});
+    var childMatch = stage.querySelector('.step.match');
+    stage.classList.toggle('has-no-match', !stageMatch && !childMatch);
+  });
+}
+function toggleTag(tag,btn){
+  if(activeTags.has(tag)){activeTags.delete(tag);btn.setAttribute('aria-pressed','false');}
+  else{activeTags.add(tag);btn.setAttribute('aria-pressed','true');}
+  applyFilter();
+}
+function clearTags(){
+  activeTags.clear();
+  document.querySelectorAll('.tag').forEach(function(b){b.setAttribute('aria-pressed','false');});
+  applyFilter();
+}
+
+var SUMMARY = [
+'HumanEval eval-only — DBOS control flow (Direct vs Enc-Dec, stacked)',
+'',
+'Both pipelines are IDENTICAL except stage 4 (generation step internals) and the gen-queue concurrency.',
+'DBOS terms: @DBOS.workflow = durable orchestration (checkpointed, recoverable);',
+'@DBOS.step = durable retry unit; DBOS queue = work queue w/ worker_concurrency.',
+'',
+'1. DRIVER (submit CLI, consume_queues=False): upsert_experiment [DB], prepare_operation(SUBMIT) [DB],',
+'   start_workflow(submit_dispatcher) [SYS], then tail progress [DB read loop].',
+'2. SUBMIT DISPATCHER [workflow]: loop fetch_operation_progress [DB] -> submit_batch_step [step]:',
+'   build samples+jobs, insert_prediction_jobs [DB], enqueue generate_prediction_workflow x N [Q/SYS],',
+'   record_operation_batch_success [DB]. Completes at next_offset>=total (OFFSET_TOTAL).',
+'3. GENERATION QUEUE (DIFFERS): worker_concurrency 200 (direct) / 64 (enc-dec).',
+'4. GENERATION WORKFLOW (DIFFERS): generate_prediction_step [step, max_attempts=3]:',
+'   mark_started [DB], fetch_job [DB], then OpenRouter:',
+'     DIRECT  -> 1 LLM call (solve: prompt->code).',
+'     ENC-DEC -> 2 sequential LLM calls (encode code->description, decode description->code).',
+'   record_generation_success [DB] -> enqueue score_prediction_workflow [Q/SYS] -> mark_scoring_queued [DB].',
+'5. SCORING QUEUE: worker_concurrency 32 (both).',
+'6. SCORE WORKFLOW: score_prediction_step [step] (OFFLINE):',
+'   fetch_scoring_target [DB]; score_humaneval_prediction = validate -> clean/extract candidates ->',
+'   select compiling candidate -> evaluate_human_eval_code -> run_subprocess_batch:',
+'   subprocess.run([sys.executable,-c,runner], stdin=json, timeout) PER function name [PROCESS CREATION];',
+'   -> score 1/0 + status counts -> compression_metrics (local). record_score_success [DB].',
+'',
+'WORKER PROCESS (worker cmd): raises FD limit, registers queues, caches per-process OpenRouter http client,',
+'starts worker_monitor thread; listens on BOTH queues. NO persistent scoring pool -- subprocesses are',
+'short-lived per score step.',
+'',
+'OTHER OPS: enqueue-scores (backfill scoring) + repair (reset+re-enqueue failures); same dispatcher loop,',
+'PROCESSED_TOTAL_OR_EMPTY_BATCH completion.',
+'',
+'STORAGE: app Postgres (experiments / predictions / batch_operations) + DBOS system DB (dbos.* workflow+queue',
+'state, separate URL) -> resumable across worker restarts.'
+].join('\n');
+function copySummary(){
+  var done=function(){var s=document.getElementById('copyState');s.textContent='✓ copied plain-text summary';
+    setTimeout(function(){s.textContent='';},2600);};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(SUMMARY).then(done,fallback);}
+  else fallback();
+  function fallback(){var ta=document.createElement('textarea');ta.value=SUMMARY;document.body.appendChild(ta);
+    ta.select();try{document.execCommand('copy');}catch(e){}document.body.removeChild(ta);done();}
+}
+</script>
+</body>
+</html>
