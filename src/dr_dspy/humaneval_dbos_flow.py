@@ -145,6 +145,7 @@ def run_repair_command(
     score_timeout: float,
     apply: bool,
 ) -> None:
+    backend.create_schema(config.database_url)
     plan = backend.build_repair_plan(
         config.database_url,
         dbos_system_database_url=config.dbos_system_database_url,
@@ -155,9 +156,19 @@ def run_repair_command(
     counts = {
         "gen_stranded": len(plan.stranded_generations),
         "gen_errors": len(plan.generation_retry_prediction_ids),
+        "gen_legacy_errors": plan.generation_retry_summary.legacy_count,
+        "gen_recoverable_errors": (
+            plan.generation_retry_summary.recoverable_count
+        ),
+        "gen_excluded_errors": plan.generation_retry_summary.excluded_count,
         "score_pending": len(plan.pending_scoring_prediction_ids),
         "score_stranded": len(plan.stranded_scoring),
         "score_errors": len(plan.scoring_retry_prediction_ids),
+        "score_legacy_errors": plan.scoring_retry_summary.legacy_count,
+        "score_recoverable_errors": (
+            plan.scoring_retry_summary.recoverable_count
+        ),
+        "score_excluded_errors": plan.scoring_retry_summary.excluded_count,
     }
     operator_log(
         eval_reporting.repair_plan_line(
@@ -166,7 +177,13 @@ def run_repair_command(
         style=eval_reporting.repair_plan_style(apply=apply, **counts),
     )
     if not apply:
-        if any(counts.values()):
+        if (
+            counts["gen_stranded"]
+            or counts["gen_errors"]
+            or counts["score_pending"]
+            or counts["score_stranded"]
+            or counts["score_errors"]
+        ):
             operator_log(
                 "dry run only; rerun with --apply to reconcile statuses and "
                 "enqueue fresh retry workflows",
@@ -179,6 +196,7 @@ def run_repair_command(
         generation_limit=generation_limit,
         scoring_limit=scoring_limit,
         score_timeout=score_timeout,
+        plan=plan,
     )
     operator_log(
         eval_reporting.repair_apply_line(

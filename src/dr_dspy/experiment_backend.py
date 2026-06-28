@@ -167,6 +167,7 @@ class ExperimentBackend(Protocol):
         scoring_limit: int,
         score_timeout: float,
         repair_token: str | None = None,
+        plan: RepairPlan | None = None,
     ) -> RepairApplyResult: ...
 
     # --- status / analysis ---

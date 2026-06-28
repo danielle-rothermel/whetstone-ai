@@ -50,6 +50,11 @@ from dr_dspy.lm_utils import (
     LmEventBuffer,
     ModelConfig,
 )
+from dr_dspy.prediction_status import (
+    GENERATION_RETRY_STATUSES,
+    GenerationStatus,
+    ScoringStatus,
+)
 from dr_dspy.runtime import load_env_file
 from dr_dspy.scoring import (
     HumanEvalScoreResult,
@@ -1205,55 +1210,6 @@ def fetch_scoreable_prediction_ids(
     )
 
 
-def fetch_pending_scoring_prediction_ids(
-    database_url: str,
-    *,
-    experiment_name: str,
-    limit: int,
-) -> list[str]:
-    return shared_eval_repair.fetch_pending_scoring_prediction_ids(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        experiment_name=experiment_name,
-        order_columns=REPAIR_ORDER_COLUMNS,
-        limit=limit,
-    )
-
-
-def fetch_score_error_prediction_ids(
-    database_url: str,
-    *,
-    experiment_name: str,
-    limit: int,
-) -> list[str]:
-    return shared_eval_repair.fetch_score_error_prediction_ids(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        experiment_name=experiment_name,
-        order_columns=REPAIR_ORDER_COLUMNS,
-        limit=limit,
-    )
-
-
-def fetch_generation_error_prediction_jobs(
-    database_url: str,
-    *,
-    experiment_name: str,
-    limit: int,
-) -> list[PredictionJob]:
-    prediction_ids = shared_eval_repair.fetch_generation_error_prediction_ids(
-        database_url,
-        prediction_table=PREDICTION_TABLE_NAME,
-        experiment_name=experiment_name,
-        order_columns=REPAIR_ORDER_COLUMNS,
-        limit=limit,
-    )
-    return [
-        fetch_prediction_job(database_url, prediction_id)
-        for prediction_id in prediction_ids
-    ]
-
-
 def reset_generation_errors_for_retry(
     database_url: str,
     *,
@@ -1267,7 +1223,7 @@ def reset_generation_errors_for_retry(
                 """
                 UPDATE dr_dspy_eval_predictions
                 SET
-                    generation_status = 'pending',
+                    generation_status = %s,
                     generation_error = NULL,
                     generation_failure_class = NULL,
                     generation_exception_type = NULL,
@@ -1285,7 +1241,7 @@ def reset_generation_errors_for_retry(
                     usage_metadata = '{}'::jsonb,
                     provider_cost = NULL,
                     generated_at = NULL,
-                    scoring_status = 'pending',
+                    scoring_status = %s,
                     scoring_error = NULL,
                     scoring_failure_class = NULL,
                     scoring_exception_type = NULL,
@@ -1303,12 +1259,14 @@ def reset_generation_errors_for_retry(
                     updated_at = now()
                 WHERE
                     prediction_id = ANY(%s)
-                    AND generation_status IN (
-                        'generation_error',
-                        'generation_recoverable_error'
-                    )
+                    AND generation_status = ANY(%s)
                 """,
-                (list(prediction_ids),),
+                (
+                    GenerationStatus.PENDING.value,
+                    ScoringStatus.PENDING.value,
+                    list(prediction_ids),
+                    list(GENERATION_RETRY_STATUSES),
+                ),
             )
             return cur.rowcount if cur.rowcount is not None else 0
 
@@ -1576,6 +1534,7 @@ def apply_repair(
     scoring_limit: int,
     score_timeout: float,
     repair_token: str | None = None,
+    plan: shared_eval_repair.RepairPlan | None = None,
 ) -> shared_eval_repair.RepairApplyResult:
     return shared_eval_repair.apply_repair(
         config,
@@ -1617,6 +1576,7 @@ def apply_repair(
             )
         ),
         repair_token=repair_token,
+        plan=plan,
     )
 
 
@@ -2250,6 +2210,7 @@ class DirectExperiment:
         scoring_limit: int,
         score_timeout: float,
         repair_token: str | None = None,
+        plan: shared_eval_repair.RepairPlan | None = None,
     ) -> shared_eval_repair.RepairApplyResult:
         return apply_repair(
             config,
@@ -2258,6 +2219,7 @@ class DirectExperiment:
             scoring_limit=scoring_limit,
             score_timeout=score_timeout,
             repair_token=repair_token,
+            plan=plan,
         )
 
     def fetch_status_counts(

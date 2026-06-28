@@ -9,6 +9,7 @@ from dr_dspy import humaneval_dbos_flow as flow
 from dr_dspy.eval_reporting import (
     StatusDimension,
     analysis_markdown,
+    repair_plan_line,
     write_analysis_csv,
 )
 
@@ -80,6 +81,33 @@ def test_write_csv_flattens_dimensions(tmp_path: Path) -> None:
     lines = csv_path.read_text().splitlines()
     assert lines[0].startswith("model,temperature,sample_count,scored_count")
     assert lines[1].startswith("gpt,0.0,1,1,")
+
+
+def test_repair_plan_line_reports_retry_categories() -> None:
+    line = repair_plan_line(
+        experiment_name="exp",
+        gen_stranded=1,
+        gen_errors=2,
+        gen_legacy_errors=1,
+        gen_recoverable_errors=1,
+        gen_excluded_errors=3,
+        score_pending=4,
+        score_stranded=5,
+        score_errors=6,
+        score_legacy_errors=2,
+        score_recoverable_errors=4,
+        score_excluded_errors=7,
+        apply=False,
+    )
+
+    assert "gen_retry=" in line
+    assert "legacy=1" in line
+    assert "rec=1" in line
+    assert "skip=3" in line
+    assert "score_retry=" in line
+    assert "legacy=2" in line
+    assert "rec=4" in line
+    assert "skip=7" in line
 
 
 def test_summarize_groups_and_carries_dimensions() -> None:
