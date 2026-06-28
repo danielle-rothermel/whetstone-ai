@@ -473,7 +473,7 @@ def decoder_signature() -> type[dspy.Signature]:
     return _DECODER_SIGNATURE
 
 
-def operator_log(
+def _operator_log(
     line: str,
     *,
     style: str | None = None,
@@ -488,7 +488,7 @@ def operator_log(
     )
 
 
-def resolve_worker_log_path(
+def _resolve_worker_log_path(
     *,
     experiment_name: str,
     queue: shared_dbos.QueueSelection,
@@ -503,13 +503,13 @@ def resolve_worker_log_path(
     )
 
 
-def configure_worker_file_logging(log_file: Path) -> logging.Logger:
+def _configure_worker_file_logging(log_file: Path) -> logging.Logger:
     return shared_eval_logging.configure_worker_file_logging(
         log_file, logger_name=DETAILED_WORKER_LOGGER_NAME
     )
 
 
-def resolve_operation_log_path(
+def _resolve_operation_log_path(
     *,
     experiment_name: str,
     operation_kind: shared_batch.BatchOperationKind,
@@ -524,47 +524,47 @@ def resolve_operation_log_path(
     )
 
 
-def configure_operation_file_logging(log_file: Path) -> None:
+def _configure_operation_file_logging(log_file: Path) -> None:
     shared_batch.configure_operation_file_logging(
         log_file, logger_name=OPERATION_LOGGER_NAME
     )
 
 
-def emit_operation_log(event: str, payload: Mapping[str, Any]) -> None:
+def _emit_operation_log(event: str, payload: Mapping[str, Any]) -> None:
     shared_batch.emit_operation_log(
         event, payload, logger_name=OPERATION_LOGGER_NAME
     )
 
 
-def resolve_submit_log_path(
+def _resolve_submit_log_path(
     *, experiment_name: str, log_file: Path | None = None
 ) -> Path:
-    return resolve_operation_log_path(
+    return _resolve_operation_log_path(
         experiment_name=experiment_name,
         operation_kind=shared_batch.BatchOperationKind.SUBMIT,
         log_file=log_file,
     )
 
 
-def configure_submit_file_logging(log_file: Path) -> None:
+def _configure_submit_file_logging(log_file: Path) -> None:
     shared_batch.configure_operation_file_logging(
         log_file, logger_name=SUBMIT_LOGGER_NAME
     )
 
 
-def emit_submit_log(event: str, payload: Mapping[str, Any]) -> None:
+def _emit_submit_log(event: str, payload: Mapping[str, Any]) -> None:
     shared_batch.emit_operation_log(
         event, payload, logger_name=SUBMIT_LOGGER_NAME
     )
 
 
-def emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
+def _emit_worker_detail_log(event: str, payload: Mapping[str, Any]) -> None:
     shared_eval_logging.emit_worker_detail_log(
         event, payload, logger_name=DETAILED_WORKER_LOGGER_NAME
     )
 
 
-def prediction_context_from_job(
+def _prediction_context_from_job(
     job: EncDecJob,
 ) -> shared_eval_logging.PredictionLogContext:
     return shared_eval_logging.PredictionLogContext(
@@ -585,7 +585,7 @@ def prediction_context_from_job(
     )
 
 
-def emit_prediction_log_event(
+def _emit_prediction_log_event(
     event: str,
     context: shared_eval_logging.PredictionLogContext,
     *,
@@ -768,7 +768,7 @@ def upsert_experiment(
     sample_count: int,
     metadata: Mapping[str, Any],
 ) -> None:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -832,7 +832,7 @@ def insert_prediction_jobs(
         )
         for job in jobs
     ]
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.executemany(
                 """
@@ -944,7 +944,7 @@ def generate_code_for_job_with_client(
 
 
 def fetch_prediction_job(database_url: str, prediction_id: str) -> EncDecJob:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1001,11 +1001,11 @@ def fetch_prediction_log_context(
     database_url: str, prediction_id: str
 ) -> shared_eval_logging.PredictionLogContext:
     job = fetch_prediction_job(database_url, prediction_id)
-    return prediction_context_from_job(job)
+    return _prediction_context_from_job(job)
 
 
 def mark_generation_started(database_url: str, prediction_id: str) -> None:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1025,7 +1025,7 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
 def record_generation_success(
     database_url: str, result: GenerationResult
 ) -> None:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1078,7 +1078,7 @@ def record_generation_error(
         if summary.is_recoverable
         else "generation_error"
     )
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1107,7 +1107,7 @@ def record_generation_error(
 
 
 def mark_scoring_started(database_url: str, prediction_id: str) -> None:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1137,7 +1137,7 @@ def mark_scoring_queued(
 def fetch_scoring_target(
     database_url: str, prediction_id: str
 ) -> ScoringTarget:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1197,7 +1197,7 @@ def score_generated_code(
 
 
 def record_score_success(database_url: str, result: ScoreResult) -> None:
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1269,7 +1269,7 @@ def record_score_error(
         if summary.is_recoverable
         else "score_error"
     )
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1305,8 +1305,8 @@ def generate_prediction_step(
 ) -> GenerationResult:
     mark_generation_started(database_url, prediction_id)
     job = fetch_prediction_job(database_url, prediction_id)
-    emit_prediction_log_event(
-        "generation_started", prediction_context_from_job(job)
+    _emit_prediction_log_event(
+        "generation_started", _prediction_context_from_job(job)
     )
     return generate_code_for_job(job)
 
@@ -1316,7 +1316,7 @@ def record_generation_success_step(
     database_url: str, result: GenerationResult
 ) -> None:
     context = fetch_prediction_log_context(database_url, result.prediction_id)
-    emit_prediction_log_event(
+    _emit_prediction_log_event(
         "generation_succeeded",
         context,
         extra={
@@ -1333,7 +1333,7 @@ def record_generation_error_step(
     database_url: str, prediction_id: str, summary: FailureSummary
 ) -> None:
     context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
+    _emit_prediction_log_event(
         "generation_failed",
         context,
         extra=failure_summary_payload(summary),
@@ -1344,7 +1344,7 @@ def record_generation_error_step(
 @DBOS.step(name="humaneval_encdec_mark_scoring_queued_step_v0")
 def mark_scoring_queued_step(database_url: str, prediction_id: str) -> None:
     context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event("scoring_enqueued", context)
+    _emit_prediction_log_event("scoring_enqueued", context)
     mark_scoring_queued(database_url, [prediction_id])
 
 
@@ -1354,7 +1354,7 @@ def score_prediction_step(
 ) -> ScoreResult:
     mark_scoring_started(database_url, prediction_id)
     context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
+    _emit_prediction_log_event(
         "scoring_started", context, extra={"timeout": timeout}
     )
     return score_generated_code(
@@ -1365,7 +1365,7 @@ def score_prediction_step(
 @DBOS.step(name="humaneval_encdec_record_score_success_step_v0")
 def record_score_success_step(database_url: str, result: ScoreResult) -> None:
     context = fetch_prediction_log_context(database_url, result.prediction_id)
-    emit_prediction_log_event(
+    _emit_prediction_log_event(
         "scoring_succeeded",
         context,
         extra={"score": result.score, "scoring_error": result.error},
@@ -1378,7 +1378,7 @@ def record_score_error_step(
     database_url: str, prediction_id: str, summary: FailureSummary
 ) -> None:
     context = fetch_prediction_log_context(database_url, prediction_id)
-    emit_prediction_log_event(
+    _emit_prediction_log_event(
         "scoring_failed",
         context,
         extra=failure_summary_payload(summary),
@@ -1404,7 +1404,7 @@ def generate_prediction_workflow(
             if summary.is_recoverable
             else "generation_error"
         )
-    enqueue_score_job(
+    _enqueue_score_job(
         database_url,
         prediction_id,
         experiment_name=experiment_name,
@@ -1444,8 +1444,8 @@ def submit_dispatcher_workflow(
         operation_kind=shared_batch.BatchOperationKind.SUBMIT,
         operation_key=operation_key,
     )
-    configure_submit_file_logging(Path(progress.log_file))
-    emit_submit_log(
+    _configure_submit_file_logging(Path(progress.log_file))
+    _emit_submit_log(
         "submit_dispatcher_started",
         {
             "operation_key": operation_key,
@@ -1473,7 +1473,7 @@ def submit_dispatcher_workflow(
                     operation_kind=shared_batch.BatchOperationKind.SUBMIT,
                     operation_key=operation_key,
                 )
-                emit_submit_log(
+                _emit_submit_log(
                     "submit_dispatcher_completed",
                     {
                         "operation_key": operation_key,
@@ -1491,7 +1491,7 @@ def submit_dispatcher_workflow(
             operation_key=operation_key,
             error=error_text,
         )
-        emit_submit_log(
+        _emit_submit_log(
             "submit_dispatcher_failed",
             {"operation_key": operation_key, "error": error_text},
         )
@@ -1529,7 +1529,7 @@ def submit_batch_step(
         start_offset=progress.next_offset,
         limit=int(progress.metadata["batch_size"]),
     )
-    emit_submit_log(
+    _emit_submit_log(
         "submit_batch_started",
         {
             "operation_key": operation_key,
@@ -1539,11 +1539,11 @@ def submit_batch_step(
     )
     try:
         inserted = insert_prediction_jobs(database_url, jobs)
-        enqueue_result = enqueue_generation_jobs(
+        enqueue_result = _enqueue_generation_jobs(
             database_url, jobs, score_timeout=spec.score_timeout
         )
     except Exception as error:
-        emit_submit_log(
+        _emit_submit_log(
             "submit_batch_failed",
             {
                 "operation_key": operation_key,
@@ -1568,7 +1568,7 @@ def submit_batch_step(
         operation_key=operation_key,
         result=result,
     )
-    emit_submit_log(
+    _emit_submit_log(
         "submit_batch_succeeded", result.model_dump(mode="json")
     )
     return result
@@ -1587,8 +1587,8 @@ def enqueue_scores_dispatcher_workflow(
         operation_kind=operation_kind,
         operation_key=operation_key,
     )
-    configure_operation_file_logging(Path(progress.log_file))
-    emit_operation_log(
+    _configure_operation_file_logging(Path(progress.log_file))
+    _emit_operation_log(
         "enqueue_scores_dispatcher_started",
         {
             "operation_key": operation_key,
@@ -1632,7 +1632,7 @@ def enqueue_scores_dispatcher_workflow(
             operation_key=operation_key,
             error=error_text,
         )
-        emit_operation_log(
+        _emit_operation_log(
             "enqueue_scores_dispatcher_failed",
             {"operation_key": operation_key, "error": error_text},
         )
@@ -1666,7 +1666,7 @@ def enqueue_scores_batch_step(
         experiment_name=str(spec["experiment_name"]),
         limit=limit,
     )
-    emit_operation_log(
+    _emit_operation_log(
         "enqueue_scores_batch_started",
         {
             "operation_key": operation_key,
@@ -1674,7 +1674,7 @@ def enqueue_scores_batch_step(
             "remaining": remaining,
         },
     )
-    enqueue_result = enqueue_score_jobs(
+    enqueue_result = _enqueue_score_jobs(
         database_url,
         prediction_ids,
         experiment_name=str(spec["experiment_name"]),
@@ -1697,7 +1697,7 @@ def enqueue_scores_batch_step(
         operation_key=operation_key,
         result=result,
     )
-    emit_operation_log(
+    _emit_operation_log(
         "enqueue_scores_batch_succeeded", result.model_dump(mode="json")
     )
     return result
@@ -1714,8 +1714,8 @@ def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
         operation_kind=operation_kind,
         operation_key=operation_key,
     )
-    configure_operation_file_logging(Path(progress.log_file))
-    emit_operation_log(
+    _configure_operation_file_logging(Path(progress.log_file))
+    _emit_operation_log(
         "repair_dispatcher_started",
         {
             "operation_key": operation_key,
@@ -1759,7 +1759,7 @@ def repair_dispatcher_workflow(database_url: str, operation_key: str) -> str:
             operation_key=operation_key,
             error=error_text,
         )
-        emit_operation_log(
+        _emit_operation_log(
             "repair_dispatcher_failed",
             {"operation_key": operation_key, "error": error_text},
         )
@@ -1794,7 +1794,7 @@ def repair_batch_step(
     scoring_processed = int(progress.counters.get("scoring_processed", 0))
     remaining_generation = max(generation_limit - generation_processed, 0)
     remaining_scoring = max(scoring_limit - scoring_processed, 0)
-    emit_operation_log(
+    _emit_operation_log(
         "repair_batch_started",
         {
             "operation_key": operation_key,
@@ -1802,7 +1802,7 @@ def repair_batch_step(
             "remaining_scoring": remaining_scoring,
         },
     )
-    config = build_eval_dbos_config(
+    config = _build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=str(spec["dbos_system_database_url"]),
         generation_concurrency=int(spec["generation_concurrency"]),
@@ -1828,14 +1828,14 @@ def repair_batch_step(
                 prediction_ids=prediction_ids,
             )
         ),
-        enqueue_generation_jobs=lambda jobs, token: enqueue_generation_jobs(
+        enqueue_generation_jobs=lambda jobs, token: _enqueue_generation_jobs(
             config.database_url,
             jobs,
             score_timeout=float(spec["score_timeout"]),
             retry_token=token,
         ),
         enqueue_score_jobs=lambda prediction_ids, timeout, token: (
-            enqueue_score_jobs(
+            _enqueue_score_jobs(
                 config.database_url,
                 prediction_ids,
                 experiment_name=str(spec["experiment_name"]),
@@ -1899,7 +1899,7 @@ def repair_batch_step(
         operation_key=operation_key,
         result=result,
     )
-    emit_operation_log(
+    _emit_operation_log(
         "repair_batch_succeeded", result.model_dump(mode="json")
     )
     return result
@@ -1912,7 +1912,7 @@ def reset_generation_errors_for_retry(
 ) -> int:
     if not prediction_ids:
         return 0
-    with connect_db(database_url) as conn:
+    with shared_dbos.connect_db(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1987,7 +1987,7 @@ def fetch_scoreable_prediction_ids(
     )
 
 
-def build_repair_plan(
+def _build_repair_plan(
     database_url: str,
     *,
     dbos_system_database_url: str,
@@ -2013,34 +2013,20 @@ QUEUE_NAME_CONFIG = shared_dbos.QueueNameConfig(
     hash_length=EXPERIMENT_QUEUE_HASH_LENGTH,
 )
 
-QueueSelection = shared_dbos.QueueSelection
-EvalDbosConfig = shared_dbos.EvalDbosConfig
-DbPoolConfig = shared_dbos.DbPoolConfig
-OpenFileLimitResult = shared_dbos.OpenFileLimitResult
-DB_POOL_AUTO = shared_dbos.DB_POOL_AUTO
-DB_POOLS = shared_dbos.DB_POOLS
-connect_db = shared_dbos.connect_db
-close_db_connection_pools = shared_dbos.close_db_connection_pools
-WorkerMonitorConfig = shared_worker_monitor.WorkerMonitorConfig
-WorkerQueueSnapshot = shared_worker_monitor.WorkerQueueSnapshot
-open_file_limit_line = shared_dbos.open_file_limit_line
-open_file_limit_style = shared_dbos.open_file_limit_style
-
-
-def resolve_database_url(database_url: str | None) -> str:
+def _resolve_database_url(database_url: str | None) -> str:
     return shared_dbos.resolve_database_url(
         database_url,
         database_url_env=DATABASE_URL_ENV,
     )
 
 
-def build_eval_dbos_config(
+def _build_eval_dbos_config(
     *,
     database_url: str | None,
     dbos_system_database_url: str | None,
     generation_concurrency: int,
     scoring_concurrency: int,
-) -> EvalDbosConfig:
+) -> shared_dbos.EvalDbosConfig:
     return shared_dbos.build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
@@ -2051,22 +2037,7 @@ def build_eval_dbos_config(
     )
 
 
-def raise_open_file_limit(requested: int) -> OpenFileLimitResult:
-    return shared_dbos.raise_open_file_limit(requested)
-
-
-def configure_worker_db_connection_pools(
-    config: EvalDbosConfig,
-    *,
-    queue: QueueSelection,
-    raw_max_size: str,
-) -> DbPoolConfig:
-    return shared_dbos.configure_worker_db_connection_pools(
-        config, queue=queue, raw_max_size=raw_max_size
-    )
-
-
-def create_eval_schema(database_url: str) -> None:
+def _create_eval_schema(database_url: str) -> None:
     shared_dbos.create_schema(
         database_url,
         statements=(
@@ -2145,11 +2116,11 @@ def run_predictor(
     )
 
 
-def configure_dbos_runtime(
-    config: EvalDbosConfig,
+def _configure_dbos_runtime(
+    config: shared_dbos.EvalDbosConfig,
     *,
     experiment_name: str,
-    queue: QueueSelection | None = None,
+    queue: shared_dbos.QueueSelection | None = None,
     consume_queues: bool = True,
 ) -> None:
     shared_dbos.configure_dbos_runtime(
@@ -2159,12 +2130,12 @@ def configure_dbos_runtime(
         queue=queue,
         queue_config=QUEUE_NAME_CONFIG,
         consume_queues=consume_queues,
-        operator_log=operator_log,
+        operator_log=_operator_log,
     )
 
 
-def queue_names_for_selection(
-    selection: QueueSelection, *, experiment_name: str
+def _queue_names_for_selection(
+    selection: shared_dbos.QueueSelection, *, experiment_name: str
 ) -> tuple[str, ...]:
     return shared_dbos.queue_names_for_selection(
         selection,
@@ -2173,19 +2144,7 @@ def queue_names_for_selection(
     )
 
 
-def configure_pooled_worker_runtime(
-    config: EvalDbosConfig,
-    *,
-    experiment_name: str,
-    queue: QueueSelection,
-    raw_db_pool_max_size: str,
-) -> DbPoolConfig:
-    return configure_worker_db_connection_pools(
-        config, queue=queue, raw_max_size=raw_db_pool_max_size
-    )
-
-
-def enqueue_generation_jobs(
+def _enqueue_generation_jobs(
     database_url: str,
     jobs: Sequence[EncDecJob],
     *,
@@ -2202,7 +2161,7 @@ def enqueue_generation_jobs(
     )
 
 
-def enqueue_score_job(
+def _enqueue_score_job(
     database_url: str,
     prediction_id: str,
     *,
@@ -2221,7 +2180,7 @@ def enqueue_score_job(
     )
 
 
-def enqueue_score_jobs(
+def _enqueue_score_jobs(
     database_url: str,
     prediction_ids: Sequence[str],
     *,
@@ -2240,8 +2199,8 @@ def enqueue_score_jobs(
     )
 
 
-def start_worker_monitor(
-    config: WorkerMonitorConfig,
+def _start_worker_monitor(
+    config: shared_worker_monitor.WorkerMonitorConfig,
     stop_event: threading.Event,
     halt_event: threading.Event,
 ) -> threading.Thread:
@@ -2249,8 +2208,8 @@ def start_worker_monitor(
         config,
         stop_event,
         halt_event,
-        operator_log=operator_log,
-        emit_worker_detail_log=emit_worker_detail_log,
+        operator_log=_operator_log,
+        emit_worker_detail_log=_emit_worker_detail_log,
     )
 
 
@@ -2258,17 +2217,17 @@ class EncDecExperiment:
     prediction_table = PREDICTION_TABLE_NAME
 
     def create_schema(self, database_url: str) -> None:
-        create_eval_schema(database_url)
+        _create_eval_schema(database_url)
 
     def configure_runtime(
         self,
-        config: EvalDbosConfig,
+        config: shared_dbos.EvalDbosConfig,
         experiment_name: str,
         *,
-        queue: QueueSelection | None = None,
+        queue: shared_dbos.QueueSelection | None = None,
         consume_queues: bool = True,
     ) -> None:
-        configure_dbos_runtime(
+        _configure_dbos_runtime(
             config,
             experiment_name=experiment_name,
             queue=queue,
@@ -2284,7 +2243,7 @@ class EncDecExperiment:
         generation_limit: int,
         scoring_limit: int,
     ) -> shared_eval_repair.RepairPlan:
-        return build_repair_plan(
+        return _build_repair_plan(
             database_url,
             dbos_system_database_url=dbos_system_database_url,
             experiment_name=experiment_name,
@@ -2294,23 +2253,25 @@ class EncDecExperiment:
 
     def configure_pooled_worker_runtime(
         self,
-        config: EvalDbosConfig,
+        config: shared_dbos.EvalDbosConfig,
         *,
         experiment_name: str,
-        queue: QueueSelection,
+        queue: shared_dbos.QueueSelection,
         raw_db_pool_max_size: str,
-    ) -> DbPoolConfig:
-        return configure_pooled_worker_runtime(
+    ) -> shared_dbos.DbPoolConfig:
+        return shared_dbos.configure_worker_db_connection_pools(
             config,
-            experiment_name=experiment_name,
             queue=queue,
-            raw_db_pool_max_size=raw_db_pool_max_size,
+            raw_max_size=raw_db_pool_max_size,
         )
 
     def queue_names_for_selection(
-        self, selection: QueueSelection, *, experiment_name: str
+        self,
+        selection: shared_dbos.QueueSelection,
+        *,
+        experiment_name: str,
     ) -> tuple[str, ...]:
-        return queue_names_for_selection(
+        return _queue_names_for_selection(
             selection, experiment_name=experiment_name
         )
 
@@ -2318,23 +2279,23 @@ class EncDecExperiment:
         self,
         *,
         experiment_name: str,
-        queue: QueueSelection,
+        queue: shared_dbos.QueueSelection,
         log_file: Path | None,
     ) -> Path:
-        return resolve_worker_log_path(
+        return _resolve_worker_log_path(
             experiment_name=experiment_name, queue=queue, log_file=log_file
         )
 
     def configure_worker_file_logging(self, log_file: Path) -> logging.Logger:
-        return configure_worker_file_logging(log_file)
+        return _configure_worker_file_logging(log_file)
 
     def start_worker_monitor(
         self,
-        monitor_config: WorkerMonitorConfig,
+        monitor_config: shared_worker_monitor.WorkerMonitorConfig,
         stop_event: threading.Event,
         halt_event: threading.Event,
     ) -> threading.Thread:
-        return start_worker_monitor(monitor_config, stop_event, halt_event)
+        return _start_worker_monitor(monitor_config, stop_event, halt_event)
 
 
 _BACKEND = EncDecExperiment()
@@ -2353,8 +2314,8 @@ def init_db(
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     load_optional_env_file(env_file)
-    create_eval_schema(resolve_database_url(database_url))
-    operator_log("initialized enc-dec eval schema")
+    _create_eval_schema(_resolve_database_url(database_url))
+    _operator_log("initialized enc-dec eval schema")
 
 
 @_APP.command()
@@ -2417,7 +2378,7 @@ def submit(
         else experiment.default_subprocess_timeout
     )
     load_optional_env_file(env_file)
-    config = build_eval_dbos_config(
+    config = _build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=generation_concurrency,
@@ -2455,7 +2416,7 @@ def submit(
         "repetitions": repetitions,
         "score_timeout": score_timeout,
     }
-    operator_log(
+    _operator_log(
         f"planned {total_jobs} jobs: samples={len(samples)}, "
         f"model_pairs={len(model_pairs)}, "
         f"encoder_temperatures={len(metadata['encoder_temperatures'])}, "
@@ -2465,16 +2426,16 @@ def submit(
         style="cyan",
     )
     if dry_run:
-        operator_log(
+        _operator_log(
             "dry run only; no rows written and no workflows enqueued",
             style="yellow",
         )
         return
 
-    resolved_log_file = resolve_submit_log_path(
+    resolved_log_file = _resolve_submit_log_path(
         experiment_name=experiment_name
     )
-    create_eval_schema(config.database_url)
+    _create_eval_schema(config.database_url)
     upsert_experiment(
         config.database_url,
         experiment_name=experiment_name,
@@ -2494,8 +2455,8 @@ def submit(
         log_file=resolved_log_file,
     )
     active_log_file = Path(progress.log_file)
-    configure_submit_file_logging(active_log_file)
-    emit_submit_log(
+    _configure_submit_file_logging(active_log_file)
+    _emit_submit_log(
         "submit_planned",
         {
             "operation_key": operation_key,
@@ -2505,7 +2466,7 @@ def submit(
             "metadata": metadata,
         },
     )
-    configure_dbos_runtime(
+    _configure_dbos_runtime(
         config, experiment_name=experiment_name, consume_queues=False
     )
     launched = shared_batch.ensure_operation_workflow(
@@ -2514,7 +2475,7 @@ def submit(
         database_url=config.database_url,
         operation_key=operation_key,
     )
-    emit_submit_log(
+    _emit_submit_log(
         "submit_dispatcher_enqueued",
         {
             "operation_key": operation_key,
@@ -2523,14 +2484,14 @@ def submit(
             "log_file": str(active_log_file),
         },
     )
-    operator_log(f"submit detail log: {active_log_file}", style="cyan")
+    _operator_log(f"submit detail log: {active_log_file}", style="cyan")
     final_progress = shared_batch.tail_operation_progress(
         database_url=config.database_url,
         operation_kind=shared_batch.BatchOperationKind.SUBMIT,
         operation_key=operation_key,
         prediction_table=PREDICTION_TABLE_NAME,
         experiment_name=experiment_name,
-        operator_log=operator_log,
+        operator_log=_operator_log,
     )
     if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
         raise typer.Exit(code=1)
@@ -2541,7 +2502,9 @@ def worker(
     experiment_name: Annotated[str, typer.Option()],
     database_url: Annotated[str | None, typer.Option()] = None,
     dbos_system_database_url: Annotated[str | None, typer.Option()] = None,
-    queue: Annotated[QueueSelection, typer.Option()] = QueueSelection.BOTH,
+    queue: Annotated[
+        shared_dbos.QueueSelection, typer.Option()
+    ] = shared_dbos.QueueSelection.BOTH,
     generation_concurrency: Annotated[
         int, typer.Option()
     ] = DEFAULT_GENERATION_CONCURRENCY,
@@ -2589,11 +2552,11 @@ def worker(
                 "match active queue capacity plus a small margin."
             ),
         ),
-    ] = DB_POOL_AUTO,
+    ] = shared_dbos.DB_POOL_AUTO,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     load_optional_env_file(env_file)
-    config = build_eval_dbos_config(
+    config = _build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=generation_concurrency,
@@ -2642,13 +2605,13 @@ def enqueue_scores_command(
         else experiment_config().default_subprocess_timeout
     )
     load_optional_env_file(env_file)
-    config = build_eval_dbos_config(
+    config = _build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=generation_concurrency,
         scoring_concurrency=scoring_concurrency,
     )
-    create_eval_schema(config.database_url)
+    _create_eval_schema(config.database_url)
     resolved_operation_key = operation_key or shared_batch.new_operation_key()
     operation_kind = shared_batch.BatchOperationKind.ENQUEUE_SCORES
     spec = {
@@ -2657,7 +2620,7 @@ def enqueue_scores_command(
         "timeout": timeout,
         "batch_size": batch_size,
     }
-    log_file = resolve_operation_log_path(
+    log_file = _resolve_operation_log_path(
         experiment_name=experiment_name,
         operation_kind=operation_kind,
     )
@@ -2672,8 +2635,8 @@ def enqueue_scores_command(
         total_items=limit,
         log_file=log_file,
     )
-    configure_operation_file_logging(Path(progress.log_file))
-    configure_dbos_runtime(
+    _configure_operation_file_logging(Path(progress.log_file))
+    _configure_dbos_runtime(
         config, experiment_name=experiment_name, consume_queues=False
     )
     launched = shared_batch.ensure_operation_workflow(
@@ -2682,7 +2645,7 @@ def enqueue_scores_command(
         database_url=config.database_url,
         operation_key=resolved_operation_key,
     )
-    emit_operation_log(
+    _emit_operation_log(
         "enqueue_scores_dispatcher_enqueued",
         {
             "operation_key": resolved_operation_key,
@@ -2697,7 +2660,7 @@ def enqueue_scores_command(
         operation_key=resolved_operation_key,
         prediction_table=PREDICTION_TABLE_NAME,
         experiment_name=experiment_name,
-        operator_log=operator_log,
+        operator_log=_operator_log,
     )
     if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
         raise typer.Exit(code=1)
@@ -2734,7 +2697,7 @@ def repair(
         else experiment_config().default_subprocess_timeout
     )
     load_optional_env_file(env_file)
-    config = build_eval_dbos_config(
+    config = _build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=generation_concurrency,
@@ -2751,7 +2714,7 @@ def repair(
         )
         return
 
-    create_eval_schema(config.database_url)
+    _create_eval_schema(config.database_url)
     operation_kind = shared_batch.BatchOperationKind.REPAIR
     spec = {
         "experiment_name": experiment_name,
@@ -2765,7 +2728,7 @@ def repair(
         "scoring_concurrency": config.scoring_concurrency,
     }
     resolved_operation_key = operation_key or shared_batch.operation_key(spec)
-    log_file = resolve_operation_log_path(
+    log_file = _resolve_operation_log_path(
         experiment_name=experiment_name,
         operation_kind=operation_kind,
     )
@@ -2780,8 +2743,8 @@ def repair(
         total_items=generation_limit + scoring_limit,
         log_file=log_file,
     )
-    configure_operation_file_logging(Path(progress.log_file))
-    configure_dbos_runtime(
+    _configure_operation_file_logging(Path(progress.log_file))
+    _configure_dbos_runtime(
         config, experiment_name=experiment_name, consume_queues=False
     )
     launched = shared_batch.ensure_operation_workflow(
@@ -2790,7 +2753,7 @@ def repair(
         database_url=config.database_url,
         operation_key=resolved_operation_key,
     )
-    emit_operation_log(
+    _emit_operation_log(
         "repair_dispatcher_enqueued",
         {
             "operation_key": resolved_operation_key,
@@ -2805,7 +2768,7 @@ def repair(
         operation_key=resolved_operation_key,
         prediction_table=PREDICTION_TABLE_NAME,
         experiment_name=experiment_name,
-        operator_log=operator_log,
+        operator_log=_operator_log,
     )
     if final_progress.status is shared_batch.BatchOperationStatus.FAILED:
         raise typer.Exit(code=1)
