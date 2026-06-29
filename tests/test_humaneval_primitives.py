@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import patch
+
 import pytest
 
 from dr_dspy.humaneval.code_extraction import (
@@ -16,12 +19,14 @@ from dr_dspy.humaneval.sampling import sample_human_eval_tasks_from_rows
 from dr_dspy.humaneval.scoring import (
     GeneratedCodeOutcome,
     score_generated_code_for_humaneval,
+    score_humaneval_prediction,
 )
 from dr_dspy.humaneval.task import (
     EvaluationCaseStatus,
     HumanEvalTask,
     evaluate_human_eval_code,
     parse_human_eval_tests,
+    run_subprocess_batch,
 )
 
 
@@ -59,6 +64,19 @@ def _input_result_test() -> str:
         "    for inp, expected in zip(inputs, results):\n"
         "        assertion(candidate(*inp), expected)\n"
     )
+
+
+class _CompletedProcessStub:
+    def __init__(
+        self,
+        *,
+        stdout: str,
+        stderr: str = "",
+        returncode: int = 0,
+    ) -> None:
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
 
 
 def test_sampling_from_rows_is_deterministic_and_indexed() -> None:
@@ -216,6 +234,33 @@ def test_score_generated_code_passes_humaneval_task() -> None:
     assert "failures" not in summary.model_dump(mode="json")
 
 
+def test_score_humaneval_prediction_flattens_score_and_compression() -> None:
+    result = score_humaneval_prediction(
+        prediction_id="prediction-1",
+        raw_generation="def add_one(x):\n    return x + 1\n",
+        task=_task(),
+        compression_input="short description",
+        ground_truth_code="def add_one(x):\n    return x + 1\n",
+        timeout=2.0,
+    )
+
+    assert result.prediction_id == "prediction-1"
+    assert result.generated_code_outcome is GeneratedCodeOutcome.PASSED
+    assert result.score == 1.0
+    assert result.error is None
+    assert result.raw_code == "def add_one(x):\n    return x + 1"
+    assert result.raw_compile_ok is True
+    assert result.extracted_compile_ok is True
+    assert result.evaluation_function_names == ["add_one"]
+    assert result.evaluation_total_cases == 2
+    assert result.evaluation_failure_count == 0
+    assert result.evaluation_status_counts == {"passed": 2}
+    assert set(result.compression_metrics) == set(CompressionMethod)
+    assert result.raw_compression_ratio is not None
+    assert result.best_compression_ratio is not None
+    assert result.best_compression_percent_reduction is not None
+
+
 def test_score_generated_code_reports_wrong_answer_as_domain_result() -> None:
     result = score_generated_code_for_humaneval(
         raw_generation="def add_one(x):\n    return x\n",
@@ -300,6 +345,27 @@ def test_evaluate_humaneval_code_reports_timeout_per_case() -> None:
     assert result.passed is False
     assert result.status_counts == {"timeout": 2}
     assert {case.case_id for case in result.results} == {"case_0", "case_1"}
+
+
+def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(
+            stdout='[{"case_id": "case_0", "status": "nonsense"}]',
+        )
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        results = run_subprocess_batch(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            function_name="add_one",
+            timeout_seconds=2.0,
+        )
+
+    assert {result.case_id for result in results} == {"case_0", "case_1"}
+    assert {result.status for result in results} == {
+        EvaluationCaseStatus.ERROR
+    }
+    assert all("Invalid runner output" in result.message for result in results)
 
 
 def test_compression_metrics_are_stable_for_methods_and_ratios() -> None:
