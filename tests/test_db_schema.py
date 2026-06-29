@@ -19,7 +19,11 @@ def test_schema_primary_keys_match_contract() -> None:
         schema.GENERATION_RUNS_TABLE: ("generation_run_id",),
         schema.NODE_ATTEMPTS_TABLE: ("node_attempt_id",),
         schema.SCORE_ATTEMPTS_TABLE: ("score_attempt_id",),
-        schema.PREDICTION_PROJECTION_TABLE: ("prediction_id",),
+        schema.PREDICTION_PROJECTION_TABLE: (
+            "prediction_id",
+            "projection_profile_id",
+            "projection_version",
+        ),
         schema.BATCH_SUBMIT_OPERATIONS_TABLE: ("operation_key",),
         schema.BATCH_SUBMIT_ITEMS_TABLE: ("batch_submit_item_id",),
     }
@@ -75,6 +79,18 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
     )
     assert "ck_dr_dspy_score_attempts_generated_code_outcome" in (
         _constraint_names(schema.score_attempts, CheckConstraint)
+    )
+    assert "ck_dr_dspy_node_attempts_status_payload" in _constraint_names(
+        schema.node_attempts,
+        CheckConstraint,
+    )
+    assert "ck_dr_dspy_score_attempts_status_payload" in _constraint_names(
+        schema.score_attempts,
+        CheckConstraint,
+    )
+    assert "ck_dr_dspy_projection_has_selection" in _constraint_names(
+        schema.prediction_projection,
+        CheckConstraint,
     )
     node_status_check = next(
         constraint

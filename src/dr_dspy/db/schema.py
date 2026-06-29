@@ -177,6 +177,11 @@ node_attempts = Table(
         name="ck_dr_dspy_node_attempts_status",
     ),
     CheckConstraint(
+        "(status != 'success' OR output IS NOT NULL) "
+        "AND (status != 'error' OR failure IS NOT NULL)",
+        name="ck_dr_dspy_node_attempts_status_payload",
+    ),
+    CheckConstraint(
         "completed_at >= started_at",
         name="ck_dr_dspy_node_attempts_time_order",
     ),
@@ -222,6 +227,11 @@ score_attempts = Table(
         name="ck_dr_dspy_score_attempts_status",
     ),
     CheckConstraint(
+        "(status != 'success' OR score IS NOT NULL) "
+        "AND (status != 'error' OR failure IS NOT NULL)",
+        name="ck_dr_dspy_score_attempts_status_payload",
+    ),
+    CheckConstraint(
         "generated_code_outcome IS NULL OR "
         f"({enum_check('generated_code_outcome', GeneratedCodeOutcome)})",
         name="ck_dr_dspy_score_attempts_generated_code_outcome",
@@ -264,10 +274,14 @@ prediction_projection = Table(
         Text,
         ForeignKey(f"{SCORE_ATTEMPTS_TABLE}.score_attempt_id"),
     ),
-    Column("projection_profile_id", Text, nullable=False),
-    Column("projection_version", Text, nullable=False),
+    Column("projection_profile_id", Text, primary_key=True),
+    Column("projection_version", Text, primary_key=True),
     Column("selected_at", DateTime(timezone=True), nullable=False),
     Column("selection_reason", Text),
+    CheckConstraint(
+        "generation_run_id IS NOT NULL OR score_attempt_id IS NOT NULL",
+        name="ck_dr_dspy_projection_has_selection",
+    ),
 )
 
 batch_submit_operations = Table(

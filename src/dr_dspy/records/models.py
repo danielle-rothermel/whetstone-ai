@@ -152,7 +152,7 @@ class GenerationTerminalErrorPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: StrictStr
-    status: GenerationRunStatus | NodeAttemptStatus
+    status: GenerationRunStatus
     failure: FailureMetadataPayload | None = None
     blocked_by: tuple[StrictStr, ...] = ()
 

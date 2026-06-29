@@ -373,6 +373,8 @@ The active backoff state is operational state, not scientific output state. It
 can live in DBOS-managed scheduling state or a small operational throttle table
 if DBOS needs an app-visible coordination point. If retries are exhausted, the
 terminal node failure is persisted as a normal append-only error outcome.
+The initial v1 schema intentionally omits a throttle-state table; add one in
+the scheduling/backoff phase only if DBOS does not provide enough coordination.
 
 ### Store score attempts as append-only outcomes
 

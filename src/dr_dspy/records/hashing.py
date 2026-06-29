@@ -1,19 +1,12 @@
-from __future__ import annotations
-
-import hashlib
-import json
 from typing import Any
 
+from dr_dspy.hashing import canonical_json as canonical_json
+from dr_dspy.hashing import sha256_json_digest
 from dr_dspy.records.models import DimensionsPayload
 
-TEXT_ENCODING = "utf-8"
 PREDICTION_ID_DIGEST_LENGTH = 24
 DIMENSIONS_DIGEST_LENGTH = 16
 FAIR_ORDER_DIGEST_LENGTH = 32
-
-
-def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
 def dimensions_digest(
@@ -87,6 +80,4 @@ def fair_order_key(
 
 
 def _sha256_digest(value: Any, *, length: int) -> str:
-    raw = canonical_json(value)
-    digest = hashlib.sha256(raw.encode(TEXT_ENCODING)).hexdigest()
-    return digest[:length]
+    return sha256_json_digest(value, length=length)
