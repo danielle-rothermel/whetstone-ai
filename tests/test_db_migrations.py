@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any
+from typing import Any, cast
 
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_mock_engine
 
@@ -28,7 +30,8 @@ def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
             str(sql.compile(dialect=engine.dialect))
         ),
     )
-    monkeypatch.setattr(migration.op, "get_bind", lambda: engine)
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
 
     migration.upgrade()
     migration.downgrade()

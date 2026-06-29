@@ -30,6 +30,7 @@ from dr_dspy.records import (
     TaskSnapshotPayload,
     TextMetricsPayload,
     dimensions_digest,
+    stable_prediction_id,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -69,7 +70,16 @@ def _direct_graph() -> GraphSpec:
 
 def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
     graph = _direct_graph()
+    graph_id = graph_digest(graph)
     dimensions = DimensionsPayload(values={"budget_ratio": 0.5})
+    dimensions_id = dimensions_digest(dimensions)
+    prediction_id = stable_prediction_id(
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        graph_digest=graph_id,
+        dimensions_digest=dimensions_id,
+        repetition_seed=0,
+    )
     encoder = ProviderConfigRef(
         provider_kind=ProviderKind.OPENROUTER,
         endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
@@ -83,17 +93,17 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
         throttle_key="openai:responses:decoder-model",
     )
     record = PredictionSpecRecord(
-        prediction_id="prediction-1",
+        prediction_id=prediction_id,
         experiment_name="exp",
         task_id="HumanEval/0",
         repetition_seed=0,
         graph=GraphSnapshotPayload(
             graph=graph,
-            graph_digest=graph_digest(graph),
+            graph_digest=graph_id,
             layout="encdec",
         ),
         dimensions=dimensions,
-        dimensions_digest=dimensions_digest(dimensions),
+        dimensions_digest=dimensions_id,
         task=TaskSnapshotPayload(
             task_id="HumanEval/0",
             inputs=TaskInputsPayload(values={"prompt": "write add"}),

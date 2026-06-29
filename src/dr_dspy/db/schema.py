@@ -177,8 +177,8 @@ node_attempts = Table(
         name="ck_dr_dspy_node_attempts_status",
     ),
     CheckConstraint(
-        "(status != 'success' OR output IS NOT NULL) "
-        "AND (status != 'error' OR failure IS NOT NULL)",
+        "(status != 'success' OR (output IS NOT NULL AND failure IS NULL)) "
+        "AND (status != 'error' OR (failure IS NOT NULL AND output IS NULL))",
         name="ck_dr_dspy_node_attempts_status_payload",
     ),
     CheckConstraint(
@@ -227,8 +227,15 @@ score_attempts = Table(
         name="ck_dr_dspy_score_attempts_status",
     ),
     CheckConstraint(
-        "(status != 'success' OR score IS NOT NULL) "
-        "AND (status != 'error' OR failure IS NOT NULL)",
+        "(status != 'success' OR (score IS NOT NULL AND failure IS NULL)) "
+        "AND (status != 'error' OR ("
+        "failure IS NOT NULL "
+        "AND score IS NULL "
+        "AND generated_code_outcome IS NULL "
+        "AND extracted_code IS NULL "
+        "AND metrics IS NULL "
+        "AND per_test_results = '[]'::jsonb"
+        "))",
         name="ck_dr_dspy_score_attempts_status_payload",
     ),
     CheckConstraint(

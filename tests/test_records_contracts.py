@@ -194,6 +194,14 @@ def test_prediction_spec_validates_dimensions_digest() -> None:
         PredictionSpecRecord.model_validate(dumped)
 
 
+def test_prediction_spec_validates_stable_prediction_id() -> None:
+    dumped = _prediction_spec().model_dump(mode="json")
+    dumped["prediction_id"] = "wrong"
+
+    with pytest.raises(ValidationError, match="prediction_id"):
+        PredictionSpecRecord.model_validate(dumped)
+
+
 def test_provider_config_ref_converts_from_runtime_provider_config() -> None:
     runtime_config = openai_responses_config(model="gpt-test")
 
@@ -377,6 +385,31 @@ def test_successful_node_attempt_requires_output() -> None:
     }
 
 
+def test_node_attempt_success_and_error_payloads_are_exclusive() -> None:
+    success = {
+        "node_attempt_id": "node-attempt-1",
+        "generation_run_id": "run-1",
+        "prediction_id": "prediction-1",
+        "node_id": "direct",
+        "attempt_index": 0,
+        "status": "success",
+        "output": {"values": {"output": "ok"}},
+        "failure": _failure().model_dump(mode="json"),
+        "started_at": NOW,
+        "completed_at": NOW,
+    }
+    error = {
+        **success,
+        "status": "error",
+        "failure": _failure().model_dump(mode="json"),
+    }
+
+    with pytest.raises(ValidationError, match="cannot have failure"):
+        NodeAttemptRecord.model_validate(success)
+    with pytest.raises(ValidationError, match="cannot have output"):
+        NodeAttemptRecord.model_validate(error)
+
+
 def test_score_attempt_success_and_error_shapes() -> None:
     success = ScoreAttemptRecord(
         score_attempt_id="score-1",
@@ -428,6 +461,33 @@ def test_score_attempt_success_and_error_shapes() -> None:
             started_at=NOW,
             completed_at=NOW,
         )
+
+
+def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
+    success = {
+        "score_attempt_id": "score-1",
+        "prediction_id": "prediction-1",
+        "generation_run_id": "run-1",
+        "scoring_profile_id": "humaneval",
+        "scoring_profile_version": "v1",
+        "parser_profile_id": "best-effort",
+        "parser_version": "v1",
+        "status": "success",
+        "score": 1.0,
+        "failure": _failure().model_dump(mode="json"),
+        "started_at": NOW,
+        "completed_at": NOW,
+    }
+    error = {
+        **success,
+        "status": "error",
+        "failure": _failure().model_dump(mode="json"),
+    }
+
+    with pytest.raises(ValidationError, match="cannot have failure"):
+        ScoreAttemptRecord.model_validate(success)
+    with pytest.raises(ValidationError, match="cannot have score"):
+        ScoreAttemptRecord.model_validate(error)
 
 
 def test_per_test_result_aligns_with_humaneval_case_summary() -> None:
@@ -493,3 +553,13 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
     )
     assert operation.model_dump(mode="json")["status"] == "partial"
     assert item.model_dump(mode="json")["failure"]["message"] == "boom"
+
+
+def test_projection_requires_selected_generation_or_score() -> None:
+    with pytest.raises(ValidationError, match="projection requires"):
+        PredictionProjectionRecord(
+            prediction_id="prediction-1",
+            projection_profile_id="analysis",
+            projection_version="v1",
+            selected_at=NOW,
+        )

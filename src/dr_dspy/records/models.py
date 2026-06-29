@@ -290,10 +290,22 @@ class PredictionSpecRecord(BaseModel):
             raise ValueError("task snapshot task_id must match spec task_id")
         if self.provider_axis not in self.provider_configs:
             raise ValueError("provider_axis must be one of provider_configs")
-        from dr_dspy.records.hashing import dimensions_digest
+        from dr_dspy.records.hashing import (
+            dimensions_digest,
+            stable_prediction_id,
+        )
 
         if self.dimensions_digest != dimensions_digest(self.dimensions):
             raise ValueError("dimensions_digest must match dimensions")
+        expected_prediction_id = stable_prediction_id(
+            experiment_name=self.experiment_name,
+            task_id=self.task_id,
+            graph_digest=self.graph.graph_digest,
+            dimensions_digest=self.dimensions_digest,
+            repetition_seed=self.repetition_seed,
+        )
+        if self.prediction_id != expected_prediction_id:
+            raise ValueError("prediction_id must match stable prediction id")
         return self
 
 
@@ -346,10 +358,18 @@ class NodeAttemptRecord(BaseModel):
             raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
-        if self.status is NodeAttemptStatus.SUCCESS and self.output is None:
-            raise ValueError("successful node attempts require output")
-        if self.status is NodeAttemptStatus.ERROR and self.failure is None:
-            raise ValueError("error node attempts require failure")
+        if self.status is NodeAttemptStatus.SUCCESS:
+            if self.output is None:
+                raise ValueError("successful node attempts require output")
+            if self.failure is not None:
+                raise ValueError(
+                    "successful node attempts cannot have failure"
+                )
+        if self.status is NodeAttemptStatus.ERROR:
+            if self.failure is None:
+                raise ValueError("error node attempts require failure")
+            if self.output is not None:
+                raise ValueError("error node attempts cannot have output")
         return self
 
 
@@ -377,10 +397,32 @@ class ScoreAttemptRecord(BaseModel):
     def validate_attempt_shape(self) -> ScoreAttemptRecord:
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
-        if self.status is ScoreAttemptStatus.SUCCESS and self.score is None:
-            raise ValueError("successful score attempts require score")
-        if self.status is ScoreAttemptStatus.ERROR and self.failure is None:
-            raise ValueError("error score attempts require failure")
+        if self.status is ScoreAttemptStatus.SUCCESS:
+            if self.score is None:
+                raise ValueError("successful score attempts require score")
+            if self.failure is not None:
+                raise ValueError(
+                    "successful score attempts cannot have failure"
+                )
+        if self.status is ScoreAttemptStatus.ERROR:
+            if self.failure is None:
+                raise ValueError("error score attempts require failure")
+            if self.score is not None:
+                raise ValueError("error score attempts cannot have score")
+            if self.generated_code_outcome is not None:
+                raise ValueError(
+                    "error score attempts cannot have generated_code_outcome"
+                )
+            if self.extracted_code is not None:
+                raise ValueError(
+                    "error score attempts cannot have extracted_code"
+                )
+            if self.metrics is not None:
+                raise ValueError("error score attempts cannot have metrics")
+            if self.per_test_results:
+                raise ValueError(
+                    "error score attempts cannot have per_test_results"
+                )
         return self
 
 
@@ -394,6 +436,14 @@ class PredictionProjectionRecord(BaseModel):
     projection_version: StrictStr
     selected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     selection_reason: StrictStr | None = None
+
+    @model_validator(mode="after")
+    def validate_selection(self) -> PredictionProjectionRecord:
+        if self.generation_run_id is None and self.score_attempt_id is None:
+            raise ValueError(
+                "projection requires generation_run_id or score_attempt_id"
+            )
+        return self
 
 
 class BatchSubmitOperationRecord(BaseModel):
