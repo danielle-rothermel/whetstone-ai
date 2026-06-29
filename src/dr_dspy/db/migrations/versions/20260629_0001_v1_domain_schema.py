@@ -31,6 +31,7 @@ def upgrade() -> None:
         sa.Column("endpoint_kind", sa.Text(), nullable=False),
         sa.Column("model", sa.Text(), nullable=False),
         sa.Column("throttle_key", sa.Text(), nullable=False),
+        sa.Column("fair_order_seed", sa.Text(), nullable=False),
         sa.Column("fair_order_key", sa.Text(), nullable=False),
         sa.Column("task_snapshot", postgresql.JSONB(), nullable=False),
         sa.Column("graph_snapshot", postgresql.JSONB(), nullable=False),
@@ -149,6 +150,7 @@ def upgrade() -> None:
         sa.Column("scoring_profile_version", sa.Text(), nullable=False),
         sa.Column("parser_profile_id", sa.Text(), nullable=False),
         sa.Column("parser_version", sa.Text(), nullable=False),
+        sa.Column("attempt_index", sa.Integer(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False),
         sa.Column("generated_code_outcome", sa.Text()),
         sa.Column("score", sa.Float()),
@@ -178,6 +180,10 @@ def upgrade() -> None:
             name="ck_dr_dspy_score_attempts_score_range",
         ),
         sa.CheckConstraint(
+            "attempt_index >= 0",
+            name="ck_dr_dspy_score_attempts_attempt_index",
+        ),
+        sa.CheckConstraint(
             "status IN ('success', 'error')",
             name="ck_dr_dspy_score_attempts_status",
         ),
@@ -204,6 +210,7 @@ def upgrade() -> None:
             "scoring_profile_version",
             "parser_profile_id",
             "parser_version",
+            "attempt_index",
             name="uq_dr_dspy_score_attempts_profile",
         ),
     )
@@ -290,6 +297,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "status IN ('inserted', 'already_present', 'enqueued', 'failed')",
             name="ck_dr_dspy_batch_items_status",
+        ),
+        sa.CheckConstraint(
+            "status != 'failed' OR failure IS NOT NULL",
+            name="ck_dr_dspy_batch_items_status_payload",
         ),
         sa.UniqueConstraint(
             "operation_key",

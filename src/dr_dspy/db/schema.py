@@ -82,6 +82,7 @@ prediction_specs = Table(
     Column("endpoint_kind", Text, nullable=False),
     Column("model", Text, nullable=False),
     Column("throttle_key", Text, nullable=False),
+    Column("fair_order_seed", Text, nullable=False),
     Column("fair_order_key", Text, nullable=False),
     Column("task_snapshot", JSONB, nullable=False),
     Column("graph_snapshot", JSONB, nullable=False),
@@ -213,6 +214,7 @@ score_attempts = Table(
     Column("scoring_profile_version", Text, nullable=False),
     Column("parser_profile_id", Text, nullable=False),
     Column("parser_version", Text, nullable=False),
+    Column("attempt_index", Integer, nullable=False),
     Column("status", Text, nullable=False),
     Column("generated_code_outcome", Text),
     Column("score", Float),
@@ -225,6 +227,10 @@ score_attempts = Table(
     CheckConstraint(
         enum_check("status", ScoreAttemptStatus),
         name="ck_dr_dspy_score_attempts_status",
+    ),
+    CheckConstraint(
+        "attempt_index >= 0",
+        name="ck_dr_dspy_score_attempts_attempt_index",
     ),
     CheckConstraint(
         "(status != 'success' OR (score IS NOT NULL AND failure IS NULL)) "
@@ -258,6 +264,7 @@ score_attempts = Table(
         "scoring_profile_version",
         "parser_profile_id",
         "parser_version",
+        "attempt_index",
         name="uq_dr_dspy_score_attempts_profile",
     ),
 )
@@ -352,6 +359,10 @@ batch_submit_items = Table(
     CheckConstraint(
         enum_check("status", BatchSubmitItemStatus),
         name="ck_dr_dspy_batch_items_status",
+    ),
+    CheckConstraint(
+        "status != 'failed' OR failure IS NOT NULL",
+        name="ck_dr_dspy_batch_items_status_payload",
     ),
     UniqueConstraint(
         "operation_key",

@@ -30,6 +30,7 @@ from dr_dspy.records import (
     TaskSnapshotPayload,
     TextMetricsPayload,
     dimensions_digest,
+    fair_order_key,
     stable_prediction_id,
 )
 
@@ -92,6 +93,18 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
         model="decoder-model",
         throttle_key="openai:responses:decoder-model",
     )
+    fair_key = fair_order_key(
+        experiment_seed="seed",
+        prediction_id=prediction_id,
+        provider=decoder.provider_kind.value,
+        endpoint_kind=decoder.endpoint_kind.value,
+        model=decoder.model,
+        throttle_key=decoder.throttle_key,
+        graph_layout="encdec",
+        task_id="HumanEval/0",
+        repetition_seed=0,
+        config_axis=dimensions_id,
+    )
     record = PredictionSpecRecord(
         prediction_id=prediction_id,
         experiment_name="exp",
@@ -110,7 +123,8 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
         ),
         provider_configs=(encoder, decoder),
         provider_axis=decoder,
-        fair_order_key="fair-1",
+        fair_order_seed="seed",
+        fair_order_key=fair_key,
         created_at=NOW,
     )
 
@@ -120,6 +134,8 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
     assert row["endpoint_kind"] == "responses"
     assert row["model"] == "decoder-model"
     assert row["throttle_key"] == "openai:responses:decoder-model"
+    assert row["fair_order_seed"] == "seed"
+    assert row["fair_order_key"] == fair_key
     assert row["provider_configs"] == [
         encoder.model_dump(mode="json"),
         decoder.model_dump(mode="json"),
@@ -183,6 +199,7 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
         score_attempt_id="score-1",
         prediction_id="prediction-1",
         generation_run_id="run-1",
+        attempt_index=0,
         scoring_profile_id="humaneval",
         scoring_profile_version="v1",
         parser_profile_id="best-effort",
@@ -208,6 +225,7 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
 
     row = io.score_attempt_row(record)
 
+    assert row["attempt_index"] == 0
     assert row["generated_code_outcome"] == "passed"
     assert row["metrics"] == {
         "profile_id": "humaneval",

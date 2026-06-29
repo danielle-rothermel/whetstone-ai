@@ -281,6 +281,7 @@ class PredictionSpecRecord(BaseModel):
     task: TaskSnapshotPayload
     provider_configs: tuple[ProviderConfigRef, ...]
     provider_axis: ProviderConfigRef
+    fair_order_seed: StrictStr
     fair_order_key: StrictStr
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -292,6 +293,7 @@ class PredictionSpecRecord(BaseModel):
             raise ValueError("provider_axis must be one of provider_configs")
         from dr_dspy.records.hashing import (
             dimensions_digest,
+            fair_order_key,
             stable_prediction_id,
         )
 
@@ -306,6 +308,20 @@ class PredictionSpecRecord(BaseModel):
         )
         if self.prediction_id != expected_prediction_id:
             raise ValueError("prediction_id must match stable prediction id")
+        expected_fair_order_key = fair_order_key(
+            experiment_seed=self.fair_order_seed,
+            prediction_id=self.prediction_id,
+            provider=self.provider_axis.provider_kind.value,
+            endpoint_kind=self.provider_axis.endpoint_kind.value,
+            model=self.provider_axis.model,
+            throttle_key=self.provider_axis.throttle_key,
+            graph_layout=self.graph.layout,
+            task_id=self.task_id,
+            repetition_seed=self.repetition_seed,
+            config_axis=self.dimensions_digest,
+        )
+        if self.fair_order_key != expected_fair_order_key:
+            raise ValueError("fair_order_key must match spec axes")
         return self
 
 
@@ -379,6 +395,7 @@ class ScoreAttemptRecord(BaseModel):
     score_attempt_id: StrictStr
     prediction_id: StrictStr
     generation_run_id: StrictStr
+    attempt_index: StrictInt
     scoring_profile_id: StrictStr
     scoring_profile_version: StrictStr
     parser_profile_id: StrictStr
@@ -395,6 +412,8 @@ class ScoreAttemptRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_attempt_shape(self) -> ScoreAttemptRecord:
+        if self.attempt_index < 0:
+            raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
         if self.status is ScoreAttemptStatus.SUCCESS:

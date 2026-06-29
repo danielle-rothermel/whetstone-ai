@@ -354,6 +354,13 @@ experiment seed and stable spec identity, mixed across axes such as:
 This gives reproducible queue order while interleaving models and configs. It
 also keeps early partial results more representative.
 
+The v1 prediction-spec contract stores both the `fair_order_seed` used for this
+mixing and the derived `fair_order_key`. Inserts should validate the key by
+recomputing it from the persisted provider/endpoint/model, throttle key,
+graph/layout, task id, repetition seed, dimensions digest, and stable prediction
+id. The seed is not part of prediction identity; it only controls reproducible
+queue ordering.
+
 ### Add config-key-aware rate-limit backoff
 
 Provider/model rate limits have been a repeated orchestration pain point, so v1
@@ -461,6 +468,15 @@ The parser/scoring profile we discussed should include:
 - existing HumanEval code cleaning
 - rejection of empty strings and dict/list literals as valid extracted code
 - intentional unwrap of DSPy `Code` objects instead of relying on `str(value)`
+
+This phase only persists score-attempt profile and parser identifiers as
+`(id, version)` references plus typed score/metric payloads. First-class
+`ScoringProfileRecord` and `ParserProfileRecord` tables belong to the
+scoring-profile execution phase, where extraction rules, metric sets, and
+versioning semantics can be specified together. Likewise, graph layout remains
+a strict string until the graph-layout vocabulary is stable enough for a closed
+enum, and compression metrics remain a typed metrics sub-shape candidate for
+the HumanEval scoring-profile phase.
 
 ## Prompt/control implications
 

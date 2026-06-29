@@ -10,6 +10,7 @@ from dr_dspy.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
+    GraphRunStatus,
     GraphSpec,
     NodeConfig,
     NodeSpec,
@@ -56,6 +57,12 @@ from dr_dspy.records import (
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
+
+
+def test_generation_run_status_matches_graph_run_status_values() -> None:
+    assert {status.value for status in GenerationRunStatus} == {
+        status.value for status in GraphRunStatus
+    }
 
 
 def _node(
@@ -139,6 +146,7 @@ def _prediction_spec(
         ),
         provider_configs=(provider,),
         provider_axis=provider,
+        fair_order_seed="seed",
         fair_order_key=fair_order_key(
             experiment_seed="seed",
             prediction_id=prediction_id,
@@ -199,6 +207,14 @@ def test_prediction_spec_validates_stable_prediction_id() -> None:
     dumped["prediction_id"] = "wrong"
 
     with pytest.raises(ValidationError, match="prediction_id"):
+        PredictionSpecRecord.model_validate(dumped)
+
+
+def test_prediction_spec_validates_fair_order_key() -> None:
+    dumped = _prediction_spec().model_dump(mode="json")
+    dumped["fair_order_key"] = "wrong"
+
+    with pytest.raises(ValidationError, match="fair_order_key"):
         PredictionSpecRecord.model_validate(dumped)
 
 
@@ -415,6 +431,7 @@ def test_score_attempt_success_and_error_shapes() -> None:
         score_attempt_id="score-1",
         prediction_id="prediction-1",
         generation_run_id="run-1",
+        attempt_index=0,
         scoring_profile_id="humaneval",
         scoring_profile_version="v1",
         parser_profile_id="best-effort",
@@ -453,6 +470,7 @@ def test_score_attempt_success_and_error_shapes() -> None:
             score_attempt_id="score-2",
             prediction_id="prediction-1",
             generation_run_id="run-1",
+            attempt_index=0,
             scoring_profile_id="humaneval",
             scoring_profile_version="v1",
             parser_profile_id="best-effort",
@@ -468,6 +486,7 @@ def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
         "score_attempt_id": "score-1",
         "prediction_id": "prediction-1",
         "generation_run_id": "run-1",
+        "attempt_index": 0,
         "scoring_profile_id": "humaneval",
         "scoring_profile_version": "v1",
         "parser_profile_id": "best-effort",
@@ -488,6 +507,24 @@ def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
         ScoreAttemptRecord.model_validate(success)
     with pytest.raises(ValidationError, match="cannot have score"):
         ScoreAttemptRecord.model_validate(error)
+
+
+def test_score_attempt_attempt_index_must_be_non_negative() -> None:
+    with pytest.raises(ValidationError, match="attempt_index"):
+        ScoreAttemptRecord(
+            score_attempt_id="score-1",
+            prediction_id="prediction-1",
+            generation_run_id="run-1",
+            attempt_index=-1,
+            scoring_profile_id="humaneval",
+            scoring_profile_version="v1",
+            parser_profile_id="best-effort",
+            parser_version="v1",
+            status=ScoreAttemptStatus.SUCCESS,
+            score=1.0,
+            started_at=NOW,
+            completed_at=NOW,
+        )
 
 
 def test_per_test_result_aligns_with_humaneval_case_summary() -> None:

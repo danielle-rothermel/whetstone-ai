@@ -80,6 +80,10 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
     assert "ck_dr_dspy_score_attempts_generated_code_outcome" in (
         _constraint_names(schema.score_attempts, CheckConstraint)
     )
+    assert "ck_dr_dspy_score_attempts_attempt_index" in _constraint_names(
+        schema.score_attempts,
+        CheckConstraint,
+    )
     assert "ck_dr_dspy_node_attempts_status_payload" in _constraint_names(
         schema.node_attempts,
         CheckConstraint,
@@ -91,6 +95,22 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
     assert "ck_dr_dspy_projection_has_selection" in _constraint_names(
         schema.prediction_projection,
         CheckConstraint,
+    )
+    assert "ck_dr_dspy_batch_items_status_payload" in _constraint_names(
+        schema.batch_submit_items,
+        CheckConstraint,
+    )
+    assert _unique_constraint_columns(
+        schema.score_attempts,
+        "uq_dr_dspy_score_attempts_profile",
+    ) == (
+        "prediction_id",
+        "generation_run_id",
+        "scoring_profile_id",
+        "scoring_profile_version",
+        "parser_profile_id",
+        "parser_version",
+        "attempt_index",
     )
     node_status_check = next(
         constraint
@@ -167,6 +187,21 @@ def _foreign_key_targets(table: Table) -> set[str]:
         f"{foreign_key.column.table.name}.{foreign_key.column.name}"
         for foreign_key in table.foreign_keys
     }
+
+
+def _unique_constraint_columns(
+    table: Table,
+    constraint_name: str,
+) -> tuple[str, ...]:
+    constraint = next(
+        constraint
+        for constraint in table.constraints
+        if (
+            isinstance(constraint, UniqueConstraint)
+            and constraint.name == constraint_name
+        )
+    )
+    return tuple(column.name for column in constraint.columns)
 
 
 def _constraint_names(
