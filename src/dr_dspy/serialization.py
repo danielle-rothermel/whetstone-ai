@@ -1,8 +1,8 @@
 """DSPy-aware serialization helpers for experiment telemetry.
 
-Deferred: masking-site re-raises; pytest suite; failure propagation in
-lm_logging/DB writes; persist exc.diagnostics() to metadata; classify as
-RecordingFailureError in failures/.
+Deferred: pytest suite; failure propagation in lm_logging/DB writes;
+persist exc.diagnostics() to metadata; classify as RecordingFailureError
+in failures/.
 """
 
 from __future__ import annotations
@@ -157,6 +157,110 @@ class PayloadTooLargeError(SerializationError):
         }
 
 
+class SignatureSummaryError(SerializationError):
+    def __init__(
+        self,
+        *,
+        path: JsonPath,
+        underlying: BaseException,
+        value_preview: str,
+        detail: str,
+    ) -> None:
+        self.path = path
+        self.underlying = underlying
+        self.value_preview = value_preview
+        self.detail = detail
+        super().__init__(
+            _transform_error_message("signature summary failed", path)
+        )
+
+    def diagnostics(self) -> dict[str, Any]:
+        return _transform_diagnostics(
+            path=self.path,
+            detail=self.detail,
+            value_preview=self.value_preview,
+            underlying=self.underlying,
+        )
+
+
+class ExampleSerializationError(SerializationError):
+    def __init__(
+        self,
+        *,
+        path: JsonPath,
+        underlying: BaseException,
+        value_preview: str,
+        detail: str,
+    ) -> None:
+        self.path = path
+        self.underlying = underlying
+        self.value_preview = value_preview
+        self.detail = detail
+        super().__init__(
+            _transform_error_message("dspy.Example transform failed", path)
+        )
+
+    def diagnostics(self) -> dict[str, Any]:
+        return _transform_diagnostics(
+            path=self.path,
+            detail=self.detail,
+            value_preview=self.value_preview,
+            underlying=self.underlying,
+        )
+
+
+class ModelDumpError(SerializationError):
+    def __init__(
+        self,
+        *,
+        path: JsonPath,
+        underlying: BaseException,
+        value_preview: str,
+        detail: str,
+    ) -> None:
+        self.path = path
+        self.underlying = underlying
+        self.value_preview = value_preview
+        self.detail = detail
+        super().__init__(
+            _transform_error_message("pydantic model_dump failed", path)
+        )
+
+    def diagnostics(self) -> dict[str, Any]:
+        return _transform_diagnostics(
+            path=self.path,
+            detail=self.detail,
+            value_preview=self.value_preview,
+            underlying=self.underlying,
+        )
+
+
+class ObjectVarsSerializationError(SerializationError):
+    def __init__(
+        self,
+        *,
+        path: JsonPath,
+        underlying: BaseException,
+        value_preview: str,
+        detail: str,
+    ) -> None:
+        self.path = path
+        self.underlying = underlying
+        self.value_preview = value_preview
+        self.detail = detail
+        super().__init__(
+            _transform_error_message("object __dict__ transform failed", path)
+        )
+
+    def diagnostics(self) -> dict[str, Any]:
+        return _transform_diagnostics(
+            path=self.path,
+            detail=self.detail,
+            value_preview=self.value_preview,
+            underlying=self.underlying,
+        )
+
+
 def sanitize_lm_kwargs(kwargs: dict[str, Any] | None) -> dict[str, Any]:
     """Strip credential-like keys from an LM kwargs dict before logging."""
     if not kwargs:
@@ -173,6 +277,25 @@ def _preview_repr(x: Any) -> str:
 
 def _detail_repr(x: Any) -> str:
     return repr(x)[:DEBUG_DETAIL_LIMIT]
+
+
+def _transform_error_message(prefix: str, path: JsonPath) -> str:
+    return f"{prefix} at path {path!r}"
+
+
+def _transform_diagnostics(
+    *,
+    path: JsonPath,
+    detail: str,
+    value_preview: str,
+    underlying: BaseException,
+) -> dict[str, Any]:
+    return {
+        "path": list(path),
+        "detail": detail,
+        "value_preview": value_preview,
+        "underlying": repr(underlying),
+    }
 
 
 def _format_top_level_sizes(
@@ -234,7 +357,10 @@ def _find_non_jsonable_path(
     return path, value
 
 
-def _signature_summary(sig_cls: type[dspy.Signature]) -> dict[str, Any]:
+def _signature_summary(
+    sig_cls: type[dspy.Signature],
+    path: JsonPath,
+) -> dict[str, Any]:
     """Summarize a Signature class for logging."""
     try:
         fields_summary = [
@@ -247,8 +373,13 @@ def _signature_summary(sig_cls: type[dspy.Signature]) -> dict[str, Any]:
             )
             for name, field in sig_cls.fields.items()
         ]
-    except Exception:
-        fields_summary = []
+    except Exception as error:
+        raise SignatureSummaryError(
+            path=path,
+            underlying=error,
+            value_preview=_preview_repr(sig_cls),
+            detail=_detail_repr(sig_cls),
+        ) from error
     return {
         "signature": getattr(sig_cls, "signature", repr(sig_cls)),
         "instructions": getattr(sig_cls, "instructions", ""),
@@ -305,18 +436,25 @@ def _jsonable_dspy_example(
     if isinstance(x, dspy.Example):
         try:
             return True, _to_jsonable_inner(x.toDict(), depth + 1, path)
-        except Exception:
-            return True, _preview_repr(x)
+        except SerializationError:
+            raise
+        except Exception as error:
+            raise ExampleSerializationError(
+                path=path,
+                underlying=error,
+                value_preview=_preview_repr(x),
+                detail=_detail_repr(x),
+            ) from error
     return False, None
 
 
 def _jsonable_type(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
-    del depth, path
+    del depth
     if not isinstance(x, type):
         return False, None
     try:
         if issubclass(x, dspy.Signature):
-            return True, _signature_summary(x)
+            return True, _signature_summary(x, path)
     except TypeError:
         pass
     return True, f"<class {x.__module__}.{x.__name__}>"
@@ -337,12 +475,17 @@ def _jsonable_dspy_lm(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
 def _jsonable_pydantic_model(
     x: Any, depth: int, path: JsonPath
 ) -> JsonableHandle:
-    del depth, path
+    del depth
     if isinstance(x, pydantic.BaseModel):
         try:
             return True, x.model_dump(mode="json")
-        except Exception:
-            return True, _preview_repr(x)
+        except Exception as error:
+            raise ModelDumpError(
+                path=path,
+                underlying=error,
+                value_preview=_preview_repr(x),
+                detail=_detail_repr(x),
+            ) from error
     return False, None
 
 
@@ -368,8 +511,15 @@ def _jsonable_object_vars(
                 key: _to_jsonable_inner(value, depth + 1, (*path, key))
                 for key, value in vars(x).items()
             }
-        except Exception:
-            return True, _preview_repr(x)
+        except SerializationError:
+            raise
+        except Exception as error:
+            raise ObjectVarsSerializationError(
+                path=path,
+                underlying=error,
+                value_preview=_preview_repr(x),
+                detail=_detail_repr(x),
+            ) from error
     return False, None
 
 
