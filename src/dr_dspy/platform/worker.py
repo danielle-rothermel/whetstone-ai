@@ -196,9 +196,17 @@ def submit_jsonl(
         int,
         typer.Option("--attempt-index", min=0),
     ] = 0,
-    worker_concurrency: Annotated[
+    queue_registration_concurrency: Annotated[
         int,
-        typer.Option("--queue-worker-concurrency", min=1),
+        typer.Option(
+            "--queue-registration-concurrency",
+            "--queue-worker-concurrency",
+            min=1,
+            help=(
+                "Worker concurrency to register in DBOS queue metadata. "
+                "submit-jsonl does not start a queue worker."
+            ),
+        ),
     ] = DEFAULT_WORKER_CONCURRENCY,
     database_url: Annotated[
         str | None,
@@ -220,11 +228,11 @@ def submit_jsonl(
     config = configure_platform_dbos_runtime(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
-        worker_concurrency=worker_concurrency,
+        worker_concurrency=queue_registration_concurrency,
         consume_generation_queue=False,
     )
     register_platform_generation_queue(
-        worker_concurrency=worker_concurrency,
+        worker_concurrency=queue_registration_concurrency,
     )
     engine = create_engine(config.database_url)
     try:

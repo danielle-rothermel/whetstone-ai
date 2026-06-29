@@ -42,7 +42,8 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
 ```
 
 `submit-jsonl` streams JSONL parsing into the submit path, validates each window
-of specs against the requested experiment, inserts the experiment row if needed,
+of specs against the requested experiment, rejects duplicate `prediction_id`
+values within the submit operation, inserts the experiment row if needed,
 persists batch operation/item audit rows, and enqueues workflows on
 `dr-dspy-platform-generation-v1`. Submission is resumable by operation key:
 existing completed/enqueued batch items are skipped, while pending or failed
@@ -59,11 +60,16 @@ globally fair order across windows. If a later window contains an invalid spec,
 earlier windows may already have been persisted and enqueued.
 
 Fairness currently controls submission and queue-admission order, not strict
-execution order. With `--queue-worker-concurrency` above 1, DBOS workers can
+execution order. With registered worker concurrency above 1, DBOS workers can
 start and finish queued workflows out of the fair prefix, so early partial
 results may still clump by provider/model. Use worker concurrency 1 when strict
 drain order matters more than throughput; a stricter multi-worker fairness
 policy would need a later queue or leasing design.
+
+The submit command does not start a queue worker. Its
+`--queue-registration-concurrency` option only registers the DBOS queue metadata
+that workers will later use; `--queue-worker-concurrency` remains accepted as a
+compatibility alias.
 
 During submission, `dr_dspy_batch_submit_operations.status` is set to
 `enqueuing` and its `requested_count` tracks the number of specs observed so

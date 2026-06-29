@@ -94,6 +94,7 @@ def submit_prediction_specs(
     resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
     item_index_offset = 0
     submitted_any_specs = False
+    seen_prediction_ids: set[str] = set()
     for ordered_specs in fair_ordered_spec_windows(
         specs,
         window_size=chunk_size,
@@ -102,6 +103,10 @@ def submit_prediction_specs(
         validate_submit_specs(
             experiment_name=experiment_name,
             specs=ordered_specs,
+        )
+        validate_unique_submit_prediction_ids(
+            specs=ordered_specs,
+            seen_prediction_ids=seen_prediction_ids,
         )
 
         with engine.begin() as connection:
@@ -260,6 +265,20 @@ def validate_submit_specs(
             raise ValueError(
                 "prediction spec experiment_name must match submit operation"
             )
+
+
+def validate_unique_submit_prediction_ids(
+    *,
+    specs: Sequence[PredictionSpecRecord],
+    seen_prediction_ids: set[str],
+) -> None:
+    for spec in specs:
+        if spec.prediction_id in seen_prediction_ids:
+            raise ValueError(
+                "duplicate prediction_id in submit operation: "
+                f"{spec.prediction_id}"
+            )
+        seen_prediction_ids.add(spec.prediction_id)
 
 
 def bulk_insert_prediction_specs(

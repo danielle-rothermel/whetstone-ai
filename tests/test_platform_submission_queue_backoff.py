@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from sqlalchemy.engine import Connection
+from typer.testing import CliRunner
 
 from dr_dspy.eval_failures import FailureClass, FailureSummary
 from dr_dspy.graph import (
@@ -419,6 +420,53 @@ def test_submit_prediction_specs_streams_fair_order_windows(
 
     assert first_enqueue_yielded_count == 2
     assert yielded_count == 5
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2])
+def test_submit_prediction_specs_rejects_duplicate_prediction_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    chunk_size: int,
+) -> None:
+    spec = _spec(task_id="HumanEval/0")
+    engine = DummyEngine()
+    prepared_windows: list[tuple[str, ...]] = []
+
+    def prepare(
+        connection: Connection,
+        *,
+        operation_key: str,
+        experiment_name: str,
+        ordered_specs: Sequence[PredictionSpecRecord],
+        submit_spec: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+        chunk_size: int,
+        item_index_offset: int,
+    ) -> None:
+        prepared_windows.append(
+            tuple(spec.prediction_id for spec in ordered_specs)
+        )
+
+    monkeypatch.setattr(submission, "prepare_submission_records", prepare)
+    monkeypatch.setattr(
+        submission,
+        "load_enqueue_candidates",
+        lambda connection, *, operation_key, prediction_ids: (),
+    )
+
+    with pytest.raises(ValueError, match="duplicate prediction_id"):
+        submission.submit_prediction_specs(
+            cast(Any, engine),
+            database_url="postgresql://example/db",
+            operation_key="op-1",
+            experiment_name="exp",
+            specs=(spec, spec),
+            chunk_size=chunk_size,
+        )
+
+    expected_prepared_windows = (
+        [(spec.prediction_id,)] if chunk_size == 1 else []
+    )
+    assert prepared_windows == expected_prepared_windows
 
 
 def test_submit_prediction_specs_records_item_enqueue_failure(
@@ -1056,6 +1104,15 @@ def test_platform_worker_config_listens_to_v1_queue(
 
     assert ("listen_v1", None) in calls
     assert ("register", 3) in calls
+
+
+def test_submit_jsonl_help_names_queue_registration_concurrency() -> None:
+    result = CliRunner().invoke(worker.APP, ["submit-jsonl", "--help"])
+
+    assert result.exit_code == 0
+    assert "--queue-registration" in result.output
+    assert "does not start a queue" in result.output
+    assert "worker." in result.output
 
 
 def test_run_one_runtime_keeps_empty_queue_listener(

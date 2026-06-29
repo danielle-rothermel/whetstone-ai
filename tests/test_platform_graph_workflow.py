@@ -13,6 +13,7 @@ from dr_dspy.db import io as db_io
 from dr_dspy.eval_failures import (
     FailureClass,
     PermanentFailureError,
+    RateLimitedFailureError,
     TransientFailureError,
 )
 from dr_dspy.graph import (
@@ -31,7 +32,7 @@ from dr_dspy.lm.boundary import (
     ProviderConfig,
     ProviderKind,
 )
-from dr_dspy.platform import graph_workflow
+from dr_dspy.platform import backoff, graph_workflow
 from dr_dspy.platform.graph_workflow import (
     _start_prediction_graph_workflow_handle,
     execute_prediction_graph,
@@ -745,6 +746,135 @@ def test_execute_lm_node_step_records_one_throttle_failure(
 
     assert len(throttle_writes) == 1
     assert throttle_writes[0]["throttle_key"] == "openai:responses:gpt-test"
+
+
+def test_throttle_backoff_lifecycle_records_delays_and_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTransaction:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: Any,
+        ) -> None:
+            pass
+
+    class FakeEngine:
+        def begin(self) -> FakeTransaction:
+            return FakeTransaction()
+
+        def dispose(self) -> None:
+            pass
+
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+    throttle_key = "openai:responses:gpt-test"
+    state_by_key: dict[str, backoff.ThrottleBackoffState | None] = {}
+    execute_calls = 0
+
+    def record_failure(
+        connection: object,
+        *,
+        throttle_key: str,
+        failure: Any,
+        now: datetime,
+    ) -> backoff.ThrottleBackoffState:
+        state = backoff.ThrottleBackoffState(
+            throttle_key=throttle_key,
+            blocked_until=now + timedelta(seconds=12),
+            consecutive_failures=1,
+            failure_class=failure.failure_class,
+            last_error_type=failure.failure_exception_type,
+            last_message=failure.message,
+            metadata=failure.failure_metadata,
+            updated_at=now,
+        )
+        state_by_key[throttle_key] = state
+        return state
+
+    def run_node(**kwargs: Any) -> NodeStepResult:
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 1:
+            raise RateLimitedFailureError("rate limited")
+        return _step_success(node, "generated code")
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "create_engine",
+        lambda url: FakeEngine(),
+    )
+    monkeypatch.setattr(graph_workflow, "utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        graph_workflow,
+        "record_throttle_failure",
+        record_failure,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "throttle_delay_seconds",
+        lambda connection, *, throttle_key, now: (
+            backoff.delay_until_unblocked_seconds(
+                state_by_key.get(throttle_key),
+                now=now,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "clear_throttle_backoff",
+        lambda connection, *, throttle_key, now: state_by_key.__setitem__(
+            throttle_key,
+            backoff.ThrottleBackoffState(
+                throttle_key=throttle_key,
+                consecutive_failures=0,
+                metadata={},
+                updated_at=now,
+            ),
+        ),
+    )
+    monkeypatch.setattr(graph_workflow, "execute_lm_node", run_node)
+
+    execute_step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
+    preflight = cast(Any, graph_workflow.throttle_preflight_step).__wrapped__
+
+    with pytest.raises(RateLimitedFailureError):
+        execute_step(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+            {"prompt": "write add"},
+        )
+
+    recorded = state_by_key[throttle_key]
+    assert recorded is not None
+    assert recorded.failure_class is FailureClass.RATE_LIMITED
+    assert preflight(
+        "postgresql://example/db",
+        spec.model_dump(mode="json"),
+        node.model_dump(mode="json"),
+    ) == 12.0
+
+    result = execute_step(
+        "postgresql://example/db",
+        spec.model_dump(mode="json"),
+        node.model_dump(mode="json"),
+        {"prompt": "write add"},
+    )
+
+    assert (
+        NodeStepResult.model_validate(result).status
+        is NodeStepStatus.SUCCESS
+    )
+    cleared = state_by_key[throttle_key]
+    assert cleared is not None
+    assert cleared.blocked_until is None
+    assert cleared.consecutive_failures == 0
 
 
 def test_throttle_state_write_errors_are_not_swallowed(
