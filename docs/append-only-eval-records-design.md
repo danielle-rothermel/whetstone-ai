@@ -139,6 +139,15 @@ completions and Responses-style endpoints. A symmetric DSPy-compatible
 `LoggingOpenAILM` wrapper is intentionally deferred until a current caller needs
 direct OpenAI outside the graph-runner path.
 
+Two LM cleanup concerns remain deferred. First, strict provider response parsing
+and `lm.utils.response_text()` both know how to extract text from chat-style
+content; keep them separate for now because one raises typed provider failures
+and the other is a telemetry preview helper, but consolidate the shared text
+walk if the shapes drift. Second, `lm.logging` still invokes recordability at
+log time, which intentionally pulls the serialization stack only when telemetry
+is emitted; import isolation is required for the pure boundary modules, not for
+logging payload persistence.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain

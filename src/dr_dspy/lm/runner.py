@@ -62,10 +62,6 @@ def prediction_field_text(prediction: Any, field_name: str) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    if isinstance(value, Mapping):
-        field_value = value.get(field_name)
-        if isinstance(field_value, str):
-            return field_value
     for attribute in STRUCTURED_TEXT_ATTRIBUTES:
         field_value = getattr(value, attribute, None)
         if isinstance(field_value, str):

@@ -151,6 +151,16 @@ def test_prediction_field_text_unwraps_structured_code_field() -> None:
     assert prediction_field_text(prediction, "code") == "def f(): pass"
 
 
+def test_prediction_field_text_rejects_dict_value() -> None:
+    prediction = _StubPrediction(code={"code": "def f(): pass"})
+
+    with pytest.raises(PredictionParseError) as exc_info:
+        prediction_field_text(prediction, "code")
+
+    assert exc_info.value.metadata["output_field"] == "code"
+    assert "dict" in exc_info.value.metadata["value_type"]
+
+
 def test_prediction_field_text_rejects_arbitrary_stringification() -> None:
     prediction = _StubPrediction(code=_StringifyingValue())
 
