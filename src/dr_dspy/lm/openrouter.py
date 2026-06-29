@@ -9,7 +9,7 @@ from typing import Any
 from openai import OpenAI
 
 import dspy
-from dr_dspy.lm_logging import PutEventFn, _LoggingMixin
+from dr_dspy.lm.logging import PutEventFn, _LoggingMixin
 from dspy.clients.openai_format import (
     completion_to_lm_response,
     to_openai_chat_request,

@@ -17,8 +17,8 @@ from pydantic import (
     model_validator,
 )
 
-from dr_dspy.parsed_code import FunctionSignature, ParsedCode
-from dr_dspy.parsed_tests import (
+from dr_dspy.humaneval.parsed_code import FunctionSignature, ParsedCode
+from dr_dspy.humaneval.parsed_tests import (
     InputExpressionTestCase,
     InputOracleTestCase,
     InputResultTestCase,

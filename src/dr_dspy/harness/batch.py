@@ -10,10 +10,11 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from dr_dspy import dbos_runtime, eval_logging
 from dr_dspy.eval_failures.recording import recordable_jsonb
-from dr_dspy.eval_reporting import validate_sql_identifier
-from dr_dspy.lm_utils import stable_json
+from dr_dspy.harness import dbos as dbos_runtime
+from dr_dspy.harness import logging as eval_logging
+from dr_dspy.harness.reporting import validate_sql_identifier
+from dr_dspy.lm.utils import stable_json
 
 BATCH_OPERATION_TABLE_NAME = "dr_dspy_batch_operations"
 BATCH_OPERATION_ITEM_TABLE_NAME = "dr_dspy_batch_operation_items"

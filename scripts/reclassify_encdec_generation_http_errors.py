@@ -7,9 +7,9 @@ import psycopg
 import typer
 from pydantic import BaseModel, ConfigDict, StrictStr
 
-from dr_dspy.dbos_runtime import resolve_database_url
 from dr_dspy.eval_failures import FailureClass
-from dr_dspy.prediction_status import GenerationStatus
+from dr_dspy.harness.dbos import resolve_database_url
+from dr_dspy.harness.status import GenerationStatus
 from dr_dspy.runtime import load_env_file
 
 DATABASE_URL_ENV = "DATABASE_URL"

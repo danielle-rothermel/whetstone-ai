@@ -8,8 +8,8 @@ import httpx
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
-from dr_dspy.dbos_runtime import QueueSelection
-from dr_dspy.openrouter_lm import (
+from dr_dspy.harness.dbos import QueueSelection
+from dr_dspy.lm.openrouter import (
     OPENROUTER_API_KEY_ENV,
     OPENROUTER_BASE_URL,
 )

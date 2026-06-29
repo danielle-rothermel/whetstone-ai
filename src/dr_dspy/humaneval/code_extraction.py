@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from dr_dspy.import_inference import infer_necessary_imports
+from dr_dspy.humaneval.import_inference import infer_necessary_imports
 
 DEFAULT_TAB_WIDTH = 4
 BLANK_RUN_RE = re.compile(r"\n{3,}")

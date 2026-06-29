@@ -5,8 +5,6 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
-from dr_dspy import dbos_runtime
-from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy.eval_failures import (
     RECOVERABLE_FAILURE_CLASSES,
     FailureClass,
@@ -14,8 +12,10 @@ from dr_dspy.eval_failures import (
     StrandedScoringError,
     exception_type_name,
 )
-from dr_dspy.eval_reporting import validate_sql_identifier
-from dr_dspy.prediction_status import (
+from dr_dspy.harness import dbos as dbos_runtime
+from dr_dspy.harness import ordering as shared_job_ordering
+from dr_dspy.harness.reporting import validate_sql_identifier
+from dr_dspy.harness.status import (
     GENERATION_RETRY_STATUSES,
     SCORING_QUEUEABLE_STATUSES,
     SCORING_RETRY_STATUSES,

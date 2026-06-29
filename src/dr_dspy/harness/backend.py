@@ -6,9 +6,9 @@ import threading
 from pathlib import Path
 from typing import Any, Protocol
 
-from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
-from dr_dspy.eval_repair import RepairPlan
-from dr_dspy.worker_monitor import WorkerMonitorConfig
+from dr_dspy.harness.dbos import EvalDbosConfig, QueueSelection
+from dr_dspy.harness.repair import RepairPlan
+from dr_dspy.harness.workers.monitor import WorkerMonitorConfig
 
 
 class ExperimentBackend(Protocol):

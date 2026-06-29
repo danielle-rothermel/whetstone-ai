@@ -22,16 +22,6 @@ from pydantic import (
 from rich.console import Console
 
 import dspy
-from dr_dspy import batch_operation as shared_batch
-from dr_dspy import dbos_runtime as shared_dbos
-from dr_dspy import dspy_runner as shared_dspy_runner
-from dr_dspy import eval_logging as shared_eval_logging
-from dr_dspy import eval_repair as shared_eval_repair
-from dr_dspy import human_eval_sampling as shared_human_eval_sampling
-from dr_dspy import humaneval_dbos_flow as shared_flow
-from dr_dspy import job_ordering as shared_job_ordering
-from dr_dspy import worker_monitor as shared_worker_monitor
-from dr_dspy import worker_resources as shared_worker_resources
 from dr_dspy.eval_failures import (
     FailureSummary,
     ensure_recordable,
@@ -42,32 +32,42 @@ from dr_dspy.eval_failures import (
     summarize_exception,
     validate_encdec_generation,
 )
-from dr_dspy.experiment_dimensions import (
+from dr_dspy.harness import batch as shared_batch
+from dr_dspy.harness import dbos as shared_dbos
+from dr_dspy.harness import flow as shared_flow
+from dr_dspy.harness import logging as shared_eval_logging
+from dr_dspy.harness import ordering as shared_job_ordering
+from dr_dspy.harness import repair as shared_eval_repair
+from dr_dspy.harness.dimensions import (
     Dimension,
     dimension_columns_ddl,
     identity_constraint_columns,
     identity_dimension_names,
 )
-from dr_dspy.human_eval import HumanEvalTask
-from dr_dspy.lm_utils import (
+from dr_dspy.harness.status import (
+    GENERATION_RETRY_STATUSES,
+    GenerationStatus,
+    ScoringStatus,
+)
+from dr_dspy.harness.workers import monitor as shared_worker_monitor
+from dr_dspy.harness.workers import resources as shared_worker_resources
+from dr_dspy.humaneval.sampling import sample_human_eval_tasks
+from dr_dspy.humaneval.scoring import (
+    HumanEvalScoreResult,
+    score_humaneval_prediction,
+)
+from dr_dspy.humaneval.task import HumanEvalTask
+from dr_dspy.lm import runner as shared_dspy_runner
+from dr_dspy.lm.signatures import DspySignatureConfig
+from dr_dspy.lm.utils import (
     LmEventBuffer,
     ModelConfig,
     provider_cost_from_response,
     usage_metadata_from_response,
 )
-from dr_dspy.prediction_status import (
-    GENERATION_RETRY_STATUSES,
-    GenerationStatus,
-    ScoringStatus,
-)
 from dr_dspy.runtime import (
     load_env_file,
 )
-from dr_dspy.scoring import (
-    HumanEvalScoreResult,
-    score_humaneval_prediction,
-)
-from dr_dspy.signatures import DspySignatureConfig
 from dspy.signatures.signature import make_signature
 
 DATABASE_URL_ENV = "DATABASE_URL"
@@ -1992,7 +1992,7 @@ def build_humaneval_samples(
             test=sample.task.test,
             entry_point=sample.task.entry_point,
         )
-        for sample in shared_human_eval_sampling.sample_human_eval_tasks(
+        for sample in sample_human_eval_tasks(
             seed=seed,
             sample_count=sample_count,
             dataset_name=config.dataset_name,

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from dr_dspy.eval_failures import RecordingFailureError
-from dr_dspy.lm_logging import _LoggingMixin
+from dr_dspy.lm.logging import _LoggingMixin
 
 
 class _StubLoggingMixin(_LoggingMixin):

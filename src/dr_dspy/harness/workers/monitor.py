@@ -14,15 +14,15 @@ from pydantic import (
     StrictStr,
 )
 
-from dr_dspy.dbos_runtime import (
+from dr_dspy.eval_failures import FailureClass
+from dr_dspy.harness.dbos import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
     DbosWorkflowStatus,
     QueueSelection,
     connect_db,
 )
-from dr_dspy.eval_failures import FailureClass
-from dr_dspy.worker_resources import (
+from dr_dspy.harness.workers.resources import (
     current_open_file_count,
     current_open_file_soft_limit,
 )

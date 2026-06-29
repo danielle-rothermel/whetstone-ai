@@ -11,8 +11,8 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from rich.console import Console
 
-from dr_dspy import dbos_runtime
-from dr_dspy.lm_utils import stable_json
+from dr_dspy.harness import dbos as dbos_runtime
+from dr_dspy.lm.utils import stable_json
 
 DEFAULT_OPERATOR_TIMESTAMP_FORMAT = "%H:%M:%S"
 

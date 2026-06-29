@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import dspy
-from dr_dspy.humaneval_encdec_dbos import (
+from dr_dspy.experiments.humaneval_encdec import (
     EncDecHumanEvalExperimentConfig,
     EncDecPair,
     create_app,
 )
-from dr_dspy.lm_utils import ModelConfig
+from dr_dspy.lm.signatures import DspySignatureConfig, FieldSignature
+from dr_dspy.lm.utils import ModelConfig
 from dr_dspy.runtime import run_typer_app
-from dr_dspy.signatures import DspySignatureConfig, FieldSignature
 
 SCRIPT_KIND = "humaneval_eval_only_encdec_dbos_v0"
 DATASET_NAME = "evalplus/humanevalplus"

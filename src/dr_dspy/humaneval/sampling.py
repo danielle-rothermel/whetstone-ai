@@ -7,7 +7,7 @@ from typing import Any, Protocol, cast
 from datasets import load_dataset  # type: ignore[import-not-found]
 from pydantic import BaseModel, ConfigDict, StrictInt
 
-from dr_dspy.human_eval import HumanEvalTask, parse_human_eval_dataset
+from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 
 HumanEvalRow = Mapping[str, Any]
 

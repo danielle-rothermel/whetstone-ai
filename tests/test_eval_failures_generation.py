@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import dspy
-from dr_dspy.dspy_runner import run_predictor
 from dr_dspy.eval_failures import (
     EmptyGenerationError,
     FailureClass,
@@ -18,7 +17,8 @@ from dr_dspy.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from dr_dspy.lm_utils import LmEventBuffer
+from dr_dspy.lm.runner import run_predictor
+from dr_dspy.lm.utils import LmEventBuffer
 
 
 @pytest.mark.parametrize("text", [None, "", "   "])
@@ -93,9 +93,9 @@ def _stub_predict(
     context_manager = MagicMock()
     context_manager.__enter__.return_value = None
     context_manager.__exit__.return_value = False
-    with patch("dr_dspy.dspy_runner.dspy.Predict", return_value=predict_call):
+    with patch("dr_dspy.lm.runner.dspy.Predict", return_value=predict_call):
         context_patch = patch(
-            "dr_dspy.dspy_runner.dspy.context",
+            "dr_dspy.lm.runner.dspy.context",
             return_value=context_manager,
         )
         with context_patch:

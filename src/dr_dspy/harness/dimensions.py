@@ -18,7 +18,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
-from dr_dspy.eval_reporting import validate_sql_identifier
+from dr_dspy.harness.reporting import validate_sql_identifier
 
 ReportJustify = Literal["default", "left", "center", "right", "full"]
 

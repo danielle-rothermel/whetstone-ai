@@ -1,7 +1,7 @@
 # Generalizing the code-generation experiment platform
 
 **Status:** design note · **Date:** 2026-06-28
-**Scope:** HumanEval eval pipelines (`humaneval_direct_dbos`, `humaneval_encdec_dbos`) and their successor
+**Scope:** HumanEval eval pipelines (`experiments/humaneval_direct`, `experiments/humaneval_encdec`) and their successor
 
 ---
 
@@ -215,10 +215,10 @@ Ordered by dependency; the substrate must exist before anything that rides on it
 
 Today the scoring stage spawns a fresh OS process for **every** test evaluation and
 reaps it; there is **no persistent pool**. The path:
-`score_prediction_step` → `score_humaneval_prediction` (`scoring.py:152`) →
-`evaluate_human_eval_code` (`human_eval.py:328`) → `run_subprocess_batch`
-(`human_eval.py:383`) → `subprocess.run([sys.executable,"-c",runner_script()], …,
-timeout=…)` (`human_eval.py:403-410`), spawned **once per top-level function name**.
+`score_prediction_step` → `score_humaneval_prediction` (`humaneval/scoring.py`) →
+`evaluate_human_eval_code` (`humaneval/task.py`) → `run_subprocess_batch`
+(`humaneval/task.py`) → `subprocess.run([sys.executable,"-c",runner_script()], …,
+timeout=…)`, spawned **once per top-level function name**.
 Scoring parallelism = the scoring queue's `worker_concurrency` (32), which is also the
 only throttle on concurrent spawns.
 
@@ -244,6 +244,6 @@ pool lifecycle owned by `run_worker_command` startup; revisit the FD budget
 (seccomp/rlimits/chroot) — this is process *reuse*, not hardening.
 
 > Symbol-based references are used for the DBOS module back-halves
-> (`humaneval_*_dbos.py`, `humaneval_dbos_flow.py`) because those files were being
-> reformatted and line numbers drift; `scoring.py` / `human_eval.py` /
+> (`experiments/humaneval_*`, `harness/flow.py`) because those files were being
+> reformatted and line numbers drift; `humaneval/scoring.py` / `humaneval/task.py` /
 > `worker_resources.py` citations are exact.

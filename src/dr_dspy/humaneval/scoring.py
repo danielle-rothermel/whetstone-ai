@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dr_dspy.code_extraction import apply_cleaning, validate_python_source
-from dr_dspy.compression import (
+from dr_dspy.humaneval.code_extraction import (
+    apply_cleaning,
+    validate_python_source,
+)
+from dr_dspy.humaneval.compression import (
     CompressionMetric,
     CompressionMetrics,
     compression_metrics,
 )
-from dr_dspy.human_eval import (
+from dr_dspy.humaneval.task import (
     EvaluationTaskResult,
     HumanEvalTask,
     evaluate_human_eval_code,

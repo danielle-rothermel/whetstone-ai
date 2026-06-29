@@ -13,12 +13,12 @@ from dr_dspy.eval_failures.exceptions import (
 )
 from dr_dspy.eval_failures.generation import require_generation_text
 from dr_dspy.eval_failures.recording import ensure_recordable
-from dr_dspy.lm_utils import (
+from dr_dspy.lm.openrouter import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
+from dr_dspy.lm.utils import (
     LmEventBuffer,
     provider_cost_from_response,
     usage_metadata_from_response,
 )
-from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
 
 DEFAULT_MAX_TRACE_SIZE = 10_000
 LM_RESPONSE_PREVIEW_LIMIT = 512

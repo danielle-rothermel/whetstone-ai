@@ -9,12 +9,14 @@ from typing import Any
 
 from rich.console import Console
 
-from dr_dspy import dbos_runtime, eval_reporting, worker_resources
-from dr_dspy.dbos_runtime import EvalDbosConfig, QueueSelection
-from dr_dspy.eval_logging import operator_log as _console_operator_log
-from dr_dspy.experiment_backend import ExperimentBackend
-from dr_dspy.lm_utils import stable_json
-from dr_dspy.worker_monitor import WorkerMonitorConfig
+from dr_dspy.harness import dbos as dbos_runtime
+from dr_dspy.harness import reporting as eval_reporting
+from dr_dspy.harness.backend import ExperimentBackend
+from dr_dspy.harness.dbos import EvalDbosConfig, QueueSelection
+from dr_dspy.harness.logging import operator_log as _console_operator_log
+from dr_dspy.harness.workers import resources as worker_resources
+from dr_dspy.harness.workers.monitor import WorkerMonitorConfig
+from dr_dspy.lm.utils import stable_json
 
 _CONSOLE = Console()
 
