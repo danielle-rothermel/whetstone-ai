@@ -46,6 +46,34 @@ class DummyConnection:
         return []
 
 
+class DummyTransaction:
+    def __init__(self, engine: DummyEngine) -> None:
+        self.engine = engine
+
+    def __enter__(self) -> DummyConnection:
+        self.engine.in_transaction = True
+        self.engine.begin_count += 1
+        return self.engine.connection
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> None:
+        self.engine.in_transaction = False
+
+
+class DummyEngine:
+    def __init__(self) -> None:
+        self.connection = DummyConnection()
+        self.begin_count = 0
+        self.in_transaction = False
+
+    def begin(self) -> DummyTransaction:
+        return DummyTransaction(self)
+
+
 def _node() -> NodeSpec:
     return NodeSpec(
         id="direct",
@@ -142,123 +170,288 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         _spec(task_id="HumanEval/1"),
         _spec(task_id="HumanEval/2"),
     )
+    engine = DummyEngine()
     chunks: list[tuple[str, ...]] = []
-    item_records: list[Any] = []
-    enqueue_calls: list[tuple[str, ...]] = []
+    enqueue_calls: list[str] = []
+    item_updates: list[submission.SubmittedPredictionItem] = []
 
-    def insert_specs(
-        connection: DummyConnection,
-        chunk: tuple[PredictionSpecRecord, ...],
-    ) -> set[str]:
-        chunks.append(tuple(spec.prediction_id for spec in chunk))
-        return {chunk[0].prediction_id}
-
-    def insert_item(
-        connection: DummyConnection,
+    def prepare(
+        connection: Connection,
         *,
-        record: Any,
+        operation_key: str,
+        experiment_name: str,
+        ordered_specs: Sequence[PredictionSpecRecord],
+        submit_spec: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
     ) -> None:
-        item_records.append(record)
+        assert engine.in_transaction is True
+        chunks.append(tuple(spec.prediction_id for spec in ordered_specs))
+
+    def candidates(
+        connection: Connection,
+        *,
+        operation_key: str,
+        prediction_ids: Sequence[str],
+    ) -> tuple[submission.EnqueueCandidate, ...]:
+        assert engine.in_transaction is True
+        chunks.append(tuple(prediction_ids))
+        by_id = {spec.prediction_id: spec for spec in specs}
+        return tuple(
+            submission.EnqueueCandidate(
+                prediction_id=prediction_id,
+                fair_order_key=by_id[prediction_id].fair_order_key,
+                item_index=index,
+            )
+            for index, prediction_id in enumerate(prediction_ids)
+        )
 
     def enqueue(
         database_url: str,
-        prediction_ids: Sequence[str],
+        prediction_id: str,
         attempt_index: int,
         queue_name: str,
-    ) -> queue_worker.EnqueuePredictionWorkflowsResult:
-        enqueue_calls.append(tuple(prediction_ids))
-        workflows = tuple(
-            queue_worker.EnqueuedPredictionWorkflow(
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        assert engine.in_transaction is False
+        enqueue_calls.append(prediction_id)
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
                 prediction_id=prediction_id,
-                generation_run_id=stable_generation_run_id(
-                    prediction_id=prediction_id,
-                    attempt_index=attempt_index,
-                ),
-                workflow_id=f"workflow:{prediction_id}",
-                enqueued=True,
-            )
-            for prediction_id in prediction_ids
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
         )
-        return queue_worker.EnqueuePredictionWorkflowsResult(
-            queue_name=queue_name,
-            enqueued_count=len(workflows),
-            existing_count=0,
-            workflows=workflows,
-        )
+
+    def update_item(
+        connection: Connection,
+        *,
+        operation_key: str,
+        item: submission.SubmittedPredictionItem,
+    ) -> None:
+        assert engine.in_transaction is True
+        item_updates.append(item)
 
     monkeypatch.setattr(
         submission,
-        "bulk_insert_prediction_specs",
-        insert_specs,
+        "prepare_submission_records",
+        prepare,
     )
-    monkeypatch.setattr(submission, "insert_batch_item", insert_item)
+    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "update_batch_item_outcome",
+        update_item,
+    )
+    monkeypatch.setattr(
+        submission,
+        "update_operation_summary",
+        lambda connection, *, operation_key, experiment_name, queue_name: (
+            submission.SubmitPredictionSpecsResult(
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                queue_name=queue_name,
+                requested_count=len(specs),
+                inserted_count=2,
+                already_present_count=1,
+                enqueued_count=len(item_updates),
+                failed_count=0,
+                items=tuple(item_updates),
+            )
+        ),
+    )
 
     result = submission.submit_prediction_specs(
-        cast(Connection, DummyConnection()),
+        cast(Any, engine),
         database_url="postgresql://example/db",
         operation_key="op-1",
         experiment_name="exp",
         specs=specs,
         chunk_size=2,
-        enqueue_workflows=enqueue,
+        enqueue_workflow=enqueue,
     )
 
-    assert [len(chunk) for chunk in chunks] == [2, 1]
-    assert enqueue_calls == chunks
+    assert [len(chunk) for chunk in chunks[1:]] == [2, 1]
+    assert enqueue_calls == [item.prediction_id for item in item_updates]
     assert result.requested_count == 3
     assert result.inserted_count == 2
     assert result.already_present_count == 1
     assert result.enqueued_count == 3
     assert result.failed_count == 0
-    assert {record.status for record in item_records} == {
+    assert {item.status for item in item_updates} == {
         BatchSubmitItemStatus.ENQUEUED
     }
-    assert item_records[0].enqueue_metadata["insert_status"] in {
-        "inserted",
-        "already_present",
-    }
+    assert engine.begin_count == 7
 
 
-def test_submit_prediction_specs_records_chunk_enqueue_failure(
+def test_submit_prediction_specs_records_item_enqueue_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    specs = (_spec(task_id="HumanEval/0"), _spec(task_id="HumanEval/1"))
-    item_records: list[Any] = []
+    specs = (
+        _spec(task_id="HumanEval/0"),
+        _spec(task_id="HumanEval/1"),
+        _spec(task_id="HumanEval/2"),
+    )
+    engine = DummyEngine()
+    item_updates: list[submission.SubmittedPredictionItem] = []
+    failed_prediction_id = specs[1].prediction_id
 
     monkeypatch.setattr(
         submission,
-        "bulk_insert_prediction_specs",
-        lambda connection, chunk: {spec.prediction_id for spec in chunk},
+        "prepare_submission_records",
+        lambda connection, **kwargs: None,
     )
     monkeypatch.setattr(
         submission,
-        "insert_batch_item",
-        lambda connection, *, record: item_records.append(record),
+        "load_enqueue_candidates",
+        lambda connection, *, operation_key, prediction_ids: tuple(
+            submission.EnqueueCandidate(
+                prediction_id=spec.prediction_id,
+                fair_order_key=spec.fair_order_key,
+                item_index=index,
+            )
+            for index, spec in enumerate(specs)
+            if spec.prediction_id in prediction_ids
+        ),
+    )
+    monkeypatch.setattr(
+        submission,
+        "update_batch_item_outcome",
+        lambda connection, *, operation_key, item: item_updates.append(item),
     )
 
     def enqueue(
         database_url: str,
-        prediction_ids: Sequence[str],
+        prediction_id: str,
         attempt_index: int,
         queue_name: str,
-    ) -> queue_worker.EnqueuePredictionWorkflowsResult:
-        raise RuntimeError("queue unavailable")
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        if prediction_id == failed_prediction_id:
+            raise RuntimeError("queue unavailable")
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    monkeypatch.setattr(
+        submission,
+        "update_operation_summary",
+        lambda connection, *, operation_key, experiment_name, queue_name: (
+            submission.SubmitPredictionSpecsResult(
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                queue_name=queue_name,
+                requested_count=len(specs),
+                inserted_count=len(specs),
+                already_present_count=0,
+                enqueued_count=sum(
+                    item.status is BatchSubmitItemStatus.ENQUEUED
+                    for item in item_updates
+                ),
+                failed_count=sum(
+                    item.status is BatchSubmitItemStatus.FAILED
+                    for item in item_updates
+                ),
+                items=tuple(item_updates),
+            )
+        ),
+    )
 
     result = submission.submit_prediction_specs(
-        cast(Connection, DummyConnection()),
+        cast(Any, engine),
         database_url="postgresql://example/db",
         operation_key="op-1",
         experiment_name="exp",
         specs=specs,
-        enqueue_workflows=enqueue,
+        enqueue_workflow=enqueue,
     )
 
-    assert result.failed_count == 2
-    assert result.enqueued_count == 0
-    assert {record.status for record in item_records} == {
-        BatchSubmitItemStatus.FAILED
-    }
-    assert all(record.failure is not None for record in item_records)
+    assert result.failed_count == 1
+    assert result.enqueued_count == 2
+    assert [item.status for item in item_updates] == [
+        BatchSubmitItemStatus.ENQUEUED,
+        BatchSubmitItemStatus.FAILED,
+        BatchSubmitItemStatus.ENQUEUED,
+    ]
+    failed = next(
+        item
+        for item in item_updates
+        if item.status is BatchSubmitItemStatus.FAILED
+    )
+    assert failed.prediction_id == failed_prediction_id
+    assert failed.failure is not None
+
+
+def test_item_needs_enqueue_supports_resume() -> None:
+    assert submission.item_needs_enqueue(
+        status=BatchSubmitItemStatus.INSERTED,
+        enqueue_metadata={},
+    )
+    assert submission.item_needs_enqueue(
+        status=BatchSubmitItemStatus.FAILED,
+        enqueue_metadata={},
+    )
+    assert submission.item_needs_enqueue(
+        status=BatchSubmitItemStatus.ALREADY_PRESENT,
+        enqueue_metadata={},
+    )
+    assert not submission.item_needs_enqueue(
+        status=BatchSubmitItemStatus.ENQUEUED,
+        enqueue_metadata={},
+    )
+    assert not submission.item_needs_enqueue(
+        status=BatchSubmitItemStatus.ALREADY_PRESENT,
+        enqueue_metadata={"workflow_id": "workflow-1"},
+    )
+
+
+def test_prepare_submission_records_upserts_experiment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec(task_id="HumanEval/0")
+    connection = DummyConnection()
+    experiment_statement = object()
+    operation_statement = object()
+
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_experiment",
+        lambda record: experiment_statement,
+    )
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_batch_operation",
+        lambda record: operation_statement,
+    )
+    monkeypatch.setattr(
+        submission,
+        "bulk_insert_prediction_specs",
+        lambda connection, chunk: {spec.prediction_id},
+    )
+    monkeypatch.setattr(
+        submission,
+        "insert_batch_item",
+        lambda connection, *, record: None,
+    )
+
+    submission.prepare_submission_records(
+        cast(Connection, connection),
+        operation_key="op-1",
+        experiment_name="exp",
+        ordered_specs=(spec,),
+        submit_spec={},
+        metadata={},
+    )
+
+    assert connection.statements[:2] == [
+        experiment_statement,
+        operation_statement,
+    ]
 
 
 def test_queue_enqueue_uses_stable_workflow_ids(

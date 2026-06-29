@@ -228,17 +228,16 @@ def submit_jsonl(
     engine = create_engine(config.database_url)
     try:
         specs = read_prediction_specs_jsonl(specs_file)
-        with engine.begin() as connection:
-            result = submit_prediction_specs(
-                connection,
-                database_url=config.database_url,
-                operation_key=operation_key,
-                experiment_name=experiment_name,
-                specs=specs,
-                submit_spec={"source": str(specs_file)},
-                chunk_size=chunk_size,
-                attempt_index=attempt_index,
-            )
+        result = submit_prediction_specs(
+            engine,
+            database_url=config.database_url,
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            specs=specs,
+            submit_spec={"source": str(specs_file)},
+            chunk_size=chunk_size,
+            attempt_index=attempt_index,
+        )
         CONSOLE.print(result.model_dump(mode="json"))
     finally:
         engine.dispose()

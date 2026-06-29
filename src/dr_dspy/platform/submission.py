@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
-from sqlalchemy import update
+from sqlalchemy import Select, select, update
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
 from dr_dspy.db import io, schema
 from dr_dspy.eval_failures import summarize_exception
@@ -15,14 +15,15 @@ from dr_dspy.hashing import sha256_json_digest
 from dr_dspy.platform.fairness import fair_ordered_specs
 from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
-    EnqueuePredictionWorkflowsResult,
-    enqueue_prediction_graph_workflows,
+    EnqueuedPredictionWorkflow,
+    enqueue_prediction_graph_workflow,
 )
 from dr_dspy.records import (
     BatchSubmitItemRecord,
     BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
+    ExperimentRecord,
     FailureMetadataPayload,
     PredictionSpecRecord,
 )
@@ -30,11 +31,12 @@ from dr_dspy.records import (
 DEFAULT_SUBMIT_CHUNK_SIZE = 500
 BATCH_SUBMIT_ITEM_ID_LENGTH = 32
 INSERT_STATUS_METADATA_KEY = "insert_status"
-WORKFLOWS_METADATA_KEY = "workflows"
+WORKFLOW_ID_METADATA_KEY = "workflow_id"
+GENERATION_RUN_ID_METADATA_KEY = "generation_run_id"
 
-type EnqueueWorkflows = Callable[
-    [str, Sequence[str], int, str],
-    EnqueuePredictionWorkflowsResult,
+type EnqueueWorkflow = Callable[
+    [str, str, int, str],
+    EnqueuedPredictionWorkflow,
 ]
 
 
@@ -64,8 +66,16 @@ class SubmitPredictionSpecsResult(BaseModel):
     items: tuple[SubmittedPredictionItem, ...] = Field(default_factory=tuple)
 
 
+class EnqueueCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prediction_id: StrictStr
+    fair_order_key: StrictStr
+    item_index: StrictInt
+
+
 def submit_prediction_specs(
-    connection: Connection,
+    engine: Engine,
     *,
     database_url: str,
     operation_key: str,
@@ -76,15 +86,92 @@ def submit_prediction_specs(
     chunk_size: int = DEFAULT_SUBMIT_CHUNK_SIZE,
     attempt_index: int = 0,
     queue_name: str = PLATFORM_GENERATION_QUEUE_NAME,
-    enqueue_workflows: EnqueueWorkflows | None = None,
+    enqueue_workflow: EnqueueWorkflow | None = None,
 ) -> SubmitPredictionSpecsResult:
-    resolved_enqueue_workflows = enqueue_workflows or _enqueue_workflows
+    resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
     ordered_specs = fair_ordered_specs(specs)
     validate_submit_specs(
         experiment_name=experiment_name,
         specs=ordered_specs,
     )
+
+    with engine.begin() as connection:
+        prepare_submission_records(
+            connection,
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            ordered_specs=ordered_specs,
+            submit_spec=submit_spec,
+            metadata=metadata,
+        )
+
+    for chunk in chunked(ordered_specs, chunk_size):
+        with engine.begin() as connection:
+            candidates = load_enqueue_candidates(
+                connection,
+                operation_key=operation_key,
+                prediction_ids=tuple(spec.prediction_id for spec in chunk),
+            )
+        for candidate in candidates:
+            try:
+                workflow = resolved_enqueue_workflow(
+                    database_url,
+                    candidate.prediction_id,
+                    attempt_index,
+                    queue_name,
+                )
+                item = SubmittedPredictionItem(
+                    prediction_id=candidate.prediction_id,
+                    fair_order_key=candidate.fair_order_key,
+                    status=(
+                        BatchSubmitItemStatus.ENQUEUED
+                        if workflow.enqueued
+                        else BatchSubmitItemStatus.ALREADY_PRESENT
+                    ),
+                    workflow_id=workflow.workflow_id,
+                    generation_run_id=workflow.generation_run_id,
+                )
+            except Exception as error:
+                item = SubmittedPredictionItem(
+                    prediction_id=candidate.prediction_id,
+                    fair_order_key=candidate.fair_order_key,
+                    status=BatchSubmitItemStatus.FAILED,
+                    failure=failure_payload_from_exception(error),
+                )
+            with engine.begin() as connection:
+                update_batch_item_outcome(
+                    connection,
+                    operation_key=operation_key,
+                    item=item,
+                )
+
+    with engine.begin() as connection:
+        return update_operation_summary(
+            connection,
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            queue_name=queue_name,
+        )
+
+
+def prepare_submission_records(
+    connection: Connection,
+    *,
+    operation_key: str,
+    experiment_name: str,
+    ordered_specs: Sequence[PredictionSpecRecord],
+    submit_spec: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+) -> None:
     created_at = datetime.now(UTC)
+    connection.execute(
+        idempotent_insert_experiment(
+            ExperimentRecord(
+                experiment_name=experiment_name,
+                created_at=created_at,
+            )
+        )
+    )
     operation = BatchSubmitOperationRecord(
         operation_key=operation_key,
         experiment_name=experiment_name,
@@ -96,119 +183,34 @@ def submit_prediction_specs(
     )
     connection.execute(idempotent_insert_batch_operation(operation))
 
-    items: list[SubmittedPredictionItem] = []
-    inserted_count = 0
-    already_present_count = 0
-    enqueued_count = 0
-    failed_count = 0
-    item_index = 0
-    for chunk in chunked(ordered_specs, chunk_size):
+    item_index_by_prediction_id = {
+        spec.prediction_id: item_index
+        for item_index, spec in enumerate(ordered_specs)
+    }
+    for chunk in chunked(ordered_specs, DEFAULT_SUBMIT_CHUNK_SIZE):
         inserted_ids = bulk_insert_prediction_specs(connection, chunk)
-        insert_status_by_prediction_id = {
-            spec.prediction_id: (
+        for spec in chunk:
+            insert_status = (
                 BatchSubmitItemStatus.INSERTED
                 if spec.prediction_id in inserted_ids
                 else BatchSubmitItemStatus.ALREADY_PRESENT
             )
-            for spec in chunk
-        }
-        inserted_count += len(inserted_ids)
-        already_present_count += len(chunk) - len(inserted_ids)
-
-        try:
-            enqueue_result = resolved_enqueue_workflows(
-                database_url,
-                [spec.prediction_id for spec in chunk],
-                attempt_index,
-                queue_name,
-            )
-        except Exception as error:
-            failure = failure_payload_from_exception(error)
-            for spec in chunk:
-                item = SubmittedPredictionItem(
-                    prediction_id=spec.prediction_id,
-                    fair_order_key=spec.fair_order_key,
-                    status=BatchSubmitItemStatus.FAILED,
-                    insert_status=insert_status_by_prediction_id[
-                        spec.prediction_id
-                    ],
-                    failure=failure,
-                )
-                insert_batch_item(
-                    connection,
-                    record=batch_item_record(
-                        operation_key=operation_key,
-                        item_index=item_index,
-                        item=item,
-                    ),
-                )
-                items.append(item)
-                item_index += 1
-                failed_count += 1
-            continue
-
-        workflow_by_prediction_id = {
-            workflow.prediction_id: workflow
-            for workflow in enqueue_result.workflows
-        }
-        for spec in chunk:
-            workflow = workflow_by_prediction_id[spec.prediction_id]
-            status = (
-                BatchSubmitItemStatus.ENQUEUED
-                if workflow.enqueued
-                else BatchSubmitItemStatus.ALREADY_PRESENT
-            )
-            if workflow.enqueued:
-                enqueued_count += 1
             item = SubmittedPredictionItem(
                 prediction_id=spec.prediction_id,
                 fair_order_key=spec.fair_order_key,
-                status=status,
-                insert_status=insert_status_by_prediction_id[
-                    spec.prediction_id
-                ],
-                workflow_id=workflow.workflow_id,
-                generation_run_id=workflow.generation_run_id,
+                status=insert_status,
+                insert_status=insert_status,
             )
             insert_batch_item(
                 connection,
                 record=batch_item_record(
                     operation_key=operation_key,
-                    item_index=item_index,
+                    item_index=item_index_by_prediction_id[
+                        spec.prediction_id
+                    ],
                     item=item,
                 ),
             )
-            items.append(item)
-            item_index += 1
-
-    status = operation_status(
-        requested_count=len(ordered_specs),
-        failed_count=failed_count,
-    )
-    connection.execute(
-        update(schema.batch_submit_operations)
-        .where(schema.batch_submit_operations.c.operation_key == operation_key)
-        .values(
-            status=status.value,
-            requested_count=len(ordered_specs),
-            inserted_count=inserted_count,
-            already_present_count=already_present_count,
-            enqueued_count=enqueued_count,
-            failed_count=failed_count,
-            completed_at=datetime.now(UTC),
-        )
-    )
-    return SubmitPredictionSpecsResult(
-        operation_key=operation_key,
-        experiment_name=experiment_name,
-        queue_name=queue_name,
-        requested_count=len(ordered_specs),
-        inserted_count=inserted_count,
-        already_present_count=already_present_count,
-        enqueued_count=enqueued_count,
-        failed_count=failed_count,
-        items=tuple(items),
-    )
 
 
 def validate_submit_specs(
@@ -239,6 +241,14 @@ def bulk_insert_prediction_specs(
     return {str(row[0]) for row in inserted}
 
 
+def idempotent_insert_experiment(record: ExperimentRecord) -> Any:
+    return (
+        insert(schema.experiments)
+        .values(io.experiment_row(record))
+        .on_conflict_do_nothing(index_elements=["experiment_name"])
+    )
+
+
 def idempotent_insert_batch_operation(
     record: BatchSubmitOperationRecord,
 ) -> Any:
@@ -257,7 +267,169 @@ def insert_batch_item(
     connection.execute(
         insert(schema.batch_submit_items)
         .values(io.batch_submit_item_row(record))
-        .on_conflict_do_nothing(index_elements=["batch_submit_item_id"])
+        .on_conflict_do_nothing(
+            index_elements=["operation_key", "prediction_id"]
+        )
+    )
+
+
+def load_enqueue_candidates(
+    connection: Connection,
+    *,
+    operation_key: str,
+    prediction_ids: Sequence[str],
+) -> tuple[EnqueueCandidate, ...]:
+    if not prediction_ids:
+        return ()
+    rows = connection.execute(
+        select_batch_items_for_predictions(
+            operation_key=operation_key,
+            prediction_ids=prediction_ids,
+        )
+    ).mappings()
+    return tuple(
+        EnqueueCandidate(
+            prediction_id=row["prediction_id"],
+            fair_order_key=row["fair_order_key"],
+            item_index=row["item_index"],
+        )
+        for row in rows
+        if item_needs_enqueue(
+            status=BatchSubmitItemStatus(row["status"]),
+            enqueue_metadata=row["enqueue_metadata"],
+        )
+    )
+
+
+def select_batch_items_for_predictions(
+    *,
+    operation_key: str,
+    prediction_ids: Sequence[str],
+) -> Select[tuple[Any, ...]]:
+    return (
+        select(schema.batch_submit_items)
+        .where(schema.batch_submit_items.c.operation_key == operation_key)
+        .where(schema.batch_submit_items.c.prediction_id.in_(prediction_ids))
+        .order_by(
+            schema.batch_submit_items.c.fair_order_key,
+            schema.batch_submit_items.c.prediction_id,
+        )
+    )
+
+
+def item_needs_enqueue(
+    *,
+    status: BatchSubmitItemStatus,
+    enqueue_metadata: dict[str, Any],
+) -> bool:
+    if status is BatchSubmitItemStatus.ENQUEUED:
+        return False
+    if (
+        status is BatchSubmitItemStatus.ALREADY_PRESENT
+        and WORKFLOW_ID_METADATA_KEY in enqueue_metadata
+    ):
+        return False
+    return True
+
+
+def update_batch_item_outcome(
+    connection: Connection,
+    *,
+    operation_key: str,
+    item: SubmittedPredictionItem,
+) -> None:
+    existing = connection.execute(
+        select(schema.batch_submit_items)
+        .where(schema.batch_submit_items.c.operation_key == operation_key)
+        .where(schema.batch_submit_items.c.prediction_id == item.prediction_id)
+    ).mappings().one()
+    existing_metadata = dict(existing["enqueue_metadata"])
+    insert_status = existing_metadata.get(INSERT_STATUS_METADATA_KEY)
+    updated_item = item.model_copy(
+        update={
+            "insert_status": (
+                BatchSubmitItemStatus(insert_status)
+                if insert_status is not None
+                else item.insert_status
+            )
+        }
+    )
+    connection.execute(
+        update(schema.batch_submit_items)
+        .where(schema.batch_submit_items.c.operation_key == operation_key)
+        .where(schema.batch_submit_items.c.prediction_id == item.prediction_id)
+        .values(
+            status=updated_item.status.value,
+            enqueue_metadata=enqueue_metadata_for_item(updated_item),
+            failure=(
+                updated_item.failure.model_dump(mode="json")
+                if updated_item.failure is not None
+                else None
+            ),
+        )
+    )
+
+
+def update_operation_summary(
+    connection: Connection,
+    *,
+    operation_key: str,
+    experiment_name: str,
+    queue_name: str,
+) -> SubmitPredictionSpecsResult:
+    rows = tuple(
+        connection.execute(
+            select(schema.batch_submit_items)
+            .where(schema.batch_submit_items.c.operation_key == operation_key)
+            .order_by(
+                schema.batch_submit_items.c.fair_order_key,
+                schema.batch_submit_items.c.prediction_id,
+            )
+        ).mappings()
+    )
+    items = tuple(submitted_item_from_row(dict(row)) for row in rows)
+    requested_count = len(items)
+    inserted_count = sum(
+        item.insert_status is BatchSubmitItemStatus.INSERTED
+        for item in items
+    )
+    already_present_count = sum(
+        item.insert_status is BatchSubmitItemStatus.ALREADY_PRESENT
+        for item in items
+    )
+    enqueued_count = sum(
+        item.status is BatchSubmitItemStatus.ENQUEUED for item in items
+    )
+    failed_count = sum(
+        item.status is BatchSubmitItemStatus.FAILED for item in items
+    )
+    status = operation_status(
+        requested_count=requested_count,
+        failed_count=failed_count,
+    )
+    connection.execute(
+        update(schema.batch_submit_operations)
+        .where(schema.batch_submit_operations.c.operation_key == operation_key)
+        .values(
+            status=status.value,
+            requested_count=requested_count,
+            inserted_count=inserted_count,
+            already_present_count=already_present_count,
+            enqueued_count=enqueued_count,
+            failed_count=failed_count,
+            completed_at=datetime.now(UTC),
+        )
+    )
+    return SubmitPredictionSpecsResult(
+        operation_key=operation_key,
+        experiment_name=experiment_name,
+        queue_name=queue_name,
+        requested_count=requested_count,
+        inserted_count=inserted_count,
+        already_present_count=already_present_count,
+        enqueued_count=enqueued_count,
+        failed_count=failed_count,
+        items=items,
     )
 
 
@@ -267,19 +439,6 @@ def batch_item_record(
     item_index: int,
     item: SubmittedPredictionItem,
 ) -> BatchSubmitItemRecord:
-    enqueue_metadata = {
-        key: value
-        for key, value in {
-            INSERT_STATUS_METADATA_KEY: (
-                item.insert_status.value
-                if item.insert_status is not None
-                else None
-            ),
-            "workflow_id": item.workflow_id,
-            "generation_run_id": item.generation_run_id,
-        }.items()
-        if value is not None
-    }
     return BatchSubmitItemRecord(
         batch_submit_item_id=batch_submit_item_id(
             operation_key=operation_key,
@@ -290,8 +449,49 @@ def batch_item_record(
         prediction_id=item.prediction_id,
         fair_order_key=item.fair_order_key,
         status=item.status,
-        enqueue_metadata=enqueue_metadata,
+        enqueue_metadata=enqueue_metadata_for_item(item),
         failure=item.failure,
+    )
+
+
+def enqueue_metadata_for_item(
+    item: SubmittedPredictionItem,
+) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            INSERT_STATUS_METADATA_KEY: (
+                item.insert_status.value
+                if item.insert_status is not None
+                else None
+            ),
+            WORKFLOW_ID_METADATA_KEY: item.workflow_id,
+            GENERATION_RUN_ID_METADATA_KEY: item.generation_run_id,
+        }.items()
+        if value is not None
+    }
+
+
+def submitted_item_from_row(row: dict[str, Any]) -> SubmittedPredictionItem:
+    metadata = dict(row["enqueue_metadata"])
+    insert_status = metadata.get(INSERT_STATUS_METADATA_KEY)
+    failure = row["failure"]
+    return SubmittedPredictionItem(
+        prediction_id=row["prediction_id"],
+        fair_order_key=row["fair_order_key"],
+        status=BatchSubmitItemStatus(row["status"]),
+        insert_status=(
+            BatchSubmitItemStatus(insert_status)
+            if insert_status is not None
+            else None
+        ),
+        workflow_id=metadata.get(WORKFLOW_ID_METADATA_KEY),
+        generation_run_id=metadata.get(GENERATION_RUN_ID_METADATA_KEY),
+        failure=(
+            FailureMetadataPayload.model_validate(failure)
+            if failure is not None
+            else None
+        ),
     )
 
 
@@ -345,15 +545,15 @@ def chunked(
     )
 
 
-def _enqueue_workflows(
+def _enqueue_workflow(
     database_url: str,
-    prediction_ids: Sequence[str],
+    prediction_id: str,
     attempt_index: int,
     queue_name: str,
-) -> EnqueuePredictionWorkflowsResult:
-    return enqueue_prediction_graph_workflows(
+) -> EnqueuedPredictionWorkflow:
+    return enqueue_prediction_graph_workflow(
         database_url=database_url,
-        prediction_ids=prediction_ids,
+        prediction_id=prediction_id,
         attempt_index=attempt_index,
         queue_name=queue_name,
     )
