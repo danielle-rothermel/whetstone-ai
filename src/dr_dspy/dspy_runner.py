@@ -7,6 +7,11 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 import dspy
+from dr_dspy.eval_failures.exceptions import (
+    EvalFailureError,
+    PredictionParseError,
+)
+from dr_dspy.eval_failures.generation import require_generation_text
 from dr_dspy.eval_failures.recording import ensure_recordable
 from dr_dspy.lm_utils import (
     LmEventBuffer,
@@ -16,6 +21,7 @@ from dr_dspy.lm_utils import (
 from dr_dspy.openrouter_lm import OPENROUTER_API_KEY_ENV, LoggingOpenRouterLM
 
 DEFAULT_MAX_TRACE_SIZE = 10_000
+LM_RESPONSE_PREVIEW_LIMIT = 512
 
 
 class PredictorRunResult(BaseModel):
@@ -58,6 +64,20 @@ def prediction_field_text(prediction: Any, field_name: str) -> str | None:
     return str(value)
 
 
+def _predictor_failure_metadata(
+    event_buffer: LmEventBuffer,
+    *,
+    output_field: str,
+) -> dict[str, str]:
+    metadata: dict[str, str] = {"output_field": output_field}
+    response_preview = event_buffer.latest_response_text()
+    if response_preview is not None:
+        metadata["lm_response_preview"] = response_preview[
+            :LM_RESPONSE_PREVIEW_LIMIT
+        ]
+    return metadata
+
+
 def run_predictor(
     *,
     signature: type[dspy.Signature],
@@ -78,13 +98,19 @@ def run_predictor(
             prediction = dspy.Predict(signature)(**dict(input_kwargs))
             if after_prediction is not None:
                 after_prediction(prediction)
-            text = prediction_field_text(prediction, output_field)
-        except Exception:
-            text = event_buffer.latest_response_text()
-            if text is None and not event_buffer.has_latest_response():
-                raise
-        response_text = event_buffer.latest_response_text()
-        return response_text or text or ""
+        except EvalFailureError:
+            raise
+        except Exception as error:
+            raise PredictionParseError(
+                f"predictor failed for output field {output_field!r}",
+                underlying=error,
+                metadata=_predictor_failure_metadata(
+                    event_buffer,
+                    output_field=output_field,
+                ),
+            ) from error
+        text = prediction_field_text(prediction, output_field)
+        return require_generation_text(text, output_field=output_field)
 
 
 def predictor_run_result(

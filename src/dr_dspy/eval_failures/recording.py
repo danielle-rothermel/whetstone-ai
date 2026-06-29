@@ -4,7 +4,10 @@ from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from dr_dspy.eval_failures.exceptions import RecordingFailureError
+from dr_dspy.eval_failures.exceptions import (
+    EvalFailureError,
+    RecordingFailureError,
+)
 from dr_dspy.serialization import (
     PAYLOAD_MAX_BYTES,
     SerializationError,
@@ -33,13 +36,20 @@ def recordable_jsonb(
 
 
 def failure_metadata_from_exception(error: BaseException) -> dict[str, Any]:
-    """Extract diagnostics() from SerializationError in the chain, else {}."""
+    """Extract SerializationError diagnostics or EvalFailureError metadata."""
     current: BaseException | None = error
     seen: set[int] = set()
+    eval_failure_metadata: dict[str, Any] | None = None
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         if isinstance(current, SerializationError):
             return current.diagnostics()
+        if (
+            isinstance(current, EvalFailureError)
+            and eval_failure_metadata is None
+        ):
+            if current.metadata:
+                eval_failure_metadata = dict(current.metadata)
         if current.__cause__ is not None:
             current = current.__cause__
             continue
@@ -51,4 +61,4 @@ def failure_metadata_from_exception(error: BaseException) -> dict[str, Any]:
             current = underlying
             continue
         break
-    return {}
+    return eval_failure_metadata or {}

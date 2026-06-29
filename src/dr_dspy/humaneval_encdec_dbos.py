@@ -40,6 +40,7 @@ from dr_dspy.eval_failures import (
     recordable_jsonb,
     should_retry_step,
     summarize_exception,
+    validate_encdec_generation,
 )
 from dr_dspy.experiment_dimensions import (
     Dimension,
@@ -963,6 +964,10 @@ def generate_code_for_job_with_client(
         output_field="code",
         lm=decoder_lm,
         event_buffer=decoder_events,
+    )
+    validate_encdec_generation(
+        description=encoded_description,
+        code=decoded_generation,
     )
     encoder_metadata = ensure_recordable(
         encoder_events.latest_response_metadata()

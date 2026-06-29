@@ -37,6 +37,7 @@ from dr_dspy.eval_failures import (
     recordable_jsonb,
     should_retry_step,
     summarize_exception,
+    validate_direct_generation,
 )
 from dr_dspy.experiment_dimensions import (
     Dimension,
@@ -1885,6 +1886,7 @@ def generate_code_for_job(
     result = shared_dspy_runner.predictor_run_result(
         raw_generation, event_buffer
     )
+    validate_direct_generation(code=result.text)
     return GenerationResult(
         prediction_id=job.prediction_id,
         raw_generation=result.text,

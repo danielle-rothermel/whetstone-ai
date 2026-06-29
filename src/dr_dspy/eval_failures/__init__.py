@@ -9,8 +9,10 @@ heuristics in ``eval_failures.policy`` without requiring custom types.
 """
 
 from dr_dspy.eval_failures.exceptions import (
+    EmptyGenerationError,
     EvalFailureError,
     PermanentFailureError,
+    PredictionParseError,
     RateLimitedFailureError,
     RecordingFailureError,
     ResourceExhaustionFailureError,
@@ -18,6 +20,11 @@ from dr_dspy.eval_failures.exceptions import (
     StrandedScoringError,
     TransientFailureError,
     UnknownFailureError,
+)
+from dr_dspy.eval_failures.generation import (
+    require_generation_text,
+    validate_direct_generation,
+    validate_encdec_generation,
 )
 from dr_dspy.eval_failures.policy import (
     FailureSummary,
@@ -44,10 +51,12 @@ from dr_dspy.eval_failures.types import (
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
     "RETRYABLE_STEP_FAILURE_CLASSES",
+    "EmptyGenerationError",
     "EvalFailureError",
     "FailureClass",
     "FailureSummary",
     "PermanentFailureError",
+    "PredictionParseError",
     "RateLimitedFailureError",
     "RecordingFailureError",
     "ResourceExhaustionFailureError",
@@ -63,7 +72,10 @@ __all__ = [
     "failure_summary_payload",
     "find_classified_exception",
     "recordable_jsonb",
+    "require_generation_text",
     "should_retry_step",
     "summarize_exception",
     "unwrap_exception",
+    "validate_direct_generation",
+    "validate_encdec_generation",
 ]

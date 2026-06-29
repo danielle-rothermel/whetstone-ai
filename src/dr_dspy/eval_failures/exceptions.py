@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from dr_dspy.eval_failures.types import FailureClass
 
@@ -15,9 +15,11 @@ class EvalFailureError(Exception):
         message: str,
         *,
         underlying: BaseException | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.underlying = underlying
+        self.metadata = dict(metadata or {})
 
 
 class PermanentFailureError(EvalFailureError):
@@ -42,6 +44,14 @@ class UnknownFailureError(EvalFailureError):
 
 class RecordingFailureError(PermanentFailureError):
     """Worker could not produce a storable record of what it did."""
+
+
+class EmptyGenerationError(PermanentFailureError):
+    """Predictor returned no usable text for a required output field."""
+
+
+class PredictionParseError(PermanentFailureError):
+    """Predictor failed to parse structured output from an LM response."""
 
 
 class StrandedGenerationError(TransientFailureError):
