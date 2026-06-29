@@ -1,10 +1,10 @@
 # Platform graph workflow implementation notes
 
-The v1 platform graph workflow currently runs one already-created
-`PredictionSpecRecord` through DBOS and persists append-only generation and
-node-attempt outcomes.
+The v1 platform graph workflow runs `PredictionSpecRecord` rows through DBOS
+and persists append-only generation and node-attempt outcomes. It supports a
+direct single-spec command and a queued batch-submission path.
 
-## Running the narrow path
+## Running the platform path
 
 Run one existing prediction spec:
 
@@ -14,28 +14,46 @@ uv run python -m dr_dspy.platform.worker run-one \
   --prediction-id "<prediction-id>"
 ```
 
-`run-one` requires a `PredictionSpecRecord` row to exist before it starts. This
-phase wires `insert_prediction_spec` in the database layer, but it does not add
-a spec-creation CLI or end-to-end fixture command. Create specs through tests,
-migration/backfill setup, or ad-hoc insertion before using the documented
-runner command.
+`run-one` requires a `PredictionSpecRecord` row to exist before it starts.
+Create specs through tests, migration/backfill setup, ad-hoc insertion, or the
+batch submit path before using the direct runner command.
 
-Start the minimal platform DBOS runtime shell:
+Start the queue-consuming platform DBOS worker:
 
 ```bash
 uv run python -m dr_dspy.platform.worker worker \
-  --database-url "$DATABASE_URL"
+  --database-url "$DATABASE_URL" \
+  --worker-concurrency 1
 ```
 
-The `worker` command launches DBOS with no listened queues. It is a runtime
-shell for the direct `run-one` stage, not a production queue-consuming worker
-path. Batch submission, fairness, queue consumption, throttle-aware backoff,
-scoring, projections, and migration/backfill are deferred.
+The `worker` command registers and listens to the
+`dr-dspy-platform-generation-v1` queue. Queue registration uses
+`on_conflict="always_update"` so worker-concurrency changes made through the
+CLI are reflected in DBOS queue metadata on restart.
+
+Submit a JSONL file of `PredictionSpecRecord` payloads:
+
+```bash
+uv run python -m dr_dspy.platform.worker submit-jsonl \
+  --database-url "$DATABASE_URL" \
+  --operation-key "<stable-submit-key>" \
+  --experiment-name "<experiment-name>" \
+  --specs-file specs.jsonl
+```
+
+`submit-jsonl` streams JSONL parsing into the submit path, validates that every
+spec belongs to the requested experiment, inserts the experiment row if needed,
+persists batch operation/item audit rows, and enqueues workflows on
+`dr-dspy-platform-generation-v1`. Submission is resumable by operation key:
+existing completed/enqueued batch items are skipped, while pending or failed
+items are retried.
+
+The submit path orders specs by their stored fair-order key before persistence
+and enqueue. Fair-order keys are part of the `PredictionSpecRecord` contract, so
+submit validates the records but does not recompute a separate scheduling key.
 
 The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
-avoid introducing a second DBOS configuration path during this narrow phase.
-Before the platform worker grows queue ownership or batch submission, DBOS
-runtime setup should move into a shared, non-v0 runtime module.
+avoid introducing a second DBOS configuration path while v1 and v0 coexist.
 
 ## Clock steps
 
@@ -90,6 +108,16 @@ request parameters. Custom provider runtime fields such as `base_url`,
 `api_key_env`, and capability flags are not spec-owned yet; adding those belongs
 in a later provider-config contract change.
 
+## Throttle preflight and backoff
+
+Each provider node resolves its `ProviderConfigRef` before the LM call. If the
+provider has a `throttle_key`, a DBOS preflight step reads the current throttle
+backoff state and durably sleeps until the key is unblocked. Retryable provider
+failures update the backoff state for that throttle key; successful calls clear
+it. Backoff is advisory across concurrent workers, but state read/write errors
+and provider-resolution errors are treated as workflow failures rather than
+silent fallbacks.
+
 ## Follow-up notes
 
 - Replace prompt metadata keys such as `user_prompt_template`, `system_prompt`,
@@ -98,12 +126,15 @@ in a later provider-config contract change.
 - Move database engine/pool ownership into the platform worker runtime instead
   of creating short-lived SQLAlchemy engines inside each DBOS step.
 - Move DBOS bootstrap ownership out of `dr_dspy.harness.dbos` and into a shared
-  runtime module before platform queue workers are added.
-- Add a supported spec-creation path for v1 runs, either as a CLI helper or a
-  standard integration-test fixture.
+  runtime module.
+- Add a supported spec-construction path for v1 runs, either as a CLI helper or
+  a standard integration-test fixture.
 - Extend the persisted provider config contract before allowing experiments to
   vary provider runtime details such as `base_url`, `api_key_env`, or capability
   flags from specs.
+- Add Postgres/DBOS integration coverage for submit/resume, throttle
+  upsert/read, and workflow-level preflight behavior once the project has a
+  standard live-fixture setup.
 
 ## Integration-test status
 
@@ -122,5 +153,8 @@ fixtures, and the tier model:
   `src/dr_dspy/migration/v0_reshape.py` (outcome import and spec pass-through).
 
 The default unit suite still covers pure graph orchestration, node execution,
-record conversion, idempotent persistence SQL shape, and worker import without
-Postgres or DBOS.
+record conversion, idempotent persistence SQL shape, queue registration,
+submit/resume item selection, partial enqueue failure handling, throttle state
+statement construction, and worker import without Postgres or DBOS. Live
+Postgres/DBOS coverage for submit/resume, throttle upsert/read, and
+workflow-level preflight behavior remains follow-up work.

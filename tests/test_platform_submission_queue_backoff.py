@@ -411,6 +411,164 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
     assert failed.failure is not None
 
 
+def test_submit_prediction_specs_resume_retries_only_failed_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = (
+        _spec(task_id="HumanEval/0"),
+        _spec(task_id="HumanEval/1"),
+        _spec(task_id="HumanEval/2"),
+    )
+    engine = DummyEngine()
+    failed_prediction_id = specs[1].prediction_id
+    prepare_operation_keys: list[str] = []
+    enqueue_calls_by_run: list[list[str]] = []
+    active_run_calls: list[str] = []
+    item_state = {
+        spec.prediction_id: (
+            BatchSubmitItemEnqueueStatus.PENDING,
+            {},
+        )
+        for spec in specs
+    }
+    failed_once = False
+
+    def prepare(
+        connection: Connection,
+        *,
+        operation_key: str,
+        experiment_name: str,
+        ordered_specs: Sequence[PredictionSpecRecord],
+        submit_spec: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        prepare_operation_keys.append(operation_key)
+
+    def candidates(
+        connection: Connection,
+        *,
+        operation_key: str,
+        prediction_ids: Sequence[str],
+    ) -> tuple[submission.EnqueueCandidate, ...]:
+        by_id = {spec.prediction_id: spec for spec in specs}
+        return tuple(
+            submission.EnqueueCandidate(
+                prediction_id=prediction_id,
+                fair_order_key=by_id[prediction_id].fair_order_key,
+                item_index=index,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
+            )
+            for index, prediction_id in enumerate(prediction_ids)
+            if submission.item_needs_enqueue(
+                enqueue_status=item_state[prediction_id][0],
+                enqueue_metadata=item_state[prediction_id][1],
+            )
+        )
+
+    def enqueue(
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+        queue_name: str,
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        nonlocal failed_once
+        active_run_calls.append(prediction_id)
+        if prediction_id == failed_prediction_id and not failed_once:
+            failed_once = True
+            raise RuntimeError("queue unavailable")
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    def update_item(
+        connection: Connection,
+        *,
+        operation_key: str,
+        item: submission.SubmittedPredictionItem,
+    ) -> None:
+        metadata = (
+            {"workflow_id": item.workflow_id}
+            if item.workflow_id is not None
+            else {}
+        )
+        item_state[item.prediction_id] = (item.enqueue_status, metadata)
+
+    def summary(
+        connection: Connection,
+        *,
+        operation_key: str,
+        experiment_name: str,
+        queue_name: str,
+    ) -> submission.SubmitPredictionSpecsResult:
+        items = tuple(
+            submission.SubmittedPredictionItem(
+                prediction_id=spec.prediction_id,
+                fair_order_key=spec.fair_order_key,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
+                enqueue_status=item_state[spec.prediction_id][0],
+            )
+            for spec in specs
+        )
+        return submission.SubmitPredictionSpecsResult(
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            queue_name=queue_name,
+            requested_count=len(specs),
+            inserted_count=len(specs),
+            already_present_count=0,
+            enqueued_count=sum(
+                item.enqueue_status is BatchSubmitItemEnqueueStatus.ENQUEUED
+                for item in items
+            ),
+            failed_count=sum(
+                item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
+                for item in items
+            ),
+            items=items,
+        )
+
+    monkeypatch.setattr(submission, "prepare_submission_records", prepare)
+    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "update_batch_item_outcome",
+        update_item,
+    )
+    monkeypatch.setattr(submission, "update_operation_summary", summary)
+
+    first = submission.submit_prediction_specs(
+        cast(Any, engine),
+        database_url="postgresql://example/db",
+        operation_key="op-1",
+        experiment_name="exp",
+        specs=specs,
+        enqueue_workflow=enqueue,
+    )
+    enqueue_calls_by_run.append(active_run_calls)
+    active_run_calls = []
+    second = submission.submit_prediction_specs(
+        cast(Any, engine),
+        database_url="postgresql://example/db",
+        operation_key="op-1",
+        experiment_name="exp",
+        specs=specs,
+        enqueue_workflow=enqueue,
+    )
+    enqueue_calls_by_run.append(active_run_calls)
+
+    assert prepare_operation_keys == ["op-1", "op-1"]
+    assert first.failed_count == 1
+    assert second.failed_count == 0
+    assert second.enqueued_count == 3
+    assert enqueue_calls_by_run[1] == [failed_prediction_id]
+
+
 def test_item_needs_enqueue_supports_resume() -> None:
     assert submission.item_needs_enqueue(
         enqueue_status=BatchSubmitItemEnqueueStatus.PENDING,
@@ -520,6 +678,37 @@ def test_queue_enqueue_uses_stable_workflow_ids(
         prediction_id,
         2,
     )
+
+
+def test_register_platform_generation_queue_updates_existing_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def register_queue(
+        queue_name: str,
+        *,
+        worker_concurrency: int,
+        on_conflict: str,
+    ) -> object:
+        captured.update(
+            {
+                "queue_name": queue_name,
+                "worker_concurrency": worker_concurrency,
+                "on_conflict": on_conflict,
+            }
+        )
+        return object()
+
+    monkeypatch.setattr(queue_worker.DBOS, "register_queue", register_queue)
+
+    queue_worker.register_platform_generation_queue(worker_concurrency=4)
+
+    assert captured == {
+        "queue_name": queue_worker.PLATFORM_GENERATION_QUEUE_NAME,
+        "worker_concurrency": 4,
+        "on_conflict": "always_update",
+    }
 
 
 def test_platform_worker_config_listens_to_v1_queue(

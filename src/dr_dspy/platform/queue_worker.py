@@ -4,13 +4,9 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
-from dbos._error import (
-    DBOSConflictingWorkflowError,
-    DBOSQueueDeduplicatedError,
-    DBOSWorkflowConflictIDError,
-)
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
+from dr_dspy.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow,
@@ -19,12 +15,7 @@ from dr_dspy.records import stable_generation_run_id
 
 PLATFORM_GENERATION_QUEUE_NAME = "dr-dspy-platform-generation-v1"
 DEFAULT_ATTEMPT_INDEX = 0
-
-WORKFLOW_START_RACE_ERRORS: tuple[type[BaseException], ...] = (
-    DBOSWorkflowConflictIDError,
-    DBOSQueueDeduplicatedError,
-    DBOSConflictingWorkflowError,
-)
+QUEUE_CONFLICT_POLICY = "always_update"
 
 type GenerationWorkflow = Callable[[str, str, int], str]
 
@@ -55,6 +46,7 @@ def register_platform_generation_queue(
     return DBOS.register_queue(
         queue_name,
         worker_concurrency=worker_concurrency,
+        on_conflict=QUEUE_CONFLICT_POLICY,
     )
 
 

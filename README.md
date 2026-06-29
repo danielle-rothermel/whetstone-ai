@@ -47,9 +47,10 @@ model, shared fixtures, and conventions for adding new coverage.
 
 ## V1 graph workflow
 
-The first v1 execution path runs an already-created `PredictionSpecRecord`
-through the pure graph runner, calls the LM provider boundary through DBOS
-steps, and persists append-only generation/node outcomes.
+The v1 execution path runs `PredictionSpecRecord` rows through the pure graph
+runner, calls the LM provider boundary through DBOS steps, and persists
+append-only generation/node outcomes. It supports both direct single-spec
+execution and queued batch submission.
 
 Run one existing prediction spec:
 
@@ -64,17 +65,42 @@ database. This phase does not include a spec-creation CLI; specs must be
 inserted by a test fixture, migration/backfill path, or ad-hoc setup before
 `run-one` can execute them.
 
-Start the minimal platform DBOS runtime shell:
+Start the platform DBOS generation worker:
 
 ```bash
 uv run python -m dr_dspy.platform.worker worker \
-  --database-url "$DATABASE_URL"
+  --database-url "$DATABASE_URL" \
+  --worker-concurrency 1
 ```
 
-The current `worker` command launches DBOS with no listened queues. It is a
-runtime shell for the direct `run-one` stage, not a production queue-consuming
-worker path. Batch submission, fairness, queue consumption, throttle-aware
-backoff, scoring, projections, and v0 migration remain deferred.
+The `worker` command registers and listens to
+`dr-dspy-platform-generation-v1`. Queue registration uses the configured
+`--worker-concurrency` and updates the DBOS queue record on restart so operator
+concurrency changes are picked up reliably.
+
+Submit a JSONL file of `PredictionSpecRecord` payloads:
+
+```bash
+uv run python -m dr_dspy.platform.worker submit-jsonl \
+  --database-url "$DATABASE_URL" \
+  --operation-key "<stable-submit-key>" \
+  --experiment-name "<experiment-name>" \
+  --specs-file specs.jsonl
+```
+
+`submit-jsonl` validates specs, creates the experiment row if needed, persists
+batch operation/item audit rows, orders specs by their stored fair-order key,
+and enqueues generation workflows on `dr-dspy-platform-generation-v1`.
+Re-running the same `--operation-key` resumes from durable batch items:
+completed/enqueued items are skipped and pending or failed items are retried.
+
+Queued graph workflow execution now includes throttle preflight/backoff keyed
+by provider throttle key. Rate-limited and transient provider failures update
+the throttle state; later workflows with the same key durably sleep before
+calling the provider.
+
+Scoring, Unitbench-facing projections, and v0 migration/backfill remain
+deferred.
 
 The legacy v0 direct and enc-dec workflows write mutable prediction rows that
 mix requested specs, workflow status, generation artifacts, scores, and repair
