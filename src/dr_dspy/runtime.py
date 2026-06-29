@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import multiprocessing as mp
 import platform
 from pathlib import Path
+from typing import Any, Protocol
 
 from dotenv import load_dotenv
 
 DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
-__all__ = ["configure_multiprocessing", "load_env_file"]
+__all__ = ["configure_multiprocessing", "load_env_file", "run_typer_app"]
+
+
+class TyperApp(Protocol):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 def load_env_file(env_file: str | Path = DEFAULT_ENV_FILE) -> Path | None:
@@ -31,3 +37,9 @@ def configure_multiprocessing() -> None:
     else:
         with contextlib.suppress(RuntimeError):
             mp.set_start_method("spawn", force=True)
+
+
+def run_typer_app(app: TyperApp) -> None:
+    configure_multiprocessing()
+    logging.getLogger("dspy").setLevel(logging.WARNING)
+    app()

@@ -2,7 +2,6 @@
 name = "dr-dspy"
 version = "0.1.0"
 description = "Add your description here"
-readme = "README.md"
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
@@ -21,6 +20,7 @@ dependencies = [
     "ruff>=0.15.10",
     "ty>=0.0.54",
     "typer>=0.26.7",
+    "zstandard>=0.25.0",
 ]
 
 [build-system]
@@ -31,11 +31,12 @@ build-backend = "hatchling.build"
 dspy = { workspace = true }
 
 [tool.ruff]
-include = ["src/**/*.py", "scripts/**/*.py"]
-exclude = ["tests/**/*.py"]
-force-exclude = true
+include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 line-length = 79
 target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
@@ -47,4 +48,4 @@ known-first-party = ["dr_dspy", "dspy"]
 extra-paths = [".."]
 
 [tool.ty.src]
-include = ["src/**/*.py", "scripts/**/*.py"]
+include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
