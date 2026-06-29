@@ -13,7 +13,8 @@ from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
     execute_lm_node,
-    node_step_error_result,
+    failure_metadata_from_exception,
+    node_step_error_result_from_failure,
 )
 from dr_dspy.platform.persistence import (
     generation_run_record_from_result,
@@ -22,6 +23,7 @@ from dr_dspy.platform.persistence import (
     persist_generation_result,
 )
 from dr_dspy.records import (
+    FailureMetadataPayload,
     GenerationRunRecord,
     NodeAttemptRecord,
     PredictionSpecRecord,
@@ -36,12 +38,7 @@ GENERATION_STARTED_AT_STEP_NAME = (
 GENERATION_COMPLETED_AT_STEP_NAME = (
     "dr_dspy_platform_generation_completed_at_v1"
 )
-NODE_ATTEMPT_STARTED_AT_STEP_NAME = (
-    "dr_dspy_platform_node_attempt_started_at_v1"
-)
-NODE_ATTEMPT_COMPLETED_AT_STEP_NAME = (
-    "dr_dspy_platform_node_attempt_completed_at_v1"
-)
+NODE_STEP_ERROR_RESULT_STEP_NAME = "dr_dspy_platform_node_step_error_result_v1"
 EXECUTE_NODE_STEP_NAME = "dr_dspy_platform_execute_lm_node_v1"
 PERSIST_RESULT_STEP_NAME = "dr_dspy_platform_persist_generation_result_v1"
 WORKFLOW_ID_PREFIX = "platform-generate-v1"
@@ -142,9 +139,6 @@ def run_prediction_graph_workflow(
         node: NodeSpec,
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
-        node_started_at = datetime.fromisoformat(
-            node_attempt_started_at_step(generation_run_id, node.id)
-        )
         try:
             result = execute_lm_node_step(
                 step_spec.model_dump(mode="json"),
@@ -153,16 +147,12 @@ def run_prediction_graph_workflow(
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
-            node_completed_at = datetime.fromisoformat(
-                node_attempt_completed_at_step(generation_run_id, node.id)
+            result = node_step_error_result_step(
+                step_spec.model_dump(mode="json"),
+                node.model_dump(mode="json"),
+                failure_metadata_from_exception(error).model_dump(mode="json"),
             )
-            return node_step_error_result(
-                spec=step_spec,
-                node=node,
-                error=error,
-                started_at=node_started_at,
-                completed_at=node_completed_at,
-            )
+            return NodeStepResult.model_validate(result)
 
     graph_result, node_step_results = run_prediction_graph_core(
         spec=spec,
@@ -242,22 +232,6 @@ def generation_completed_at_step(generation_run_id: str) -> str:
     return timestamp_now_iso()
 
 
-@DBOS.step(name=NODE_ATTEMPT_STARTED_AT_STEP_NAME)
-def node_attempt_started_at_step(
-    generation_run_id: str,
-    node_id: str,
-) -> str:
-    return timestamp_now_iso()
-
-
-@DBOS.step(name=NODE_ATTEMPT_COMPLETED_AT_STEP_NAME)
-def node_attempt_completed_at_step(
-    generation_run_id: str,
-    node_id: str,
-) -> str:
-    return timestamp_now_iso()
-
-
 def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -279,6 +253,23 @@ def execute_lm_node_step(
         node=NodeSpec.model_validate(node_payload),
         node_inputs=node_inputs,
         raise_retryable=True,
+    )
+    return result.model_dump(mode="json")
+
+
+@DBOS.step(name=NODE_STEP_ERROR_RESULT_STEP_NAME)
+def node_step_error_result_step(
+    spec_payload: dict[str, Any],
+    node_payload: dict[str, Any],
+    failure_payload: dict[str, Any],
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    result = node_step_error_result_from_failure(
+        spec=PredictionSpecRecord.model_validate(spec_payload),
+        node=NodeSpec.model_validate(node_payload),
+        failure=FailureMetadataPayload.model_validate(failure_payload),
+        started_at=now,
+        completed_at=now,
     )
     return result.model_dump(mode="json")
 

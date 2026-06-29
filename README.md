@@ -32,7 +32,8 @@ complete.
   Unitbench-facing projections.
 - [Platform graph workflow implementation notes](docs/platform-graph-workflow-implementation.md)
   describe the current v1 workflow entrypoint, DBOS timing boundaries,
-  node-attempt indexing semantics, provider-config scope, and follow-up work.
+  node-attempt indexing semantics, provider-config scope, integration-test
+  status, and follow-up work.
 
 ## V1 graph workflow
 
@@ -48,15 +49,17 @@ uv run python -m dr_dspy.platform.worker run-one \
   --prediction-id "<prediction-id>"
 ```
 
-Start a minimal platform worker process:
+Start the minimal platform DBOS runtime shell:
 
 ```bash
 uv run python -m dr_dspy.platform.worker worker \
   --database-url "$DATABASE_URL"
 ```
 
-The current worker path intentionally does not implement batch submission,
-fairness, throttle-aware backoff, scoring, projections, or v0 migration.
+The current `worker` command launches DBOS with no listened queues. It is a
+runtime shell for the direct `run-one` stage, not a queue consumer. Batch
+submission, fairness, queue consumption, throttle-aware backoff, scoring,
+projections, and v0 migration remain deferred.
 
 The legacy v0 direct and enc-dec workflows write mutable prediction rows that
 mix requested specs, workflow status, generation artifacts, scores, and repair

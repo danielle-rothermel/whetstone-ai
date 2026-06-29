@@ -14,21 +14,26 @@ uv run python -m dr_dspy.platform.worker run-one \
   --prediction-id "<prediction-id>"
 ```
 
-Start the minimal platform worker process:
+Start the minimal platform DBOS runtime shell:
 
 ```bash
 uv run python -m dr_dspy.platform.worker worker \
   --database-url "$DATABASE_URL"
 ```
 
-This entrypoint intentionally does not add batch submission, fairness,
-throttle-aware backoff, scoring, projections, or migration/backfill.
+The `worker` command launches DBOS with no listened queues. It is a runtime
+shell for the direct `run-one` stage, not a queue consumer. Batch submission,
+fairness, queue consumption, throttle-aware backoff, scoring, projections, and
+migration/backfill are deferred.
 
 ## Clock steps
 
-Generation start, generation completion, node-attempt fallback start, and
-node-attempt fallback completion each use distinct DBOS step names. This avoids
-depending on DBOS memoization details for repeated calls to a single clock step.
+Generation start and generation completion use distinct DBOS step names. This
+avoids depending on DBOS memoization details for repeated calls to a single
+clock step. Node-attempt timestamps are captured inside the node execution step,
+where the provider call happens. If DBOS exhausts retries before the node step
+returns, the workflow converts the step exception into a terminal node error in
+a separate DBOS step.
 
 ## Node attempt indexes
 
@@ -55,3 +60,11 @@ in a later provider-config contract change.
 - Extend the persisted provider config contract before allowing experiments to
   vary provider runtime details such as `base_url`, `api_key_env`, or capability
   flags from specs.
+
+## Integration-test status
+
+The default test suite covers the pure graph orchestration, node execution,
+record conversion, idempotent persistence statement shape, and worker import.
+It does not require a live DBOS system database. A narrow live DBOS/Postgres
+workflow test should be added once the project has a standard integration-test
+fixture for DBOS.

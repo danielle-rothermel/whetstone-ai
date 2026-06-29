@@ -224,11 +224,11 @@ def execute_lm_node(
         )
 
 
-def node_step_error_result(
+def node_step_error_result_from_failure(
     *,
     spec: PredictionSpecRecord,
     node: NodeSpec,
-    error: BaseException,
+    failure: FailureMetadataPayload,
     started_at: datetime,
     completed_at: datetime,
 ) -> NodeStepResult:
@@ -236,10 +236,11 @@ def node_step_error_result(
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
     except Exception:
         provider_ref = None
-    return NodeStepResult.error(
+    return NodeStepResult(
         node_id=node.id,
+        status=NodeStepStatus.ERROR,
         provider_config=provider_ref,
-        error=error,
+        failure=failure,
         started_at=started_at,
         completed_at=completed_at,
     )

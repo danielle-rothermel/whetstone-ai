@@ -99,7 +99,12 @@ def run_one(
         shared_dbos.destroy_dbos_runtime()
 
 
-@APP.command()
+@APP.command(
+    help=(
+        "Launch the platform DBOS runtime without queue listeners. "
+        "Queue-consuming workers are deferred until batch submission lands."
+    )
+)
 def worker(
     database_url: Annotated[
         str | None,
@@ -122,12 +127,15 @@ def worker(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
     )
-    CONSOLE.print("platform graph worker running; press Ctrl-C to stop")
+    CONSOLE.print(
+        "platform graph DBOS runtime running without queue listeners; "
+        "press Ctrl-C to stop"
+    )
     try:
         while True:
             time.sleep(1.0)
     except KeyboardInterrupt:
-        CONSOLE.print("platform graph worker stopping")
+        CONSOLE.print("platform graph DBOS runtime stopping")
     finally:
         shared_dbos.destroy_dbos_runtime()
 

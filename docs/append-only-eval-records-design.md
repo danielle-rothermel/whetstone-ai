@@ -156,7 +156,7 @@ DBOS node steps, and persists append-only `GenerationRunRecord` and
 terminal outcomes only. See
 `docs/platform-graph-workflow-implementation.md` for the current entrypoint,
 clock-step boundaries, node-attempt indexing semantics, provider-config scope,
-and follow-up work.
+integration-test status, and follow-up work.
 
 Two platform workflow concerns remain deferred. First, prompt configuration is
 currently a documented metadata contract on graph nodes; a later graph contract

@@ -320,6 +320,170 @@ def test_failed_upstream_node_blocks_downstream_without_node_attempt() -> None:
     )
 
 
+def test_terminal_error_summary_preserves_node_failure_class() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+
+    execution = execute_prediction_graph(
+        spec=spec,
+        attempt_index=0,
+        generation_run_id="run-1",
+        started_at=NOW,
+        completed_at=LATER,
+        run_node_step=lambda step_spec, node, inputs: _step_error(
+            node,
+            "provider failed",
+        ),
+    )
+
+    node_failure = execution.node_attempts[0].failure
+    terminal_error = execution.generation_run.summary.terminal_error
+    assert node_failure is not None
+    assert terminal_error is not None
+    assert terminal_error.failure is not None
+    assert node_failure.failure_class is FailureClass.PERMANENT
+    assert terminal_error.failure.failure_class is FailureClass.PERMANENT
+
+
+def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+    database_url = "postgresql://example/db"
+    attempt_index = 2
+    generation_run_id = stable_generation_run_id(
+        prediction_id=spec.prediction_id,
+        attempt_index=attempt_index,
+    )
+    calls: list[tuple[str, Any]] = []
+
+    def load_step(
+        step_database_url: str,
+        prediction_id: str,
+    ) -> dict[str, Any]:
+        calls.append(("load", (step_database_url, prediction_id)))
+        return spec.model_dump(mode="json")
+
+    def started_step(step_generation_run_id: str) -> str:
+        calls.append(("started", step_generation_run_id))
+        return NOW.isoformat()
+
+    def execute_step(
+        spec_payload: dict[str, Any],
+        node_payload: dict[str, Any],
+        node_inputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        step_spec = PredictionSpecRecord.model_validate(spec_payload)
+        node = NodeSpec.model_validate(node_payload)
+        calls.append(
+            (
+                "execute",
+                (step_spec.prediction_id, node.id, node_inputs),
+            )
+        )
+        return _step_success(
+            node,
+            f"workflow {node_inputs['prompt']}",
+        ).model_dump(mode="json")
+
+    def completed_step(step_generation_run_id: str) -> str:
+        calls.append(("completed", step_generation_run_id))
+        return LATER.isoformat()
+
+    def persist_step(
+        step_database_url: str,
+        spec_payload: dict[str, Any],
+        step_generation_run_id: str,
+        step_attempt_index: int,
+        graph_result_payload: dict[str, Any],
+        node_step_result_payloads: list[dict[str, Any]],
+        started_at: str,
+        completed_at: str,
+    ) -> None:
+        persisted_spec = PredictionSpecRecord.model_validate(spec_payload)
+        graph_result = graph_workflow.GraphRunResult.model_validate(
+            graph_result_payload
+        )
+        calls.append(
+            (
+                "persist",
+                (
+                    step_database_url,
+                    persisted_spec.prediction_id,
+                    step_generation_run_id,
+                    step_attempt_index,
+                    graph_result.status,
+                    len(node_step_result_payloads),
+                    started_at,
+                    completed_at,
+                ),
+            )
+        )
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "load_prediction_spec_step",
+        load_step,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "generation_started_at_step",
+        started_step,
+    )
+    monkeypatch.setattr(graph_workflow, "execute_lm_node_step", execute_step)
+    monkeypatch.setattr(
+        graph_workflow,
+        "generation_completed_at_step",
+        completed_step,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "persist_generation_result_step",
+        persist_step,
+    )
+
+    workflow = cast(
+        Any,
+        graph_workflow.run_prediction_graph_workflow,
+    ).__wrapped__
+    result = workflow(database_url, spec.prediction_id, attempt_index)
+
+    assert result == generation_run_id
+    assert calls == [
+        ("load", (database_url, spec.prediction_id)),
+        ("started", generation_run_id),
+        (
+            "execute",
+            (
+                spec.prediction_id,
+                "direct",
+                {"prompt": "write add"},
+            ),
+        ),
+        ("completed", generation_run_id),
+        (
+            "persist",
+            (
+                database_url,
+                spec.prediction_id,
+                generation_run_id,
+                attempt_index,
+                GraphRunStatus.SUCCESS,
+                1,
+                NOW.isoformat(),
+                LATER.isoformat(),
+            ),
+        ),
+    ]
+
+
 def test_independent_branch_failure_records_partial_generation() -> None:
     graph = GraphSpec(
         nodes=(_node("terminal"), _node("bad")),
@@ -549,15 +713,13 @@ def test_platform_worker_import_registers_entrypoint() -> None:
     assert worker.APP is not None
 
 
-def test_platform_clock_steps_use_distinct_dbos_step_names() -> None:
+def test_generation_clock_steps_have_distinct_dbos_names() -> None:
     step_names = {
         graph_workflow.GENERATION_STARTED_AT_STEP_NAME,
         graph_workflow.GENERATION_COMPLETED_AT_STEP_NAME,
-        graph_workflow.NODE_ATTEMPT_STARTED_AT_STEP_NAME,
-        graph_workflow.NODE_ATTEMPT_COMPLETED_AT_STEP_NAME,
     }
 
-    assert len(step_names) == 4
+    assert len(step_names) == 2
 
 
 class _RecordingConnection:
