@@ -191,18 +191,52 @@ def start_prediction_graph_workflow(
     prediction_id: str,
     attempt_index: int = 0,
 ) -> str:
+    generation_run_id, _handle = _start_prediction_graph_workflow_handle(
+        database_url=database_url,
+        prediction_id=prediction_id,
+        attempt_index=attempt_index,
+    )
+    return generation_run_id
+
+
+def run_prediction_graph_workflow_once(
+    database_url: str,
+    prediction_id: str,
+    attempt_index: int = 0,
+) -> str:
+    _generation_run_id, handle = _start_prediction_graph_workflow_handle(
+        database_url=database_url,
+        prediction_id=prediction_id,
+        attempt_index=attempt_index,
+    )
+    result = handle.get_result()
+    if not isinstance(result, str):
+        raise TypeError("platform graph workflow returned a non-string result")
+    return result
+
+
+def platform_generation_workflow_id(generation_run_id: str) -> str:
+    return f"{WORKFLOW_ID_PREFIX}:{generation_run_id}"
+
+
+def _start_prediction_graph_workflow_handle(
+    *,
+    database_url: str,
+    prediction_id: str,
+    attempt_index: int,
+) -> tuple[str, Any]:
     generation_run_id = stable_generation_run_id(
         prediction_id=prediction_id,
         attempt_index=attempt_index,
     )
-    with SetWorkflowID(f"{WORKFLOW_ID_PREFIX}:{generation_run_id}"):
-        DBOS.start_workflow(
+    with SetWorkflowID(platform_generation_workflow_id(generation_run_id)):
+        handle = DBOS.start_workflow(
             run_prediction_graph_workflow,
             database_url,
             prediction_id,
             attempt_index,
         )
-    return generation_run_id
+    return generation_run_id, handle
 
 
 @DBOS.step(name=LOAD_SPEC_STEP_NAME)

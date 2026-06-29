@@ -2,18 +2,17 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 
 import typer
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS
 from rich.console import Console
 
 from dr_dspy.harness import dbos as shared_dbos
 from dr_dspy.platform.graph_workflow import (
-    WORKFLOW_ID_PREFIX,
-    run_prediction_graph_workflow,
+    platform_generation_workflow_id,
+    run_prediction_graph_workflow_once,
 )
-from dr_dspy.records import stable_generation_run_id
 from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
@@ -75,24 +74,18 @@ def run_one(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
     )
-    generation_run_id = stable_generation_run_id(
-        prediction_id=prediction_id,
-        attempt_index=attempt_index,
-    )
-    workflow_id = f"{WORKFLOW_ID_PREFIX}:{generation_run_id}"
     try:
-        with SetWorkflowID(workflow_id):
-            handle = DBOS.start_workflow(
-                run_prediction_graph_workflow,
-                config.database_url,
-                prediction_id,
-                attempt_index,
-            )
-        result = _workflow_result(handle)
+        generation_run_id = run_prediction_graph_workflow_once(
+            database_url=config.database_url,
+            prediction_id=prediction_id,
+            attempt_index=attempt_index,
+        )
         CONSOLE.print(
             {
-                "workflow_id": workflow_id,
-                "generation_run_id": result,
+                "workflow_id": platform_generation_workflow_id(
+                    generation_run_id
+                ),
+                "generation_run_id": generation_run_id,
             }
         )
     finally:
@@ -138,13 +131,6 @@ def worker(
         CONSOLE.print("platform graph DBOS runtime stopping")
     finally:
         shared_dbos.destroy_dbos_runtime()
-
-
-def _workflow_result(handle: Any) -> str:
-    result = handle.get_result()
-    if not isinstance(result, str):
-        raise TypeError("platform graph workflow returned a non-string result")
-    return result
 
 
 def main() -> None:

@@ -49,6 +49,11 @@ uv run python -m dr_dspy.platform.worker run-one \
   --prediction-id "<prediction-id>"
 ```
 
+This command assumes the `PredictionSpecRecord` already exists in the
+database. This phase does not include a spec-creation CLI; specs must be
+inserted by a test fixture, migration/backfill path, or ad-hoc setup before
+`run-one` can execute them.
+
 Start the minimal platform DBOS runtime shell:
 
 ```bash
@@ -57,9 +62,9 @@ uv run python -m dr_dspy.platform.worker worker \
 ```
 
 The current `worker` command launches DBOS with no listened queues. It is a
-runtime shell for the direct `run-one` stage, not a queue consumer. Batch
-submission, fairness, queue consumption, throttle-aware backoff, scoring,
-projections, and v0 migration remain deferred.
+runtime shell for the direct `run-one` stage, not a production queue-consuming
+worker path. Batch submission, fairness, queue consumption, throttle-aware
+backoff, scoring, projections, and v0 migration remain deferred.
 
 The legacy v0 direct and enc-dec workflows write mutable prediction rows that
 mix requested specs, workflow status, generation artifacts, scores, and repair

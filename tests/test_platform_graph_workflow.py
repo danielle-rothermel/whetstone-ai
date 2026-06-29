@@ -592,6 +592,39 @@ def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
         )
 
 
+def test_lm_node_executor_rejects_unsupported_node_op() -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    unsupported_node = NodeSpec.model_construct(
+        id=node.id,
+        config=node.config,
+        op=cast(Any, "python_call"),
+    )
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+
+    def provider_caller(client: Any, request: Any) -> Any:
+        raise AssertionError("unsupported node op should not call provider")
+
+    result = execute_lm_node(
+        spec=spec,
+        node=unsupported_node,
+        node_inputs={"prompt": "write add"},
+        client_factory=lambda config: object(),
+        provider_caller=provider_caller,
+    )
+
+    assert result.status is NodeStepStatus.ERROR
+    assert result.failure is not None
+    assert result.failure.failure_class is FailureClass.PERMANENT
+    assert result.failure.message == (
+        "unsupported node operation for LM executor"
+    )
+    assert result.failure.metadata == {
+        "node_id": "direct",
+        "node_op": "python_call",
+    }
+
+
 def test_multiple_provider_configs_require_node_provider_config_id() -> None:
     node = _node("direct", bindings={"prompt": "task.prompt"})
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
@@ -711,6 +744,74 @@ def test_platform_worker_import_registers_entrypoint() -> None:
     from dr_dspy.platform import worker
 
     assert worker.APP is not None
+
+
+def test_platform_worker_run_one_uses_shared_workflow_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_dspy.platform import worker
+
+    class RuntimeConfig:
+        database_url = "postgresql://example/db"
+
+    calls: list[tuple[str, Any]] = []
+
+    def load_env_file(env_file: Any = None) -> None:
+        calls.append(("load_env", env_file))
+
+    def configure_runtime(
+        *,
+        database_url: str | None,
+        dbos_system_database_url: str | None,
+    ) -> RuntimeConfig:
+        calls.append(
+            (
+                "configure",
+                (database_url, dbos_system_database_url),
+            )
+        )
+        return RuntimeConfig()
+
+    def run_once(
+        *,
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+    ) -> str:
+        calls.append(
+            (
+                "run_once",
+                (database_url, prediction_id, attempt_index),
+            )
+        )
+        return "generation-run-1"
+
+    monkeypatch.setattr(worker, "load_env_file", load_env_file)
+    monkeypatch.setattr(
+        worker,
+        "configure_platform_dbos_runtime",
+        configure_runtime,
+    )
+    monkeypatch.setattr(worker, "run_prediction_graph_workflow_once", run_once)
+    monkeypatch.setattr(
+        worker.shared_dbos,
+        "destroy_dbos_runtime",
+        lambda: None,
+    )
+
+    worker.run_one(
+        prediction_id="prediction-1",
+        attempt_index=3,
+        database_url="postgresql://app/db",
+        dbos_system_database_url="postgresql://dbos/db",
+        env_file=None,
+    )
+
+    assert calls == [
+        ("load_env", None),
+        ("configure", ("postgresql://app/db", "postgresql://dbos/db")),
+        ("run_once", ("postgresql://example/db", "prediction-1", 3)),
+    ]
 
 
 def test_generation_clock_steps_have_distinct_dbos_names() -> None:

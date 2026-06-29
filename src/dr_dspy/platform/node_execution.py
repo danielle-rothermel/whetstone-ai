@@ -14,7 +14,7 @@ from dr_dspy.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from dr_dspy.graph import NodeOutput, NodeSpec
+from dr_dspy.graph import NodeOp, NodeOutput, NodeSpec
 from dr_dspy.lm.boundary import (
     EndpointKind,
     ProviderConfig,
@@ -168,6 +168,14 @@ def execute_lm_node(
     provider_ref: ProviderConfigRef | None = None
     resolved_client_factory = client_factory or create_provider_client
     try:
+        if node.op is not NodeOp.LLM_CALL:
+            raise PermanentFailureError(
+                "unsupported node operation for LM executor",
+                metadata={
+                    "node_id": node.id,
+                    "node_op": str(node.op),
+                },
+            )
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
         runtime_config = runtime_provider_config(provider_ref)
         messages = build_node_messages(node=node, node_inputs=node_inputs)

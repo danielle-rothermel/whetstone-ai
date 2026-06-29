@@ -14,6 +14,12 @@ uv run python -m dr_dspy.platform.worker run-one \
   --prediction-id "<prediction-id>"
 ```
 
+`run-one` requires a `PredictionSpecRecord` row to exist before it starts. This
+phase wires `insert_prediction_spec` in the database layer, but it does not add
+a spec-creation CLI or end-to-end fixture command. Create specs through tests,
+migration/backfill setup, or ad-hoc insertion before using the documented
+runner command.
+
 Start the minimal platform DBOS runtime shell:
 
 ```bash
@@ -22,9 +28,14 @@ uv run python -m dr_dspy.platform.worker worker \
 ```
 
 The `worker` command launches DBOS with no listened queues. It is a runtime
-shell for the direct `run-one` stage, not a queue consumer. Batch submission,
-fairness, queue consumption, throttle-aware backoff, scoring, projections, and
-migration/backfill are deferred.
+shell for the direct `run-one` stage, not a production queue-consuming worker
+path. Batch submission, fairness, queue consumption, throttle-aware backoff,
+scoring, projections, and migration/backfill are deferred.
+
+The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
+avoid introducing a second DBOS configuration path during this narrow phase.
+Before the platform worker grows queue ownership or batch submission, DBOS
+runtime setup should move into a shared, non-v0 runtime module.
 
 ## Clock steps
 
@@ -57,6 +68,10 @@ in a later provider-config contract change.
   is ready for another breaking change.
 - Move database engine/pool ownership into the platform worker runtime instead
   of creating short-lived SQLAlchemy engines inside each DBOS step.
+- Move DBOS bootstrap ownership out of `dr_dspy.harness.dbos` and into a shared
+  runtime module before platform queue workers are added.
+- Add a supported spec-creation path for v1 runs, either as a CLI helper or a
+  standard integration-test fixture.
 - Extend the persisted provider config contract before allowing experiments to
   vary provider runtime details such as `base_url`, `api_key_env`, or capability
   flags from specs.
