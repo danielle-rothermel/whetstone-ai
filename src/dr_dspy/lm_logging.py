@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 import time
 import uuid
 from collections.abc import Callable
 from typing import Any
 
-from dr_dspy.serialization import sanitize_lm_kwargs, to_jsonable
+from dr_dspy.eval_failures.recording import ensure_recordable
+from dr_dspy.serialization import sanitize_lm_kwargs
 
 PutEventFn = Callable[..., None]
 
@@ -23,44 +23,31 @@ class _LoggingMixin:
     def _log_request(
         self, req_id: str, messages: Any, kwargs: dict[str, Any]
     ) -> None:
-        try:
-            self._log(
-                "lm.request",
-                payload={
-                    "req_id": req_id,
-                    "messages": to_jsonable(messages),
-                    "kwargs": sanitize_lm_kwargs(kwargs),
-                },
-            )
-        except Exception as e:
-            print(
-                f"[{type(self).__name__} log_request] {e!r}", file=sys.stderr
-            )
+        self._log(
+            "lm.request",
+            payload={
+                "req_id": req_id,
+                "messages": ensure_recordable(messages),
+                "kwargs": sanitize_lm_kwargs(kwargs),
+            },
+        )
 
     def _log_response(self, req_id: str, resp: Any, dt: float) -> None:
-        try:
-            self._log(
-                "lm.response",
-                payload={
-                    "req_id": req_id,
-                    "dt": dt,
-                    "response": to_jsonable(resp),
-                },
-            )
-        except Exception as e:
-            print(
-                f"[{type(self).__name__} log_response] {e!r}", file=sys.stderr
-            )
+        self._log(
+            "lm.response",
+            payload={
+                "req_id": req_id,
+                "dt": dt,
+                "response": ensure_recordable(resp),
+            },
+        )
 
     def _log_error(self, req_id: str, exc: BaseException, dt: float) -> None:
-        try:
-            self._log(
-                "lm.error",
-                payload={"req_id": req_id, "dt": dt, "error": repr(exc)},
-                error=repr(exc),
-            )
-        except Exception as e:
-            print(f"[{type(self).__name__} log_error] {e!r}", file=sys.stderr)
+        self._log(
+            "lm.error",
+            payload={"req_id": req_id, "dt": dt, "error": repr(exc)},
+            error=repr(exc),
+        )
 
     def _run_logged_forward(
         self,

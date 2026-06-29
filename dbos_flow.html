@@ -564,6 +564,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_failure_exception_type · generation_underlying_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">generation_failure_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>
         <div class="col-row extra"><span class="cn">response_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row extra"><span class="cn">usage_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
@@ -571,6 +572,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="tbl-group">scoring (shared shape)</div>
         <div class="col-row"><span class="cn">scoring_status · score</span><span class="ct">TEXT·FLOAT8</span></div>
         <div class="col-row"><span class="cn">scoring_error · _failure_class · _exception_*</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">scoring_failure_metadata · data_quality_flags<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row"><span class="cn">raw_code · raw_compile_ok · raw_compile_error</span><span class="ct">TEXT·BOOL</span></div>
         <div class="col-row"><span class="cn">extraction_candidate_count · selected_candidate_index</span><span class="ct">INT</span></div>
         <div class="col-row"><span class="cn">extracted_compile_ok · _error · extraction_error</span><span class="ct">BOOL·TEXT</span></div>
@@ -661,6 +663,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="col-row"><span class="cn">generation_status</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_error · _failure_class</span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">generation_failure_exception_type · generation_underlying_exception_type · _message</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">generation_failure_metadata<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row extra"><span class="cn">encoded_description<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
         <div class="col-row extra"><span class="cn">decoded_generation<span class="ctag extra">+</span></span><span class="ct">TEXT</span></div>
         <div class="col-row"><span class="cn">raw_generation</span><span class="ct">TEXT</span></div>
@@ -673,6 +676,7 @@ details.ex[open]>summary::before{transform:rotate(90deg);}
         <div class="tbl-group">scoring (shared shape)</div>
         <div class="col-row"><span class="cn">scoring_status · score</span><span class="ct">TEXT·FLOAT8</span></div>
         <div class="col-row"><span class="cn">scoring_error · _failure_class · _exception_*</span><span class="ct">TEXT</span></div>
+        <div class="col-row extra"><span class="cn">scoring_failure_metadata · data_quality_flags<span class="ctag extra">+</span></span><span class="ct">JSONB</span></div>
         <div class="col-row"><span class="cn">raw_code · raw_compile_ok · raw_compile_error</span><span class="ct">TEXT·BOOL</span></div>
         <div class="col-row"><span class="cn">extraction_candidate_count · selected_candidate_index</span><span class="ct">INT</span></div>
         <div class="col-row"><span class="cn">extracted_compile_ok · _error · extraction_error</span><span class="ct">BOOL·TEXT</span></div>

@@ -21,7 +21,7 @@ from dr_dspy.dbos_runtime import (
     QueueSelection,
     connect_db,
 )
-from dr_dspy.failures import FailureClass
+from dr_dspy.eval_failures import FailureClass
 from dr_dspy.worker_resources import (
     current_open_file_count,
     current_open_file_soft_limit,

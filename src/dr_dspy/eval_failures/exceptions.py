@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from dr_dspy.failures.types import FailureClass
+from dr_dspy.eval_failures.types import FailureClass
 
 
 class EvalFailureError(Exception):
-    """Base for dr-dspy classified failures."""
+    """Base for dr-dspy classified eval worker failures."""
 
     failure_class: ClassVar[FailureClass]
 
@@ -38,6 +38,10 @@ class ResourceExhaustionFailureError(EvalFailureError):
 
 class UnknownFailureError(EvalFailureError):
     failure_class = FailureClass.UNKNOWN
+
+
+class RecordingFailureError(PermanentFailureError):
+    """Worker could not produce a storable record of what it did."""
 
 
 class StrandedGenerationError(TransientFailureError):

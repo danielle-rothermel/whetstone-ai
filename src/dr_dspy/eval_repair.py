@@ -7,14 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from dr_dspy import dbos_runtime
 from dr_dspy import job_ordering as shared_job_ordering
-from dr_dspy.eval_reporting import validate_sql_identifier
-from dr_dspy.failures import (
+from dr_dspy.eval_failures import (
     RECOVERABLE_FAILURE_CLASSES,
     FailureClass,
     StrandedGenerationError,
     StrandedScoringError,
     exception_type_name,
 )
+from dr_dspy.eval_reporting import validate_sql_identifier
 from dr_dspy.prediction_status import (
     GENERATION_RETRY_STATUSES,
     SCORING_QUEUEABLE_STATUSES,

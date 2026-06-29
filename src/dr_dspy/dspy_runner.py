@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 import dspy
+from dr_dspy.eval_failures.recording import ensure_recordable
 from dr_dspy.lm_utils import (
     LmEventBuffer,
     provider_cost_from_response,
@@ -89,10 +90,15 @@ def run_predictor(
 def predictor_run_result(
     text: str, event_buffer: LmEventBuffer
 ) -> PredictorRunResult:
-    response_metadata = event_buffer.latest_response_metadata()
+    response_metadata = ensure_recordable(
+        event_buffer.latest_response_metadata()
+    )
+    usage_metadata = ensure_recordable(
+        usage_metadata_from_response(response_metadata)
+    )
     return PredictorRunResult(
         text=text,
         response_metadata=response_metadata,
-        usage_metadata=usage_metadata_from_response(response_metadata),
+        usage_metadata=usage_metadata,
         provider_cost=provider_cost_from_response(response_metadata),
     )

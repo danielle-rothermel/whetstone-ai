@@ -8,10 +8,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
 from dr_dspy import dbos_runtime, eval_logging
+from dr_dspy.eval_failures.recording import recordable_jsonb
 from dr_dspy.eval_reporting import validate_sql_identifier
 from dr_dspy.lm_utils import stable_json
 
@@ -320,7 +320,7 @@ def record_operation_items(
                         operation_key,
                         item_kind.value,
                         index,
-                        Jsonb(dict(payload)),
+                        recordable_jsonb(dict(payload)),
                         digest,
                     )
                     for index, (payload, digest) in enumerate(
@@ -560,8 +560,8 @@ def prepare_operation(
                         script_kind,
                         workflow_id,
                         attempt,
-                        Jsonb(dict(spec)),
-                        Jsonb(dict(metadata)),
+                        recordable_jsonb(dict(spec)),
+                        recordable_jsonb(dict(metadata)),
                         total_items,
                         str(log_file),
                     ),
@@ -593,7 +593,7 @@ def prepare_operation(
                     (
                         workflow_id,
                         attempt,
-                        Jsonb(dict(metadata)),
+                        recordable_jsonb(dict(metadata)),
                         str(log_file),
                         operation_kind.value,
                         operation_key,
@@ -690,7 +690,7 @@ def record_operation_batch_success(
                     result.enqueued,
                     result.existing_workflows,
                     result.marked,
-                    Jsonb(counters),
+                    recordable_jsonb(counters),
                     operation_kind.value,
                     operation_key,
                 ),

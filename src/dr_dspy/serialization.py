@@ -1,8 +1,7 @@
 """DSPy-aware serialization helpers for experiment telemetry.
 
-Deferred: pytest suite; failure propagation in lm_logging/DB writes;
-persist exc.diagnostics() to metadata; classify as RecordingFailureError
-in failures/.
+Encoding errors raised here are bridged to eval worker failures at
+``dr_dspy.eval_failures.recording.ensure_recordable``.
 """
 
 from __future__ import annotations

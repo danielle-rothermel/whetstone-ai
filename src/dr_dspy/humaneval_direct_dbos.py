@@ -10,7 +10,6 @@ from typing import Annotated, Any
 
 import typer
 from dbos import DBOS
-from psycopg.types.json import Jsonb
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -31,16 +30,17 @@ from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy import worker_resources as shared_worker_resources
-from dr_dspy.experiment_dimensions import (
-    Dimension,
-    identity_dimension_names,
-)
-from dr_dspy.failures import (
+from dr_dspy.eval_failures import (
     FailureSummary,
     error_text,
     failure_summary_payload,
+    recordable_jsonb,
     should_retry_step,
     summarize_exception,
+)
+from dr_dspy.experiment_dimensions import (
+    Dimension,
+    identity_dimension_names,
 )
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
@@ -157,6 +157,7 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     generation_failure_exception_type TEXT,
     generation_underlying_exception_type TEXT,
     generation_exception_message TEXT,
+    generation_failure_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     raw_code             TEXT,
     response_metadata    JSONB       NOT NULL DEFAULT '{}'::jsonb,
     usage_metadata       JSONB       NOT NULL DEFAULT '{}'::jsonb,
@@ -168,6 +169,8 @@ CREATE TABLE IF NOT EXISTS dr_dspy_eval_predictions (
     scoring_failure_exception_type TEXT,
     scoring_underlying_exception_type TEXT,
     scoring_exception_message TEXT,
+    scoring_failure_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    data_quality_flags   JSONB       NOT NULL DEFAULT '{}'::jsonb,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     generated_at         TIMESTAMPTZ,
@@ -265,6 +268,15 @@ PREDICTION_MIGRATION_SQL = (
     "SET scoring_underlying_exception_type = scoring_exception_type "
     "WHERE scoring_underlying_exception_type IS NULL "
     "AND scoring_exception_type IS NOT NULL",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_failure_metadata JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_failure_metadata JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE dr_dspy_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS data_quality_flags JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
 )
 PREDICTION_CONSTRAINT_MIGRATION_SQL = (
     """
@@ -1100,7 +1112,7 @@ def upsert_experiment(
                     seed,
                     sample_count,
                     experiment_config().solve_signature.instructions,
-                    Jsonb(dict(metadata)),
+                    recordable_jsonb(dict(metadata)),
                 ),
             )
 
@@ -1126,7 +1138,7 @@ def insert_prediction_jobs(
             job.ground_truth_code,
             job.test,
             job.entry_point,
-            Jsonb(job.reasoning),
+            recordable_jsonb(job.reasoning),
         )
         for job in jobs
     ]
@@ -1233,6 +1245,7 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1255,6 +1268,7 @@ def record_generation_success(
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
                     raw_generation = %s,
                     raw_code = NULL,
                     response_metadata = %s,
@@ -1266,8 +1280,8 @@ def record_generation_success(
                 """,
                 (
                     result.raw_generation,
-                    Jsonb(result.response_metadata),
-                    Jsonb(result.usage_metadata),
+                    recordable_jsonb(result.response_metadata),
+                    recordable_jsonb(result.usage_metadata),
                     result.provider_cost,
                     result.prediction_id,
                 ),
@@ -1296,6 +1310,7 @@ def record_generation_error(
                     generation_failure_exception_type = %s,
                     generation_underlying_exception_type = %s,
                     generation_exception_message = %s,
+                    generation_failure_metadata = %s,
                     raw_generation = NULL,
                     raw_code = NULL,
                     updated_at = now()
@@ -1308,6 +1323,7 @@ def record_generation_error(
                     summary.failure_exception_type,
                     summary.underlying_exception_type,
                     summary.message,
+                    recordable_jsonb(summary.failure_metadata),
                     prediction_id,
                 ),
             )
@@ -1390,6 +1406,9 @@ def reset_generation_errors_for_retry(
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
+                    scoring_failure_metadata = '{}'::jsonb,
+                    data_quality_flags = '{}'::jsonb,
                     raw_generation = NULL,
                     raw_code = NULL,
                     raw_compile_ok = NULL,
@@ -1457,6 +1476,7 @@ def mark_scoring_started(database_url: str, prediction_id: str) -> None:
                     scoring_failure_exception_type = NULL,
                     scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
+                    scoring_failure_metadata = '{}'::jsonb,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1478,6 +1498,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     scoring_failure_exception_type = NULL,
                     scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
+                    scoring_failure_metadata = '{}'::jsonb,
                     raw_code = %s,
                     raw_compile_ok = %s,
                     raw_compile_error = %s,
@@ -1509,11 +1530,11 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     result.extracted_compile_ok,
                     result.extracted_compile_error,
                     result.extraction_error,
-                    Jsonb(result.evaluation_function_names),
+                    recordable_jsonb(result.evaluation_function_names),
                     result.evaluation_total_cases,
                     result.evaluation_failure_count,
-                    Jsonb(result.evaluation_status_counts),
-                    Jsonb(
+                    recordable_jsonb(result.evaluation_status_counts),
+                    recordable_jsonb(
                         {
                             method.value: metric.model_dump(mode="json")
                             for method, metric in (
@@ -1551,6 +1572,7 @@ def record_score_error(
                     scoring_failure_exception_type = %s,
                     scoring_underlying_exception_type = %s,
                     scoring_exception_message = %s,
+                    scoring_failure_metadata = %s,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1561,6 +1583,7 @@ def record_score_error(
                     summary.failure_exception_type,
                     summary.underlying_exception_type,
                     summary.message,
+                    recordable_jsonb(summary.failure_metadata),
                     prediction_id,
                 ),
             )

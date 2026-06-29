@@ -17,13 +17,14 @@ from openai import (
     RateLimitError,
     UnprocessableEntityError,
 )
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from dr_dspy.failures.exceptions import (
+from dr_dspy.eval_failures.exceptions import (
     EvalFailureError,
     failure_exception_type_for_class,
 )
-from dr_dspy.failures.types import (
+from dr_dspy.eval_failures.recording import failure_metadata_from_exception
+from dr_dspy.eval_failures.types import (
     RECOVERABLE_FAILURE_CLASSES,
     RETRYABLE_STEP_FAILURE_CLASSES,
     FailureClass,
@@ -51,6 +52,7 @@ class FailureSummary(BaseModel):
     failure_exception_type: StrictStr
     underlying_exception_type: StrictStr
     message: StrictStr
+    failure_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def is_recoverable(self) -> bool:
@@ -201,6 +203,7 @@ def summarize_exception(error: BaseException) -> FailureSummary:
         failure_exception_type=failure_type,
         underlying_exception_type=underlying_exception_type_name(error),
         message=str(error),
+        failure_metadata=failure_metadata_from_exception(error),
     )
 
 

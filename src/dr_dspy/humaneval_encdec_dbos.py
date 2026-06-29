@@ -11,7 +11,6 @@ from typing import Annotated, Any
 
 import typer
 from dbos import DBOS
-from psycopg.types.json import Jsonb
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -33,18 +32,20 @@ from dr_dspy import humaneval_dbos_flow as shared_flow
 from dr_dspy import job_ordering as shared_job_ordering
 from dr_dspy import worker_monitor as shared_worker_monitor
 from dr_dspy import worker_resources as shared_worker_resources
+from dr_dspy.eval_failures import (
+    FailureSummary,
+    ensure_recordable,
+    error_text,
+    failure_summary_payload,
+    recordable_jsonb,
+    should_retry_step,
+    summarize_exception,
+)
 from dr_dspy.experiment_dimensions import (
     Dimension,
     dimension_columns_ddl,
     identity_constraint_columns,
     identity_dimension_names,
-)
-from dr_dspy.failures import (
-    FailureSummary,
-    error_text,
-    failure_summary_payload,
-    should_retry_step,
-    summarize_exception,
 )
 from dr_dspy.human_eval import HumanEvalTask
 from dr_dspy.lm_utils import (
@@ -185,6 +186,7 @@ __DIMENSION_COLUMNS__
     generation_failure_exception_type TEXT,
     generation_underlying_exception_type TEXT,
     generation_exception_message TEXT,
+    generation_failure_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     encoded_description  TEXT,
     decoded_generation   TEXT,
     raw_generation       TEXT,
@@ -202,6 +204,8 @@ __DIMENSION_COLUMNS__
     scoring_failure_exception_type TEXT,
     scoring_underlying_exception_type TEXT,
     scoring_exception_message TEXT,
+    scoring_failure_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    data_quality_flags   JSONB       NOT NULL DEFAULT '{}'::jsonb,
     raw_code             TEXT,
     raw_compile_ok       BOOLEAN,
     raw_compile_error    TEXT,
@@ -276,6 +280,15 @@ PREDICTION_MIGRATION_SQL = (
     "SET scoring_underlying_exception_type = scoring_exception_type "
     "WHERE scoring_underlying_exception_type IS NULL "
     "AND scoring_exception_type IS NOT NULL",
+    "ALTER TABLE dr_dspy_encdec_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS generation_failure_metadata JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE dr_dspy_encdec_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS scoring_failure_metadata JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE dr_dspy_encdec_eval_predictions "
+    "ADD COLUMN IF NOT EXISTS data_quality_flags JSONB "
+    "NOT NULL DEFAULT '{}'::jsonb",
 )
 
 
@@ -822,7 +835,7 @@ def upsert_experiment(
                     sample_count,
                     experiment_config().encoder_signature.instructions,
                     experiment_config().decoder_signature.instructions,
-                    Jsonb(dict(metadata)),
+                    recordable_jsonb(dict(metadata)),
                 ),
             )
 
@@ -851,8 +864,8 @@ def insert_prediction_jobs(
             job.ground_truth_code,
             job.test,
             job.entry_point,
-            Jsonb(job.encoder_reasoning),
-            Jsonb(job.decoder_reasoning),
+            recordable_jsonb(job.encoder_reasoning),
+            recordable_jsonb(job.decoder_reasoning),
         )
         for job in jobs
     ]
@@ -951,16 +964,24 @@ def generate_code_for_job_with_client(
         lm=decoder_lm,
         event_buffer=decoder_events,
     )
-    encoder_metadata = encoder_events.latest_response_metadata()
-    decoder_metadata = decoder_events.latest_response_metadata()
+    encoder_metadata = ensure_recordable(
+        encoder_events.latest_response_metadata()
+    )
+    decoder_metadata = ensure_recordable(
+        decoder_events.latest_response_metadata()
+    )
     return GenerationResult(
         prediction_id=job.prediction_id,
         encoded_description=encoded_description,
         decoded_generation=decoded_generation,
         encoder_response_metadata=encoder_metadata,
         decoder_response_metadata=decoder_metadata,
-        encoder_usage_metadata=usage_metadata_from_response(encoder_metadata),
-        decoder_usage_metadata=usage_metadata_from_response(decoder_metadata),
+        encoder_usage_metadata=ensure_recordable(
+            usage_metadata_from_response(encoder_metadata)
+        ),
+        decoder_usage_metadata=ensure_recordable(
+            usage_metadata_from_response(decoder_metadata)
+        ),
         encoder_provider_cost=provider_cost_from_response(encoder_metadata),
         decoder_provider_cost=provider_cost_from_response(decoder_metadata),
         encoder_char_budget=encoder_char_budget,
@@ -1040,6 +1061,7 @@ def mark_generation_started(database_url: str, prediction_id: str) -> None:
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1061,6 +1083,7 @@ def record_generation_success(
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
                     encoded_description = %s,
                     decoded_generation = %s,
                     raw_generation = %s,
@@ -1081,10 +1104,10 @@ def record_generation_success(
                     result.encoded_description,
                     result.decoded_generation,
                     result.decoded_generation,
-                    Jsonb(result.encoder_response_metadata),
-                    Jsonb(result.decoder_response_metadata),
-                    Jsonb(result.encoder_usage_metadata),
-                    Jsonb(result.decoder_usage_metadata),
+                    recordable_jsonb(result.encoder_response_metadata),
+                    recordable_jsonb(result.decoder_response_metadata),
+                    recordable_jsonb(result.encoder_usage_metadata),
+                    recordable_jsonb(result.decoder_usage_metadata),
                     result.encoder_provider_cost,
                     result.decoder_provider_cost,
                     result.provider_cost,
@@ -1115,6 +1138,7 @@ def record_generation_error(
                     generation_failure_exception_type = %s,
                     generation_underlying_exception_type = %s,
                     generation_exception_message = %s,
+                    generation_failure_metadata = %s,
                     encoded_description = NULL,
                     decoded_generation = NULL,
                     raw_generation = NULL,
@@ -1129,6 +1153,7 @@ def record_generation_error(
                     summary.failure_exception_type,
                     summary.underlying_exception_type,
                     summary.message,
+                    recordable_jsonb(summary.failure_metadata),
                     prediction_id,
                 ),
             )
@@ -1146,6 +1171,7 @@ def mark_scoring_started(database_url: str, prediction_id: str) -> None:
                     scoring_failure_exception_type = NULL,
                     scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
+                    scoring_failure_metadata = '{}'::jsonb,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1238,6 +1264,7 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     scoring_failure_exception_type = NULL,
                     scoring_underlying_exception_type = NULL,
                     scoring_exception_message = NULL,
+                    scoring_failure_metadata = '{}'::jsonb,
                     raw_code = %s,
                     raw_compile_ok = %s,
                     raw_compile_error = %s,
@@ -1269,11 +1296,11 @@ def record_score_success(database_url: str, result: ScoreResult) -> None:
                     result.extracted_compile_ok,
                     result.extracted_compile_error,
                     result.extraction_error,
-                    Jsonb(result.evaluation_function_names),
+                    recordable_jsonb(result.evaluation_function_names),
                     result.evaluation_total_cases,
                     result.evaluation_failure_count,
-                    Jsonb(result.evaluation_status_counts),
-                    Jsonb(
+                    recordable_jsonb(result.evaluation_status_counts),
+                    recordable_jsonb(
                         {
                             method.value: metric.model_dump(mode="json")
                             for method, metric in (
@@ -1310,6 +1337,7 @@ def record_score_error(
                     scoring_failure_exception_type = %s,
                     scoring_underlying_exception_type = %s,
                     scoring_exception_message = %s,
+                    scoring_failure_metadata = %s,
                     updated_at = now()
                 WHERE prediction_id = %s
                 """,
@@ -1320,6 +1348,7 @@ def record_score_error(
                     summary.failure_exception_type,
                     summary.underlying_exception_type,
                     summary.message,
+                    recordable_jsonb(summary.failure_metadata),
                     prediction_id,
                 ),
             )
@@ -1807,6 +1836,9 @@ def reset_generation_errors_for_retry(
                     generation_failure_exception_type = NULL,
                     generation_underlying_exception_type = NULL,
                     generation_exception_message = NULL,
+                    generation_failure_metadata = '{}'::jsonb,
+                    scoring_failure_metadata = '{}'::jsonb,
+                    data_quality_flags = '{}'::jsonb,
                     encoded_description = NULL,
                     decoded_generation = NULL,
                     raw_generation = NULL,
