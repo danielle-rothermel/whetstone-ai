@@ -41,23 +41,27 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
   --specs-file specs.jsonl
 ```
 
-`submit-jsonl` streams JSONL parsing into the submit path, validates each window
-of specs against the requested experiment, rejects duplicate `prediction_id`
-values within the submit operation, inserts the experiment row if needed,
-persists batch operation/item audit rows, and enqueues workflows on
+`submit-jsonl` streams JSONL parsing into the submit path, validates bounded
+windows of specs against the requested experiment, rejects duplicate
+`prediction_id` values within the submit operation, inserts the experiment row
+if needed, persists batch operation/item audit rows, and enqueues workflows on
 `dr-dspy-platform-generation-v1`. Submission is resumable by operation key:
-existing completed/enqueued batch items are skipped, while pending or failed
-items are retried.
+existing completed/enqueued batch items are skipped, while pending or previously
+failed items are retried.
 
-The submit path uses approximate windowed fairness. It reads at most
-`--chunk-size` specs into memory, validates them, orders that window by the
-stored fair-order key, persists the window, enqueues its workflows, and then
-continues to the next window. Fair-order keys are part of the
-`PredictionSpecRecord` contract, so submit validates the records but does not
-recompute a separate scheduling key. This supports large JSONL submissions
-without globally materializing and sorting every spec, but it does not provide a
-globally fair order across windows. If a later window contains an invalid spec,
-earlier windows may already have been persisted and enqueued.
+The submit path separates chunked persistence from queue admission. It reads and
+validates at most `--chunk-size` specs at a time, orders each persistence window
+by the stored fair-order key, and writes prediction specs plus pending batch
+items without globally materializing every spec in Python. After all windows are
+persisted, enqueueing repeatedly selects pending batch items for the operation
+ordered by `(fair_order_key, prediction_id)` in `--chunk-size` pages. This keeps
+large JSONL submissions bounded while giving deterministic queue mixing across
+the full persisted operation instead of only within the current input window.
+Fair-order keys are part of the `PredictionSpecRecord` contract, so submit
+validates the records but does not recompute a separate scheduling key. If a
+later window contains an invalid spec, earlier windows may already have been
+persisted, but enqueueing does not begin until validation reaches the enqueue
+phase.
 
 Fairness currently controls submission and queue-admission order, not strict
 execution order. With registered worker concurrency above 1, DBOS workers can
@@ -79,6 +83,17 @@ and item rows show the exact pending/enqueued/failed state.
 
 The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
 avoid introducing a second DBOS configuration path while v1 and v0 coexist.
+
+## Migration status
+
+The v1 platform schema is still pre-deployment. The `20260629_0001` revision has
+been edited while the branch is being hardened, including the draft
+`dr_dspy_batch_submit_items.status` shape being replaced by separate
+`insert_status` and `enqueue_status` columns. Local or Neon databases that
+applied an earlier draft v1 migration should reset the v1 platform tables and
+rerun Alembic from the current revision set. This branch does not promise an
+upgrade path from earlier draft v1 schemas until the v1 migration history is
+declared deployed/frozen.
 
 ## Clock steps
 

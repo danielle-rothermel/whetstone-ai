@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
 from typer.testing import CliRunner
 
@@ -200,8 +201,11 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     )
     engine = DummyEngine()
     chunks: list[tuple[str, ...]] = []
+    candidate_pages: list[tuple[str, ...]] = []
     enqueue_calls: list[str] = []
     item_updates: list[submission.SubmittedPredictionItem] = []
+    pending_ids = {spec.prediction_id for spec in specs}
+    by_id = {spec.prediction_id: spec for spec in specs}
 
     def prepare(
         connection: Connection,
@@ -222,11 +226,18 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         connection: Connection,
         *,
         operation_key: str,
-        prediction_ids: Sequence[str],
+        limit: int,
     ) -> tuple[submission.EnqueueCandidate, ...]:
         assert engine.in_transaction is True
-        chunks.append(tuple(prediction_ids))
-        by_id = {spec.prediction_id: spec for spec in specs}
+        prediction_ids = tuple(
+            spec.prediction_id
+            for spec in sorted(
+                specs,
+                key=lambda spec: (spec.fair_order_key, spec.prediction_id),
+            )
+            if spec.prediction_id in pending_ids
+        )[:limit]
+        candidate_pages.append(prediction_ids)
         return tuple(
             submission.EnqueueCandidate(
                 prediction_id=prediction_id,
@@ -262,6 +273,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         item: submission.SubmittedPredictionItem,
     ) -> None:
         assert engine.in_transaction is True
+        pending_ids.discard(item.prediction_id)
         item_updates.append(item)
 
     monkeypatch.setattr(
@@ -269,7 +281,11 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         "prepare_submission_records",
         prepare,
     )
-    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "load_pending_enqueue_candidates",
+        candidates,
+    )
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
@@ -304,7 +320,8 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         enqueue_workflow=enqueue,
     )
 
-    assert [len(chunk) for chunk in chunks] == [2, 2, 1, 1]
+    assert [len(chunk) for chunk in chunks] == [2, 1]
+    assert [len(page) for page in candidate_pages] == [2, 1, 0]
     assert enqueue_calls == [item.prediction_id for item in item_updates]
     assert result.requested_count == 3
     assert result.inserted_count == 2
@@ -314,10 +331,10 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert {item.enqueue_status for item in item_updates} == {
         BatchSubmitItemEnqueueStatus.ENQUEUED
     }
-    assert engine.begin_count == 8
+    assert engine.begin_count == 10
 
 
-def test_submit_prediction_specs_streams_fair_order_windows(
+def test_submit_prediction_specs_enqueues_after_all_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     specs = tuple(
@@ -347,13 +364,23 @@ def test_submit_prediction_specs_streams_fair_order_windows(
     ) -> None:
         assert len(ordered_specs) <= 2
 
+    pending_ids = {spec.prediction_id for spec in specs}
+    by_id = {spec.prediction_id: spec for spec in specs}
+
     def candidates(
         connection: Connection,
         *,
         operation_key: str,
-        prediction_ids: Sequence[str],
+        limit: int,
     ) -> tuple[submission.EnqueueCandidate, ...]:
-        by_id = {spec.prediction_id: spec for spec in specs}
+        prediction_ids = tuple(
+            spec.prediction_id
+            for spec in sorted(
+                specs,
+                key=lambda spec: (spec.fair_order_key, spec.prediction_id),
+            )
+            if spec.prediction_id in pending_ids
+        )[:limit]
         return tuple(
             submission.EnqueueCandidate(
                 prediction_id=prediction_id,
@@ -384,11 +411,17 @@ def test_submit_prediction_specs_streams_fair_order_windows(
         )
 
     monkeypatch.setattr(submission, "prepare_submission_records", prepare)
-    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "load_pending_enqueue_candidates",
+        candidates,
+    )
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
-        lambda connection, *, operation_key, item: None,
+        lambda connection, *, operation_key, item: pending_ids.discard(
+            item.prediction_id
+        ),
     )
     monkeypatch.setattr(
         submission,
@@ -418,7 +451,7 @@ def test_submit_prediction_specs_streams_fair_order_windows(
         enqueue_workflow=enqueue,
     )
 
-    assert first_enqueue_yielded_count == 2
+    assert first_enqueue_yielded_count == 5
     assert yielded_count == 5
 
 
@@ -449,8 +482,8 @@ def test_submit_prediction_specs_rejects_duplicate_prediction_ids(
     monkeypatch.setattr(submission, "prepare_submission_records", prepare)
     monkeypatch.setattr(
         submission,
-        "load_enqueue_candidates",
-        lambda connection, *, operation_key, prediction_ids: (),
+        "load_pending_enqueue_candidates",
+        lambda connection, *, operation_key, limit: (),
     )
 
     with pytest.raises(ValueError, match="duplicate prediction_id"):
@@ -480,6 +513,7 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
     engine = DummyEngine()
     item_updates: list[submission.SubmittedPredictionItem] = []
     failed_prediction_id = specs[1].prediction_id
+    pending_ids = {spec.prediction_id for spec in specs}
 
     monkeypatch.setattr(
         submission,
@@ -488,8 +522,8 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
     )
     monkeypatch.setattr(
         submission,
-        "load_enqueue_candidates",
-        lambda connection, *, operation_key, prediction_ids: tuple(
+        "load_pending_enqueue_candidates",
+        lambda connection, *, operation_key, limit: tuple(
             submission.EnqueueCandidate(
                 prediction_id=spec.prediction_id,
                 fair_order_key=spec.fair_order_key,
@@ -497,13 +531,16 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
                 insert_status=BatchSubmitItemInsertStatus.INSERTED,
             )
             for index, spec in enumerate(specs)
-            if spec.prediction_id in prediction_ids
-        ),
+            if spec.prediction_id in pending_ids
+        )[:limit],
     )
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
-        lambda connection, *, operation_key, item: item_updates.append(item),
+        lambda connection, *, operation_key, item: (
+            pending_ids.discard(item.prediction_id),
+            item_updates.append(item),
+        ),
     )
 
     def enqueue(
@@ -586,6 +623,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
     engine = DummyEngine()
     failed_prediction_id = specs[1].prediction_id
     prepare_operation_keys: list[str] = []
+    reset_operation_keys: list[str] = []
     enqueue_calls_by_run: list[list[str]] = []
     active_run_calls: list[str] = []
     item_state = {
@@ -610,13 +648,23 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
     ) -> None:
         prepare_operation_keys.append(operation_key)
 
+    by_id = {spec.prediction_id: spec for spec in specs}
+
     def candidates(
         connection: Connection,
         *,
         operation_key: str,
-        prediction_ids: Sequence[str],
+        limit: int,
     ) -> tuple[submission.EnqueueCandidate, ...]:
-        by_id = {spec.prediction_id: spec for spec in specs}
+        prediction_ids = tuple(
+            spec.prediction_id
+            for spec in sorted(
+                specs,
+                key=lambda spec: (spec.fair_order_key, spec.prediction_id),
+            )
+            if item_state[spec.prediction_id][0]
+            is BatchSubmitItemEnqueueStatus.PENDING
+        )[:limit]
         return tuple(
             submission.EnqueueCandidate(
                 prediction_id=prediction_id,
@@ -625,10 +673,6 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
                 insert_status=BatchSubmitItemInsertStatus.INSERTED,
             )
             for index, prediction_id in enumerate(prediction_ids)
-            if submission.item_needs_enqueue(
-                enqueue_status=item_state[prediction_id][0],
-                enqueue_metadata=item_state[prediction_id][1],
-            )
         )
 
     def enqueue(
@@ -664,6 +708,15 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
             else {}
         )
         item_state[item.prediction_id] = (item.enqueue_status, metadata)
+
+    def reset_failed(connection: Connection, *, operation_key: str) -> None:
+        reset_operation_keys.append(operation_key)
+        for prediction_id, (status, _metadata) in item_state.items():
+            if status is BatchSubmitItemEnqueueStatus.FAILED:
+                item_state[prediction_id] = (
+                    BatchSubmitItemEnqueueStatus.PENDING,
+                    {},
+                )
 
     def summary(
         connection: Connection,
@@ -707,7 +760,12 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
         )
 
     monkeypatch.setattr(submission, "prepare_submission_records", prepare)
-    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "load_pending_enqueue_candidates",
+        candidates,
+    )
+    monkeypatch.setattr(submission, "reset_failed_enqueue_items", reset_failed)
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
@@ -736,33 +794,34 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
     enqueue_calls_by_run.append(active_run_calls)
 
     assert prepare_operation_keys == ["op-1", "op-1"]
+    assert reset_operation_keys == ["op-1", "op-1"]
     assert first.failed_count == 1
     assert second.failed_count == 0
     assert second.enqueued_count == 3
     assert enqueue_calls_by_run[1] == [failed_prediction_id]
 
 
-def test_item_needs_enqueue_supports_resume() -> None:
-    assert submission.item_needs_enqueue(
-        enqueue_status=BatchSubmitItemEnqueueStatus.PENDING,
-        enqueue_metadata={},
+def test_pending_enqueue_selector_orders_operation_by_fair_key() -> None:
+    statement = submission.select_pending_batch_items_for_enqueue(
+        operation_key="op-1",
+        limit=500,
     )
-    assert submission.item_needs_enqueue(
-        enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
-        enqueue_metadata={},
+
+    rendered = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
     )
-    assert submission.item_needs_enqueue(
-        enqueue_status=BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
-        enqueue_metadata={},
+
+    assert "dr_dspy_batch_submit_items.operation_key = 'op-1'" in rendered
+    assert "dr_dspy_batch_submit_items.enqueue_status = 'pending'" in rendered
+    assert "dr_dspy_batch_submit_items.prediction_id IN" not in rendered
+    assert (
+        "ORDER BY dr_dspy_batch_submit_items.fair_order_key, "
+        "dr_dspy_batch_submit_items.prediction_id" in rendered
     )
-    assert not submission.item_needs_enqueue(
-        enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
-        enqueue_metadata={},
-    )
-    assert not submission.item_needs_enqueue(
-        enqueue_status=BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
-        enqueue_metadata={"workflow_id": "workflow-1"},
-    )
+    assert "LIMIT 500" in rendered
 
 
 def test_update_operation_summary_counts_already_scheduled_items() -> None:

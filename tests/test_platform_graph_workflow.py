@@ -649,6 +649,28 @@ def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
         )
 
 
+def test_lm_node_dbos_step_retries_retryable_failures() -> None:
+    retry_config = {
+        name: cell.cell_contents
+        for name, cell in zip(
+            graph_workflow.execute_lm_node_step.__code__.co_freevars,
+            graph_workflow.execute_lm_node_step.__closure__ or (),
+            strict=True,
+        )
+    }
+
+    assert retry_config["retries_allowed"] is True
+    assert (
+        retry_config["max_attempts"]
+        == graph_workflow.NODE_STEP_MAX_ATTEMPTS
+    )
+    assert (
+        retry_config["interval_seconds"]
+        == graph_workflow.NODE_STEP_RETRY_INTERVAL_SECONDS
+    )
+    assert retry_config["should_retry"] is graph_workflow.should_retry_step
+
+
 def test_lm_node_executor_rejects_unsupported_node_op() -> None:
     node = _node("direct", bindings={"prompt": "task.prompt"})
     unsupported_node = NodeSpec.model_construct(

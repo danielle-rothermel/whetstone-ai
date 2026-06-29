@@ -8,6 +8,7 @@ from dbos import DBOS, SetWorkflowID
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
+from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_dspy.harness.dbos import (
     WORKFLOW_START_RACE_ERRORS,
@@ -56,6 +57,8 @@ EXECUTE_NODE_STEP_NAME = "dr_dspy_platform_execute_lm_node_v1"
 THROTTLE_PREFLIGHT_STEP_NAME = "dr_dspy_platform_throttle_preflight_v1"
 PERSIST_RESULT_STEP_NAME = "dr_dspy_platform_persist_generation_result_v1"
 WORKFLOW_ID_PREFIX = "platform-generate-v1"
+NODE_STEP_MAX_ATTEMPTS = 3
+NODE_STEP_RETRY_INTERVAL_SECONDS = 2.0
 
 type RunNodeStep = Callable[
     [PredictionSpecRecord, NodeSpec, Mapping[str, Any]],
@@ -306,7 +309,13 @@ def throttle_preflight_step(
         engine.dispose()
 
 
-@DBOS.step(name=EXECUTE_NODE_STEP_NAME)
+@DBOS.step(
+    name=EXECUTE_NODE_STEP_NAME,
+    retries_allowed=True,
+    max_attempts=NODE_STEP_MAX_ATTEMPTS,
+    interval_seconds=NODE_STEP_RETRY_INTERVAL_SECONDS,
+    should_retry=should_retry_step,
+)
 def execute_lm_node_step(
     database_url: str,
     spec_payload: dict[str, Any],
