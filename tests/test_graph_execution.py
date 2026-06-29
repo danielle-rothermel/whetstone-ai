@@ -63,7 +63,7 @@ def test_direct_one_node_graph_success() -> None:
         run_node=lambda node, inputs: _output(f"code for {inputs['prompt']}"),
     )
 
-    assert result.status is GraphRunStatus.SUCCEEDED
+    assert result.status is GraphRunStatus.SUCCESS
     assert result.execution_order == ("direct",)
     assert result.terminal_output == "code for write add"
     assert result.outcomes["direct"].status is NodeOutcomeStatus.SUCCESS
@@ -98,7 +98,7 @@ def test_two_node_graph_binds_upstream_output_into_downstream_input() -> None:
         run_node=run_node,
     )
 
-    assert result.status is GraphRunStatus.SUCCEEDED
+    assert result.status is GraphRunStatus.SUCCESS
     assert result.execution_order == ("encoder", "decoder")
     assert seen_inputs["decoder"] == {"description": "plain description"}
     assert result.terminal_output == "def f(): return 'plain description'"
@@ -155,7 +155,7 @@ def test_missing_terminal_node_validation() -> None:
         GraphSpec(nodes=(_node("direct"),), terminal_node_id="missing")
 
 
-def test_missing_task_input_becomes_failed_outcome() -> None:
+def test_missing_task_input_becomes_error_outcome() -> None:
     graph = GraphSpec(
         nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
         terminal_node_id="direct",
@@ -168,8 +168,8 @@ def test_missing_task_input_becomes_failed_outcome() -> None:
     )
 
     outcome = result.outcomes["direct"]
-    assert result.status is GraphRunStatus.FAILED
-    assert outcome.status is NodeOutcomeStatus.FAILED
+    assert result.status is GraphRunStatus.ERROR
+    assert outcome.status is NodeOutcomeStatus.ERROR
     assert outcome.error is not None
     assert outcome.error.error_type == (
         f"{InputResolutionError.__module__}."
@@ -179,7 +179,7 @@ def test_missing_task_input_becomes_failed_outcome() -> None:
     assert result.terminal_error.error == outcome.error
 
 
-def test_node_exception_captures_persistable_and_in_memory_error() -> None:
+def test_node_exception_captures_persistable_error() -> None:
     graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
     error = PermanentFailureError(
         "provider rejected request",
@@ -193,12 +193,11 @@ def test_node_exception_captures_persistable_and_in_memory_error() -> None:
 
     outcome = result.outcomes["direct"]
     dumped = result.model_dump(mode="json")
-    assert outcome.status is NodeOutcomeStatus.FAILED
-    assert outcome.exception is error
+    assert result.status is GraphRunStatus.ERROR
+    assert outcome.status is NodeOutcomeStatus.ERROR
     assert outcome.error is not None
     assert outcome.error.failure_class == "permanent"
     assert outcome.error.metadata == {"provider": "test"}
-    assert "_exception" not in dumped["outcomes"]["direct"]
     assert "exception" not in dumped["outcomes"]["direct"]
 
 
@@ -217,11 +216,11 @@ def test_independent_nodes_continue_after_unrelated_failure() -> None:
 
     assert result.status is GraphRunStatus.PARTIAL
     assert result.terminal_output == "ok"
-    assert result.outcomes["bad"].status is NodeOutcomeStatus.FAILED
+    assert result.outcomes["bad"].status is NodeOutcomeStatus.ERROR
     assert result.outcomes["terminal"].status is NodeOutcomeStatus.SUCCESS
 
 
-def test_downstream_nodes_are_skipped_when_dependency_fails() -> None:
+def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
     graph = GraphSpec(
         nodes=(
             _node("encoder", bindings={"prompt": "task.prompt"}),
@@ -241,12 +240,12 @@ def test_downstream_nodes_are_skipped_when_dependency_fails() -> None:
         run_node=run_node,
     )
 
-    assert result.status is GraphRunStatus.FAILED
-    assert result.outcomes["encoder"].status is NodeOutcomeStatus.FAILED
-    assert result.outcomes["decoder"].status is NodeOutcomeStatus.SKIPPED
+    assert result.status is GraphRunStatus.BLOCKED
+    assert result.outcomes["encoder"].status is NodeOutcomeStatus.ERROR
+    assert result.outcomes["decoder"].status is NodeOutcomeStatus.BLOCKED
     assert result.outcomes["decoder"].blocked_by == ("encoder",)
     assert result.terminal_error is not None
-    assert result.terminal_error.status is NodeOutcomeStatus.SKIPPED
+    assert result.terminal_error.status is NodeOutcomeStatus.BLOCKED
     assert result.terminal_error.blocked_by == ("encoder",)
 
 
@@ -279,7 +278,7 @@ def test_result_json_dump_is_persistable_shape() -> None:
     )
 
     assert result.model_dump(mode="json") == {
-        "status": "succeeded",
+        "status": "success",
         "outcomes": {
             "direct": {
                 "node_id": "direct",

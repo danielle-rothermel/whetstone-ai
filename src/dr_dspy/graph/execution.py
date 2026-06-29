@@ -33,7 +33,7 @@ def execute_graph(
         execution_order.append(node.id)
         blocked_by = _blocked_dependencies(node, outcomes)
         if blocked_by:
-            outcomes[node.id] = NodeOutcome.skipped(
+            outcomes[node.id] = NodeOutcome.blocked(
                 node_id=node.id,
                 blocked_by=blocked_by,
             )
@@ -52,7 +52,7 @@ def execute_graph(
                 run_node=run_node,
             )
         except Exception as error:
-            outcomes[node.id] = NodeOutcome.failed(
+            outcomes[node.id] = NodeOutcome.from_error(
                 node_id=node.id,
                 error=error,
             )
@@ -183,10 +183,12 @@ def _graph_status(
     outcomes: Mapping[str, NodeOutcome],
 ) -> GraphRunStatus:
     if terminal.status is not NodeOutcomeStatus.SUCCESS:
-        return GraphRunStatus.FAILED
+        if terminal.status is NodeOutcomeStatus.BLOCKED:
+            return GraphRunStatus.BLOCKED
+        return GraphRunStatus.ERROR
     if any(
         outcome.status is not NodeOutcomeStatus.SUCCESS
         for outcome in outcomes.values()
     ):
         return GraphRunStatus.PARTIAL
-    return GraphRunStatus.SUCCEEDED
+    return GraphRunStatus.SUCCESS

@@ -7,14 +7,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    PrivateAttr,
     StrictStr,
     model_serializer,
     model_validator,
 )
-
-from dr_dspy.eval_failures.exceptions import EvalFailureError
-from dr_dspy.eval_failures.types import FailureClass
 
 TASK_SOURCE = "task"
 REF_SEPARATOR = "."
@@ -44,14 +40,22 @@ class BindingSource(StrEnum):
 
 
 class NodeOutcomeStatus(StrEnum):
+    """Runner outcome states, not append-only node-attempt row states.
+
+    BLOCKED means the node was not invoked because an upstream dependency did
+    not succeed. Persistence wrappers should not store BLOCKED as a node
+    attempt outcome; it is derivable from the graph and upstream outcomes.
+    """
+
     SUCCESS = "success"
-    FAILED = "failed"
-    SKIPPED = "skipped"
+    ERROR = "error"
+    BLOCKED = "blocked"
 
 
 class GraphRunStatus(StrEnum):
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
+    SUCCESS = "success"
+    ERROR = "error"
+    BLOCKED = "blocked"
     PARTIAL = "partial"
 
 
@@ -235,22 +239,17 @@ class NodeError(BaseModel):
 
     error_type: StrictStr
     message: StrictStr
-    failure_class: FailureClass | None = None
+    failure_class: StrictStr | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_exception(cls, error: BaseException) -> NodeError:
         error_type = f"{type(error).__module__}.{type(error).__qualname__}"
-        failure_class: FailureClass | None = None
-        metadata: dict[str, Any] = {}
-        if isinstance(error, EvalFailureError):
-            failure_class = type(error).failure_class
-            metadata = dict(error.metadata)
         return cls(
             error_type=error_type,
             message=str(error),
-            failure_class=failure_class,
-            metadata=metadata,
+            failure_class=_exception_failure_class(error),
+            metadata=_exception_metadata(error),
         )
 
 
@@ -262,7 +261,6 @@ class NodeOutcome(BaseModel):
     output: NodeOutput | None = None
     error: NodeError | None = None
     blocked_by: tuple[StrictStr, ...] = ()
-    _exception: BaseException | None = PrivateAttr(default=None)
 
     @classmethod
     def success(cls, *, node_id: str, output: NodeOutput) -> NodeOutcome:
@@ -273,22 +271,20 @@ class NodeOutcome(BaseModel):
         )
 
     @classmethod
-    def failed(
+    def from_error(
         cls,
         *,
         node_id: str,
         error: BaseException,
     ) -> NodeOutcome:
-        outcome = cls(
+        return cls(
             node_id=node_id,
-            status=NodeOutcomeStatus.FAILED,
+            status=NodeOutcomeStatus.ERROR,
             error=NodeError.from_exception(error),
         )
-        outcome._exception = error
-        return outcome
 
     @classmethod
-    def skipped(
+    def blocked(
         cls,
         *,
         node_id: str,
@@ -296,25 +292,21 @@ class NodeOutcome(BaseModel):
     ) -> NodeOutcome:
         return cls(
             node_id=node_id,
-            status=NodeOutcomeStatus.SKIPPED,
+            status=NodeOutcomeStatus.BLOCKED,
             blocked_by=blocked_by,
         )
-
-    @property
-    def exception(self) -> BaseException | None:
-        return self._exception
 
     @model_validator(mode="after")
     def validate_outcome(self) -> NodeOutcome:
         if self.status is NodeOutcomeStatus.SUCCESS and self.output is None:
             raise ValueError("successful node outcomes require output")
-        if self.status is NodeOutcomeStatus.FAILED and self.error is None:
-            raise ValueError("failed node outcomes require error")
+        if self.status is NodeOutcomeStatus.ERROR and self.error is None:
+            raise ValueError("error node outcomes require error")
         if (
-            self.status is NodeOutcomeStatus.SKIPPED
+            self.status is NodeOutcomeStatus.BLOCKED
             and not self.blocked_by
         ):
-            raise ValueError("skipped node outcomes require blocked_by")
+            raise ValueError("blocked node outcomes require blocked_by")
         return self
 
 
@@ -395,3 +387,19 @@ def validate_acyclic_graph(nodes: tuple[NodeSpec, ...]) -> None:
             raise GraphValidationError(f"graph has a cycle among: {stuck}")
         done.update(ready)
         remaining.difference_update(ready)
+
+
+def _exception_failure_class(error: BaseException) -> str | None:
+    failure_class = getattr(type(error), "failure_class", None)
+    if isinstance(failure_class, StrEnum):
+        return failure_class.value
+    if isinstance(failure_class, str):
+        return failure_class
+    return None
+
+
+def _exception_metadata(error: BaseException) -> dict[str, Any]:
+    metadata = getattr(error, "metadata", None)
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return {}
