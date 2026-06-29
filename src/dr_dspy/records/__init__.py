@@ -8,6 +8,7 @@ from dr_dspy.records.hashing import (
     stable_prediction_id,
 )
 from dr_dspy.records.models import (
+    AstMetricsPayload,
     BatchSubmitItemRecord,
     BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
@@ -29,11 +30,13 @@ from dr_dspy.records.models import (
     PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
+    PythonLeakageMetricsPayload,
     ResponseMetadataPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
     TaskInputsPayload,
     TaskSnapshotPayload,
+    TextMetricsPayload,
     UsageCostPayload,
 )
 
@@ -41,6 +44,7 @@ __all__ = [
     "DIMENSIONS_DIGEST_LENGTH",
     "FAIR_ORDER_DIGEST_LENGTH",
     "PREDICTION_ID_DIGEST_LENGTH",
+    "AstMetricsPayload",
     "BatchSubmitItemRecord",
     "BatchSubmitItemStatus",
     "BatchSubmitOperationRecord",
@@ -62,11 +66,13 @@ __all__ = [
     "PredictionProjectionRecord",
     "PredictionSpecRecord",
     "ProviderConfigRef",
+    "PythonLeakageMetricsPayload",
     "ResponseMetadataPayload",
     "ScoreAttemptRecord",
     "ScoreAttemptStatus",
     "TaskInputsPayload",
     "TaskSnapshotPayload",
+    "TextMetricsPayload",
     "UsageCostPayload",
     "canonical_json",
     "dimensions_digest",

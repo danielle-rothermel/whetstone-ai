@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictFloat,
     StrictInt,
     StrictStr,
@@ -16,7 +17,9 @@ from pydantic import (
 
 from dr_dspy.eval_failures.types import FailureClass
 from dr_dspy.graph import GraphSpec
+from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
 from dr_dspy.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
 
 
@@ -78,6 +81,14 @@ class GraphSnapshotPayload(BaseModel):
     graph: GraphSpec
     graph_digest: StrictStr
     layout: StrictStr
+
+    @model_validator(mode="after")
+    def validate_graph_digest(self) -> GraphSnapshotPayload:
+        from dr_dspy.graph import graph_digest
+
+        if self.graph_digest != graph_digest(self.graph):
+            raise ValueError("graph_digest must match graph")
+        return self
 
 
 class ProviderConfigRef(BaseModel):
@@ -172,16 +183,80 @@ class MetricsPayload(BaseModel):
 
     profile_id: StrictStr
     profile_version: StrictStr
-    values: dict[StrictStr, Any] = Field(default_factory=dict)
+    text: TextMetricsPayload | None = None
+    python_leakage: PythonLeakageMetricsPayload | None = None
+    ast: AstMetricsPayload | None = None
+    compression: dict[StrictStr, Any] = Field(default_factory=dict)
+    custom: dict[StrictStr, Any] = Field(default_factory=dict)
+
+
+class TextMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    character_count: StrictInt
+    byte_count: StrictInt
+    line_count: StrictInt
+    nonempty_line_count: StrictInt
+    word_count: StrictInt
+    average_word_length: StrictFloat | None = None
+    punctuation_count: StrictInt | None = None
+    symbol_count: StrictInt | None = None
+
+
+class PythonLeakageMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keyword_count: StrictInt
+    code_marker_count: StrictInt
+    fenced_code_block_count: StrictInt
+    code_like_line_count: StrictInt
+    operator_count: StrictInt
+    punctuation_density: StrictFloat | None = None
+    task_name_hit_count: StrictInt | None = None
+
+
+class AstMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parse_ok: StrictBool
+    parse_error: StrictStr | None = None
+    top_level_function_count: StrictInt = 0
+    class_count: StrictInt = 0
+    import_count: StrictInt = 0
+    ast_node_count: StrictInt = 0
+    statement_count: StrictInt = 0
+    branch_count: StrictInt = 0
 
 
 class PerTestResultPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    task_id: StrictStr
     test_id: StrictStr
-    status: StrictStr
-    message: StrictStr | None = None
-    metadata: dict[StrictStr, Any] = Field(default_factory=dict)
+    function_name: StrictStr
+    status: EvaluationCaseStatus
+    message: StrictStr = ""
+    test_type: HumanEvalTestCaseKind
+    input_repr: StrictStr = ""
+    expected_output_repr: StrictStr = ""
+    actual_output_repr: StrictStr = ""
+
+    @classmethod
+    def from_evaluation_case(
+        cls,
+        case: EvaluationCaseSummary,
+    ) -> PerTestResultPayload:
+        return cls(
+            task_id=case.task_id,
+            test_id=case.case_id,
+            function_name=case.function_name,
+            status=case.status,
+            message=case.message,
+            test_type=case.test_type,
+            input_repr=case.input_repr,
+            expected_output_repr=case.expected_output_repr,
+            actual_output_repr=case.actual_output_repr,
+        )
 
 
 class ExperimentRecord(BaseModel):
@@ -210,11 +285,15 @@ class PredictionSpecRecord(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
-    def validate_task_id(self) -> PredictionSpecRecord:
+    def validate_spec_shape(self) -> PredictionSpecRecord:
         if self.task.task_id != self.task_id:
             raise ValueError("task snapshot task_id must match spec task_id")
         if self.provider_axis not in self.provider_configs:
             raise ValueError("provider_axis must be one of provider_configs")
+        from dr_dspy.records.hashing import dimensions_digest
+
+        if self.dimensions_digest != dimensions_digest(self.dimensions):
+            raise ValueError("dimensions_digest must match dimensions")
         return self
 
 

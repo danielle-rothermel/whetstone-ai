@@ -12,6 +12,7 @@ from dr_dspy.graph import (
     NodeError,
     NodeOutput,
     NodeSpec,
+    graph_digest,
 )
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
@@ -27,6 +28,8 @@ from dr_dspy.records import (
     ScoreAttemptStatus,
     TaskInputsPayload,
     TaskSnapshotPayload,
+    TextMetricsPayload,
+    dimensions_digest,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -66,6 +69,7 @@ def _direct_graph() -> GraphSpec:
 
 def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
     graph = _direct_graph()
+    dimensions = DimensionsPayload(values={"budget_ratio": 0.5})
     encoder = ProviderConfigRef(
         provider_kind=ProviderKind.OPENROUTER,
         endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
@@ -85,11 +89,11 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
         repetition_seed=0,
         graph=GraphSnapshotPayload(
             graph=graph,
-            graph_digest="graph-digest",
+            graph_digest=graph_digest(graph),
             layout="encdec",
         ),
-        dimensions=DimensionsPayload(values={"budget_ratio": 0.5}),
-        dimensions_digest="dimensions-digest",
+        dimensions=dimensions,
+        dimensions_digest=dimensions_digest(dimensions),
         task=TaskSnapshotPayload(
             task_id="HumanEval/0",
             inputs=TaskInputsPayload(values={"prompt": "write add"}),
@@ -179,7 +183,14 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
         metrics=MetricsPayload(
             profile_id="humaneval",
             profile_version="v1",
-            values={"passed": True},
+            text=TextMetricsPayload(
+                character_count=12,
+                byte_count=12,
+                line_count=1,
+                nonempty_line_count=1,
+                word_count=2,
+            ),
+            custom={"passed": True},
         ),
         started_at=NOW,
         completed_at=NOW,
@@ -191,5 +202,18 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
     assert row["metrics"] == {
         "profile_id": "humaneval",
         "profile_version": "v1",
-        "values": {"passed": True},
+        "text": {
+            "character_count": 12,
+            "byte_count": 12,
+            "line_count": 1,
+            "nonempty_line_count": 1,
+            "word_count": 2,
+            "average_word_length": None,
+            "punctuation_count": None,
+            "symbol_count": None,
+        },
+        "python_leakage": None,
+        "ast": None,
+        "compression": {},
+        "custom": {"passed": True},
     }

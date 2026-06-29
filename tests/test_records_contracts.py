@@ -15,7 +15,10 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_dspy.harness.flow import stable_prediction_id_from_dimensions
+from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
 from dr_dspy.lm.boundary import (
     EndpointKind,
     ProviderKind,
@@ -37,13 +40,16 @@ from dr_dspy.records import (
     NodeAttemptRecord,
     NodeAttemptStatus,
     NodeOutputPayload,
+    PerTestResultPayload,
     PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
+    PythonLeakageMetricsPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
     TaskInputsPayload,
     TaskSnapshotPayload,
+    TextMetricsPayload,
     dimensions_digest,
     fair_order_key,
     stable_prediction_id,
@@ -137,10 +143,13 @@ def _prediction_spec(
             experiment_seed="seed",
             prediction_id=prediction_id,
             provider=provider.provider_kind.value,
+            endpoint_kind=provider.endpoint_kind.value,
             model=provider.model,
+            throttle_key=provider.throttle_key,
             graph_layout="direct",
             task_id="HumanEval/0",
             repetition_seed=7,
+            config_axis=dimensions_id,
         ),
         created_at=NOW,
     )
@@ -164,6 +173,25 @@ def test_prediction_spec_rejects_extra_fields_and_dumps_json() -> None:
     assert dumped["graph"]["graph"]["terminal_node_id"] == "direct"
     with pytest.raises(ValidationError):
         PredictionSpecRecord.model_validate({**dumped, "extra": "nope"})
+
+
+def test_graph_snapshot_validates_digest() -> None:
+    graph = _direct_graph()
+
+    with pytest.raises(ValidationError, match="graph_digest"):
+        GraphSnapshotPayload(
+            graph=graph,
+            graph_digest="wrong",
+            layout="direct",
+        )
+
+
+def test_prediction_spec_validates_dimensions_digest() -> None:
+    dumped = _prediction_spec().model_dump(mode="json")
+    dumped["dimensions_digest"] = "wrong"
+
+    with pytest.raises(ValidationError, match="dimensions_digest"):
+        PredictionSpecRecord.model_validate(dumped)
 
 
 def test_provider_config_ref_converts_from_runtime_provider_config() -> None:
@@ -221,6 +249,61 @@ def test_stable_prediction_id_changes_with_graph_or_dimensions() -> None:
     assert base.prediction_id != changed_graph.prediction_id
     assert base.dimensions_digest != changed_dimensions.dimensions_digest
     assert base.graph.graph_digest != changed_graph.graph.graph_digest
+
+
+def test_v1_prediction_ids_are_not_v0_compatible() -> None:
+    v1 = _prediction_spec()
+    v0 = stable_prediction_id_from_dimensions(
+        experiment_name=v1.experiment_name,
+        task_id=v1.task_id,
+        dimensions=v1.dimensions.values,
+        repetition_seed=v1.repetition_seed,
+        digest_length=24,
+    )
+
+    assert v1.prediction_id != v0
+
+
+def test_fair_order_key_mixes_endpoint_throttle_and_config_axes() -> None:
+    base = fair_order_key(
+        experiment_seed="seed",
+        prediction_id="prediction",
+        provider="openai",
+        endpoint_kind="responses",
+        model="model",
+        throttle_key="openai:responses:model",
+        graph_layout="direct",
+        task_id="HumanEval/0",
+        repetition_seed=1,
+        config_axis="temperature=0.2",
+    )
+    changed_endpoint = fair_order_key(
+        experiment_seed="seed",
+        prediction_id="prediction",
+        provider="openai",
+        endpoint_kind="chat_completions",
+        model="model",
+        throttle_key="openai:chat_completions:model",
+        graph_layout="direct",
+        task_id="HumanEval/0",
+        repetition_seed=1,
+        config_axis="temperature=0.2",
+    )
+    changed_config = fair_order_key(
+        experiment_seed="seed",
+        prediction_id="prediction",
+        provider="openai",
+        endpoint_kind="responses",
+        model="model",
+        throttle_key="openai:responses:model",
+        graph_layout="direct",
+        task_id="HumanEval/0",
+        repetition_seed=1,
+        config_axis="temperature=0.9",
+    )
+
+    assert base != changed_endpoint
+    assert base != changed_config
 
 
 def test_node_attempt_statuses_are_only_invoked_terminal_outcomes() -> None:
@@ -309,7 +392,22 @@ def test_score_attempt_success_and_error_shapes() -> None:
         metrics=MetricsPayload(
             profile_id="humaneval",
             profile_version="v1",
-            values={"passed": True},
+            text=TextMetricsPayload(
+                character_count=12,
+                byte_count=12,
+                line_count=1,
+                nonempty_line_count=1,
+                word_count=2,
+                average_word_length=5.5,
+            ),
+            python_leakage=PythonLeakageMetricsPayload(
+                keyword_count=1,
+                code_marker_count=1,
+                fenced_code_block_count=0,
+                code_like_line_count=1,
+                operator_count=0,
+            ),
+            custom={"passed": True},
         ),
         started_at=NOW,
         completed_at=NOW,
@@ -330,6 +428,34 @@ def test_score_attempt_success_and_error_shapes() -> None:
             started_at=NOW,
             completed_at=NOW,
         )
+
+
+def test_per_test_result_aligns_with_humaneval_case_summary() -> None:
+    summary = EvaluationCaseSummary(
+        task_id="HumanEval/0",
+        case_id="case_0",
+        function_name="add",
+        status=EvaluationCaseStatus.PASSED,
+        message="",
+        test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+        input_repr="[1, 2]",
+        expected_output_repr="3",
+        actual_output_repr="3",
+    )
+
+    payload = PerTestResultPayload.from_evaluation_case(summary)
+
+    assert payload.model_dump(mode="json") == {
+        "task_id": "HumanEval/0",
+        "test_id": "case_0",
+        "function_name": "add",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1, 2]",
+        "expected_output_repr": "3",
+        "actual_output_repr": "3",
+    }
 
 
 def test_projection_and_batch_records_validate_json_contracts() -> None:
