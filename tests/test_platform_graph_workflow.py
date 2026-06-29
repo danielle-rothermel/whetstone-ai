@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
-from dr_dspy.eval_failures import FailureClass, PermanentFailureError
+from dr_dspy.db import io as db_io
+from dr_dspy.eval_failures import (
+    FailureClass,
+    PermanentFailureError,
+    TransientFailureError,
+)
 from dr_dspy.graph import (
     BindingRef,
     FieldRole,
@@ -29,6 +35,12 @@ from dr_dspy.platform.node_execution import (
     NodeStepStatus,
     execute_lm_node,
     provider_config_ref_for_node,
+)
+from dr_dspy.platform.persistence import (
+    idempotent_insert_generation_run,
+    idempotent_insert_node_attempt,
+    persist_generation_result,
+    prediction_spec_from_row,
 )
 from dr_dspy.records import (
     DimensionsPayload,
@@ -396,6 +408,25 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
     assert result.response_metadata.response_metadata["id"] == "resp-1"
 
 
+def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+
+    def provider_caller(client: Any, request: Any) -> None:
+        raise TransientFailureError("temporary provider failure")
+
+    with pytest.raises(TransientFailureError):
+        execute_lm_node(
+            spec=spec,
+            node=node,
+            node_inputs={"prompt": "write add"},
+            client_factory=lambda config: object(),
+            provider_caller=provider_caller,
+            raise_retryable=True,
+        )
+
+
 def test_multiple_provider_configs_require_node_provider_config_id() -> None:
     node = _node("direct", bindings={"prompt": "task.prompt"})
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
@@ -434,3 +465,96 @@ def test_deterministic_generation_and_node_attempt_ids() -> None:
         node_id="decoder",
         attempt_index=0,
     )
+
+
+def test_prediction_spec_from_row_round_trips_db_io_shape() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+
+    parsed = prediction_spec_from_row(db_io.prediction_spec_row(spec))
+
+    assert parsed.model_dump(mode="json") == spec.model_dump(mode="json")
+
+
+def test_persist_generation_result_uses_idempotent_inserts() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+    generation_run_id = stable_generation_run_id(
+        prediction_id=spec.prediction_id,
+        attempt_index=0,
+    )
+    execution = execute_prediction_graph(
+        spec=spec,
+        attempt_index=0,
+        generation_run_id=generation_run_id,
+        started_at=NOW,
+        completed_at=LATER,
+        run_node_step=lambda step_spec, node, inputs: _step_success(
+            node,
+            "ok",
+        ),
+    )
+
+    generation_sql = _postgres_sql(
+        idempotent_insert_generation_run(execution.generation_run)
+    )
+    node_sql = _postgres_sql(
+        idempotent_insert_node_attempt(execution.node_attempts[0])
+    )
+
+    assert "ON CONFLICT (generation_run_id) DO NOTHING" in generation_sql
+    assert "ON CONFLICT (node_attempt_id) DO NOTHING" in node_sql
+
+
+def test_persist_generation_result_executes_idempotent_statements() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+    execution = execute_prediction_graph(
+        spec=spec,
+        attempt_index=0,
+        generation_run_id="run-1",
+        started_at=NOW,
+        completed_at=LATER,
+        run_node_step=lambda step_spec, node, inputs: _step_success(
+            node,
+            "ok",
+        ),
+    )
+    connection = _RecordingConnection()
+
+    persist_generation_result(
+        cast(Any, connection),
+        generation_run=execution.generation_run,
+        node_attempts=execution.node_attempts,
+    )
+
+    compiled = [_postgres_sql(statement) for statement in connection.calls]
+    assert len(compiled) == 2
+    assert all("ON CONFLICT" in statement for statement in compiled)
+
+
+def test_platform_worker_import_registers_entrypoint() -> None:
+    from dr_dspy.platform import worker
+
+    assert worker.APP is not None
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
+
+    def execute(self, statement: Any) -> None:
+        self.calls.append(statement)
+
+
+def _postgres_sql(statement: Any) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))

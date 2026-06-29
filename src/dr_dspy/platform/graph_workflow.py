@@ -8,10 +8,12 @@ from dbos import DBOS, SetWorkflowID
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
+from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
     execute_lm_node,
+    node_step_error_result,
 )
 from dr_dspy.platform.persistence import (
     generation_run_record_from_result,
@@ -127,12 +129,25 @@ def run_prediction_graph_workflow(
         node: NodeSpec,
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
-        result = execute_lm_node_step(
-            step_spec.model_dump(mode="json"),
-            node.model_dump(mode="json"),
-            dict(node_inputs),
-        )
-        return NodeStepResult.model_validate(result)
+        started_at = datetime.fromisoformat(start_generation_clock_step())
+        try:
+            result = execute_lm_node_step(
+                step_spec.model_dump(mode="json"),
+                node.model_dump(mode="json"),
+                dict(node_inputs),
+            )
+            return NodeStepResult.model_validate(result)
+        except Exception as error:
+            completed_at = datetime.fromisoformat(
+                start_generation_clock_step()
+            )
+            return node_step_error_result(
+                spec=step_spec,
+                node=node,
+                error=error,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
 
     graph_result, node_step_results = run_prediction_graph_core(
         spec=spec,
@@ -205,7 +220,13 @@ def start_generation_clock_step() -> str:
     return datetime.now(UTC).isoformat()
 
 
-@DBOS.step(name=EXECUTE_NODE_STEP_NAME)
+@DBOS.step(
+    name=EXECUTE_NODE_STEP_NAME,
+    retries_allowed=True,
+    max_attempts=3,
+    interval_seconds=2.0,
+    should_retry=should_retry_step,
+)
 def execute_lm_node_step(
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
@@ -215,6 +236,7 @@ def execute_lm_node_step(
         spec=PredictionSpecRecord.model_validate(spec_payload),
         node=NodeSpec.model_validate(node_payload),
         node_inputs=node_inputs,
+        raise_retryable=True,
     )
     return result.model_dump(mode="json")
 

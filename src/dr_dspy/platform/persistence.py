@@ -4,9 +4,10 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
-from dr_dspy.db import io
+from dr_dspy.db import io, schema
 from dr_dspy.graph import (
     GraphRunResult,
     NodeOutcomeStatus,
@@ -153,9 +154,25 @@ def persist_generation_result(
     generation_run: GenerationRunRecord,
     node_attempts: Iterable[NodeAttemptRecord],
 ) -> None:
-    connection.execute(io.insert_generation_run(generation_run))
+    connection.execute(idempotent_insert_generation_run(generation_run))
     for node_attempt in node_attempts:
-        connection.execute(io.insert_node_attempt(node_attempt))
+        connection.execute(idempotent_insert_node_attempt(node_attempt))
+
+
+def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
+    return (
+        insert(schema.generation_runs)
+        .values(io.generation_run_row(record))
+        .on_conflict_do_nothing(index_elements=["generation_run_id"])
+    )
+
+
+def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
+    return (
+        insert(schema.node_attempts)
+        .values(io.node_attempt_row(record))
+        .on_conflict_do_nothing(index_elements=["node_attempt_id"])
+    )
 
 
 def _provider_axis_from_row(

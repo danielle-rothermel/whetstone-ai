@@ -9,7 +9,11 @@ from typing import Any
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from dr_dspy.eval_failures import FailureClass, PermanentFailureError
+from dr_dspy.eval_failures import (
+    PermanentFailureError,
+    should_retry_step,
+    summarize_exception,
+)
 from dr_dspy.graph import NodeOutput, NodeSpec
 from dr_dspy.lm.boundary import (
     EndpointKind,
@@ -158,6 +162,7 @@ def execute_lm_node(
     node_inputs: Mapping[str, Any],
     client_factory: ProviderClientFactory | None = None,
     provider_caller: ProviderCaller = call_provider_request,
+    raise_retryable: bool = False,
 ) -> NodeStepResult:
     started_at = datetime.now(UTC)
     provider_ref: ProviderConfigRef | None = None
@@ -207,6 +212,8 @@ def execute_lm_node(
             completed_at=completed_at,
         )
     except Exception as error:
+        if raise_retryable and should_retry_step(error):
+            raise
         completed_at = datetime.now(UTC)
         return NodeStepResult.error(
             node_id=node.id,
@@ -215,6 +222,27 @@ def execute_lm_node(
             started_at=started_at,
             completed_at=completed_at,
         )
+
+
+def node_step_error_result(
+    *,
+    spec: PredictionSpecRecord,
+    node: NodeSpec,
+    error: BaseException,
+    started_at: datetime,
+    completed_at: datetime,
+) -> NodeStepResult:
+    try:
+        provider_ref = provider_config_ref_for_node(spec=spec, node=node)
+    except Exception:
+        provider_ref = None
+    return NodeStepResult.error(
+        node_id=node.id,
+        provider_config=provider_ref,
+        error=error,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
 
 
 def provider_config_ref_for_node(
@@ -330,20 +358,10 @@ def create_provider_client(config: ProviderConfig) -> OpenAI:
 def failure_metadata_from_exception(
     error: BaseException,
 ) -> FailureMetadataPayload:
-    failure_class = getattr(type(error), "failure_class", None)
-    metadata = getattr(error, "metadata", None)
+    summary = summarize_exception(error)
     return FailureMetadataPayload(
-        failure_class=(
-            failure_class if isinstance(failure_class, FailureClass) else None
-        ),
-        error_type=_exception_error_type(error),
-        message=str(error),
-        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+        failure_class=summary.failure_class,
+        error_type=summary.failure_exception_type,
+        message=summary.message,
+        metadata=summary.failure_metadata,
     )
-
-
-def _exception_error_type(error: BaseException) -> str:
-    error_type = getattr(error, "error_type", None)
-    if isinstance(error_type, str):
-        return error_type
-    return f"{type(error).__module__}.{type(error).__qualname__}"
