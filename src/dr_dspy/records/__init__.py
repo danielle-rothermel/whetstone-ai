@@ -10,10 +10,14 @@ from dr_dspy.records.batch_submit import (
 from dr_dspy.records.hashing import (
     DIMENSIONS_DIGEST_LENGTH,
     FAIR_ORDER_DIGEST_LENGTH,
+    GENERATION_RUN_ID_DIGEST_LENGTH,
+    NODE_ATTEMPT_ID_DIGEST_LENGTH,
     PREDICTION_ID_DIGEST_LENGTH,
     canonical_json,
     dimensions_digest,
     fair_order_key,
+    stable_generation_run_id,
+    stable_node_attempt_id,
     stable_prediction_id,
 )
 from dr_dspy.records.limits import (
@@ -62,7 +66,9 @@ __all__ = [
     "BATCH_SUBMIT_SPEC_MAX_BYTES",
     "DIMENSIONS_DIGEST_LENGTH",
     "FAIR_ORDER_DIGEST_LENGTH",
+    "GENERATION_RUN_ID_DIGEST_LENGTH",
     "GRAPH_SNAPSHOT_MAX_BYTES",
+    "NODE_ATTEMPT_ID_DIGEST_LENGTH",
     "NODE_OUTPUT_MAX_BYTES",
     "PER_TEST_RESULTS_MAX_BYTES",
     "PER_TEST_RESULTS_MAX_COUNT",
@@ -108,6 +114,8 @@ __all__ = [
     "dimensions_digest",
     "fair_order_key",
     "insert_outcome_from_rowcount",
+    "stable_generation_run_id",
+    "stable_node_attempt_id",
     "stable_prediction_id",
     "validate_payload_size",
 ]

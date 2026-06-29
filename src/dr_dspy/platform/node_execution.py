@@ -1,0 +1,349 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any
+
+from openai import OpenAI
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
+
+from dr_dspy.eval_failures import FailureClass, PermanentFailureError
+from dr_dspy.graph import NodeOutput, NodeSpec
+from dr_dspy.lm.boundary import (
+    EndpointKind,
+    ProviderConfig,
+    ProviderKind,
+    ProviderRequest,
+    build_chat_completions_request,
+    build_responses_request,
+    call_provider_request,
+    openai_chat_config,
+    openai_responses_config,
+    openrouter_chat_config,
+    parse_provider_response,
+)
+from dr_dspy.platform.prompts import build_node_messages, node_prompt_spec
+from dr_dspy.records import (
+    FailureMetadataPayload,
+    NodeOutputPayload,
+    PredictionSpecRecord,
+    ProviderConfigRef,
+    ResponseMetadataPayload,
+    UsageCostPayload,
+)
+
+TEMPERATURE_PARAMETER = "temperature"
+TOKEN_LIMIT_PARAMETER = "token_limit"
+REASONING_PARAMETER = "reasoning"
+EXTRA_BODY_PARAMETER = "extra_body"
+EXTRA_KWARGS_PARAMETER = "extra_kwargs"
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 120.0
+
+type ProviderClientFactory = Callable[[ProviderConfig], Any]
+type ProviderCaller = Callable[[Any, ProviderRequest], Any]
+
+
+class NodeStepStatus(StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
+
+
+class NodeStepResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: StrictStr
+    status: NodeStepStatus
+    provider_config: ProviderConfigRef | None = None
+    output: NodeOutputPayload | None = None
+    usage_cost: UsageCostPayload = Field(default_factory=UsageCostPayload)
+    response_metadata: ResponseMetadataPayload = Field(
+        default_factory=ResponseMetadataPayload
+    )
+    failure: FailureMetadataPayload | None = None
+    started_at: datetime
+    completed_at: datetime
+
+    @classmethod
+    def success(
+        cls,
+        *,
+        node_id: str,
+        provider_config: ProviderConfigRef,
+        output: NodeOutput,
+        usage_metadata: Mapping[str, Any],
+        provider_cost: float | None,
+        response_metadata: Mapping[str, Any],
+        started_at: datetime,
+        completed_at: datetime,
+    ) -> NodeStepResult:
+        return cls(
+            node_id=node_id,
+            status=NodeStepStatus.SUCCESS,
+            provider_config=provider_config,
+            output=NodeOutputPayload(
+                values=output.values,
+                metadata=output.metadata,
+            ),
+            usage_cost=UsageCostPayload(
+                usage_metadata=dict(usage_metadata),
+                provider_cost=provider_cost,
+            ),
+            response_metadata=ResponseMetadataPayload(
+                response_metadata=dict(response_metadata)
+            ),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+    @classmethod
+    def error(
+        cls,
+        *,
+        node_id: str,
+        provider_config: ProviderConfigRef | None,
+        error: BaseException,
+        started_at: datetime,
+        completed_at: datetime,
+    ) -> NodeStepResult:
+        return cls(
+            node_id=node_id,
+            status=NodeStepStatus.ERROR,
+            provider_config=provider_config,
+            failure=failure_metadata_from_exception(error),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+    def graph_output(self) -> NodeOutput:
+        if self.status is NodeStepStatus.ERROR:
+            raise NodeStepFailure.from_result(self)
+        if self.output is None:
+            raise PermanentFailureError(
+                "successful node step result has no output",
+                metadata={"node_id": self.node_id},
+            )
+        return NodeOutput(
+            values=self.output.values,
+            metadata=self.output.metadata,
+        )
+
+
+class NodeStepFailure(Exception):
+    def __init__(self, failure: FailureMetadataPayload) -> None:
+        super().__init__(failure.message)
+        self.error_type = failure.error_type
+        self.failure_class = (
+            failure.failure_class.value
+            if failure.failure_class is not None
+            else None
+        )
+        self.metadata = failure.metadata
+
+    @classmethod
+    def from_result(cls, result: NodeStepResult) -> NodeStepFailure:
+        if result.failure is None:
+            raise PermanentFailureError(
+                "error node step result has no failure payload",
+                metadata={"node_id": result.node_id},
+            )
+        return cls(result.failure)
+
+
+def execute_lm_node(
+    *,
+    spec: PredictionSpecRecord,
+    node: NodeSpec,
+    node_inputs: Mapping[str, Any],
+    client_factory: ProviderClientFactory | None = None,
+    provider_caller: ProviderCaller = call_provider_request,
+) -> NodeStepResult:
+    started_at = datetime.now(UTC)
+    provider_ref: ProviderConfigRef | None = None
+    resolved_client_factory = client_factory or create_provider_client
+    try:
+        provider_ref = provider_config_ref_for_node(spec=spec, node=node)
+        runtime_config = runtime_provider_config(provider_ref)
+        messages = build_node_messages(node=node, node_inputs=node_inputs)
+        request = build_provider_request(
+            config=runtime_config,
+            messages=messages,
+            parameters=merged_node_parameters(
+                provider_ref=provider_ref,
+                node=node,
+            ),
+        )
+        response = provider_caller(
+            resolved_client_factory(runtime_config),
+            request,
+        )
+        result = parse_provider_response(
+            response,
+            config=runtime_config,
+            output_field=node.config.output_field,
+        )
+        output = NodeOutput(
+            values={node.config.output_field: result.text},
+            metadata={
+                key: value
+                for key, value in {
+                    "response_id": result.response_id,
+                    "model": result.model,
+                    "finish_reason": result.finish_reason,
+                }.items()
+                if value is not None
+            },
+        )
+        completed_at = datetime.now(UTC)
+        return NodeStepResult.success(
+            node_id=node.id,
+            provider_config=provider_ref,
+            output=output,
+            usage_metadata=result.usage_metadata,
+            provider_cost=result.provider_cost,
+            response_metadata=result.response_metadata,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+    except Exception as error:
+        completed_at = datetime.now(UTC)
+        return NodeStepResult.error(
+            node_id=node.id,
+            provider_config=provider_ref,
+            error=error,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+
+def provider_config_ref_for_node(
+    *,
+    spec: PredictionSpecRecord,
+    node: NodeSpec,
+) -> ProviderConfigRef:
+    prompt_spec = node_prompt_spec(node)
+    if prompt_spec.provider_config_id is not None:
+        for provider_config in spec.provider_configs:
+            if provider_config.config_id == prompt_spec.provider_config_id:
+                return provider_config
+        raise PermanentFailureError(
+            "node references unknown provider_config_id",
+            metadata={
+                "node_id": node.id,
+                "provider_config_id": prompt_spec.provider_config_id,
+            },
+        )
+
+    if len(spec.provider_configs) == 1:
+        return spec.provider_configs[0]
+
+    raise PermanentFailureError(
+        "node must declare provider_config_id when spec has multiple configs",
+        metadata={"node_id": node.id},
+    )
+
+
+def runtime_provider_config(provider_ref: ProviderConfigRef) -> ProviderConfig:
+    if (
+        provider_ref.provider_kind is ProviderKind.OPENROUTER
+        and provider_ref.endpoint_kind is EndpointKind.CHAT_COMPLETIONS
+    ):
+        config = openrouter_chat_config(model=provider_ref.model)
+    elif (
+        provider_ref.provider_kind is ProviderKind.OPENAI
+        and provider_ref.endpoint_kind is EndpointKind.CHAT_COMPLETIONS
+    ):
+        config = openai_chat_config(model=provider_ref.model)
+    elif (
+        provider_ref.provider_kind is ProviderKind.OPENAI
+        and provider_ref.endpoint_kind is EndpointKind.RESPONSES
+    ):
+        config = openai_responses_config(model=provider_ref.model)
+    else:
+        raise PermanentFailureError(
+            "unsupported provider endpoint for platform graph workflow",
+            metadata={
+                "provider_kind": provider_ref.provider_kind.value,
+                "endpoint_kind": provider_ref.endpoint_kind.value,
+                "model": provider_ref.model,
+            },
+        )
+    return config.model_copy(
+        update={"throttle_key": provider_ref.throttle_key}
+    )
+
+
+def merged_node_parameters(
+    *,
+    provider_ref: ProviderConfigRef,
+    node: NodeSpec,
+) -> dict[str, Any]:
+    return {
+        **provider_ref.parameters,
+        **node.config.parameters,
+    }
+
+
+def build_provider_request(
+    *,
+    config: ProviderConfig,
+    messages: Any,
+    parameters: Mapping[str, Any],
+) -> ProviderRequest:
+    request_kwargs = {
+        "config": config,
+        "messages": messages,
+        "temperature": parameters.get(TEMPERATURE_PARAMETER),
+        "token_limit": parameters.get(TOKEN_LIMIT_PARAMETER),
+        "reasoning": parameters.get(REASONING_PARAMETER),
+        "extra_body": parameters.get(EXTRA_BODY_PARAMETER),
+        "extra_kwargs": parameters.get(EXTRA_KWARGS_PARAMETER),
+    }
+    if config.endpoint_kind is EndpointKind.CHAT_COMPLETIONS:
+        return build_chat_completions_request(**request_kwargs)
+    if config.endpoint_kind is EndpointKind.RESPONSES:
+        return build_responses_request(**request_kwargs)
+    raise PermanentFailureError(
+        "unsupported provider endpoint kind",
+        metadata={"endpoint_kind": config.endpoint_kind.value},
+    )
+
+
+def create_provider_client(config: ProviderConfig) -> OpenAI:
+    api_key = os.environ.get(config.api_key_env)
+    if not api_key:
+        raise PermanentFailureError(
+            "provider API key environment variable is not set",
+            metadata={
+                "api_key_env": config.api_key_env,
+                "provider_kind": config.provider_kind.value,
+            },
+        )
+    return OpenAI(
+        api_key=api_key,
+        base_url=config.base_url,
+        timeout=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+    )
+
+
+def failure_metadata_from_exception(
+    error: BaseException,
+) -> FailureMetadataPayload:
+    failure_class = getattr(type(error), "failure_class", None)
+    metadata = getattr(error, "metadata", None)
+    return FailureMetadataPayload(
+        failure_class=(
+            failure_class if isinstance(failure_class, FailureClass) else None
+        ),
+        error_type=_exception_error_type(error),
+        message=str(error),
+        metadata=dict(metadata) if isinstance(metadata, dict) else {},
+    )
+
+
+def _exception_error_type(error: BaseException) -> str:
+    error_type = getattr(error, "error_type", None)
+    if isinstance(error_type, str):
+        return error_type
+    return f"{type(error).__module__}.{type(error).__qualname__}"
