@@ -398,6 +398,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         return NOW.isoformat()
 
     def execute_step(
+        step_database_url: str,
         spec_payload: dict[str, Any],
         node_payload: dict[str, Any],
         node_inputs: dict[str, Any],
@@ -407,13 +408,33 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         calls.append(
             (
                 "execute",
-                (step_spec.prediction_id, node.id, node_inputs),
+                (
+                    step_database_url,
+                    step_spec.prediction_id,
+                    node.id,
+                    node_inputs,
+                ),
             )
         )
         return _step_success(
             node,
             f"workflow {node_inputs['prompt']}",
         ).model_dump(mode="json")
+
+    def throttle_preflight_step(
+        step_database_url: str,
+        spec_payload: dict[str, Any],
+        node_payload: dict[str, Any],
+    ) -> float:
+        step_spec = PredictionSpecRecord.model_validate(spec_payload)
+        node = NodeSpec.model_validate(node_payload)
+        calls.append(
+            (
+                "throttle",
+                (step_database_url, step_spec.prediction_id, node.id),
+            )
+        )
+        return 0.0
 
     def completed_step(step_generation_run_id: str) -> str:
         calls.append(("completed", step_generation_run_id))
@@ -459,6 +480,16 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         "generation_started_at_step",
         started_step,
     )
+    monkeypatch.setattr(
+        graph_workflow,
+        "throttle_preflight_step",
+        throttle_preflight_step,
+    )
+    monkeypatch.setattr(
+        graph_workflow.DBOS,
+        "sleep",
+        lambda seconds: calls.append(("sleep", seconds)),
+    )
     monkeypatch.setattr(graph_workflow, "execute_lm_node_step", execute_step)
     monkeypatch.setattr(
         graph_workflow,
@@ -481,9 +512,12 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
     assert calls == [
         ("load", (database_url, spec.prediction_id)),
         ("started", generation_run_id),
+        ("throttle", (database_url, spec.prediction_id, "direct")),
+        ("sleep", 0.0),
         (
             "execute",
             (
+                database_url,
                 spec.prediction_id,
                 "direct",
                 {"prompt": "write add"},
@@ -875,11 +909,16 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
         *,
         database_url: str | None,
         dbos_system_database_url: str | None,
+        consume_generation_queue: bool,
     ) -> RuntimeConfig:
         calls.append(
             (
                 "configure",
-                (database_url, dbos_system_database_url),
+                (
+                    database_url,
+                    dbos_system_database_url,
+                    consume_generation_queue,
+                ),
             )
         )
         return RuntimeConfig()
@@ -924,7 +963,7 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
 
     assert calls == [
         ("load_env", None),
-        ("configure", ("postgresql://app/db", "postgresql://dbos/db")),
+        ("configure", ("postgresql://app/db", "postgresql://dbos/db", False)),
         ("run_once", ("postgresql://example/db", "prediction-1", 3)),
         ("destroy", None),
     ]

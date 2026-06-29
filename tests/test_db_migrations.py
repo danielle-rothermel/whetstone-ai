@@ -49,8 +49,8 @@ def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
     rendered = "\n".join(statements)
     assert "CREATE TABLE dr_dspy_prediction_specs" in rendered
     assert "CREATE TABLE dr_dspy_prediction_projection" in rendered
-    assert "DROP TABLE dr_dspy_prediction_specs" in rendered
-    assert "DROP TABLE dr_dspy_experiments" in rendered
+    assert "CREATE TABLE dr_dspy_throttle_backoff" in rendered
+    assert "DROP TABLE dr_dspy_throttle_backoff" in rendered
 
 
 def test_alembic_v1_schema_revision_matches_live_named_contracts(
@@ -120,6 +120,9 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
     migration = importlib.import_module(
         "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
     )
+    throttle_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff"
+    )
     append_only_migration = importlib.import_module(
         "dr_dspy.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers"
@@ -134,6 +137,12 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(migration, "op", Operations(context))
             migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(throttle_migration, "op", Operations(context))
+            throttle_migration.upgrade()
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
@@ -202,6 +211,9 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
                 Operations(context),
             )
             append_only_migration.downgrade()
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(throttle_migration, "op", Operations(context))
+            throttle_migration.downgrade()
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(migration, "op", Operations(context))
             migration.downgrade()
@@ -290,8 +302,11 @@ def _seed_generation_run_chain(conn: Any) -> None:
 
 
 def _render_upgrade(monkeypatch: Any) -> tuple[Any, list[str]]:
-    migration = importlib.import_module(
+    first_migration = importlib.import_module(
         "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
+    )
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff"
     )
     statements: list[str] = []
     engine = create_mock_engine(
@@ -301,8 +316,10 @@ def _render_upgrade(monkeypatch: Any) -> tuple[Any, list[str]]:
         ),
     )
     context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(first_migration, "op", Operations(context))
     monkeypatch.setattr(migration, "op", Operations(context))
 
+    first_migration.upgrade()
     migration.upgrade()
     return migration, statements
 
