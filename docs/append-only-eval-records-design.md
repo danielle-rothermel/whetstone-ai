@@ -133,6 +133,12 @@ prompt formatting. The later graph-runner stage should adopt caller-built
 messages through the plain prompt path rather than rewriting the v0 experiments
 in this PR.
 
+Direct OpenAI support is represented in this stage by typed provider configs,
+request builders, response parsers, and fake-client call dispatch for both chat
+completions and Responses-style endpoints. A symmetric DSPy-compatible
+`LoggingOpenAILM` wrapper is intentionally deferred until a current caller needs
+direct OpenAI outside the graph-runner path.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain

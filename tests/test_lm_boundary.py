@@ -8,8 +8,10 @@ import dspy
 from dr_dspy.eval_failures import (
     EmptyGenerationError,
     FailureClass,
+    PermanentFailureError,
     ProviderResponseParseError,
     RateLimitedFailureError,
+    TransientFailureError,
     summarize_exception,
 )
 from dr_dspy.lm.boundary import (
@@ -32,6 +34,11 @@ from dr_dspy.lm.openrouter import LoggingOpenRouterLM
 from dr_dspy.lm.utils import LmEventBuffer
 
 
+class _PlainComparisonSignature(dspy.Signature):
+    question: str = dspy.InputField()
+    answer: str = dspy.OutputField()
+
+
 def test_plain_prompt_adapter_builds_exact_user_message() -> None:
     adapter = PlainPromptAdapter(output_field="code")
 
@@ -44,17 +51,26 @@ def test_plain_prompt_adapter_builds_exact_user_message() -> None:
 
 def test_plain_prompt_adapter_builds_exact_system_and_user_messages() -> None:
     adapter = PlainPromptAdapter(output_field="code")
+    user_content = "What is 2+2?"
 
     messages = adapter.messages(
         system_content="You write Python.",
-        user_content="solve this",
+        user_content=user_content,
     )
+    plain_content = "\n".join(message.content for message in messages)
+    dspy_messages = dspy.ChatAdapter().format(
+        _PlainComparisonSignature,
+        [],
+        {"question": user_content},
+    )
+    dspy_content = "\n".join(message["content"] for message in dspy_messages)
 
     assert [message.provider_dict() for message in messages] == [
         {"role": "system", "content": "You write Python."},
-        {"role": "user", "content": "solve this"},
+        {"role": "user", "content": user_content},
     ]
-    assert "[[ ##" not in repr(messages)
+    assert "[[ ##" in dspy_content
+    assert "[[ ##" not in plain_content
 
 
 def test_plain_prompt_adapter_returns_configured_output_field() -> None:
@@ -326,6 +342,96 @@ def test_provider_error_translation_preserves_rate_limit_cause() -> None:
     assert isinstance(exc_info.value.underlying, openai.RateLimitError)
     summary = summarize_exception(exc_info.value)
     assert summary.failure_class is FailureClass.RATE_LIMITED
+
+
+def test_provider_error_translation_preserves_permanent_auth_cause() -> None:
+    import httpx
+    import openai
+
+    request = build_chat_completions_request(
+        config=openrouter_chat_config(model="model/test"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    class AuthFailureCompletions:
+        def create(self, **kwargs: Any) -> None:
+            response = httpx.Response(
+                401,
+                request=httpx.Request("POST", "https://example.test"),
+            )
+            raise openai.AuthenticationError(
+                "bad key",
+                response=response,
+                body=None,
+            )
+
+    client = _FakeClient()
+    client.chat = type(
+        "FakeChat",
+        (),
+        {"completions": AuthFailureCompletions()},
+    )()
+
+    with pytest.raises(PermanentFailureError) as exc_info:
+        call_provider_request(client, request)
+
+    assert isinstance(exc_info.value.underlying, openai.AuthenticationError)
+    summary = summarize_exception(exc_info.value)
+    assert summary.failure_class is FailureClass.PERMANENT
+
+
+def test_provider_error_translation_preserves_transient_cause() -> None:
+    import httpx
+    import openai
+
+    request = build_chat_completions_request(
+        config=openrouter_chat_config(model="model/test"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    class ConnectionFailureCompletions:
+        def create(self, **kwargs: Any) -> None:
+            raise openai.APIConnectionError(
+                request=httpx.Request("POST", "https://example.test")
+            )
+
+    client = _FakeClient()
+    client.chat = type(
+        "FakeChat",
+        (),
+        {"completions": ConnectionFailureCompletions()},
+    )()
+
+    with pytest.raises(TransientFailureError) as exc_info:
+        call_provider_request(client, request)
+
+    assert isinstance(exc_info.value.underlying, openai.APIConnectionError)
+    summary = summarize_exception(exc_info.value)
+    assert summary.failure_class is FailureClass.TRANSIENT
+
+
+def test_provider_error_translation_passes_eval_failure_through() -> None:
+    request = build_chat_completions_request(
+        config=openrouter_chat_config(model="model/test"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    expected_error = PermanentFailureError("already classified")
+
+    class ClassifiedFailureCompletions:
+        def create(self, **kwargs: Any) -> None:
+            raise expected_error
+
+    client = _FakeClient()
+    client.chat = type(
+        "FakeChat",
+        (),
+        {"completions": ClassifiedFailureCompletions()},
+    )()
+
+    with pytest.raises(PermanentFailureError) as exc_info:
+        call_provider_request(client, request)
+
+    assert exc_info.value is expected_error
 
 
 def test_logging_openrouter_lm_uses_provider_boundary() -> None:
