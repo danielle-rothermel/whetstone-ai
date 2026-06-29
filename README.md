@@ -9,7 +9,9 @@ complete.
 ## Package layout
 
 - `humaneval/` — task parsing, code extraction, scoring, compression metrics
-- `lm/` — prompt/provider boundary helpers, DSPy compatibility, LM telemetry
+- `lm/boundary.py` — forward prompt/provider request and response boundary
+- `lm/runner.py`, `lm/signatures.py`, `lm/openrouter.py` — legacy DSPy compatibility for v0 workflows
+- `lm/logging.py`, `lm/utils.py` — shared LM telemetry and JSON helpers
 - `graph/` — pure graph execution and graph-spec hashing
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads

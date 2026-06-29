@@ -1,3 +1,9 @@
+"""Legacy DSPy predictor runner for v0 experiment workflows.
+
+New graph platform execution should build provider requests through
+``dr_dspy.lm.boundary`` instead of adding new ``dspy.Predict`` paths here.
+"""
+
 from __future__ import annotations
 
 import os

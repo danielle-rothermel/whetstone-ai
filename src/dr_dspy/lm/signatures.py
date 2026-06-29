@@ -1,3 +1,5 @@
+"""Legacy DSPy signature config models for v0 workflow scripts."""
+
 from __future__ import annotations
 
 from typing import Any
