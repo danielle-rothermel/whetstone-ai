@@ -17,10 +17,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
-from dr_dspy.graph import GraphRunStatus
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.records import (
     BatchSubmitItemStatus,
     BatchSubmitOperationStatus,
+    GenerationRunStatus,
     NodeAttemptStatus,
     ScoreAttemptStatus,
 )
@@ -123,7 +124,7 @@ generation_runs = Table(
         name="ck_dr_dspy_generation_runs_attempt_index",
     ),
     CheckConstraint(
-        enum_check("status", GraphRunStatus),
+        enum_check("status", GenerationRunStatus),
         name="ck_dr_dspy_generation_runs_status",
     ),
     CheckConstraint(
@@ -160,6 +161,7 @@ node_attempts = Table(
     Column("endpoint_kind", Text),
     Column("model", Text),
     Column("throttle_key", Text),
+    Column("provider_config", JSONB),
     Column("output", JSONB),
     Column("usage_cost", JSONB, nullable=False),
     Column("response_metadata", JSONB, nullable=False),
@@ -207,6 +209,7 @@ score_attempts = Table(
     Column("parser_profile_id", Text, nullable=False),
     Column("parser_version", Text, nullable=False),
     Column("status", Text, nullable=False),
+    Column("generated_code_outcome", Text),
     Column("score", Float),
     Column("extracted_code", JSONB),
     Column("metrics", JSONB),
@@ -217,6 +220,11 @@ score_attempts = Table(
     CheckConstraint(
         enum_check("status", ScoreAttemptStatus),
         name="ck_dr_dspy_score_attempts_status",
+    ),
+    CheckConstraint(
+        "generated_code_outcome IS NULL OR "
+        f"({enum_check('generated_code_outcome', GeneratedCodeOutcome)})",
+        name="ck_dr_dspy_score_attempts_generated_code_outcome",
     ),
     CheckConstraint(
         "score IS NULL OR (score >= 0 AND score <= 1)",
@@ -362,6 +370,8 @@ Index("ix_dr_dspy_score_attempts_profile", score_attempts.c.scoring_profile_id,
       score_attempts.c.scoring_profile_version)
 Index("ix_dr_dspy_score_attempts_parser", score_attempts.c.parser_profile_id,
       score_attempts.c.parser_version)
+Index("ix_dr_dspy_score_attempts_generated_code_outcome",
+      score_attempts.c.generated_code_outcome)
 Index("ix_dr_dspy_projection_generation",
       prediction_projection.c.generation_run_id)
 Index("ix_dr_dspy_projection_score", prediction_projection.c.score_attempt_id)

@@ -10,14 +10,17 @@ from dr_dspy.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
-    GraphRunStatus,
     GraphSpec,
     NodeConfig,
-    NodeOutput,
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.lm.boundary import (
+    EndpointKind,
+    ProviderKind,
+    openai_responses_config,
+)
 from dr_dspy.records import (
     BatchSubmitItemRecord,
     BatchSubmitItemStatus,
@@ -26,6 +29,7 @@ from dr_dspy.records import (
     DimensionsPayload,
     FailureMetadataPayload,
     GenerationRunRecord,
+    GenerationRunStatus,
     GenerationRunSummaryPayload,
     GenerationTerminalErrorPayload,
     GraphSnapshotPayload,
@@ -128,6 +132,7 @@ def _prediction_spec(
             inputs=TaskInputsPayload(values={"prompt": "write add"}),
         ),
         provider_configs=(provider,),
+        provider_axis=provider,
         fair_order_key=fair_order_key(
             experiment_seed="seed",
             prediction_id=prediction_id,
@@ -159,6 +164,42 @@ def test_prediction_spec_rejects_extra_fields_and_dumps_json() -> None:
     assert dumped["graph"]["graph"]["terminal_node_id"] == "direct"
     with pytest.raises(ValidationError):
         PredictionSpecRecord.model_validate({**dumped, "extra": "nope"})
+
+
+def test_provider_config_ref_converts_from_runtime_provider_config() -> None:
+    runtime_config = openai_responses_config(model="gpt-test")
+
+    ref = ProviderConfigRef.from_config(
+        runtime_config,
+        config_id="decoder",
+        parameters={"temperature": 0.2},
+    )
+
+    assert ref.provider_kind is ProviderKind.OPENAI
+    assert ref.endpoint_kind is EndpointKind.RESPONSES
+    assert ref.model == "gpt-test"
+    assert ref.config_id == "decoder"
+    assert ref.throttle_key == "openai:responses:gpt-test"
+    assert ref.parameters == {"temperature": 0.2}
+
+
+def test_prediction_spec_requires_provider_axis_member() -> None:
+    provider = _provider()
+    other_provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENROUTER,
+        endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
+        model="other",
+        throttle_key="openrouter:chat_completions:other",
+    )
+    spec = _prediction_spec().model_copy(
+        update={
+            "provider_configs": (provider,),
+            "provider_axis": other_provider,
+        }
+    )
+
+    with pytest.raises(ValidationError, match="provider_axis"):
+        PredictionSpecRecord.model_validate(spec.model_dump(mode="json"))
 
 
 def test_stable_prediction_id_changes_with_graph_or_dimensions() -> None:
@@ -203,14 +244,14 @@ def test_generation_run_can_store_terminal_blocked_result() -> None:
         generation_run_id="run-1",
         prediction_id="prediction-1",
         attempt_index=0,
-        status=GraphRunStatus.BLOCKED,
+        status=GenerationRunStatus.BLOCKED,
         terminal_node_id="decoder",
         summary=GenerationRunSummaryPayload(
             execution_order=("encoder", "decoder"),
             terminal_node_id="decoder",
             terminal_error=GenerationTerminalErrorPayload(
                 node_id="decoder",
-                status=GraphRunStatus.BLOCKED,
+                status=GenerationRunStatus.BLOCKED,
                 blocked_by=("encoder",),
             ),
         ),
@@ -218,7 +259,7 @@ def test_generation_run_can_store_terminal_blocked_result() -> None:
         completed_at=NOW,
     )
 
-    assert record.status is GraphRunStatus.BLOCKED
+    assert record.status is GenerationRunStatus.BLOCKED
     assert record.summary.terminal_error is not None
     assert record.summary.terminal_error.blocked_by == ("encoder",)
 
@@ -243,14 +284,12 @@ def test_successful_node_attempt_requires_output() -> None:
         node_id="direct",
         attempt_index=0,
         status=NodeAttemptStatus.SUCCESS,
-        output=NodeOutputPayload(
-            output=NodeOutput(values={"output": "def add(): pass"})
-        ),
+        output=NodeOutputPayload(values={"output": "def add(): pass"}),
         started_at=NOW,
         completed_at=NOW,
     )
 
-    assert record.model_dump(mode="json")["output"]["output"]["values"] == {
+    assert record.model_dump(mode="json")["output"]["values"] == {
         "output": "def add(): pass"
     }
 
@@ -265,6 +304,7 @@ def test_score_attempt_success_and_error_shapes() -> None:
         parser_profile_id="best-effort",
         parser_version="v1",
         status=ScoreAttemptStatus.SUCCESS,
+        generated_code_outcome=GeneratedCodeOutcome.PASSED,
         score=1.0,
         metrics=MetricsPayload(
             profile_id="humaneval",
@@ -276,6 +316,7 @@ def test_score_attempt_success_and_error_shapes() -> None:
     )
 
     assert success.model_dump(mode="json")["status"] == "success"
+    assert success.generated_code_outcome is GeneratedCodeOutcome.PASSED
     with pytest.raises(ValidationError, match="require failure"):
         ScoreAttemptRecord(
             score_attempt_id="score-2",

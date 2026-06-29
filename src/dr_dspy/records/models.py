@@ -15,8 +15,9 @@ from pydantic import (
 )
 
 from dr_dspy.eval_failures.types import FailureClass
-from dr_dspy.graph import GraphRunStatus, GraphSpec, NodeError, NodeOutput
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
+from dr_dspy.graph import GraphSpec
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
 
 
 class NodeAttemptStatus(StrEnum):
@@ -27,6 +28,13 @@ class NodeAttemptStatus(StrEnum):
 class ScoreAttemptStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"
+
+
+class GenerationRunStatus(StrEnum):
+    SUCCESS = "success"
+    ERROR = "error"
+    BLOCKED = "blocked"
+    PARTIAL = "partial"
 
 
 class BatchSubmitOperationStatus(StrEnum):
@@ -82,6 +90,23 @@ class ProviderConfigRef(BaseModel):
     throttle_key: StrictStr
     parameters: dict[StrictStr, Any] = Field(default_factory=dict)
 
+    @classmethod
+    def from_config(
+        cls,
+        config: ProviderConfig,
+        *,
+        config_id: str | None = None,
+        parameters: dict[str, Any] | None = None,
+    ) -> ProviderConfigRef:
+        return cls(
+            provider_kind=config.provider_kind,
+            endpoint_kind=config.endpoint_kind,
+            model=config.model,
+            config_id=config_id,
+            throttle_key=config.throttle_identity,
+            parameters=dict(parameters or {}),
+        )
+
 
 class UsageCostPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -104,32 +129,19 @@ class FailureMetadataPayload(BaseModel):
     message: StrictStr
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
-    @classmethod
-    def from_node_error(cls, error: NodeError) -> FailureMetadataPayload:
-        failure_class = (
-            FailureClass(error.failure_class)
-            if error.failure_class is not None
-            else None
-        )
-        return cls(
-            failure_class=failure_class,
-            error_type=error.error_type,
-            message=error.message,
-            metadata=error.metadata,
-        )
-
 
 class NodeOutputPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    output: NodeOutput
+    values: dict[StrictStr, Any]
+    metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
 class GenerationTerminalErrorPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: StrictStr
-    status: GraphRunStatus | NodeAttemptStatus
+    status: GenerationRunStatus | NodeAttemptStatus
     failure: FailureMetadataPayload | None = None
     blocked_by: tuple[StrictStr, ...] = ()
 
@@ -193,6 +205,7 @@ class PredictionSpecRecord(BaseModel):
     dimensions_digest: StrictStr
     task: TaskSnapshotPayload
     provider_configs: tuple[ProviderConfigRef, ...]
+    provider_axis: ProviderConfigRef
     fair_order_key: StrictStr
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -200,6 +213,8 @@ class PredictionSpecRecord(BaseModel):
     def validate_task_id(self) -> PredictionSpecRecord:
         if self.task.task_id != self.task_id:
             raise ValueError("task snapshot task_id must match spec task_id")
+        if self.provider_axis not in self.provider_configs:
+            raise ValueError("provider_axis must be one of provider_configs")
         return self
 
 
@@ -209,7 +224,7 @@ class GenerationRunRecord(BaseModel):
     generation_run_id: StrictStr
     prediction_id: StrictStr
     attempt_index: StrictInt
-    status: GraphRunStatus
+    status: GenerationRunStatus
     terminal_node_id: StrictStr
     terminal_output_node_id: StrictStr | None = None
     summary: GenerationRunSummaryPayload
@@ -270,6 +285,7 @@ class ScoreAttemptRecord(BaseModel):
     parser_profile_id: StrictStr
     parser_version: StrictStr
     status: ScoreAttemptStatus
+    generated_code_outcome: GeneratedCodeOutcome | None = None
     score: StrictFloat | None = None
     extracted_code: ExtractedCodePayload | None = None
     metrics: MetricsPayload | None = None

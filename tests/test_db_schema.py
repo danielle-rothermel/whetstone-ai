@@ -73,6 +73,9 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.node_attempts,
         CheckConstraint,
     )
+    assert "ck_dr_dspy_score_attempts_generated_code_outcome" in (
+        _constraint_names(schema.score_attempts, CheckConstraint)
+    )
     node_status_check = next(
         constraint
         for constraint in schema.node_attempts.constraints
@@ -104,6 +107,7 @@ def test_schema_has_indexes_for_common_reads() -> None:
         "ix_dr_dspy_node_attempts_node",
         "ix_dr_dspy_score_attempts_profile",
         "ix_dr_dspy_score_attempts_parser",
+        "ix_dr_dspy_score_attempts_generated_code_outcome",
         "ix_dr_dspy_projection_score",
         "ix_dr_dspy_batch_items_fair_order",
     } <= index_names
@@ -121,6 +125,7 @@ def test_schema_payload_columns_are_postgres_jsonb() -> None:
         schema.PREDICTION_SPECS_TABLE,
         "graph_snapshot",
     ) in jsonb_columns
+    assert (schema.NODE_ATTEMPTS_TABLE, "provider_config") in jsonb_columns
     assert (schema.NODE_ATTEMPTS_TABLE, "output") in jsonb_columns
     assert (schema.SCORE_ATTEMPTS_TABLE, "per_test_results") in jsonb_columns
     assert (
