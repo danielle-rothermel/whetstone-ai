@@ -10,6 +10,11 @@ from typing import Any, Protocol, cast
 
 import psycopg
 from dbos import DBOS, DBOSConfig, SetWorkflowID
+from dbos._error import (
+    DBOSConflictingWorkflowError,
+    DBOSQueueDeduplicatedError,
+    DBOSWorkflowConflictIDError,
+)
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
@@ -513,6 +518,24 @@ def score_workflow_id(
     return f"score-retry:{retry_token}:{prediction_id}"
 
 
+WORKFLOW_START_RACE_ERRORS: tuple[type[BaseException], ...] = (
+    DBOSWorkflowConflictIDError,
+    DBOSQueueDeduplicatedError,
+    DBOSConflictingWorkflowError,
+)
+
+
+def workflow_start_raced(*, workflow_id: str, error: BaseException) -> bool:
+    """Return True when a concurrent start/enqueue won (idempotent caller)."""
+    if isinstance(error, WORKFLOW_START_RACE_ERRORS):
+        return True
+    if isinstance(error, Exception) and (
+        DBOS.get_workflow_status(workflow_id) is not None
+    ):
+        return True
+    return False
+
+
 def enqueue_generation_workflows(
     database_url: str,
     jobs: Sequence[PredictionJobLike],
@@ -542,8 +565,11 @@ def enqueue_generation_workflows(
                     job.experiment_name,
                     score_timeout,
                 )
-            except Exception:
-                if DBOS.get_workflow_status(workflow_id) is not None:
+            except WORKFLOW_START_RACE_ERRORS:
+                existing += 1
+                continue
+            except Exception as error:
+                if workflow_start_raced(workflow_id=workflow_id, error=error):
                     existing += 1
                     continue
                 raise
@@ -574,8 +600,10 @@ def enqueue_score_workflow(
                 prediction_id,
                 timeout,
             )
-        except Exception:
-            if DBOS.get_workflow_status(workflow_id) is not None:
+        except WORKFLOW_START_RACE_ERRORS:
+            return False
+        except Exception as error:
+            if workflow_start_raced(workflow_id=workflow_id, error=error):
                 return False
             raise
     return True

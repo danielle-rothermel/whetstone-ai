@@ -14,7 +14,12 @@ from pydantic import (
     StrictStr,
 )
 
-from dr_dspy.eval_failures import FailureClass
+from dr_dspy.eval_failures import (
+    FailureClass,
+    error_text,
+    failure_summary_payload,
+    summarize_exception,
+)
 from dr_dspy.harness.dbos import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
@@ -487,14 +492,18 @@ def run_worker_monitor(
             was_active = snapshot.active_total > 0
             last_error = None
         except Exception as e:
-            error = repr(e)
-            emit_worker_detail_log("worker_monitor_error", {"error": error})
-            if error != last_error:
+            summary = summarize_exception(e)
+            message = error_text(summary)
+            emit_worker_detail_log(
+                "worker_monitor_error",
+                failure_summary_payload(summary) | {"error": message},
+            )
+            if message != last_error:
                 operator_log(
-                    f"worker monitor error: {error}; retrying",
+                    f"worker monitor error: {message}; retrying",
                     style="red",
                 )
-                last_error = error
+                last_error = message
         stop_event.wait(config.interval_seconds)
 
 

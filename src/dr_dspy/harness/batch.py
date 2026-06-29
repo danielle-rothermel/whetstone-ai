@@ -932,8 +932,13 @@ def ensure_operation_workflow(
             dbos_runtime.DBOS.start_workflow(
                 workflow, database_url, operation_key
             )
-        except Exception:
-            if dbos_runtime.DBOS.get_workflow_status(workflow_id) is not None:
+        except dbos_runtime.WORKFLOW_START_RACE_ERRORS:
+            return False
+        except Exception as error:
+            if dbos_runtime.workflow_start_raced(
+                workflow_id=workflow_id,
+                error=error,
+            ):
                 return False
             raise
     return True
