@@ -14,6 +14,7 @@ from dr_dspy.graph import (
     GraphSpec,
     InputResolutionError,
     NodeConfig,
+    NodeExecutionError,
     NodeOutcomeStatus,
     NodeOutput,
     NodeSpec,
@@ -147,12 +148,61 @@ def test_cycle_detection() -> None:
         )
 
 
+def test_empty_graph_validation() -> None:
+    with pytest.raises(ValueError, match="graph must have at least one node"):
+        GraphSpec(nodes=(), terminal_node_id="missing")
+
+
 def test_missing_terminal_node_validation() -> None:
     with pytest.raises(
         ValueError,
         match="terminal_node_id 'missing' not in graph",
     ):
         GraphSpec(nodes=(_node("direct"),), terminal_node_id="missing")
+
+
+def test_node_config_requires_declared_fields() -> None:
+    with pytest.raises(
+        ValueError,
+        match="node config must declare at least one field",
+    ):
+        NodeConfig(fields=(), output_field="output")
+
+
+def test_node_config_rejects_duplicate_field_names() -> None:
+    with pytest.raises(ValueError, match="duplicate field names"):
+        NodeConfig(
+            fields=(
+                FieldSpec(name="output", role=FieldRole.OUTPUT),
+                FieldSpec(name="output", role=FieldRole.OUTPUT),
+            ),
+            output_field="output",
+        )
+
+
+def test_node_config_rejects_unknown_output_field() -> None:
+    with pytest.raises(
+        ValueError,
+        match="output_field 'missing' is not an output field",
+    ):
+        NodeConfig(
+            fields=(FieldSpec(name="output", role=FieldRole.OUTPUT),),
+            output_field="missing",
+        )
+
+
+def test_node_config_rejects_binding_to_undeclared_input_field() -> None:
+    with pytest.raises(
+        ValueError,
+        match="input binding 'prompt' is not an input field",
+    ):
+        NodeConfig(
+            fields=(FieldSpec(name="output", role=FieldRole.OUTPUT),),
+            input_bindings={
+                "prompt": BindingRef.model_validate("task.prompt")
+            },
+            output_field="output",
+        )
 
 
 def test_missing_task_input_becomes_error_outcome() -> None:
@@ -177,6 +227,54 @@ def test_missing_task_input_becomes_error_outcome() -> None:
     )
     assert result.terminal_error is not None
     assert result.terminal_error.error == outcome.error
+
+
+def test_missing_returned_output_field_becomes_node_execution_error() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", output_field="code"),),
+        terminal_node_id="direct",
+    )
+
+    result = execute_graph(
+        graph=graph,
+        inputs={},
+        run_node=lambda node, inputs: _output("wrong", field="text"),
+    )
+
+    outcome = result.outcomes["direct"]
+    assert result.status is GraphRunStatus.ERROR
+    assert outcome.status is NodeOutcomeStatus.ERROR
+    assert outcome.error is not None
+    assert outcome.error.error_type == (
+        f"{NodeExecutionError.__module__}."
+        f"{NodeExecutionError.__qualname__}"
+    )
+
+
+def test_missing_named_upstream_output_field_becomes_input_error() -> None:
+    graph = GraphSpec(
+        nodes=(
+            _node("encoder", output_field="description"),
+            _node("decoder", bindings={"description": "encoder.other"}),
+        ),
+        terminal_node_id="decoder",
+    )
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        if node.id == "encoder":
+            return _output("summary", field="description")
+        return _output("unreachable")
+
+    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+
+    outcome = result.outcomes["decoder"]
+    assert result.status is GraphRunStatus.ERROR
+    assert outcome.status is NodeOutcomeStatus.ERROR
+    assert outcome.error is not None
+    assert outcome.error.error_type == (
+        f"{InputResolutionError.__module__}."
+        f"{InputResolutionError.__qualname__}"
+    )
 
 
 def test_node_exception_captures_persistable_error() -> None:
@@ -249,6 +347,28 @@ def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
     assert result.terminal_error.blocked_by == ("encoder",)
 
 
+def test_blocked_node_lists_all_failed_dependencies() -> None:
+    graph = GraphSpec(
+        nodes=(
+            _node("terminal", bindings={"left": "a", "right": "b"}),
+            _node("b"),
+            _node("a"),
+        ),
+        terminal_node_id="terminal",
+    )
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        if node.id in {"a", "b"}:
+            raise RuntimeError(f"{node.id} errored")
+        return _output("unreachable")
+
+    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+
+    assert result.status is GraphRunStatus.BLOCKED
+    assert result.outcomes["terminal"].status is NodeOutcomeStatus.BLOCKED
+    assert result.outcomes["terminal"].blocked_by == ("a", "b")
+
+
 def test_default_node_ref_uses_upstream_configured_output_field() -> None:
     graph = GraphSpec(
         nodes=(
@@ -303,3 +423,19 @@ def test_graph_digest_is_stable_for_equivalent_graph_specs() -> None:
     same_graph = GraphSpec.model_validate(graph.model_dump(mode="json"))
 
     assert graph_digest(graph) == graph_digest(same_graph)
+
+
+def test_graph_digest_changes_with_node_declaration_order() -> None:
+    first = GraphSpec(
+        nodes=(_node("a"), _node("b")),
+        terminal_node_id="a",
+    )
+    second = GraphSpec(
+        nodes=(_node("b"), _node("a")),
+        terminal_node_id="a",
+    )
+
+    assert first.topological_order() == tuple(
+        sorted(first.nodes, key=lambda n: n.id)
+    )
+    assert graph_digest(first) != graph_digest(second)

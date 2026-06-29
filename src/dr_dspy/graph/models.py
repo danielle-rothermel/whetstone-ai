@@ -151,19 +151,22 @@ class NodeConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_fields(self) -> NodeConfig:
+        if not self.fields:
+            raise ValueError("node config must declare at least one field")
+
         field_names = [field.name for field in self.fields]
         if len(field_names) != len(set(field_names)):
             raise ValueError("duplicate field names in node config")
 
         output_names = {field.name for field in self.output_fields()}
-        if self.fields and self.output_field not in output_names:
+        if self.output_field not in output_names:
             raise ValueError(
                 f"output_field {self.output_field!r} is not an output field"
             )
 
         input_names = {field.name for field in self.input_fields()}
         for field_name in self.input_bindings:
-            if input_names and field_name not in input_names:
+            if field_name not in input_names:
                 raise ValueError(
                     f"input binding {field_name!r} is not an input field"
                 )
@@ -201,25 +204,7 @@ class GraphSpec(BaseModel):
         raise KeyError(node_id)
 
     def topological_order(self) -> tuple[NodeSpec, ...]:
-        validate_acyclic_graph(self.nodes)
-        by_id = {node.id: node for node in self.nodes}
-        done: set[str] = set()
-        ordered: list[NodeSpec] = []
-        while len(ordered) < len(self.nodes):
-            ready = sorted(
-                node_id
-                for node_id, node in by_id.items()
-                if node_id not in done and node.dependencies() <= done
-            )
-            if not ready:
-                stuck = ", ".join(
-                    sorted(node_id for node_id in by_id if node_id not in done)
-                )
-                raise GraphValidationError(f"graph has a cycle among: {stuck}")
-            for node_id in ready:
-                ordered.append(by_id[node_id])
-                done.add(node_id)
-        return tuple(ordered)
+        return topological_order(self.nodes)
 
     @model_validator(mode="after")
     def validate_graph(self) -> GraphSpec:
@@ -373,20 +358,28 @@ def validate_binding_ref(ref: BindingRef, node_ids: set[str]) -> None:
 
 
 def validate_acyclic_graph(nodes: tuple[NodeSpec, ...]) -> None:
+    topological_order(nodes)
+
+
+def topological_order(nodes: tuple[NodeSpec, ...]) -> tuple[NodeSpec, ...]:
     node_ids = {node.id for node in nodes}
+    by_id = {node.id: node for node in nodes}
     done: set[str] = set()
     remaining = set(node_ids)
+    ordered: list[NodeSpec] = []
     while remaining:
-        ready = {
-            node.id
-            for node in nodes
-            if node.id in remaining and node.dependencies() <= done
-        }
+        ready = sorted(
+            node_id
+            for node_id in remaining
+            if by_id[node_id].dependencies() <= done
+        )
         if not ready:
             stuck = ", ".join(sorted(remaining))
             raise GraphValidationError(f"graph has a cycle among: {stuck}")
+        ordered.extend(by_id[node_id] for node_id in ready)
         done.update(ready)
         remaining.difference_update(ready)
+    return tuple(ordered)
 
 
 def _exception_failure_class(error: BaseException) -> str | None:

@@ -1,6 +1,6 @@
 """Pure graph execution contracts and runner."""
 
-from dr_dspy.graph.execution import RunNode, execute_graph, resolve_node_inputs
+from dr_dspy.graph.execution import RunNode, execute_graph
 from dr_dspy.graph.hashing import (
     GRAPH_DIGEST_LENGTH,
     canonical_graph_payload,
@@ -55,5 +55,4 @@ __all__ = [
     "canonical_graph_payload",
     "execute_graph",
     "graph_digest",
-    "resolve_node_inputs",
 ]
