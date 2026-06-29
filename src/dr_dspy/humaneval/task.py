@@ -1,3 +1,12 @@
+"""HumanEval task, parsing, and subprocess execution primitives.
+
+The subprocess runner validates each returned case result, but it currently
+preserves partial runner output rather than requiring one returned row per
+parsed test case. Tightening that cardinality check would be a benchmark
+behavior change and is deferred until per-test score persistence semantics are
+defined.
+"""
+
 from __future__ import annotations
 
 import ast

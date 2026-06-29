@@ -121,6 +121,11 @@ later score-attempt rows can store why a generated answer passed, failed,
 failed extraction, or had no top-level function. Persisting that field belongs
 to the score-attempt schema/scoring-profile stage, not the v0 table cleanup.
 
+Subprocess runner output is validated per returned case, but this stage keeps
+the existing behavior that partial runner output is preserved instead of being
+treated as a whole-batch runner error. Stricter cardinality requirements should
+be decided with the per-test persistence and score-attempt semantics.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain

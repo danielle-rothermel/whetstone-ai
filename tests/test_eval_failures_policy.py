@@ -78,6 +78,16 @@ def test_explicit_failure_summary_preserves_metadata() -> None:
     assert summary.failure_metadata == {"task_id": "x"}
 
 
+def test_unclassified_error_is_unknown_and_not_retryable() -> None:
+    error = RuntimeError("unexpected")
+
+    summary = summarize_exception(error)
+
+    assert summary.failure_class is FailureClass.UNKNOWN
+    assert summary.is_recoverable is False
+    assert should_retry_step(error) is False
+
+
 def test_lazy_openai_rate_limit_classification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
