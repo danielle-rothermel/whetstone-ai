@@ -311,6 +311,13 @@ failed in a way that affects coverage/cost/outcomes.
 It does not store transient states such as queued, started, retrying, or
 deduplicated. Those belong to DBOS.
 
+The pure graph runner may also return `blocked` outcomes for nodes that were not
+invoked because an upstream dependency errored. `blocked` is runner
+bookkeeping, not a node-attempt outcome, and should not be persisted as a node
+attempt row by default. Persist the invoked upstream node's `error` outcome; a
+later graph or generation-run summary may record that the terminal node was
+blocked and reference the upstream error path.
+
 ### Keep batch submission for scale
 
 Batch submission remains a core design requirement because some experiments

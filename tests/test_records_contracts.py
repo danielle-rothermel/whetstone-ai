@@ -1,0 +1,328 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from dr_dspy.graph import (
+    BindingRef,
+    FieldRole,
+    FieldSpec,
+    GraphRunStatus,
+    GraphSpec,
+    NodeConfig,
+    NodeOutput,
+    NodeSpec,
+    graph_digest,
+)
+from dr_dspy.lm.boundary import EndpointKind, ProviderKind
+from dr_dspy.records import (
+    BatchSubmitItemRecord,
+    BatchSubmitItemStatus,
+    BatchSubmitOperationRecord,
+    BatchSubmitOperationStatus,
+    DimensionsPayload,
+    FailureMetadataPayload,
+    GenerationRunRecord,
+    GenerationRunSummaryPayload,
+    GenerationTerminalErrorPayload,
+    GraphSnapshotPayload,
+    MetricsPayload,
+    NodeAttemptRecord,
+    NodeAttemptStatus,
+    NodeOutputPayload,
+    PredictionProjectionRecord,
+    PredictionSpecRecord,
+    ProviderConfigRef,
+    ScoreAttemptRecord,
+    ScoreAttemptStatus,
+    TaskInputsPayload,
+    TaskSnapshotPayload,
+    dimensions_digest,
+    fair_order_key,
+    stable_prediction_id,
+)
+
+NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
+
+
+def _node(
+    node_id: str,
+    *,
+    bindings: dict[str, str] | None = None,
+    output_field: str = "output",
+) -> NodeSpec:
+    input_bindings = {
+        name: BindingRef.model_validate(ref)
+        for name, ref in (bindings or {}).items()
+    }
+    fields = [
+        FieldSpec(name=name, role=FieldRole.INPUT)
+        for name in input_bindings
+    ]
+    fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
+    return NodeSpec(
+        id=node_id,
+        config=NodeConfig(
+            fields=tuple(fields),
+            input_bindings=input_bindings,
+            output_field=output_field,
+        ),
+    )
+
+
+def _direct_graph() -> GraphSpec:
+    return GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+
+
+def _provider() -> ProviderConfigRef:
+    return ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="gpt-test",
+        throttle_key="openai:responses:gpt-test",
+        parameters={"temperature": 0.2},
+    )
+
+
+def _dimensions(**values: Any) -> DimensionsPayload:
+    return DimensionsPayload(values={"temperature": 0.2, **values})
+
+
+def _prediction_spec(
+    *,
+    graph: GraphSpec | None = None,
+    dimensions: DimensionsPayload | None = None,
+) -> PredictionSpecRecord:
+    graph = graph or _direct_graph()
+    dimensions = dimensions or _dimensions()
+    graph_id = graph_digest(graph)
+    dimensions_id = dimensions_digest(dimensions)
+    prediction_id = stable_prediction_id(
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        graph_digest=graph_id,
+        dimensions_digest=dimensions_id,
+        repetition_seed=7,
+    )
+    provider = _provider()
+    return PredictionSpecRecord(
+        prediction_id=prediction_id,
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        repetition_seed=7,
+        graph=GraphSnapshotPayload(
+            graph=graph,
+            graph_digest=graph_id,
+            layout="direct",
+        ),
+        dimensions=dimensions,
+        dimensions_digest=dimensions_id,
+        task=TaskSnapshotPayload(
+            task_id="HumanEval/0",
+            inputs=TaskInputsPayload(values={"prompt": "write add"}),
+        ),
+        provider_configs=(provider,),
+        fair_order_key=fair_order_key(
+            experiment_seed="seed",
+            prediction_id=prediction_id,
+            provider=provider.provider_kind.value,
+            model=provider.model,
+            graph_layout="direct",
+            task_id="HumanEval/0",
+            repetition_seed=7,
+        ),
+        created_at=NOW,
+    )
+
+
+def _failure() -> FailureMetadataPayload:
+    return FailureMetadataPayload(
+        error_type="builtins.RuntimeError",
+        message="boom",
+        metadata={"node": "direct"},
+    )
+
+
+def test_prediction_spec_rejects_extra_fields_and_dumps_json() -> None:
+    spec = _prediction_spec()
+
+    dumped = spec.model_dump(mode="json")
+
+    assert dumped["prediction_id"] == spec.prediction_id
+    assert dumped["provider_configs"][0]["provider_kind"] == "openai"
+    assert dumped["graph"]["graph"]["terminal_node_id"] == "direct"
+    with pytest.raises(ValidationError):
+        PredictionSpecRecord.model_validate({**dumped, "extra": "nope"})
+
+
+def test_stable_prediction_id_changes_with_graph_or_dimensions() -> None:
+    base = _prediction_spec()
+    changed_dimensions = _prediction_spec(
+        dimensions=_dimensions(temperature=0.9)
+    )
+    changed_graph = _prediction_spec(
+        graph=GraphSpec(
+            nodes=(
+                _node("encoder", bindings={"prompt": "task.prompt"}),
+                _node("decoder", bindings={"text": "encoder"}),
+            ),
+            terminal_node_id="decoder",
+        )
+    )
+
+    assert base.prediction_id != changed_dimensions.prediction_id
+    assert base.prediction_id != changed_graph.prediction_id
+    assert base.dimensions_digest != changed_dimensions.dimensions_digest
+    assert base.graph.graph_digest != changed_graph.graph.graph_digest
+
+
+def test_node_attempt_statuses_are_only_invoked_terminal_outcomes() -> None:
+    with pytest.raises(ValidationError):
+        NodeAttemptRecord.model_validate(
+            {
+                "node_attempt_id": "node-attempt-1",
+                "generation_run_id": "run-1",
+                "prediction_id": "prediction-1",
+                "node_id": "decoder",
+                "attempt_index": 0,
+                "status": "blocked",
+                "started_at": NOW,
+                "completed_at": NOW,
+            }
+        )
+
+
+def test_generation_run_can_store_terminal_blocked_result() -> None:
+    record = GenerationRunRecord(
+        generation_run_id="run-1",
+        prediction_id="prediction-1",
+        attempt_index=0,
+        status=GraphRunStatus.BLOCKED,
+        terminal_node_id="decoder",
+        summary=GenerationRunSummaryPayload(
+            execution_order=("encoder", "decoder"),
+            terminal_node_id="decoder",
+            terminal_error=GenerationTerminalErrorPayload(
+                node_id="decoder",
+                status=GraphRunStatus.BLOCKED,
+                blocked_by=("encoder",),
+            ),
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert record.status is GraphRunStatus.BLOCKED
+    assert record.summary.terminal_error is not None
+    assert record.summary.terminal_error.blocked_by == ("encoder",)
+
+
+def test_successful_node_attempt_requires_output() -> None:
+    with pytest.raises(ValidationError, match="require output"):
+        NodeAttemptRecord(
+            node_attempt_id="node-attempt-1",
+            generation_run_id="run-1",
+            prediction_id="prediction-1",
+            node_id="direct",
+            attempt_index=0,
+            status=NodeAttemptStatus.SUCCESS,
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+    record = NodeAttemptRecord(
+        node_attempt_id="node-attempt-1",
+        generation_run_id="run-1",
+        prediction_id="prediction-1",
+        node_id="direct",
+        attempt_index=0,
+        status=NodeAttemptStatus.SUCCESS,
+        output=NodeOutputPayload(
+            output=NodeOutput(values={"output": "def add(): pass"})
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert record.model_dump(mode="json")["output"]["output"]["values"] == {
+        "output": "def add(): pass"
+    }
+
+
+def test_score_attempt_success_and_error_shapes() -> None:
+    success = ScoreAttemptRecord(
+        score_attempt_id="score-1",
+        prediction_id="prediction-1",
+        generation_run_id="run-1",
+        scoring_profile_id="humaneval",
+        scoring_profile_version="v1",
+        parser_profile_id="best-effort",
+        parser_version="v1",
+        status=ScoreAttemptStatus.SUCCESS,
+        score=1.0,
+        metrics=MetricsPayload(
+            profile_id="humaneval",
+            profile_version="v1",
+            values={"passed": True},
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert success.model_dump(mode="json")["status"] == "success"
+    with pytest.raises(ValidationError, match="require failure"):
+        ScoreAttemptRecord(
+            score_attempt_id="score-2",
+            prediction_id="prediction-1",
+            generation_run_id="run-1",
+            scoring_profile_id="humaneval",
+            scoring_profile_version="v1",
+            parser_profile_id="best-effort",
+            parser_version="v1",
+            status=ScoreAttemptStatus.ERROR,
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+
+def test_projection_and_batch_records_validate_json_contracts() -> None:
+    projection = PredictionProjectionRecord(
+        prediction_id="prediction-1",
+        generation_run_id="run-1",
+        score_attempt_id="score-1",
+        projection_profile_id="analysis",
+        projection_version="v1",
+        selected_at=NOW,
+        selection_reason="latest validated score",
+    )
+    operation = BatchSubmitOperationRecord(
+        operation_key="op-1",
+        experiment_name="exp",
+        status=BatchSubmitOperationStatus.PARTIAL,
+        requested_count=2,
+        inserted_count=1,
+        failed_count=1,
+        created_at=NOW,
+    )
+    item = BatchSubmitItemRecord(
+        batch_submit_item_id="item-1",
+        operation_key="op-1",
+        item_index=1,
+        prediction_id="prediction-1",
+        fair_order_key="abc",
+        status=BatchSubmitItemStatus.FAILED,
+        failure=_failure(),
+        created_at=NOW,
+    )
+
+    assert projection.model_dump(mode="json")["selected_at"].startswith(
+        "2026-06-29"
+    )
+    assert operation.model_dump(mode="json")["status"] == "partial"
+    assert item.model_dump(mode="json")["failure"]["message"] == "boom"
