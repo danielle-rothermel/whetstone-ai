@@ -30,7 +30,18 @@ from dr_dspy.records import (
 
 PLATFORM_GENERATION_WORKFLOW_NAME = "dr_dspy_platform_graph_generation_v1"
 LOAD_SPEC_STEP_NAME = "dr_dspy_platform_load_prediction_spec_v1"
-START_CLOCK_STEP_NAME = "dr_dspy_platform_generation_started_at_v1"
+GENERATION_STARTED_AT_STEP_NAME = (
+    "dr_dspy_platform_generation_started_at_v1"
+)
+GENERATION_COMPLETED_AT_STEP_NAME = (
+    "dr_dspy_platform_generation_completed_at_v1"
+)
+NODE_ATTEMPT_STARTED_AT_STEP_NAME = (
+    "dr_dspy_platform_node_attempt_started_at_v1"
+)
+NODE_ATTEMPT_COMPLETED_AT_STEP_NAME = (
+    "dr_dspy_platform_node_attempt_completed_at_v1"
+)
 EXECUTE_NODE_STEP_NAME = "dr_dspy_platform_execute_lm_node_v1"
 PERSIST_RESULT_STEP_NAME = "dr_dspy_platform_persist_generation_result_v1"
 WORKFLOW_ID_PREFIX = "platform-generate-v1"
@@ -122,14 +133,18 @@ def run_prediction_graph_workflow(
         prediction_id=spec.prediction_id,
         attempt_index=attempt_index,
     )
-    started_at = datetime.fromisoformat(start_generation_clock_step())
+    started_at = datetime.fromisoformat(
+        generation_started_at_step(generation_run_id)
+    )
 
     def run_node_step(
         step_spec: PredictionSpecRecord,
         node: NodeSpec,
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
-        started_at = datetime.fromisoformat(start_generation_clock_step())
+        node_started_at = datetime.fromisoformat(
+            node_attempt_started_at_step(generation_run_id, node.id)
+        )
         try:
             result = execute_lm_node_step(
                 step_spec.model_dump(mode="json"),
@@ -138,22 +153,24 @@ def run_prediction_graph_workflow(
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
-            completed_at = datetime.fromisoformat(
-                start_generation_clock_step()
+            node_completed_at = datetime.fromisoformat(
+                node_attempt_completed_at_step(generation_run_id, node.id)
             )
             return node_step_error_result(
                 spec=step_spec,
                 node=node,
                 error=error,
-                started_at=started_at,
-                completed_at=completed_at,
+                started_at=node_started_at,
+                completed_at=node_completed_at,
             )
 
     graph_result, node_step_results = run_prediction_graph_core(
         spec=spec,
         run_node_step=run_node_step,
     )
-    completed_at = datetime.fromisoformat(start_generation_clock_step())
+    completed_at = datetime.fromisoformat(
+        generation_completed_at_step(generation_run_id)
+    )
     execution = _records_for_persistence(
         spec=spec,
         attempt_index=attempt_index,
@@ -215,8 +232,33 @@ def load_prediction_spec_step(
         engine.dispose()
 
 
-@DBOS.step(name=START_CLOCK_STEP_NAME)
-def start_generation_clock_step() -> str:
+@DBOS.step(name=GENERATION_STARTED_AT_STEP_NAME)
+def generation_started_at_step(generation_run_id: str) -> str:
+    return timestamp_now_iso()
+
+
+@DBOS.step(name=GENERATION_COMPLETED_AT_STEP_NAME)
+def generation_completed_at_step(generation_run_id: str) -> str:
+    return timestamp_now_iso()
+
+
+@DBOS.step(name=NODE_ATTEMPT_STARTED_AT_STEP_NAME)
+def node_attempt_started_at_step(
+    generation_run_id: str,
+    node_id: str,
+) -> str:
+    return timestamp_now_iso()
+
+
+@DBOS.step(name=NODE_ATTEMPT_COMPLETED_AT_STEP_NAME)
+def node_attempt_completed_at_step(
+    generation_run_id: str,
+    node_id: str,
+) -> str:
+    return timestamp_now_iso()
+
+
+def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 

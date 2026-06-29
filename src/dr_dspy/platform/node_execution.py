@@ -273,6 +273,14 @@ def provider_config_ref_for_node(
 
 
 def runtime_provider_config(provider_ref: ProviderConfigRef) -> ProviderConfig:
+    """Build the runtime provider config supported by today's spec record.
+
+    ``ProviderConfigRef`` currently persists provider kind, endpoint kind,
+    model, throttle key, and request parameters only. Custom provider runtime
+    details such as ``base_url``, ``api_key_env``, and capability flags remain
+    template-owned until the provider config contract is expanded.
+    """
+
     if (
         provider_ref.provider_kind is ProviderKind.OPENROUTER
         and provider_ref.endpoint_kind is EndpointKind.CHAT_COMPLETIONS

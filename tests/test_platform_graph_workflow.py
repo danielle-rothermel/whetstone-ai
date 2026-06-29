@@ -29,6 +29,7 @@ from dr_dspy.lm.boundary import (
     ProviderConfig,
     ProviderKind,
 )
+from dr_dspy.platform import graph_workflow
 from dr_dspy.platform.graph_workflow import execute_prediction_graph
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
@@ -546,6 +547,17 @@ def test_platform_worker_import_registers_entrypoint() -> None:
     from dr_dspy.platform import worker
 
     assert worker.APP is not None
+
+
+def test_platform_clock_steps_use_distinct_dbos_step_names() -> None:
+    step_names = {
+        graph_workflow.GENERATION_STARTED_AT_STEP_NAME,
+        graph_workflow.GENERATION_COMPLETED_AT_STEP_NAME,
+        graph_workflow.NODE_ATTEMPT_STARTED_AT_STEP_NAME,
+        graph_workflow.NODE_ATTEMPT_COMPLETED_AT_STEP_NAME,
+    }
+
+    assert len(step_names) == 4
 
 
 class _RecordingConnection:

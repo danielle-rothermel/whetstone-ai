@@ -105,6 +105,14 @@ def node_attempt_records_from_steps(
     generation_run_id: str,
     step_results: Iterable[NodeStepResult],
 ) -> tuple[NodeAttemptRecord, ...]:
+    """Build one terminal node-attempt row for each invoked graph node.
+
+    DBOS retries happen inside the node execution step and do not create
+    separate append-only node attempt rows. Until the platform adds explicit
+    node reattempt workflows, every invoked node in a generation run is stored
+    as attempt index 0.
+    """
+
     return tuple(
         node_attempt_record_from_step(
             spec=spec,
