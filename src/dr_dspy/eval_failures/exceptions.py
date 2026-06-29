@@ -54,6 +54,10 @@ class PredictionParseError(PermanentFailureError):
     """Predictor failed to parse structured output from an LM response."""
 
 
+class ProviderResponseParseError(PermanentFailureError):
+    """Provider response could not be parsed into an LM result."""
+
+
 class StrandedGenerationError(TransientFailureError):
     pass
 

@@ -9,15 +9,28 @@ from typing import Any
 from openai import OpenAI
 
 import dspy
+from dr_dspy.lm.boundary import (
+    OPENROUTER_API_KEY_ENV,
+    OPENROUTER_BASE_URL,
+    ProviderConfig,
+    ProviderRequest,
+    build_chat_completions_request,
+    call_provider_request,
+    openrouter_chat_config,
+    parse_provider_response,
+)
 from dr_dspy.lm.logging import PutEventFn, _LoggingMixin
 from dspy.clients.openai_format import (
     completion_to_lm_response,
     to_openai_chat_request,
 )
 
-OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DSPY_ONLY_KWARGS = frozenset({"cache", "rollout_id"})
+TOKEN_LIMIT_KEYS = (
+    "max_completion_tokens",
+    "max_tokens",
+    "max_output_tokens",
+)
 
 __all__ = [
     "OPENROUTER_API_KEY_ENV",
@@ -86,26 +99,48 @@ class _OpenRouterLM(dspy.BaseLM):
         self._client = OpenAI(api_key=api_key, base_url=self.base_url)
         return self._client
 
+    def _provider_config(self) -> ProviderConfig:
+        return openrouter_chat_config(
+            model=self.model,
+            base_url=self.base_url,
+        )
+
     def _request_kwargs(
         self,
         request: dspy.LMRequest,
     ) -> dict[str, Any]:
+        return self._provider_request(request).kwargs
+
+    def _provider_request(
+        self,
+        request: dspy.LMRequest,
+    ) -> ProviderRequest:
+        config = self._provider_config()
         request_kwargs = {
             key: value
             for key, value in to_openai_chat_request(request).items()
             if key not in DSPY_ONLY_KWARGS and value is not None
         }
-        if self.reasoning:
-            extra_body = dict(request_kwargs.pop("extra_body", {}) or {})
-            extra_body["reasoning"] = dict(self.reasoning)
-            request_kwargs["extra_body"] = extra_body
-        return request_kwargs
+        request_kwargs.pop("model", None)
+        messages = request_kwargs.pop("messages", [])
+        temperature = request_kwargs.pop("temperature", None)
+        extra_body = request_kwargs.pop("extra_body", {}) or {}
+        token_limit = _pop_token_limit(request_kwargs, request)
+        return build_chat_completions_request(
+            config=config,
+            messages=messages,
+            temperature=temperature,
+            token_limit=token_limit,
+            reasoning=self.reasoning,
+            extra_body=extra_body,
+            extra_kwargs=request_kwargs,
+        )
 
-    def _create_completion(self, request_kwargs: dict[str, Any]) -> Any:
-        return self._get_client().chat.completions.create(**request_kwargs)
+    def _create_completion(self, request: ProviderRequest) -> Any:
+        return call_provider_request(self._get_client(), request)
 
     def _provider_completion(self, request: dspy.LMRequest) -> Any:
-        return self._create_completion(self._request_kwargs(request))
+        return self._create_completion(self._provider_request(request))
 
     def _forward_request(
         self,
@@ -131,9 +166,9 @@ class _OpenRouterLM(dspy.BaseLM):
         **kwargs: Any,
     ) -> dspy.LMResponse:
         request = self._forward_request(prompt, messages, kwargs)
-        return completion_to_lm_response(
-            self._provider_completion(request), request
-        )
+        completion = self._provider_completion(request)
+        parse_provider_response(completion, config=self._provider_config())
+        return completion_to_lm_response(completion, request)
 
     async def aforward(
         self,
@@ -160,16 +195,17 @@ class LoggingOpenRouterLM(_LoggingMixin, _OpenRouterLM):
         **kwargs: Any,
     ) -> dspy.LMResponse:
         request = self._forward_request(prompt, messages, kwargs)
-        request_kwargs = self._request_kwargs(request)
+        provider_request = self._provider_request(request)
         completion = self._run_logged_forward(
-            lambda: self._create_completion(request_kwargs),
-            messages=request_kwargs.get("messages"),
+            lambda: self._create_completion(provider_request),
+            messages=provider_request.kwargs.get("messages"),
             kwargs={
                 key: value
-                for key, value in request_kwargs.items()
+                for key, value in provider_request.kwargs.items()
                 if key != "messages"
             },
         )
+        parse_provider_response(completion, config=self._provider_config())
         return completion_to_lm_response(completion, request)
 
     async def aforward(
@@ -179,3 +215,14 @@ class LoggingOpenRouterLM(_LoggingMixin, _OpenRouterLM):
         **kwargs: Any,
     ) -> dspy.LMResponse:
         return self.forward(prompt=prompt, messages=messages, **kwargs)
+
+
+def _pop_token_limit(
+    request_kwargs: dict[str, Any],
+    request: dspy.LMRequest,
+) -> int | None:
+    for key in TOKEN_LIMIT_KEYS:
+        value = request_kwargs.pop(key, None)
+        if type(value) is int:
+            return value
+    return request.config.max_tokens
