@@ -16,7 +16,6 @@ from dr_dspy.eval_failures.exceptions import (
 )
 from dr_dspy.eval_failures.generation import require_generation_text
 from dr_dspy.eval_failures.policy import classify_exception
-from dr_dspy.eval_failures.recording import ensure_recordable
 from dr_dspy.lm.utils import content_to_text, provider_cost_from_response
 
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
@@ -465,6 +464,8 @@ def _without_none(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _response_metadata(response: Any) -> dict[str, Any]:
+    from dr_dspy.eval_failures.recording import ensure_recordable
+
     recordable = ensure_recordable(response)
     if isinstance(recordable, dict):
         return recordable

@@ -14,16 +14,15 @@ from dr_dspy.lm.boundary import (
     OPENROUTER_BASE_URL,
     ProviderConfig,
     ProviderRequest,
+    ProviderResult,
     build_chat_completions_request,
     call_provider_request,
     openrouter_chat_config,
     parse_provider_response,
 )
 from dr_dspy.lm.logging import PutEventFn, _LoggingMixin
-from dspy.clients.openai_format import (
-    completion_to_lm_response,
-    to_openai_chat_request,
-)
+from dspy.clients.openai_format import to_openai_chat_request
+from dspy.core.types import LMOutput, LMResponse, LMTextPart
 
 DSPY_ONLY_KWARGS = frozenset({"cache", "rollout_id"})
 TOKEN_LIMIT_KEYS = (
@@ -167,8 +166,11 @@ class _OpenRouterLM(dspy.BaseLM):
     ) -> dspy.LMResponse:
         request = self._forward_request(prompt, messages, kwargs)
         completion = self._provider_completion(request)
-        parse_provider_response(completion, config=self._provider_config())
-        return completion_to_lm_response(completion, request)
+        result = parse_provider_response(
+            completion,
+            config=self._provider_config(),
+        )
+        return _provider_result_to_lm_response(result, completion=completion)
 
     async def aforward(
         self,
@@ -205,8 +207,11 @@ class LoggingOpenRouterLM(_LoggingMixin, _OpenRouterLM):
                 if key != "messages"
             },
         )
-        parse_provider_response(completion, config=self._provider_config())
-        return completion_to_lm_response(completion, request)
+        result = parse_provider_response(
+            completion,
+            config=self._provider_config(),
+        )
+        return _provider_result_to_lm_response(result, completion=completion)
 
     async def aforward(
         self,
@@ -226,3 +231,24 @@ def _pop_token_limit(
         if type(value) is int:
             return value
     return request.config.max_tokens
+
+
+def _provider_result_to_lm_response(
+    result: ProviderResult,
+    *,
+    completion: Any,
+) -> LMResponse:
+    output = LMOutput(
+        parts=[LMTextPart(text=result.text)],
+        finish_reason=result.finish_reason,
+        truncated=result.finish_reason == "length",
+    )
+    return LMResponse(
+        model=result.model,
+        outputs=[output],
+        usage=result.usage_metadata or None,
+        cost=result.provider_cost,
+        response_id=result.response_id,
+        provider_response=completion,
+        metadata={"response_metadata": result.response_metadata},
+    )

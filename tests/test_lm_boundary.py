@@ -17,6 +17,7 @@ from dr_dspy.lm.boundary import (
     PlainPromptAdapter,
     ProviderConfig,
     ProviderKind,
+    ProviderResult,
     ReasoningRequestShape,
     TokenLimitParameter,
     build_chat_completions_request,
@@ -357,3 +358,85 @@ def test_logging_openrouter_lm_uses_provider_boundary() -> None:
         "extra_body": {"reasoning": {"enabled": False}},
     }
     assert events.latest_response_text() == "ok"
+
+
+def test_logging_openrouter_lm_returns_parsed_provider_result_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _FakeClient()
+    events = LmEventBuffer()
+    lm = LoggingOpenRouterLM(
+        "model/test",
+        log=events.put_event,
+        client=client,
+        cache=False,
+    )
+    request = dspy.LMRequest.from_call(
+        model="model/test",
+        prompt="hello",
+        cache=False,
+    )
+
+    def parse_result(*args: Any, **kwargs: Any) -> ProviderResult:
+        return ProviderResult(
+            text="parsed text",
+            response_metadata={"usage": {"total_tokens": 3}},
+            usage_metadata={"total_tokens": 3},
+            provider_cost=0.01,
+            response_id="parsed-response",
+            model="parsed-model",
+            finish_reason="stop",
+        )
+
+    monkeypatch.setattr(
+        "dr_dspy.lm.openrouter.parse_provider_response",
+        parse_result,
+    )
+
+    response = lm.forward(request)
+
+    assert response.text == "parsed text"
+    assert response.model == "parsed-model"
+    assert response.response_id == "parsed-response"
+    assert response.cost == 0.01
+    assert response.provider_response == {
+        "choices": [{"message": {"content": "ok"}}]
+    }
+
+
+def test_logging_openrouter_lm_rejects_reasoning_only_response() -> None:
+    class ReasoningOnlyCompletions:
+        def create(self, **kwargs: Any) -> dict[str, Any]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "reasoning_content": "thinking",
+                            "content": "",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+    client = _FakeClient()
+    client.chat = type(
+        "FakeChat",
+        (),
+        {"completions": ReasoningOnlyCompletions()},
+    )()
+    events = LmEventBuffer()
+    lm = LoggingOpenRouterLM(
+        "model/test",
+        log=events.put_event,
+        client=client,
+        cache=False,
+    )
+    request = dspy.LMRequest.from_call(
+        model="model/test",
+        prompt="hello",
+        cache=False,
+    )
+
+    with pytest.raises(EmptyGenerationError):
+        lm.forward(request)
