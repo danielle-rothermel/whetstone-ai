@@ -22,13 +22,6 @@ class HumanEvalTestCaseKind(StrEnum):
     INPUT_EXPRESSION = "input_expression"
 
 
-class ParsedTestType(StrEnum):
-    INPUT_RESULT = "input_result"
-    INPUT_ORACLE = "input_oracle"
-    INPUT_EXPRESSION = "input_expression"
-    UNKNOWN = "unknown"
-
-
 class SingleCaseCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,7 +146,7 @@ TestCase = Annotated[
 class ParsedTests(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    test_type: ParsedTestType
+    test_type: HumanEvalTestCaseKind
     support_code: str
     check_name: str
     candidate_arg_name: str
@@ -171,6 +164,66 @@ class ParsedTests(BaseModel):
                 candidate_name=candidate_name,
                 assertion_name=self.assertion_name,
             )
+
+    def to_summary(self) -> ParsedTestsSummary:
+        return ParsedTestsSummary(
+            test_type=self.test_type,
+            support_code=self.support_code,
+            check_name=self.check_name,
+            candidate_arg_name=self.candidate_arg_name,
+            assertion_name=self.assertion_name,
+            cases=[
+                ParsedTestCaseSummary.from_case(
+                    case,
+                    assertion_name=self.assertion_name,
+                )
+                for case in self.cases
+            ],
+            original_test=self.original_test,
+        )
+
+
+class ParsedTestCaseSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: HumanEvalTestCaseKind
+    case_id: str
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_expr: str = ""
+    expected_output_expr: str | None = None
+
+    @classmethod
+    def from_case(
+        cls,
+        case: TestCase,
+        *,
+        assertion_name: str,
+    ) -> ParsedTestCaseSummary:
+        check = case.as_check(
+            candidate_name="candidate",
+            assertion_name=assertion_name,
+        )
+        return cls(
+            kind=case.kind,
+            case_id=case.case_id,
+            input_repr=check.input_repr,
+            expected_output_repr=check.expected_output_repr,
+            actual_output_expr=check.actual_output_expr,
+            expected_output_expr=check.expected_output_expr,
+        )
+
+
+class ParsedTestsSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    test_type: HumanEvalTestCaseKind
+    support_code: str
+    check_name: str
+    candidate_arg_name: str
+    assertion_name: str
+    cases: list[ParsedTestCaseSummary]
+    original_test: str
 
 
 def literal_assignment(function_node: ast.FunctionDef, name: str) -> Any:

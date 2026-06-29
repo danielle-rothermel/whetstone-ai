@@ -22,11 +22,11 @@ from pydantic import (
 
 from dr_dspy.humaneval.parsed_code import FunctionSignature, ParsedCode
 from dr_dspy.humaneval.parsed_tests import (
+    HumanEvalTestCaseKind,
     InputExpressionTestCase,
     InputOracleTestCase,
     InputResultTestCase,
     ParsedTests,
-    ParsedTestType,
     SingleCaseCheck,
     TestCase,
     UnsupportedTestFormatError,
@@ -92,7 +92,34 @@ class EvaluationCaseResult(BaseModel):
     function_name: str
     status: EvaluationCaseStatus
     message: str = ""
-    test_type: ParsedTestType
+    test_type: HumanEvalTestCaseKind
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_repr: str = ""
+
+    def to_summary(self) -> EvaluationCaseSummary:
+        return EvaluationCaseSummary(
+            task_id=self.task_id,
+            case_id=self.case_id,
+            function_name=self.function_name,
+            status=self.status,
+            message=self.message,
+            test_type=self.test_type,
+            input_repr=self.input_repr,
+            expected_output_repr=self.expected_output_repr,
+            actual_output_repr=self.actual_output_repr,
+        )
+
+
+class EvaluationCaseSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    case_id: str
+    function_name: str
+    status: EvaluationCaseStatus
+    message: str = ""
+    test_type: HumanEvalTestCaseKind
     input_repr: str = ""
     expected_output_repr: str = ""
     actual_output_repr: str = ""
@@ -135,6 +162,31 @@ class EvaluationTaskResult(BaseModel):
     def status_counts(self) -> dict[str, int]:
         return dict(Counter(result.status.value for result in self.results))
 
+    def to_summary(self) -> EvaluationTaskSummary:
+        return EvaluationTaskSummary(
+            task_id=self.task_id,
+            entry_point=self.entry_point,
+            function_names=self.function_names,
+            total_cases=self.total_cases,
+            results=[result.to_summary() for result in self.results],
+            passed=self.passed,
+            failure_count=len(self.failures),
+            status_counts=self.status_counts,
+        )
+
+
+class EvaluationTaskSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    entry_point: str
+    function_names: list[str]
+    total_cases: int
+    results: list[EvaluationCaseSummary] = Field(default_factory=list)
+    passed: bool
+    failure_count: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
+
 
 class HumanEvalRunnerPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -143,7 +195,7 @@ class HumanEvalRunnerPayload(BaseModel):
     candidate_code: str
     support_code: str
     function_name: str
-    test_type: ParsedTestType
+    test_type: HumanEvalTestCaseKind
     checks: list[SingleCaseCheck]
 
 
@@ -280,7 +332,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = ParsedTestType.INPUT_EXPRESSION
+            test_type = HumanEvalTestCaseKind.INPUT_EXPRESSION
         else:
             cases = [
                 InputResultTestCase(
@@ -293,7 +345,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = ParsedTestType.INPUT_RESULT
+            test_type = HumanEvalTestCaseKind.INPUT_RESULT
     else:
         _ = find_for_loop(check_node)
         if assertion_call is None:
@@ -314,7 +366,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
             )
             for index, args in enumerate(inputs)
         ]
-        test_type = ParsedTestType.INPUT_ORACLE
+        test_type = HumanEvalTestCaseKind.INPUT_ORACLE
 
     return ParsedTests(
         test_type=test_type,

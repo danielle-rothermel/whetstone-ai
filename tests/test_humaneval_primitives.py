@@ -11,10 +11,7 @@ from dr_dspy.humaneval.compression import (
     compression_metrics,
 )
 from dr_dspy.humaneval.parsed_code import ParsedCode, ParsedCodeSummary
-from dr_dspy.humaneval.parsed_tests import (
-    HumanEvalTestCaseKind,
-    ParsedTestType,
-)
+from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.sampling import sample_human_eval_tasks_from_rows
 from dr_dspy.humaneval.scoring import (
     GeneratedCodeOutcome,
@@ -92,7 +89,7 @@ def test_sampling_from_rows_is_deterministic_and_indexed() -> None:
 def test_parse_input_result_tests_have_stable_case_ids() -> None:
     parsed = parse_human_eval_tests(_input_result_test())
 
-    assert parsed.test_type is ParsedTestType.INPUT_RESULT
+    assert parsed.test_type is HumanEvalTestCaseKind.INPUT_RESULT
     assert [case.case_id for case in parsed.cases] == ["case_0", "case_1"]
     assert [case.kind for case in parsed.cases] == [
         HumanEvalTestCaseKind.INPUT_RESULT,
@@ -101,6 +98,12 @@ def test_parse_input_result_tests_have_stable_case_ids() -> None:
     checks = list(parsed.iter_checks(candidate_name="candidate"))
     assert checks[0].input_repr == "[1]"
     assert "candidate(*[1])" in checks[0].code
+
+    summary = parsed.to_summary()
+    assert summary.test_type is HumanEvalTestCaseKind.INPUT_RESULT
+    assert [case.case_id for case in summary.cases] == ["case_0", "case_1"]
+    assert summary.cases[0].input_repr == "[1]"
+    assert "code" not in summary.cases[0].model_dump(mode="json")
 
 
 def test_parse_oracle_tests_have_expected_expression_metadata() -> None:
@@ -114,7 +117,7 @@ def test_parse_oracle_tests_have_expected_expression_metadata() -> None:
         "        assertion(candidate(*inp), ref(*inp))\n"
     )
 
-    assert parsed.test_type is ParsedTestType.INPUT_ORACLE
+    assert parsed.test_type is HumanEvalTestCaseKind.INPUT_ORACLE
     assert [case.case_id for case in parsed.cases] == ["case_0", "case_1"]
     checks = list(parsed.iter_checks(candidate_name="candidate"))
     assert checks[0].expected_output_expr == "ref(*[1])"
@@ -129,7 +132,7 @@ def test_parse_expression_tests_preserve_indexed_assertion() -> None:
         "        assert candidate(*inp) == expected\n"
     )
 
-    assert parsed.test_type is ParsedTestType.INPUT_EXPRESSION
+    assert parsed.test_type is HumanEvalTestCaseKind.INPUT_EXPRESSION
     checks = list(parsed.iter_checks(candidate_name="candidate"))
     assert checks[1].case_id == "case_1"
     assert "i = 1" in checks[1].code
@@ -206,6 +209,11 @@ def test_score_generated_code_passes_humaneval_task() -> None:
     assert result.error is None
     assert result.evaluation is not None
     assert result.evaluation.status_counts == {"passed": 2}
+    summary = result.evaluation.to_summary()
+    assert summary.passed is True
+    assert summary.failure_count == 0
+    assert summary.results[0].status is EvaluationCaseStatus.PASSED
+    assert "failures" not in summary.model_dump(mode="json")
 
 
 def test_score_generated_code_reports_wrong_answer_as_domain_result() -> None:
@@ -324,4 +332,3 @@ def test_compression_metrics_keep_empty_ground_truth_ratio_null() -> None:
         metric.percent_reduction_vs_ground_truth is None
         for metric in metrics.values()
     )
-

@@ -1,3 +1,12 @@
+"""Pure HumanEval scoring primitives.
+
+`GeneratedCodeOutcome` is part of the primitive score contract so later
+append-only score attempts can persist why a generation scored zero without
+parsing error text. The current v0 experiment writers still persist their
+legacy scoring columns only; wiring this outcome into durable score-attempt
+records belongs to the schema/scoring-profile stage.
+"""
+
 from __future__ import annotations
 
 from enum import StrEnum
