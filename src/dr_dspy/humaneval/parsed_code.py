@@ -51,6 +51,23 @@ class FunctionSignature(BaseModel):
             values.setdefault("function_args", extract_function_args(node))
         return values
 
+    def to_summary(self) -> FunctionSignatureSummary:
+        return FunctionSignatureSummary(
+            code_str=self.code_str,
+            signature_str=self.signature_str,
+            function_name=self.function_name,
+            function_args=self.function_args,
+        )
+
+
+class FunctionSignatureSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code_str: str
+    signature_str: str
+    function_name: str
+    function_args: list[Variable] = Field(default_factory=list)
+
 
 class ParsedCode(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -84,6 +101,31 @@ class ParsedCode(BaseModel):
         )
         values.setdefault("comments", collect_comments(code_str, tree))
         return values
+
+    def to_summary(self) -> ParsedCodeSummary:
+        return ParsedCodeSummary(
+            code_str=self.code_str,
+            signature=(
+                self.signature.to_summary() if self.signature else None
+            ),
+            signatures=[
+                signature.to_summary() for signature in self.signatures
+            ],
+            code_without_comments=self.code_without_comments,
+            comments=self.comments,
+            display_title=self.display_title,
+        )
+
+
+class ParsedCodeSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code_str: str
+    signature: FunctionSignatureSummary | None = None
+    signatures: list[FunctionSignatureSummary] = Field(default_factory=list)
+    code_without_comments: str = ""
+    comments: str = ""
+    display_title: str = "ParsedCode"
 
 
 def ensure_tree(

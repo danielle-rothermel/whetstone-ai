@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from dr_dspy.humaneval.code_extraction import (
@@ -18,9 +20,18 @@ from dr_dspy.humaneval.task import (
 )
 
 
+class GeneratedCodeOutcome(StrEnum):
+    PASSED = "passed"
+    TESTS_FAILED = "tests_failed"
+    EMPTY_GENERATION = "empty_generation"
+    EXTRACTION_FAILED = "extraction_failed"
+    NO_TOP_LEVEL_FUNCTIONS = "no_top_level_functions"
+
+
 class GeneratedCodeScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    outcome: GeneratedCodeOutcome
     score: float
     error: str | None
     raw_code: str | None = None
@@ -40,6 +51,7 @@ class HumanEvalScoreResult(BaseModel):
     prediction_id: str
     score: float
     error: str | None
+    generated_code_outcome: GeneratedCodeOutcome
     raw_code: str | None = None
     raw_compile_ok: bool
     raw_compile_error: str | None = None
@@ -83,6 +95,7 @@ def score_generated_code_for_humaneval(
     if not raw_generation.strip():
         extraction_error = "empty raw generation"
         return GeneratedCodeScore(
+            outcome=GeneratedCodeOutcome.EMPTY_GENERATION,
             score=0.0,
             error=extraction_error,
             raw_code=None,
@@ -117,6 +130,7 @@ def score_generated_code_for_humaneval(
             else "no compilable extracted candidate"
         )
         return GeneratedCodeScore(
+            outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
             score=0.0,
             error=extraction_error,
             raw_code=None,
@@ -134,10 +148,17 @@ def score_generated_code_for_humaneval(
         candidate_code=selected_code,
         timeout_seconds=timeout,
     )
+    outcome = (
+        GeneratedCodeOutcome.PASSED
+        if evaluation.passed
+        else GeneratedCodeOutcome.TESTS_FAILED
+    )
     error = None if evaluation.passed else "HumanEval tests failed"
     if not evaluation.function_names:
+        outcome = GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
         error = "no top-level candidate functions"
     return GeneratedCodeScore(
+        outcome=outcome,
         score=1.0 if evaluation.passed else 0.0,
         error=error,
         raw_code=selected_code,
@@ -183,6 +204,7 @@ def score_humaneval_prediction(
         prediction_id=prediction_id,
         score=generated_score.score,
         error=generated_score.error,
+        generated_code_outcome=generated_score.outcome,
         raw_code=generated_score.raw_code,
         raw_compile_ok=generated_score.raw_compile_ok,
         raw_compile_error=generated_score.raw_compile_error,

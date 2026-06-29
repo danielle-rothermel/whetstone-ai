@@ -7,12 +7,15 @@ import sys
 import textwrap
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal, Self
+from enum import StrEnum
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
+    ValidationError,
     computed_field,
     model_validator,
 )
@@ -23,6 +26,8 @@ from dr_dspy.humaneval.parsed_tests import (
     InputOracleTestCase,
     InputResultTestCase,
     ParsedTests,
+    ParsedTestType,
+    SingleCaseCheck,
     TestCase,
     UnsupportedTestFormatError,
     assertion_tolerance,
@@ -34,6 +39,13 @@ from dr_dspy.humaneval.parsed_tests import (
     for_loop_names,
     literal_assignment,
 )
+
+
+class EvaluationCaseStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    ERROR = "error"
+    TIMEOUT = "timeout"
 
 
 class HumanEvalTask(BaseModel):
@@ -78,9 +90,9 @@ class EvaluationCaseResult(BaseModel):
     task_id: str
     case_id: str
     function_name: str
-    status: Literal["passed", "failed", "error", "timeout"]
+    status: EvaluationCaseStatus
     message: str = ""
-    test_type: str
+    test_type: ParsedTestType
     input_repr: str = ""
     expected_output_repr: str = ""
     actual_output_repr: str = ""
@@ -98,7 +110,11 @@ class EvaluationTaskResult(BaseModel):
     @computed_field
     @property
     def failures(self) -> list[EvaluationCaseResult]:
-        return [result for result in self.results if result.status != "passed"]
+        return [
+            result
+            for result in self.results
+            if result.status is not EvaluationCaseStatus.PASSED
+        ]
 
     @computed_field
     @property
@@ -107,7 +123,7 @@ class EvaluationTaskResult(BaseModel):
             return False
         return any(
             all(
-                result.status == "passed"
+                result.status is EvaluationCaseStatus.PASSED
                 for result in self.results
                 if result.function_name == function_name
             )
@@ -117,7 +133,29 @@ class EvaluationTaskResult(BaseModel):
     @computed_field
     @property
     def status_counts(self) -> dict[str, int]:
-        return dict(Counter(result.status for result in self.results))
+        return dict(Counter(result.status.value for result in self.results))
+
+
+class HumanEvalRunnerPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    candidate_code: str
+    support_code: str
+    function_name: str
+    test_type: ParsedTestType
+    checks: list[SingleCaseCheck]
+
+
+class HumanEvalRunnerCaseOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str
+    status: EvaluationCaseStatus
+    message: str = ""
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_repr: str = ""
 
 
 class HumanEvalOverride(BaseModel):
@@ -242,7 +280,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = "input_expression"
+            test_type = ParsedTestType.INPUT_EXPRESSION
         else:
             cases = [
                 InputResultTestCase(
@@ -255,7 +293,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = "input_result"
+            test_type = ParsedTestType.INPUT_RESULT
     else:
         _ = find_for_loop(check_node)
         if assertion_call is None:
@@ -276,7 +314,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
             )
             for index, args in enumerate(inputs)
         ]
-        test_type = "input_oracle"
+        test_type = ParsedTestType.INPUT_ORACLE
 
     return ParsedTests(
         test_type=test_type,
@@ -388,21 +426,18 @@ def run_subprocess_batch(
     timeout_seconds: float,
 ) -> list[EvaluationCaseResult]:
     parsed_tests = require_parsed_tests(task)
-    payload = {
-        "task_id": task.task_id,
-        "candidate_code": candidate_code,
-        "support_code": parsed_tests.support_code,
-        "function_name": function_name,
-        "test_type": parsed_tests.test_type,
-        "checks": [
-            check.model_dump()
-            for check in parsed_tests.iter_checks(candidate_name="candidate")
-        ],
-    }
+    payload = HumanEvalRunnerPayload(
+        task_id=task.task_id,
+        candidate_code=candidate_code,
+        support_code=parsed_tests.support_code,
+        function_name=function_name,
+        test_type=parsed_tests.test_type,
+        checks=list(parsed_tests.iter_checks(candidate_name="candidate")),
+    )
     try:
         completed = subprocess.run(
             [sys.executable, "-c", runner_script()],
-            input=json.dumps(payload),
+            input=payload.model_dump_json(),
             capture_output=True,
             check=False,
             encoding="utf-8",
@@ -425,19 +460,29 @@ def run_subprocess_batch(
             function_name=function_name,
             message=f"Could not decode runner output: {exc}",
         )
+    try:
+        runner_results = TypeAdapter(
+            list[HumanEvalRunnerCaseOutput]
+        ).validate_python(raw_results)
+    except ValidationError as exc:
+        return error_results(
+            task=task,
+            function_name=function_name,
+            message=f"Invalid runner output: {exc}",
+        )
     return [
         EvaluationCaseResult(
             task_id=task.task_id,
-            case_id=result["case_id"],
+            case_id=result.case_id,
             function_name=function_name,
-            status=result["status"],
-            message=result.get("message", ""),
+            status=result.status,
+            message=result.message,
             test_type=parsed_tests.test_type,
-            input_repr=result.get("input_repr", ""),
-            expected_output_repr=result.get("expected_output_repr", ""),
-            actual_output_repr=result.get("actual_output_repr", ""),
+            input_repr=result.input_repr,
+            expected_output_repr=result.expected_output_repr,
+            actual_output_repr=result.actual_output_repr,
         )
-        for result in raw_results
+        for result in runner_results
     ]
 
 
@@ -452,7 +497,7 @@ def timeout_results(
             task_id=task.task_id,
             case_id=case.case_id,
             function_name=function_name,
-            status="timeout",
+            status=EvaluationCaseStatus.TIMEOUT,
             message="Batch timed out",
             test_type=parsed_tests.test_type,
             **case_metadata(parsed_tests, case),
@@ -473,7 +518,7 @@ def error_results(
             task_id=task.task_id,
             case_id=case.case_id,
             function_name=function_name,
-            status="error",
+            status=EvaluationCaseStatus.ERROR,
             message=message,
             test_type=parsed_tests.test_type,
             **case_metadata(parsed_tests, case),

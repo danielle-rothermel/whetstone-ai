@@ -1,22 +1,9 @@
 from __future__ import annotations
 
 import errno
-from typing import Any
+from importlib import import_module
+from typing import Any, cast
 
-import httpx
-import psycopg
-from dbos._error import DBOSMaxStepRetriesExceeded
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
-)
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from dr_dspy.eval_failures.exceptions import (
@@ -29,6 +16,11 @@ from dr_dspy.eval_failures.types import (
     RETRYABLE_STEP_FAILURE_CLASSES,
     FailureClass,
 )
+
+DBOS_ERROR_MODULE = "dbos._error"
+OPENAI_MODULE = "openai"
+HTTPX_MODULE = "httpx"
+PSYCOPG_MODULE = "psycopg"
 
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
@@ -59,9 +51,36 @@ class FailureSummary(BaseModel):
         return self.failure_class in RECOVERABLE_FAILURE_CLASSES
 
 
+def _is_optional_exception_type(
+    error: BaseException,
+    *,
+    module_name: str,
+    type_names: tuple[str, ...],
+) -> bool:
+    try:
+        module = import_module(module_name)
+    except ImportError:
+        return False
+    types = tuple(
+        getattr(module, type_name)
+        for type_name in type_names
+        if hasattr(module, type_name)
+    )
+    return bool(types) and isinstance(error, types)
+
+
+def _is_dbos_max_step_retries_exceeded(error: BaseException) -> bool:
+    return _is_optional_exception_type(
+        error,
+        module_name=DBOS_ERROR_MODULE,
+        type_names=("DBOSMaxStepRetriesExceeded",),
+    )
+
+
 def unwrap_exception(error: BaseException) -> BaseException:
-    if isinstance(error, DBOSMaxStepRetriesExceeded) and error.errors:
-        return unwrap_exception(error.errors[-1])
+    errors = getattr(error, "errors", None)
+    if _is_dbos_max_step_retries_exceeded(error) and errors:
+        return unwrap_exception(errors[-1])
     if isinstance(error, EvalFailureError) and error.underlying is not None:
         return unwrap_exception(error.underlying)
     if error.__cause__ is not None:
@@ -90,8 +109,9 @@ def _iter_exception_chain(error: BaseException) -> list[BaseException]:
     while current is not None and id(current) not in seen:
         seen.add(id(current))
         chain.append(current)
-        if isinstance(current, DBOSMaxStepRetriesExceeded) and current.errors:
-            current = current.errors[-1]
+        errors = getattr(current, "errors", None)
+        if _is_dbos_max_step_retries_exceeded(current) and errors:
+            current = errors[-1]
             continue
         if (
             isinstance(current, EvalFailureError)
@@ -130,36 +150,62 @@ def is_open_file_exhaustion(error: BaseException) -> bool:
 def _classify_third_party_exception(error: BaseException) -> FailureClass:
     if is_open_file_exhaustion(error):
         return FailureClass.RESOURCE_EXHAUSTION
-    if isinstance(error, RateLimitError):
+    if _is_optional_exception_type(
+        error,
+        module_name=OPENAI_MODULE,
+        type_names=("RateLimitError",),
+    ):
         return FailureClass.RATE_LIMITED
-    if isinstance(error, (APIConnectionError, APITimeoutError)):
+    if _is_optional_exception_type(
+        error,
+        module_name=OPENAI_MODULE,
+        type_names=("APIConnectionError", "APITimeoutError"),
+    ):
         return FailureClass.TRANSIENT
-    if isinstance(error, APIStatusError):
-        if error.status_code == 429:
+    if _is_optional_exception_type(
+        error,
+        module_name=OPENAI_MODULE,
+        type_names=("APIStatusError",),
+    ):
+        status_code = getattr(error, "status_code", None)
+        if status_code == 429:
             return FailureClass.RATE_LIMITED
-        if error.status_code >= 500 or error.status_code in {408, 409, 425}:
+        if status_code is not None and (
+            status_code >= 500 or status_code in {408, 409, 425}
+        ):
             return FailureClass.TRANSIENT
         return FailureClass.PERMANENT
-    if isinstance(error, httpx.HTTPStatusError):
-        status_code = error.response.status_code
+    if _is_optional_exception_type(
+        error,
+        module_name=HTTPX_MODULE,
+        type_names=("HTTPStatusError",),
+    ):
+        response = cast(Any, error).response
+        status_code = response.status_code
         if status_code == 429:
             return FailureClass.RATE_LIMITED
         if status_code >= 500 or status_code in {408, 409, 425}:
             return FailureClass.TRANSIENT
         return FailureClass.PERMANENT
-    if isinstance(
+    if _is_optional_exception_type(
         error,
-        (
-            AuthenticationError,
-            BadRequestError,
-            NotFoundError,
-            PermissionDeniedError,
-            UnprocessableEntityError,
-            ValueError,
+        module_name=OPENAI_MODULE,
+        type_names=(
+            "AuthenticationError",
+            "BadRequestError",
+            "NotFoundError",
+            "PermissionDeniedError",
+            "UnprocessableEntityError",
         ),
     ):
         return FailureClass.PERMANENT
-    if isinstance(error, psycopg.OperationalError):
+    if isinstance(error, ValueError):
+        return FailureClass.PERMANENT
+    if _is_optional_exception_type(
+        error,
+        module_name=PSYCOPG_MODULE,
+        type_names=("OperationalError",),
+    ):
         return FailureClass.TRANSIENT
     if isinstance(error, TimeoutError):
         return FailureClass.TRANSIENT

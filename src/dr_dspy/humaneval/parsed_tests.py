@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +14,19 @@ PAIR_TARGET_SIZE = 2
 
 class UnsupportedTestFormatError(ValueError):
     pass
+
+
+class HumanEvalTestCaseKind(StrEnum):
+    INPUT_RESULT = "input_result"
+    INPUT_ORACLE = "input_oracle"
+    INPUT_EXPRESSION = "input_expression"
+
+
+class ParsedTestType(StrEnum):
+    INPUT_RESULT = "input_result"
+    INPUT_ORACLE = "input_oracle"
+    INPUT_EXPRESSION = "input_expression"
+    UNKNOWN = "unknown"
 
 
 class SingleCaseCheck(BaseModel):
@@ -29,7 +43,9 @@ class SingleCaseCheck(BaseModel):
 class InputResultTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_result"] = "input_result"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_RESULT] = (
+        HumanEvalTestCaseKind.INPUT_RESULT
+    )
     case_id: str
     args: list[Any]
     expected: Any
@@ -57,7 +73,9 @@ class InputResultTestCase(BaseModel):
 class InputOracleTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_oracle"] = "input_oracle"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_ORACLE] = (
+        HumanEvalTestCaseKind.INPUT_ORACLE
+    )
     case_id: str
     args: list[Any]
     oracle_name: str
@@ -87,7 +105,9 @@ class InputOracleTestCase(BaseModel):
 class InputExpressionTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_expression"] = "input_expression"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_EXPRESSION] = (
+        HumanEvalTestCaseKind.INPUT_EXPRESSION
+    )
     case_id: str
     args: list[Any]
     expected: Any
@@ -133,12 +153,7 @@ TestCase = Annotated[
 class ParsedTests(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    test_type: Literal[
-        "input_result",
-        "input_oracle",
-        "input_expression",
-        "unknown",
-    ]
+    test_type: ParsedTestType
     support_code: str
     check_name: str
     candidate_arg_name: str
@@ -264,4 +279,3 @@ def for_loop_names(loop_node: ast.For) -> tuple[str | None, str, str]:
     ):
         return (None, target.elts[0].id, target.elts[1].id)
     raise UnsupportedTestFormatError("Unsupported for-loop target shape")
-
