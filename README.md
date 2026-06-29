@@ -52,7 +52,8 @@ All storable JSON/JSONB values pass through `ensure_recordable` or
 `recordable_jsonb`. Unencodable LM telemetry or persistence payloads raise
 `RecordingFailureError` (permanent, no step retry) instead of being silently
 dropped or stored as empty objects. Call sites include LM logging, predictor
-metadata, experiment DB writes, and harness batch operations.
+metadata, legacy v0 experiment DB writes, and legacy v0 harness batch
+operations.
 
 ### Generation boundary
 

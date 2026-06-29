@@ -1,3 +1,10 @@
+"""Legacy v0 DBOS enqueue-race regression coverage.
+
+These tests protect old harness behavior that remains useful while interpreting
+and migrating v0 workflow data. They are not a signal that harness is the
+forward graph-platform orchestration surface.
+"""
+
 from __future__ import annotations
 
 from unittest.mock import patch
