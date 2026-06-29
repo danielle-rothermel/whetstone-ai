@@ -23,6 +23,9 @@ from dr_dspy.records import (
     NodeAttemptRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
+    ResponseMetadataPayload,
+    ScoreAttemptRecord,
+    UsageCostPayload,
     stable_node_attempt_id,
 )
 from dr_dspy.records.providers import find_provider_config_ref
@@ -45,6 +48,28 @@ def load_prediction_spec(
         io.select_prediction_spec(prediction_id)
     ).mappings().one()
     return prediction_spec_from_row(dict(row))
+
+
+def load_generation_run(
+    connection: Connection,
+    *,
+    generation_run_id: str,
+) -> GenerationRunRecord:
+    row = connection.execute(
+        io.select_generation_run(generation_run_id)
+    ).mappings().one()
+    return generation_run_from_row(dict(row))
+
+
+def load_node_attempts_for_generation_run(
+    connection: Connection,
+    *,
+    generation_run_id: str,
+) -> tuple[NodeAttemptRecord, ...]:
+    rows = connection.execute(
+        io.select_node_attempts_by_generation_run(generation_run_id)
+    ).mappings()
+    return tuple(node_attempt_from_row(dict(row)) for row in rows)
 
 
 def prediction_spec_from_row(row: Mapping[str, Any]) -> PredictionSpecRecord:
@@ -74,6 +99,44 @@ def prediction_spec_from_row(row: Mapping[str, Any]) -> PredictionSpecRecord:
         fair_order_seed=row["fair_order_seed"],
         fair_order_key=row["fair_order_key"],
         created_at=row["created_at"],
+    )
+
+
+def generation_run_from_row(row: Mapping[str, Any]) -> GenerationRunRecord:
+    return GenerationRunRecord(
+        generation_run_id=row["generation_run_id"],
+        prediction_id=row["prediction_id"],
+        attempt_index=row["attempt_index"],
+        status=row["status"],
+        terminal_node_id=row["terminal_node_id"],
+        terminal_output_node_id=row["terminal_output_node_id"],
+        summary=row["summary"],
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+def node_attempt_from_row(row: Mapping[str, Any]) -> NodeAttemptRecord:
+    return NodeAttemptRecord(
+        node_attempt_id=row["node_attempt_id"],
+        generation_run_id=row["generation_run_id"],
+        prediction_id=row["prediction_id"],
+        node_id=row["node_id"],
+        attempt_index=row["attempt_index"],
+        status=row["status"],
+        provider_config=(
+            ProviderConfigRef.model_validate(row["provider_config"])
+            if row["provider_config"] is not None
+            else None
+        ),
+        output=row["output"],
+        usage_cost=UsageCostPayload.model_validate(row["usage_cost"]),
+        response_metadata=ResponseMetadataPayload.model_validate(
+            row["response_metadata"]
+        ),
+        failure=row["failure"],
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
     )
 
 
@@ -194,6 +257,14 @@ def _postgres_insert_values(
     }
 
 
+def persist_score_attempt(
+    connection: Connection,
+    *,
+    score_attempt: ScoreAttemptRecord,
+) -> None:
+    connection.execute(idempotent_insert_score_attempt(score_attempt))
+
+
 def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
     """Insert a generation run row, ignoring generation_run_id conflicts."""
     return (
@@ -214,6 +285,35 @@ def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
             )
         )
         .on_conflict_do_nothing(index_elements=["node_attempt_id"])
+    )
+
+
+def idempotent_insert_score_attempt(record: ScoreAttemptRecord) -> Any:
+    return (
+        insert(schema.score_attempts)
+        .values(io.score_attempt_row(record))
+        .on_conflict_do_nothing(index_elements=["score_attempt_id"])
+    )
+
+
+def _provider_axis_from_row(
+    *,
+    row: Mapping[str, Any],
+    provider_configs: tuple[ProviderConfigRef, ...],
+) -> ProviderConfigRef:
+    for provider_config in provider_configs:
+        if (
+            provider_config.provider_kind.value == row["provider_kind"]
+            and provider_config.endpoint_kind.value == row["endpoint_kind"]
+            and provider_config.model == row["model"]
+            and provider_config.throttle_key == row["throttle_key"]
+        ):
+            return provider_config
+    return ProviderConfigRef(
+        provider_kind=row["provider_kind"],
+        endpoint_kind=row["endpoint_kind"],
+        model=row["model"],
+        throttle_key=row["throttle_key"],
     )
 
 

@@ -9,6 +9,7 @@ DIMENSIONS_DIGEST_LENGTH = 16
 FAIR_ORDER_DIGEST_LENGTH = 32
 GENERATION_RUN_ID_DIGEST_LENGTH = 24
 NODE_ATTEMPT_ID_DIGEST_LENGTH = 32
+SCORE_ATTEMPT_ID_DIGEST_LENGTH = 32
 
 
 def dimensions_digest(
@@ -115,6 +116,29 @@ def stable_node_attempt_id(
         {
             "generation_run_id": generation_run_id,
             "node_id": node_id,
+            "attempt_index": attempt_index,
+        },
+        length=length,
+    )
+
+
+def stable_score_attempt_id(
+    *,
+    generation_run_id: str,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    attempt_index: int,
+    length: int = SCORE_ATTEMPT_ID_DIGEST_LENGTH,
+) -> str:
+    return _sha256_digest(
+        {
+            "generation_run_id": generation_run_id,
+            "scoring_profile_id": scoring_profile_id,
+            "scoring_profile_version": scoring_profile_version,
+            "parser_profile_id": parser_profile_id,
+            "parser_version": parser_version,
             "attempt_index": attempt_index,
         },
         length=length,

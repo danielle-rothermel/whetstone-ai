@@ -250,18 +250,6 @@ class ExtractedCodePayload(BaseModel):
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
-class MetricsPayload(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    profile_id: StrictStr
-    profile_version: StrictStr
-    text: TextMetricsPayload | None = None
-    python_leakage: PythonLeakageMetricsPayload | None = None
-    ast: AstMetricsPayload | None = None
-    compression: dict[StrictStr, Any] = Field(default_factory=dict)
-    custom: dict[StrictStr, Any] = Field(default_factory=dict)
-
-
 class TextMetricsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -298,6 +286,31 @@ class AstMetricsPayload(BaseModel):
     ast_node_count: StrictInt = 0
     statement_count: StrictInt = 0
     branch_count: StrictInt = 0
+
+
+class MetricsStagePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage_id: StrictStr
+    source_kind: StrictStr
+    text: TextMetricsPayload
+    python_leakage: PythonLeakageMetricsPayload
+    ast: AstMetricsPayload | None = None
+    compression: dict[StrictStr, Any] = Field(default_factory=dict)
+    custom: dict[StrictStr, Any] = Field(default_factory=dict)
+
+
+class MetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: StrictStr
+    profile_version: StrictStr
+    text: TextMetricsPayload | None = None
+    python_leakage: PythonLeakageMetricsPayload | None = None
+    ast: AstMetricsPayload | None = None
+    compression: dict[StrictStr, Any] = Field(default_factory=dict)
+    stages: tuple[MetricsStagePayload, ...] = ()
+    custom: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
 class PerTestResultPayload(BaseModel):

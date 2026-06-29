@@ -10,6 +10,10 @@ from rich.console import Console
 from sqlalchemy import create_engine
 
 from dr_dspy.harness import dbos as shared_dbos
+from dr_dspy.platform.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    PARSER_PROFILE_VERSION,
+)
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow_once,
@@ -18,6 +22,17 @@ from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
+)
+from dr_dspy.platform.scoring import (
+    DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
+from dr_dspy.platform.scoring_workflow import (
+    DEFAULT_HUMANEVAL_DATASET_NAME,
+    DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    platform_scoring_workflow_id,
+    run_score_generation_workflow_once,
 )
 from dr_dspy.platform.submission import (
     DEFAULT_SUBMIT_CHUNK_SIZE,
@@ -119,6 +134,93 @@ def run_one(
                     generation_run_id
                 ),
                 "generation_run_id": generation_run_id,
+            }
+        )
+    finally:
+        shared_dbos.destroy_dbos_runtime()
+
+
+@APP.command("score-one")
+def score_one(
+    generation_run_id: Annotated[
+        str,
+        typer.Option(
+            "--generation-run-id",
+            help="Existing v1 generation run id to score.",
+        ),
+    ],
+    score_attempt_index: Annotated[
+        int,
+        typer.Option("--score-attempt-index", min=0),
+    ] = 0,
+    scoring_profile_id: Annotated[
+        str,
+        typer.Option("--scoring-profile-id"),
+    ] = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: Annotated[
+        str,
+        typer.Option("--scoring-profile-version"),
+    ] = HUMANEVAL_SCORING_PROFILE_VERSION,
+    parser_profile_id: Annotated[
+        str,
+        typer.Option("--parser-profile-id"),
+    ] = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    parser_version: Annotated[
+        str,
+        typer.Option("--parser-version"),
+    ] = PARSER_PROFILE_VERSION,
+    timeout_seconds: Annotated[
+        float,
+        typer.Option("--timeout-seconds", min=0.1),
+    ] = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
+    dataset_name: Annotated[
+        str,
+        typer.Option("--dataset-name"),
+    ] = DEFAULT_HUMANEVAL_DATASET_NAME,
+    dataset_split: Annotated[
+        str,
+        typer.Option("--dataset-split"),
+    ] = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Postgres URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help="DBOS system database URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    env_file: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    load_env_file(env_file) if env_file is not None else load_env_file()
+    config = configure_platform_dbos_runtime(
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        consume_generation_queue=False,
+    )
+    try:
+        score_attempt_id = run_score_generation_workflow_once(
+            database_url=config.database_url,
+            generation_run_id=generation_run_id,
+            score_attempt_index=score_attempt_index,
+            scoring_profile_id=scoring_profile_id,
+            scoring_profile_version=scoring_profile_version,
+            parser_profile_id=parser_profile_id,
+            parser_version=parser_version,
+            timeout_seconds=timeout_seconds,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        )
+        CONSOLE.print(
+            {
+                "workflow_id": platform_scoring_workflow_id(score_attempt_id),
+                "generation_run_id": generation_run_id,
+                "score_attempt_id": score_attempt_id,
             }
         )
     finally:

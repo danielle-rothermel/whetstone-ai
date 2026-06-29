@@ -551,6 +551,7 @@ def select_prediction_projections(
     )
 
 
+
 def _validate_jsonb_fields(row: Row, *fields: str) -> None:
     for field in fields:
         value = row.get(field)
@@ -624,6 +625,27 @@ def _validate_node_attempt_provider_row(row: Row) -> None:
         raise ValueError(
             "denormalized provider columns must match provider_config snapshot"
         )
+
+
+def select_generation_run(
+    generation_run_id: str,
+) -> Select[tuple[Any, ...]]:
+    return select(schema.generation_runs).where(
+        schema.generation_runs.c.generation_run_id == generation_run_id
+    )
+
+
+def select_node_attempts_by_generation_run(
+    generation_run_id: str,
+) -> Select[tuple[Any, ...]]:
+    return (
+        select(schema.node_attempts)
+        .where(schema.node_attempts.c.generation_run_id == generation_run_id)
+        .order_by(
+            schema.node_attempts.c.node_id,
+            schema.node_attempts.c.attempt_index,
+        )
+    )
 
 
 def _dump(value: BaseModel) -> dict[str, Any]:

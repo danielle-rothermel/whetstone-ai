@@ -379,6 +379,7 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
         "python_leakage": None,
         "ast": None,
         "compression": {},
+        "stages": [],
         "custom": {"passed": True},
     }
 
