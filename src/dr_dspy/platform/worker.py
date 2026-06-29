@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
@@ -227,13 +228,12 @@ def submit_jsonl(
     )
     engine = create_engine(config.database_url)
     try:
-        specs = read_prediction_specs_jsonl(specs_file)
         result = submit_prediction_specs(
             engine,
             database_url=config.database_url,
             operation_key=operation_key,
             experiment_name=experiment_name,
-            specs=specs,
+            specs=iter_prediction_specs_jsonl(specs_file),
             submit_spec={"source": str(specs_file)},
             chunk_size=chunk_size,
             attempt_index=attempt_index,
@@ -244,22 +244,20 @@ def submit_jsonl(
         shared_dbos.destroy_dbos_runtime()
 
 
-def read_prediction_specs_jsonl(
+def iter_prediction_specs_jsonl(
     path: Path,
-) -> tuple[PredictionSpecRecord, ...]:
-    specs: list[PredictionSpecRecord] = []
+) -> Iterator[PredictionSpecRecord]:
     with path.open(encoding="utf-8") as file:
         for line_number, line in enumerate(file, start=1):
             stripped = line.strip()
             if not stripped:
                 continue
             try:
-                specs.append(PredictionSpecRecord.model_validate_json(stripped))
+                yield PredictionSpecRecord.model_validate_json(stripped)
             except ValueError as error:
                 raise ValueError(
                     f"invalid prediction spec JSON on line {line_number}"
                 ) from error
-    return tuple(specs)
 
 
 def main() -> None:

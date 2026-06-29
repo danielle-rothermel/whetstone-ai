@@ -6,13 +6,14 @@ from enum import StrEnum
 from typing import Any
 
 from dr_dspy.records.models import (
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
-    BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
 )
 
-# Enqueued items record whether the spec row was new via enqueue_metadata.
+# Legacy metadata key; prefer insert_status on BatchSubmitItemRecord.
 SPEC_OUTCOME_METADATA_KEY = "spec_outcome"
 
 
@@ -45,36 +46,22 @@ class BatchSubmitOperationCounts:
 def batch_submit_operation_counts_from_items(
     items: tuple[BatchSubmitItemRecord, ...] | list[BatchSubmitItemRecord],
 ) -> BatchSubmitOperationCounts:
-    inserted_count = 0
-    already_present_count = 0
-    enqueued_count = 0
-    failed_count = 0
-    for item in items:
-        if item.status is BatchSubmitItemStatus.FAILED:
-            failed_count += 1
-            continue
-        if item.status is BatchSubmitItemStatus.ENQUEUED:
-            enqueued_count += 1
-            spec_outcome = item.enqueue_metadata.get(SPEC_OUTCOME_METADATA_KEY)
-            if spec_outcome == SpecInsertOutcome.INSERTED.value:
-                inserted_count += 1
-            elif spec_outcome == SpecInsertOutcome.ALREADY_PRESENT.value:
-                already_present_count += 1
-            else:
-                raise ValueError(
-                    "enqueued batch submit items require "
-                    f"{SPEC_OUTCOME_METADATA_KEY} metadata"
-                )
-            continue
-        if item.status is BatchSubmitItemStatus.INSERTED:
-            inserted_count += 1
-            continue
-        if item.status is BatchSubmitItemStatus.ALREADY_PRESENT:
-            already_present_count += 1
-            continue
-        raise ValueError(
-            f"unsupported batch submit item status: {item.status}"
-        )
+    inserted_count = sum(
+        item.insert_status is BatchSubmitItemInsertStatus.INSERTED
+        for item in items
+    )
+    already_present_count = sum(
+        item.insert_status is BatchSubmitItemInsertStatus.ALREADY_PRESENT
+        for item in items
+    )
+    enqueued_count = sum(
+        item.enqueue_status is BatchSubmitItemEnqueueStatus.ENQUEUED
+        for item in items
+    )
+    failed_count = sum(
+        item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
+        for item in items
+    )
     return BatchSubmitOperationCounts(
         inserted_count=inserted_count,
         already_present_count=already_present_count,

@@ -696,6 +696,50 @@ def test_multiple_provider_configs_require_node_provider_config_id() -> None:
         provider_config_ref_for_node(spec=spec, node=node)
 
 
+def test_throttle_preflight_propagates_provider_resolution_errors() -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(
+        graph,
+        providers=(
+            _provider(config_id="encoder", model="encoder-model"),
+            _provider(config_id="decoder", model="decoder-model"),
+        ),
+    )
+    preflight = cast(Any, graph_workflow.throttle_preflight_step).__wrapped__
+
+    with pytest.raises(PermanentFailureError, match="provider_config_id"):
+        preflight(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+        )
+
+
+def test_throttle_state_write_errors_are_not_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenEngine:
+        def begin(self) -> object:
+            raise RuntimeError("database unavailable")
+
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "create_engine",
+        lambda database_url: BrokenEngine(),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        graph_workflow.record_throttle_failure_state(
+            database_url="postgresql://example/db",
+            throttle_key="openai:responses:gpt-test",
+            error=TransientFailureError("temporary provider failure"),
+        )
+
+
 def test_deterministic_generation_and_node_attempt_ids() -> None:
     generation_run_id = stable_generation_run_id(
         prediction_id="prediction-1",

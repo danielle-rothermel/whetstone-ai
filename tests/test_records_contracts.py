@@ -26,8 +26,9 @@ from dr_dspy.lm.boundary import (
     openai_responses_config,
 )
 from dr_dspy.records import (
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
-    BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -780,7 +781,8 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
         item_index=1,
         prediction_id="prediction-1",
         fair_order_key="abc",
-        status=BatchSubmitItemStatus.FAILED,
+        insert_status=BatchSubmitItemInsertStatus.INSERTED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
         failure=_failure(),
         created_at=NOW,
     )

@@ -21,7 +21,8 @@ from dr_dspy.graph import (
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.platform import backoff, queue_worker, submission, worker
 from dr_dspy.records import (
-    BatchSubmitItemStatus,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     DimensionsPayload,
     GraphSnapshotPayload,
     PredictionSpecRecord,
@@ -100,18 +101,22 @@ def _spec(
     graph_id = graph_digest(graph)
     dimensions = DimensionsPayload(values={"temperature": temperature})
     dimensions_id = dimensions_digest(dimensions)
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model=model,
+        throttle_key=f"openai:responses:{model}",
+    )
     prediction_id = stable_prediction_id(
         experiment_name="exp",
         task_id=task_id,
         graph_digest=graph_id,
         dimensions_digest=dimensions_id,
         repetition_seed=0,
-    )
-    provider = ProviderConfigRef(
-        provider_kind=ProviderKind.OPENAI,
-        endpoint_kind=EndpointKind.RESPONSES,
-        model=model,
-        throttle_key=f"openai:responses:{model}",
+        provider_kind=provider.provider_kind.value,
+        endpoint_kind=provider.endpoint_kind.value,
+        model=provider.model,
+        throttle_key=provider.throttle_key,
     )
     return PredictionSpecRecord(
         prediction_id=prediction_id,
@@ -162,6 +167,22 @@ def test_fair_ordering_sorts_by_stored_key() -> None:
     )
 
 
+def test_fair_ordering_interleaves_model_axis() -> None:
+    specs = tuple(
+        _spec(task_id=f"HumanEval/{task_id}", model=model)
+        for model in ("model-a", "model-b")
+        for task_id in range(8)
+    )
+
+    ordered = submission.fair_ordered_specs(specs)
+    prefix_models = {spec.provider_axis.model for spec in ordered[:4]}
+
+    assert prefix_models == {"model-a", "model-b"}
+    assert [spec.provider_axis.model for spec in ordered] != [
+        spec.provider_axis.model for spec in specs
+    ]
+
+
 def test_submit_prediction_specs_chunks_and_records_counts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -201,6 +222,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
                 prediction_id=prediction_id,
                 fair_order_key=by_id[prediction_id].fair_order_key,
                 item_index=index,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
             )
             for index, prediction_id in enumerate(prediction_ids)
         )
@@ -278,8 +300,8 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert result.already_present_count == 1
     assert result.enqueued_count == 3
     assert result.failed_count == 0
-    assert {item.status for item in item_updates} == {
-        BatchSubmitItemStatus.ENQUEUED
+    assert {item.enqueue_status for item in item_updates} == {
+        BatchSubmitItemEnqueueStatus.ENQUEUED
     }
     assert engine.begin_count == 7
 
@@ -309,6 +331,7 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
                 prediction_id=spec.prediction_id,
                 fair_order_key=spec.fair_order_key,
                 item_index=index,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
             )
             for index, spec in enumerate(specs)
             if spec.prediction_id in prediction_ids
@@ -350,11 +373,12 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
                 inserted_count=len(specs),
                 already_present_count=0,
                 enqueued_count=sum(
-                    item.status is BatchSubmitItemStatus.ENQUEUED
+                    item.enqueue_status
+                    is BatchSubmitItemEnqueueStatus.ENQUEUED
                     for item in item_updates
                 ),
                 failed_count=sum(
-                    item.status is BatchSubmitItemStatus.FAILED
+                    item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
                     for item in item_updates
                 ),
                 items=tuple(item_updates),
@@ -373,15 +397,15 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
 
     assert result.failed_count == 1
     assert result.enqueued_count == 2
-    assert [item.status for item in item_updates] == [
-        BatchSubmitItemStatus.ENQUEUED,
-        BatchSubmitItemStatus.FAILED,
-        BatchSubmitItemStatus.ENQUEUED,
+    assert [item.enqueue_status for item in item_updates] == [
+        BatchSubmitItemEnqueueStatus.ENQUEUED,
+        BatchSubmitItemEnqueueStatus.FAILED,
+        BatchSubmitItemEnqueueStatus.ENQUEUED,
     ]
     failed = next(
         item
         for item in item_updates
-        if item.status is BatchSubmitItemStatus.FAILED
+        if item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
     )
     assert failed.prediction_id == failed_prediction_id
     assert failed.failure is not None
@@ -389,23 +413,23 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
 
 def test_item_needs_enqueue_supports_resume() -> None:
     assert submission.item_needs_enqueue(
-        status=BatchSubmitItemStatus.INSERTED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.PENDING,
         enqueue_metadata={},
     )
     assert submission.item_needs_enqueue(
-        status=BatchSubmitItemStatus.FAILED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
         enqueue_metadata={},
     )
     assert submission.item_needs_enqueue(
-        status=BatchSubmitItemStatus.ALREADY_PRESENT,
+        enqueue_status=BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
         enqueue_metadata={},
     )
     assert not submission.item_needs_enqueue(
-        status=BatchSubmitItemStatus.ENQUEUED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
         enqueue_metadata={},
     )
     assert not submission.item_needs_enqueue(
-        status=BatchSubmitItemStatus.ALREADY_PRESENT,
+        enqueue_status=BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
         enqueue_metadata={"workflow_id": "workflow-1"},
     )
 

@@ -32,8 +32,9 @@ from dr_dspy.records.limits import (
 )
 from dr_dspy.records.models import (
     AstMetricsPayload,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
-    BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -78,8 +79,9 @@ __all__ = [
     "SPEC_OUTCOME_METADATA_KEY",
     "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
+    "BatchSubmitItemEnqueueStatus",
+    "BatchSubmitItemInsertStatus",
     "BatchSubmitItemRecord",
-    "BatchSubmitItemStatus",
     "BatchSubmitOperationCounts",
     "BatchSubmitOperationRecord",
     "BatchSubmitOperationStatus",

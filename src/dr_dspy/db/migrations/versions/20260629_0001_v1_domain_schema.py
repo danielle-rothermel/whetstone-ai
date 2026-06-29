@@ -347,7 +347,8 @@ def upgrade() -> None:
         sa.Column("item_index", sa.Integer(), nullable=False),
         sa.Column("prediction_id", sa.Text(), nullable=False),
         sa.Column("fair_order_key", sa.Text(), nullable=False),
-        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("insert_status", sa.Text(), nullable=False),
+        sa.Column("enqueue_status", sa.Text(), nullable=False),
         sa.Column("enqueue_metadata", postgresql.JSONB(), nullable=False),
         sa.Column("failure", postgresql.JSONB()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -364,13 +365,18 @@ def upgrade() -> None:
             name="ck_dr_dspy_batch_items_item_index",
         ),
         sa.CheckConstraint(
-            "status IN ('inserted', 'already_present', 'enqueued', 'failed')",
-            name="ck_dr_dspy_batch_items_status",
+            "insert_status IN ('inserted', 'already_present')",
+            name="ck_dr_dspy_batch_items_insert_status",
         ),
         sa.CheckConstraint(
-            "(status = 'failed' OR failure IS NULL) "
-            "AND (status != 'failed' OR failure IS NOT NULL)",
-            name="ck_dr_dspy_batch_items_status_payload",
+            "enqueue_status IN "
+            "('pending', 'enqueued', 'workflow_already_present', 'failed')",
+            name="ck_dr_dspy_batch_items_enqueue_status",
+        ),
+        sa.CheckConstraint(
+            "(enqueue_status = 'failed' OR failure IS NULL) "
+            "AND (enqueue_status != 'failed' OR failure IS NOT NULL)",
+            name="ck_dr_dspy_batch_items_enqueue_status_payload",
         ),
         sa.UniqueConstraint(
             "operation_key",

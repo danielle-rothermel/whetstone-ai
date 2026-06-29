@@ -141,9 +141,17 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.prediction_projection,
         CheckConstraint,
     )
-    assert "ck_dr_dspy_batch_items_status_payload" in _constraint_names(
+    assert "ck_dr_dspy_batch_items_insert_status" in _constraint_names(
         schema.batch_submit_items,
         CheckConstraint,
+    )
+    assert "ck_dr_dspy_batch_items_enqueue_status" in _constraint_names(
+        schema.batch_submit_items,
+        CheckConstraint,
+    )
+    assert (
+        "ck_dr_dspy_batch_items_enqueue_status_payload"
+        in _constraint_names(schema.batch_submit_items, CheckConstraint)
     )
     assert "ck_dr_dspy_batch_ops_count_bounds" in _constraint_names(
         schema.batch_submit_operations,

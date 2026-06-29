@@ -57,10 +57,15 @@ class BatchSubmitOperationStatus(StrEnum):
     ERROR = "error"
 
 
-class BatchSubmitItemStatus(StrEnum):
+class BatchSubmitItemInsertStatus(StrEnum):
     INSERTED = "inserted"
     ALREADY_PRESENT = "already_present"
+
+
+class BatchSubmitItemEnqueueStatus(StrEnum):
+    PENDING = "pending"
     ENQUEUED = "enqueued"
+    WORKFLOW_ALREADY_PRESENT = "workflow_already_present"
     FAILED = "failed"
 
 
@@ -659,7 +664,8 @@ class BatchSubmitItemRecord(BaseModel):
     item_index: StrictInt
     prediction_id: StrictStr
     fair_order_key: StrictStr
-    status: BatchSubmitItemStatus
+    insert_status: BatchSubmitItemInsertStatus
+    enqueue_status: BatchSubmitItemEnqueueStatus
     enqueue_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
     failure: FailureMetadataPayload | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -669,7 +675,7 @@ class BatchSubmitItemRecord(BaseModel):
         if self.item_index < 0:
             raise ValueError("item_index must be non-negative")
         if (
-            self.status is BatchSubmitItemStatus.FAILED
+            self.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
             and self.failure is None
         ):
             raise ValueError("failed batch submit items require failure")

@@ -20,7 +20,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.records import (
-    BatchSubmitItemStatus,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitOperationStatus,
     GenerationRunStatus,
     NodeAttemptStatus,
@@ -477,7 +478,8 @@ batch_submit_items = Table(
         nullable=False,
     ),
     Column("fair_order_key", Text, nullable=False),
-    Column("status", Text, nullable=False),
+    Column("insert_status", Text, nullable=False),
+    Column("enqueue_status", Text, nullable=False),
     Column("enqueue_metadata", JSONB, nullable=False),
     Column("failure", JSONB),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -486,13 +488,17 @@ batch_submit_items = Table(
         name="ck_dr_dspy_batch_items_item_index",
     ),
     CheckConstraint(
-        enum_check("status", BatchSubmitItemStatus),
-        name="ck_dr_dspy_batch_items_status",
+        enum_check("insert_status", BatchSubmitItemInsertStatus),
+        name="ck_dr_dspy_batch_items_insert_status",
     ),
     CheckConstraint(
-        "(status = 'failed' OR failure IS NULL) "
-        "AND (status != 'failed' OR failure IS NOT NULL)",
-        name="ck_dr_dspy_batch_items_status_payload",
+        enum_check("enqueue_status", BatchSubmitItemEnqueueStatus),
+        name="ck_dr_dspy_batch_items_enqueue_status",
+    ),
+    CheckConstraint(
+        "(enqueue_status = 'failed' OR failure IS NULL) "
+        "AND (enqueue_status != 'failed' OR failure IS NOT NULL)",
+        name="ck_dr_dspy_batch_items_enqueue_status_payload",
     ),
     UniqueConstraint(
         "operation_key",
