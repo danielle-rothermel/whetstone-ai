@@ -41,16 +41,35 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
   --specs-file specs.jsonl
 ```
 
-`submit-jsonl` streams JSONL parsing into the submit path, validates that every
-spec belongs to the requested experiment, inserts the experiment row if needed,
+`submit-jsonl` streams JSONL parsing into the submit path, validates each window
+of specs against the requested experiment, inserts the experiment row if needed,
 persists batch operation/item audit rows, and enqueues workflows on
 `dr-dspy-platform-generation-v1`. Submission is resumable by operation key:
 existing completed/enqueued batch items are skipped, while pending or failed
 items are retried.
 
-The submit path orders specs by their stored fair-order key before persistence
-and enqueue. Fair-order keys are part of the `PredictionSpecRecord` contract, so
-submit validates the records but does not recompute a separate scheduling key.
+The submit path uses approximate windowed fairness. It reads at most
+`--chunk-size` specs into memory, validates them, orders that window by the
+stored fair-order key, persists the window, enqueues its workflows, and then
+continues to the next window. Fair-order keys are part of the
+`PredictionSpecRecord` contract, so submit validates the records but does not
+recompute a separate scheduling key. This supports large JSONL submissions
+without globally materializing and sorting every spec, but it does not provide a
+globally fair order across windows. If a later window contains an invalid spec,
+earlier windows may already have been persisted and enqueued.
+
+Fairness currently controls submission and queue-admission order, not strict
+execution order. With `--queue-worker-concurrency` above 1, DBOS workers can
+start and finish queued workflows out of the fair prefix, so early partial
+results may still clump by provider/model. Use worker concurrency 1 when strict
+drain order matters more than throughput; a stricter multi-worker fairness
+policy would need a later queue or leasing design.
+
+During submission, `dr_dspy_batch_submit_operations.status` is set to
+`enqueuing` and its `requested_count` tracks the number of specs observed so
+far. The final summary changes the status to `completed`, `partial`, or `error`.
+If a submit process crashes mid-enqueue, operation status remains `enqueuing`
+and item rows show the exact pending/enqueued/failed state.
 
 The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
 avoid introducing a second DBOS configuration path while v1 and v0 coexist.
@@ -117,6 +136,13 @@ failures update the backoff state for that throttle key; successful calls clear
 it. Backoff is advisory across concurrent workers, but state read/write errors
 and provider-resolution errors are treated as workflow failures rather than
 silent fallbacks.
+
+The dedicated `dr_dspy_throttle_backoff` table is a deliberate coordination
+choice. DBOS queueing handles durable workflow execution, but it does not model
+per-provider-key `blocked_until` and `consecutive_failures` state shared by
+independent workflows. The table is therefore the app-owned cross-worker throttle
+coordination point, while DBOS remains responsible for workflow durability and
+queue dispatch.
 
 ## Follow-up notes
 

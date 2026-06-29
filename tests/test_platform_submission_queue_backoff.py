@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -19,7 +19,13 @@ from dr_dspy.graph import (
     graph_digest,
 )
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import backoff, queue_worker, submission, worker
+from dr_dspy.platform import (
+    backoff,
+    fairness,
+    queue_worker,
+    submission,
+    worker,
+)
 from dr_dspy.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
@@ -160,7 +166,7 @@ def test_fair_ordering_sorts_by_stored_key() -> None:
         _spec(task_id="HumanEval/1"),
     )
 
-    ordered = submission.fair_ordered_specs(reversed(specs))
+    ordered = fairness.fair_ordered_specs(reversed(specs))
 
     assert [spec.fair_order_key for spec in ordered] == sorted(
         spec.fair_order_key for spec in specs
@@ -174,7 +180,7 @@ def test_fair_ordering_interleaves_model_axis() -> None:
         for task_id in range(8)
     )
 
-    ordered = submission.fair_ordered_specs(specs)
+    ordered = fairness.fair_ordered_specs(specs)
     prefix_models = {spec.provider_axis.model for spec in ordered[:4]}
 
     assert prefix_models == {"model-a", "model-b"}
@@ -205,6 +211,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         submit_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
         chunk_size: int,
+        item_index_offset: int,
     ) -> None:
         assert engine.in_transaction is True
         assert chunk_size == 2
@@ -296,7 +303,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         enqueue_workflow=enqueue,
     )
 
-    assert [len(chunk) for chunk in chunks[1:]] == [2, 1]
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1, 1]
     assert enqueue_calls == [item.prediction_id for item in item_updates]
     assert result.requested_count == 3
     assert result.inserted_count == 2
@@ -306,7 +313,112 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert {item.enqueue_status for item in item_updates} == {
         BatchSubmitItemEnqueueStatus.ENQUEUED
     }
-    assert engine.begin_count == 7
+    assert engine.begin_count == 8
+
+
+def test_submit_prediction_specs_streams_fair_order_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = tuple(
+        _spec(task_id=f"HumanEval/{task_id}")
+        for task_id in range(5)
+    )
+    engine = DummyEngine()
+    yielded_count = 0
+    first_enqueue_yielded_count: int | None = None
+
+    def iter_specs() -> Iterable[PredictionSpecRecord]:
+        nonlocal yielded_count
+        for spec in specs:
+            yielded_count += 1
+            yield spec
+
+    def prepare(
+        connection: Connection,
+        *,
+        operation_key: str,
+        experiment_name: str,
+        ordered_specs: Sequence[PredictionSpecRecord],
+        submit_spec: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+        chunk_size: int,
+        item_index_offset: int,
+    ) -> None:
+        assert len(ordered_specs) <= 2
+
+    def candidates(
+        connection: Connection,
+        *,
+        operation_key: str,
+        prediction_ids: Sequence[str],
+    ) -> tuple[submission.EnqueueCandidate, ...]:
+        by_id = {spec.prediction_id: spec for spec in specs}
+        return tuple(
+            submission.EnqueueCandidate(
+                prediction_id=prediction_id,
+                fair_order_key=by_id[prediction_id].fair_order_key,
+                item_index=index,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
+            )
+            for index, prediction_id in enumerate(prediction_ids)
+        )
+
+    def enqueue(
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+        queue_name: str,
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        nonlocal first_enqueue_yielded_count
+        if first_enqueue_yielded_count is None:
+            first_enqueue_yielded_count = yielded_count
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    monkeypatch.setattr(submission, "prepare_submission_records", prepare)
+    monkeypatch.setattr(submission, "load_enqueue_candidates", candidates)
+    monkeypatch.setattr(
+        submission,
+        "update_batch_item_outcome",
+        lambda connection, *, operation_key, item: None,
+    )
+    monkeypatch.setattr(
+        submission,
+        "update_operation_summary",
+        lambda connection, *, operation_key, experiment_name, queue_name: (
+            submission.SubmitPredictionSpecsResult(
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                queue_name=queue_name,
+                requested_count=len(specs),
+                inserted_count=len(specs),
+                already_present_count=0,
+                enqueued_count=len(specs),
+                already_scheduled_count=0,
+                failed_count=0,
+            )
+        ),
+    )
+
+    submission.submit_prediction_specs(
+        cast(Any, engine),
+        database_url="postgresql://example/db",
+        operation_key="op-1",
+        experiment_name="exp",
+        specs=iter_specs(),
+        chunk_size=2,
+        enqueue_workflow=enqueue,
+    )
+
+    assert first_enqueue_yielded_count == 2
+    assert yielded_count == 5
 
 
 def test_submit_prediction_specs_records_item_enqueue_failure(
@@ -446,6 +558,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
         submit_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
         chunk_size: int,
+        item_index_offset: int,
     ) -> None:
         prepare_operation_keys.append(operation_key)
 
@@ -703,6 +816,68 @@ def test_prepare_submission_records_upserts_experiment(
         experiment_statement,
         operation_statement,
     ]
+
+
+def test_prepare_submission_records_marks_operation_enqueuing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = (
+        _spec(task_id="HumanEval/2"),
+        _spec(task_id="HumanEval/3"),
+    )
+    connection = DummyConnection()
+    operation_statuses: list[Any] = []
+    requested_counts: list[int] = []
+    item_indexes: list[int] = []
+
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_experiment",
+        lambda record: object(),
+    )
+
+    def insert_operation(record: Any) -> object:
+        operation_statuses.append(record.status)
+        return object()
+
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_batch_operation",
+        insert_operation,
+    )
+    monkeypatch.setattr(
+        submission,
+        "mark_operation_enqueuing",
+        lambda connection, *, operation_key, requested_count: (
+            requested_counts.append(requested_count)
+        ),
+    )
+    monkeypatch.setattr(
+        submission,
+        "bulk_insert_prediction_specs",
+        lambda connection, chunk: {spec.prediction_id for spec in chunk},
+    )
+    monkeypatch.setattr(
+        submission,
+        "insert_batch_item",
+        lambda connection, *, record: item_indexes.append(record.item_index),
+    )
+
+    submission.prepare_submission_records(
+        cast(Connection, connection),
+        operation_key="op-1",
+        experiment_name="exp",
+        ordered_specs=specs,
+        submit_spec={},
+        metadata={},
+        item_index_offset=5,
+    )
+
+    assert operation_statuses == [
+        submission.BatchSubmitOperationStatus.ENQUEUING
+    ]
+    assert requested_counts == [7]
+    assert item_indexes == [5, 6]
 
 
 def test_prepare_submission_records_uses_requested_chunk_size(

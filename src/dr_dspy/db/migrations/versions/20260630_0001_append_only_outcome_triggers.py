@@ -8,7 +8,7 @@ from dr_dspy.db.schema import (
 )
 
 revision = "20260630_0001"
-down_revision = "20260629_0003"
+down_revision = "20260629_0004"
 branch_labels = None
 depends_on = None
 

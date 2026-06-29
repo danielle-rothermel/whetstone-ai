@@ -46,12 +46,14 @@ def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
     migrations, statements = _render_upgrade(monkeypatch)
     migrations[-1].downgrade()
     migrations[-2].downgrade()
+    migrations[-3].downgrade()
 
     rendered = "\n".join(statements)
     assert "CREATE TABLE dr_dspy_prediction_specs" in rendered
     assert "CREATE TABLE dr_dspy_prediction_projection" in rendered
     assert "CREATE TABLE dr_dspy_throttle_backoff" in rendered
     assert "already_scheduled_count" in rendered
+    assert "enqueuing" in rendered
     assert "DROP TABLE dr_dspy_throttle_backoff" in rendered
 
 
@@ -129,6 +131,10 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
         "dr_dspy.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count"
     )
+    enqueuing_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260629_0004_batch_submit_enqueuing_status"
+    )
     append_only_migration = importlib.import_module(
         "dr_dspy.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers"
@@ -155,6 +161,16 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(batch_migration, "op", Operations(context))
             batch_migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                enqueuing_migration,
+                "op",
+                Operations(context),
+            )
+            enqueuing_migration.upgrade()
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
@@ -223,6 +239,13 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
                 Operations(context),
             )
             append_only_migration.downgrade()
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                enqueuing_migration,
+                "op",
+                Operations(context),
+            )
+            enqueuing_migration.downgrade()
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(batch_migration, "op", Operations(context))
             batch_migration.downgrade()
@@ -327,6 +350,10 @@ def _render_upgrade(monkeypatch: Any) -> tuple[tuple[Any, ...], list[str]]:
         "dr_dspy.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count"
     )
+    fourth_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260629_0004_batch_submit_enqueuing_status"
+    )
     statements: list[str] = []
     engine = create_mock_engine(
         "postgresql+psycopg://",
@@ -338,11 +365,18 @@ def _render_upgrade(monkeypatch: Any) -> tuple[tuple[Any, ...], list[str]]:
     monkeypatch.setattr(first_migration, "op", Operations(context))
     monkeypatch.setattr(second_migration, "op", Operations(context))
     monkeypatch.setattr(third_migration, "op", Operations(context))
+    monkeypatch.setattr(fourth_migration, "op", Operations(context))
 
     first_migration.upgrade()
     second_migration.upgrade()
     third_migration.upgrade()
-    return (first_migration, second_migration, third_migration), statements
+    fourth_migration.upgrade()
+    return (
+        first_migration,
+        second_migration,
+        third_migration,
+        fourth_migration,
+    ), statements
 
 
 def _named_constraint_names(table: Table) -> set[str]:
