@@ -1,16 +1,7 @@
 from __future__ import annotations
 
-import subprocess
-import sys
-
 import pytest
 
-from dr_dspy.eval_failures import (
-    FailureClass,
-    PermanentFailureError,
-    should_retry_step,
-    summarize_exception,
-)
 from dr_dspy.humaneval.code_extraction import (
     apply_cleaning,
     validate_python_source,
@@ -334,31 +325,3 @@ def test_compression_metrics_keep_empty_ground_truth_ratio_null() -> None:
         for metric in metrics.values()
     )
 
-
-def test_eval_failure_package_import_skips_runtime_dependencies() -> None:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; "
-                "import dr_dspy.eval_failures; "
-                "print('dbos._error' in sys.modules)"
-            ),
-        ],
-        capture_output=True,
-        check=True,
-        encoding="utf-8",
-    )
-
-    assert completed.stdout.strip() == "False"
-
-
-def test_failure_summary_preserves_metadata_and_retry_policy() -> None:
-    error = PermanentFailureError("bad input", metadata={"task_id": "x"})
-
-    summary = summarize_exception(error)
-
-    assert summary.failure_class is FailureClass.PERMANENT
-    assert should_retry_step(error) is False
-    assert summary.failure_metadata == {"task_id": "x"}

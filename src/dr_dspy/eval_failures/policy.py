@@ -10,7 +10,6 @@ from dr_dspy.eval_failures.exceptions import (
     EvalFailureError,
     failure_exception_type_for_class,
 )
-from dr_dspy.eval_failures.recording import failure_metadata_from_exception
 from dr_dspy.eval_failures.types import (
     RECOVERABLE_FAILURE_CLASSES,
     RETRYABLE_STEP_FAILURE_CLASSES,
@@ -242,6 +241,8 @@ def underlying_exception_type_name(error: BaseException) -> str:
 
 
 def summarize_exception(error: BaseException) -> FailureSummary:
+    from dr_dspy.eval_failures.recording import failure_metadata_from_exception
+
     failure_class = classify_exception(error)
     failure_type = failure_exception_type_name(error, failure_class)
     return FailureSummary(
