@@ -19,15 +19,11 @@ DSPY_FREE_PATHS = (
     SRC_ROOT / "lm" / "boundary.py",
 )
 FORBIDDEN_PLATFORM_IMPORTS = (
-    "alembic",
     "dbos",
     "psycopg",
     "psycopg_pool",
-    "sqlalchemy",
-    "dr_dspy.db",
     "dr_dspy.experiments",
     "dr_dspy.harness",
-    "dr_dspy.records",
     "dr_dspy.runtime",
 )
 FORBIDDEN_DSPY_IMPORTS = ("dspy",)

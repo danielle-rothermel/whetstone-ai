@@ -1,3 +1,5 @@
+"""Legacy v0 DBOS and database helpers for old orchestration surfaces."""
+
 from __future__ import annotations
 
 import hashlib

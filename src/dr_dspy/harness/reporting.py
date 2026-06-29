@@ -1,3 +1,5 @@
+"""Legacy v0 reporting helpers for old repair and status commands."""
+
 from __future__ import annotations
 
 

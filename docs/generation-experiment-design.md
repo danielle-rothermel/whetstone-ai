@@ -3,6 +3,15 @@
 **Status:** design note · **Date:** 2026-06-28
 **Scope:** HumanEval eval pipelines (`experiments/humaneval_direct`, `experiments/humaneval_encdec`) and their successor
 
+> **Superseded implementation direction:** this note captures the earlier
+> generalization path from the v0 direct and enc-dec workflows. The current
+> platform direction is `docs/append-only-eval-records-design.md`: DBOS owns
+> durable in-flight workflow state, app tables store requested specs and
+> append-only terminal outcomes, and v0 repair/status/reporting surfaces should
+> not be carried forward by default. Treat the mutable prediction-row,
+> typed-spine/JSONB table, and repair-flow details below as historical context
+> unless a later migration/backfill task explicitly needs them.
+
 ---
 
 ## 1. Goal

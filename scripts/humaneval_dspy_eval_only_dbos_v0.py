@@ -1,3 +1,10 @@
+"""Legacy v0 direct HumanEval DBOS CLI.
+
+This command preserves access to old mutable prediction-table workflows for
+migration and validation. New experiment execution should use the graph/domain
+platform path described in docs/append-only-eval-records-design.md.
+"""
+
 from __future__ import annotations
 
 import dspy
