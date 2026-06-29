@@ -13,6 +13,13 @@ output. Experiment backends live under `src/dr_dspy/`.
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
 
+## Design notes
+
+- [Graph-based eval platform design](docs/append-only-eval-records-design.md)
+  captures the planned migration toward graph-shaped generation specs,
+  append-only outcomes, explicit prompt/LM boundaries, rescoring, metrics, and
+  Unitbench-facing projections.
+
 ## Failure handling (`eval_failures`)
 
 Eval worker step failures are classified, summarized for DB/logs, and persisted
