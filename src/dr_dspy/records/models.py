@@ -593,6 +593,7 @@ class BatchSubmitOperationRecord(BaseModel):
     inserted_count: StrictInt = 0
     already_present_count: StrictInt = 0
     enqueued_count: StrictInt = 0
+    already_scheduled_count: StrictInt = 0
     failed_count: StrictInt = 0
     spec: dict[StrictStr, Any] = Field(default_factory=dict)
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
@@ -606,6 +607,7 @@ class BatchSubmitOperationRecord(BaseModel):
             self.inserted_count,
             self.already_present_count,
             self.enqueued_count,
+            self.already_scheduled_count,
             self.failed_count,
         )
         if any(count < 0 for count in counts):

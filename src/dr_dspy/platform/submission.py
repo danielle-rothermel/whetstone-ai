@@ -62,6 +62,7 @@ class SubmitPredictionSpecsResult(BaseModel):
     inserted_count: StrictInt
     already_present_count: StrictInt
     enqueued_count: StrictInt
+    already_scheduled_count: StrictInt
     failed_count: StrictInt
     items: tuple[SubmittedPredictionItem, ...] = Field(default_factory=tuple)
 
@@ -89,6 +90,7 @@ def submit_prediction_specs(
     queue_name: str = PLATFORM_GENERATION_QUEUE_NAME,
     enqueue_workflow: EnqueueWorkflow | None = None,
 ) -> SubmitPredictionSpecsResult:
+    validate_chunk_size(chunk_size)
     resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
     ordered_specs = fair_ordered_specs(specs)
     validate_submit_specs(
@@ -104,6 +106,7 @@ def submit_prediction_specs(
             ordered_specs=ordered_specs,
             submit_spec=submit_spec,
             metadata=metadata,
+            chunk_size=chunk_size,
         )
 
     for chunk in chunked(ordered_specs, chunk_size):
@@ -168,7 +171,9 @@ def prepare_submission_records(
     ordered_specs: Sequence[PredictionSpecRecord],
     submit_spec: dict[str, Any] | None,
     metadata: dict[str, Any] | None,
+    chunk_size: int = DEFAULT_SUBMIT_CHUNK_SIZE,
 ) -> None:
+    validate_chunk_size(chunk_size)
     created_at = datetime.now(UTC)
     connection.execute(
         idempotent_insert_experiment(
@@ -193,7 +198,7 @@ def prepare_submission_records(
         spec.prediction_id: item_index
         for item_index, spec in enumerate(ordered_specs)
     }
-    for chunk in chunked(ordered_specs, DEFAULT_SUBMIT_CHUNK_SIZE):
+    for chunk in chunked(ordered_specs, chunk_size):
         inserted_ids = bulk_insert_prediction_specs(connection, chunk)
         for spec in chunk:
             insert_status = (
@@ -407,6 +412,13 @@ def update_operation_summary(
         item.enqueue_status is BatchSubmitItemEnqueueStatus.ENQUEUED
         for item in items
     )
+    already_scheduled_count = sum(
+        (
+            item.enqueue_status
+            is BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT
+        )
+        for item in items
+    )
     failed_count = sum(
         item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
         for item in items
@@ -424,6 +436,7 @@ def update_operation_summary(
             inserted_count=inserted_count,
             already_present_count=already_present_count,
             enqueued_count=enqueued_count,
+            already_scheduled_count=already_scheduled_count,
             failed_count=failed_count,
             completed_at=datetime.now(UTC),
         )
@@ -436,6 +449,7 @@ def update_operation_summary(
         inserted_count=inserted_count,
         already_present_count=already_present_count,
         enqueued_count=enqueued_count,
+        already_scheduled_count=already_scheduled_count,
         failed_count=failed_count,
         items=items,
     )
@@ -538,12 +552,16 @@ def chunked(
     values: Sequence[PredictionSpecRecord],
     chunk_size: int,
 ) -> tuple[tuple[PredictionSpecRecord, ...], ...]:
-    if chunk_size < 1:
-        raise ValueError("chunk_size must be positive")
+    validate_chunk_size(chunk_size)
     return tuple(
         tuple(values[index:index + chunk_size])
         for index in range(0, len(values), chunk_size)
     )
+
+
+def validate_chunk_size(chunk_size: int) -> None:
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
 
 
 def _enqueue_workflow(

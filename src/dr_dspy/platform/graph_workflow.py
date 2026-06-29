@@ -8,7 +8,6 @@ from dbos import DBOS, SetWorkflowID
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
-from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_dspy.harness.dbos import (
     WORKFLOW_START_RACE_ERRORS,
@@ -307,13 +306,7 @@ def throttle_preflight_step(
         engine.dispose()
 
 
-@DBOS.step(
-    name=EXECUTE_NODE_STEP_NAME,
-    retries_allowed=True,
-    max_attempts=3,
-    interval_seconds=2.0,
-    should_retry=should_retry_step,
-)
+@DBOS.step(name=EXECUTE_NODE_STEP_NAME)
 def execute_lm_node_step(
     database_url: str,
     spec_payload: dict[str, Any],

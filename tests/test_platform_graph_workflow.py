@@ -716,6 +716,37 @@ def test_throttle_preflight_propagates_provider_resolution_errors() -> None:
         )
 
 
+def test_execute_lm_node_step_records_one_throttle_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+    throttle_writes: list[dict[str, Any]] = []
+
+    def fail_lm_node(**kwargs: Any) -> NodeStepResult:
+        raise TransientFailureError("temporary provider failure")
+
+    monkeypatch.setattr(graph_workflow, "execute_lm_node", fail_lm_node)
+    monkeypatch.setattr(
+        graph_workflow,
+        "record_throttle_failure_state",
+        lambda **kwargs: throttle_writes.append(kwargs),
+    )
+    step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
+
+    with pytest.raises(TransientFailureError):
+        step(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+            {"prompt": "write add"},
+        )
+
+    assert len(throttle_writes) == 1
+    assert throttle_writes[0]["throttle_key"] == "openai:responses:gpt-test"
+
+
 def test_throttle_state_write_errors_are_not_swallowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

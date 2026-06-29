@@ -204,8 +204,10 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         ordered_specs: Sequence[PredictionSpecRecord],
         submit_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
+        chunk_size: int,
     ) -> None:
         assert engine.in_transaction is True
+        assert chunk_size == 2
         chunks.append(tuple(spec.prediction_id for spec in ordered_specs))
 
     def candidates(
@@ -277,6 +279,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
                 inserted_count=2,
                 already_present_count=1,
                 enqueued_count=len(item_updates),
+                already_scheduled_count=0,
                 failed_count=0,
                 items=tuple(item_updates),
             )
@@ -377,6 +380,7 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
                     is BatchSubmitItemEnqueueStatus.ENQUEUED
                     for item in item_updates
                 ),
+                already_scheduled_count=0,
                 failed_count=sum(
                     item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
                     for item in item_updates
@@ -441,6 +445,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
         ordered_specs: Sequence[PredictionSpecRecord],
         submit_spec: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
+        chunk_size: int,
     ) -> None:
         prepare_operation_keys.append(operation_key)
 
@@ -526,6 +531,13 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
                 item.enqueue_status is BatchSubmitItemEnqueueStatus.ENQUEUED
                 for item in items
             ),
+            already_scheduled_count=sum(
+                (
+                    item.enqueue_status
+                    is BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT
+                )
+                for item in items
+            ),
             failed_count=sum(
                 item.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
                 for item in items
@@ -592,6 +604,63 @@ def test_item_needs_enqueue_supports_resume() -> None:
     )
 
 
+def test_update_operation_summary_counts_already_scheduled_items() -> None:
+    specs = (
+        _spec(task_id="HumanEval/0"),
+        _spec(task_id="HumanEval/1"),
+    )
+
+    class Result:
+        def __init__(self, rows: tuple[dict[str, Any], ...]) -> None:
+            self.rows = rows
+
+        def mappings(self) -> tuple[dict[str, Any], ...]:
+            return self.rows
+
+    class ConnectionWithRows:
+        def __init__(self, rows: tuple[dict[str, Any], ...]) -> None:
+            self.rows = rows
+            self.statements: list[Any] = []
+
+        def execute(self, statement: Any) -> Result:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return Result(self.rows)
+            return Result(())
+
+    rows = tuple(
+        {
+            "prediction_id": spec.prediction_id,
+            "fair_order_key": spec.fair_order_key,
+            "insert_status": BatchSubmitItemInsertStatus.INSERTED.value,
+            "enqueue_status": (
+                BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT.value
+            ),
+            "enqueue_metadata": {
+                "workflow_id": f"workflow:{spec.prediction_id}",
+                "generation_run_id": stable_generation_run_id(
+                    prediction_id=spec.prediction_id,
+                    attempt_index=0,
+                ),
+            },
+            "failure": None,
+        }
+        for spec in specs
+    )
+
+    result = submission.update_operation_summary(
+        cast(Connection, ConnectionWithRows(rows)),
+        operation_key="op-1",
+        experiment_name="exp",
+        queue_name="queue",
+    )
+
+    assert result.requested_count == 2
+    assert result.enqueued_count == 0
+    assert result.already_scheduled_count == 2
+    assert result.failed_count == 0
+
+
 def test_prepare_submission_records_upserts_experiment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -634,6 +703,58 @@ def test_prepare_submission_records_upserts_experiment(
         experiment_statement,
         operation_statement,
     ]
+
+
+def test_prepare_submission_records_uses_requested_chunk_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    specs = tuple(
+        _spec(task_id=f"HumanEval/{task_id}")
+        for task_id in range(5)
+    )
+    connection = DummyConnection()
+    chunks: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_experiment",
+        lambda record: object(),
+    )
+    monkeypatch.setattr(
+        submission,
+        "idempotent_insert_batch_operation",
+        lambda record: object(),
+    )
+
+    def bulk_insert(
+        connection: Connection,
+        chunk: Sequence[PredictionSpecRecord],
+    ) -> set[str]:
+        chunks.append(tuple(spec.prediction_id for spec in chunk))
+        return {spec.prediction_id for spec in chunk}
+
+    monkeypatch.setattr(
+        submission,
+        "bulk_insert_prediction_specs",
+        bulk_insert,
+    )
+    monkeypatch.setattr(
+        submission,
+        "insert_batch_item",
+        lambda connection, *, record: None,
+    )
+
+    submission.prepare_submission_records(
+        cast(Connection, connection),
+        operation_key="op-1",
+        experiment_name="exp",
+        ordered_specs=specs,
+        submit_spec={},
+        metadata={},
+        chunk_size=2,
+    )
+
+    assert [len(chunk) for chunk in chunks] == [2, 2, 1]
 
 
 def test_queue_enqueue_uses_stable_workflow_ids(

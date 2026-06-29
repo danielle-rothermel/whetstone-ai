@@ -431,6 +431,7 @@ batch_submit_operations = Table(
     Column("inserted_count", Integer, nullable=False),
     Column("already_present_count", Integer, nullable=False),
     Column("enqueued_count", Integer, nullable=False),
+    Column("already_scheduled_count", Integer, nullable=False),
     Column("failed_count", Integer, nullable=False),
     Column("spec", JSONB, nullable=False),
     Column("metadata", JSONB, nullable=False),
@@ -443,7 +444,7 @@ batch_submit_operations = Table(
     CheckConstraint(
         "requested_count >= 0 AND inserted_count >= 0 "
         "AND already_present_count >= 0 AND enqueued_count >= 0 "
-        "AND failed_count >= 0",
+        "AND already_scheduled_count >= 0 AND failed_count >= 0",
         name="ck_dr_dspy_batch_ops_counts",
     ),
     CheckConstraint(

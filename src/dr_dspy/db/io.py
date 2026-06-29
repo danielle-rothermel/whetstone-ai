@@ -244,6 +244,7 @@ def batch_submit_operation_row(record: BatchSubmitOperationRecord) -> Row:
         "inserted_count": record.inserted_count,
         "already_present_count": record.already_present_count,
         "enqueued_count": record.enqueued_count,
+        "already_scheduled_count": record.already_scheduled_count,
         "failed_count": record.failed_count,
         "spec": record.spec,
         "metadata": record.metadata,
