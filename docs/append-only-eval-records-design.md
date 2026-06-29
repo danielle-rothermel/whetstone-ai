@@ -148,6 +148,23 @@ log time, which intentionally pulls the serialization stack only when telemetry
 is emitted; import isolation is required for the pure boundary modules, not for
 logging payload persistence.
 
+For the platform graph workflow stage, the first v1 execution path is available
+under `dr_dspy.platform`. It loads an already-created `PredictionSpecRecord`,
+runs its `GraphSpec` through the pure graph runner, calls the LM boundary inside
+DBOS node steps, and persists append-only `GenerationRunRecord` and
+`NodeAttemptRecord` rows. DBOS owns durable workflow execution; app tables store
+terminal outcomes only. See
+`docs/platform-graph-workflow-implementation.md` for the current entrypoint,
+clock-step boundaries, node-attempt indexing semantics, provider-config scope,
+and follow-up work.
+
+Two platform workflow concerns remain deferred. First, prompt configuration is
+currently a documented metadata contract on graph nodes; a later graph contract
+change should replace those string metadata keys with typed Pydantic fields.
+Second, platform DBOS steps currently create short-lived SQLAlchemy engines;
+pooling should move into the platform worker/runtime once the worker lifecycle
+and queue strategy are stable.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain

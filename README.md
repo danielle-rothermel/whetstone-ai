@@ -18,6 +18,7 @@ complete.
 - `db/schema.py` — SQLAlchemy Core table definitions for v1 eval records
 - `db/io.py` — typed row builders, row parsers, and insert/select helpers
 - `db/migrations/` — Alembic migrations for the v1 schema
+- `platform/` — v1 DBOS graph workflow, plain-prompt node execution, and append-only generation/node persistence
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
 - `harness/` — legacy v0 DBOS workflows, batch operations, repair, worker monitoring
@@ -29,6 +30,33 @@ complete.
   captures the planned migration toward graph-shaped generation specs,
   append-only outcomes, explicit prompt/LM boundaries, rescoring, metrics, and
   Unitbench-facing projections.
+- [Platform graph workflow implementation notes](docs/platform-graph-workflow-implementation.md)
+  describe the current v1 workflow entrypoint, DBOS timing boundaries,
+  node-attempt indexing semantics, provider-config scope, and follow-up work.
+
+## V1 graph workflow
+
+The first v1 execution path runs an already-created `PredictionSpecRecord`
+through the pure graph runner, calls the LM provider boundary through DBOS
+steps, and persists append-only generation/node outcomes.
+
+Run one existing prediction spec:
+
+```bash
+uv run python -m dr_dspy.platform.worker run-one \
+  --database-url "$DATABASE_URL" \
+  --prediction-id "<prediction-id>"
+```
+
+Start a minimal platform worker process:
+
+```bash
+uv run python -m dr_dspy.platform.worker worker \
+  --database-url "$DATABASE_URL"
+```
+
+The current worker path intentionally does not implement batch submission,
+fairness, throttle-aware backoff, scoring, projections, or v0 migration.
 
 The legacy v0 direct and enc-dec workflows write mutable prediction rows that
 mix requested specs, workflow status, generation artifacts, scores, and repair

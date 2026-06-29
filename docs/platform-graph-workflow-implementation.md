@@ -4,6 +4,26 @@ The v1 platform graph workflow currently runs one already-created
 `PredictionSpecRecord` through DBOS and persists append-only generation and
 node-attempt outcomes.
 
+## Running the narrow path
+
+Run one existing prediction spec:
+
+```bash
+uv run python -m dr_dspy.platform.worker run-one \
+  --database-url "$DATABASE_URL" \
+  --prediction-id "<prediction-id>"
+```
+
+Start the minimal platform worker process:
+
+```bash
+uv run python -m dr_dspy.platform.worker worker \
+  --database-url "$DATABASE_URL"
+```
+
+This entrypoint intentionally does not add batch submission, fairness,
+throttle-aware backoff, scoring, projections, or migration/backfill.
+
 ## Clock steps
 
 Generation start, generation completion, node-attempt fallback start, and
@@ -24,3 +44,14 @@ The runtime provider config is reconstructed from the fields currently stored in
 request parameters. Custom provider runtime fields such as `base_url`,
 `api_key_env`, and capability flags are not spec-owned yet; adding those belongs
 in a later provider-config contract change.
+
+## Follow-up notes
+
+- Replace prompt metadata keys such as `user_prompt_template`, `system_prompt`,
+  and `provider_config_id` with typed graph/spec fields once the graph contract
+  is ready for another breaking change.
+- Move database engine/pool ownership into the platform worker runtime instead
+  of creating short-lived SQLAlchemy engines inside each DBOS step.
+- Extend the persisted provider config contract before allowing experiments to
+  vary provider runtime details such as `base_url`, `api_key_env`, or capability
+  flags from specs.
