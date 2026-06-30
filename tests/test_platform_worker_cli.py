@@ -376,6 +376,59 @@ def test_rescore_rejects_invalid_generation_status() -> None:
     assert "generation-status must be one of" in result.output
 
 
+def test_backfill_v0_encdec_dry_run_calls_backfill_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeEngine:
+        def dispose(self) -> None:
+            captured["disposed"] = True
+
+    class FakeResult:
+        def model_dump(self, mode: str) -> dict[str, Any]:
+            return {"dry_run": True, "selected_v0_rows": 3}
+
+    def fake_run_backfill(engine: FakeEngine, **kwargs: Any) -> FakeResult:
+        captured["engine"] = engine
+        captured["kwargs"] = kwargs
+        return FakeResult()
+
+    monkeypatch.setattr(worker, "load_env_file", lambda env_file=None: None)
+    monkeypatch.setattr(
+        worker,
+        "resolve_database_url",
+        lambda database_url, error_suffix: "postgresql://app/db",
+    )
+    monkeypatch.setattr(
+        worker,
+        "create_engine",
+        lambda database_url: FakeEngine(),
+    )
+    monkeypatch.setattr(worker, "run_v0_encdec_backfill", fake_run_backfill)
+
+    result = CliRunner().invoke(
+        worker.APP,
+        [
+            "backfill-v0-encdec",
+            "--dry-run",
+            "--limit",
+            "3",
+            "--target-experiment-name",
+            "v0_encdec_backfill_smoke_20260630",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["dry_run"] is True
+    assert captured["kwargs"]["limit"] == 3
+    assert (
+        captured["kwargs"]["target_experiment_name"]
+        == "v0_encdec_backfill_smoke_20260630"
+    )
+    assert captured["disposed"] is True
+
+
 def test_build_specs_writes_jsonl_from_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

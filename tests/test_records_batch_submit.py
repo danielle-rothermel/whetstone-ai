@@ -7,7 +7,6 @@ import pytest
 from pydantic import ValidationError
 
 from dr_dspy.records import (
-    BATCH_SUBMIT_SPEC_MAX_BYTES,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
@@ -20,6 +19,7 @@ from dr_dspy.records import (
     is_terminal_enqueue_status,
     operation_status_from_counts,
 )
+from dr_dspy.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -227,12 +227,6 @@ def _operation(**overrides: object) -> BatchSubmitOperationRecord:
         ),
         (
             {
-                "spec": {"x": "y" * BATCH_SUBMIT_SPEC_MAX_BYTES},
-            },
-            "batch submit spec",
-        ),
-        (
-            {
                 "status": BatchSubmitOperationStatus.COMPLETED,
                 "enqueued_count": 2,
                 "completed_at": NOW,
@@ -248,6 +242,16 @@ def test_batch_submit_operation_rejects_invalid_counts(
 ) -> None:
     with pytest.raises(ValidationError, match=match):
         _operation(**overrides)
+
+
+def test_batch_submit_operation_rejects_oversized_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "BATCH_SUBMIT_SPEC_MAX_BYTES", 1024)
+    with pytest.raises(ValidationError, match="batch submit spec"):
+        _operation(
+            spec={"x": "y" * (records_models.BATCH_SUBMIT_SPEC_MAX_BYTES + 1)}
+        )
 
 
 @pytest.mark.parametrize(

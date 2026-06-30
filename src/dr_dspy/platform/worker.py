@@ -13,6 +13,7 @@ from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
+from dr_dspy.migration.v0_encdec_backfill import run_v0_encdec_backfill
 from dr_dspy.platform.cli_env import load_env_file, run_typer_app
 from dr_dspy.platform.dbos_bootstrap import (
     DBOS_SYSTEM_DATABASE_URL_ENV,
@@ -364,6 +365,53 @@ def rescore(
         engine.dispose()
         if launched_dbos:
             destroy_dbos_runtime()
+
+
+@APP.command("backfill-v0-encdec")
+def backfill_v0_encdec(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run"),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1),
+    ] = None,
+    target_experiment_name: Annotated[
+        str | None,
+        typer.Option(
+            "--target-experiment-name",
+            help=(
+                "Override experiment_name on reshaped v1 specs. "
+                "When omitted, each v0 row keeps its legacy experiment_name."
+            ),
+        ),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Postgres URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    env_file: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    load_env_file(env_file) if env_file is not None else load_env_file()
+    resolved_database_url = resolve_database_url(
+        database_url=database_url,
+        error_suffix="for enc-dec v0 backfill",
+    )
+    engine = create_engine(resolved_database_url)
+    try:
+        result = run_v0_encdec_backfill(
+            engine,
+            dry_run=dry_run,
+            limit=limit,
+            target_experiment_name=target_experiment_name,
+        )
+        CONSOLE.print(result.model_dump(mode="json"))
+    finally:
+        engine.dispose()
 
 
 @APP.command(help="Launch a queue-consuming v1 generation worker.")

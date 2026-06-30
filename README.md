@@ -40,6 +40,7 @@ Canonical documentation in [`docs/`](docs/):
 - [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
 - [Testing logs](docs/testing_logs.md) — chronological manual / live pipeline
   runs (smoke E2E, sizing notes).
+- [Limit enforcement points](docs/ref/limit_enforcement_points.md) — payload size tiers, validator map, changelog.
 
 Repository extraction and `dr_dspy` → `whetstone` rename plans live in
 [Remaining implementation intentions](docs/remaining-implementation-intentions.md#repository-extraction-and-rename--not-started).

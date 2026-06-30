@@ -23,9 +23,6 @@ from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
-    NODE_OUTPUT_MAX_BYTES,
-    PROVIDER_TELEMETRY_MAX_BYTES,
-    TASK_INPUTS_MAX_BYTES,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
@@ -55,6 +52,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
+from dr_dspy.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -615,7 +613,11 @@ def test_batch_and_projection_rows_round_trip() -> None:
     )
 
 
-def test_prediction_spec_row_rejects_oversized_jsonb_payload() -> None:
+def test_prediction_spec_row_rejects_oversized_jsonb_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "TASK_INPUTS_MAX_BYTES", 1024)
+    oversized_prompt = "x" * (records_models.TASK_INPUTS_MAX_BYTES + 1)
     graph = _direct_graph()
     graph_id = graph_digest(graph)
     dimensions = DimensionsPayload(values={"budget_ratio": 0.5})
@@ -637,7 +639,7 @@ def test_prediction_spec_row_rejects_oversized_jsonb_payload() -> None:
         model=provider.model,
         throttle_key=provider.throttle_key,
     )
-    oversized_prompt = "x" * (TASK_INPUTS_MAX_BYTES + 1)
+    oversized_prompt = "x" * (records_models.TASK_INPUTS_MAX_BYTES + 1)
     with pytest.raises(ValidationError, match="task inputs"):
         PredictionSpecRecord(
             prediction_id=prediction_id,
@@ -674,14 +676,18 @@ def test_prediction_spec_row_rejects_oversized_jsonb_payload() -> None:
         )
 
 
-def test_node_attempt_row_rejects_oversized_usage_metadata_payload() -> None:
+def test_node_attempt_row_rejects_oversized_usage_metadata_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "PROVIDER_TELEMETRY_MAX_BYTES", 1024)
     provider = ProviderConfigRef(
         provider_kind=ProviderKind.OPENAI,
         endpoint_kind=EndpointKind.RESPONSES,
         model="decoder-model",
         throttle_key="openai:responses:decoder-model",
     )
-    oversized_metadata = {"blob": "x" * (PROVIDER_TELEMETRY_MAX_BYTES + 1)}
+    telemetry_limit = records_models.PROVIDER_TELEMETRY_MAX_BYTES + 1
+    oversized_metadata = {"blob": "x" * telemetry_limit}
     with pytest.raises(ValidationError, match="usage metadata"):
         NodeAttemptRecord(
             node_attempt_id="node-attempt-1",
@@ -698,14 +704,18 @@ def test_node_attempt_row_rejects_oversized_usage_metadata_payload() -> None:
         )
 
 
-def test_node_attempt_row_rejects_oversized_response_metadata() -> None:
+def test_node_attempt_row_rejects_oversized_response_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "PROVIDER_TELEMETRY_MAX_BYTES", 1024)
     provider = ProviderConfigRef(
         provider_kind=ProviderKind.OPENAI,
         endpoint_kind=EndpointKind.RESPONSES,
         model="decoder-model",
         throttle_key="openai:responses:decoder-model",
     )
-    oversized_metadata = {"blob": "x" * (PROVIDER_TELEMETRY_MAX_BYTES + 1)}
+    telemetry_limit = records_models.PROVIDER_TELEMETRY_MAX_BYTES + 1
+    oversized_metadata = {"blob": "x" * telemetry_limit}
     with pytest.raises(ValidationError, match="response metadata"):
         NodeAttemptRecord(
             node_attempt_id="node-attempt-1",
@@ -724,14 +734,17 @@ def test_node_attempt_row_rejects_oversized_response_metadata() -> None:
         )
 
 
-def test_node_attempt_row_rejects_oversized_node_output_payload() -> None:
+def test_node_attempt_row_rejects_oversized_node_output_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "NODE_OUTPUT_MAX_BYTES", 1024)
     provider = ProviderConfigRef(
         provider_kind=ProviderKind.OPENAI,
         endpoint_kind=EndpointKind.RESPONSES,
         model="decoder-model",
         throttle_key="openai:responses:decoder-model",
     )
-    oversized_output = "x" * (NODE_OUTPUT_MAX_BYTES + 1)
+    oversized_output = "x" * (records_models.NODE_OUTPUT_MAX_BYTES + 1)
     with pytest.raises(ValidationError, match="node output"):
         NodeAttemptRecord(
             node_attempt_id="node-attempt-1",

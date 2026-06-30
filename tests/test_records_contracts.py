@@ -65,11 +65,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records.limits import (
-    METRICS_MAX_BYTES,
-    METRICS_STAGES_MAX_COUNT,
-    PER_TEST_RESULTS_MAX_BYTES,
-)
+from dr_dspy.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -813,10 +809,13 @@ def _score_attempt_base_kwargs() -> dict[str, Any]:
     }
 
 
-def test_score_attempt_rejects_metrics_stage_count_over_limit() -> None:
+def test_score_attempt_rejects_metrics_stage_count_over_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "METRICS_STAGES_MAX_COUNT", 2)
     stages = tuple(
         _minimal_metrics_stage(f"stage-{index}")
-        for index in range(METRICS_STAGES_MAX_COUNT + 1)
+        for index in range(records_models.METRICS_STAGES_MAX_COUNT + 1)
     )
     with pytest.raises(
         ValidationError,
@@ -832,8 +831,11 @@ def test_score_attempt_rejects_metrics_stage_count_over_limit() -> None:
         )
 
 
-def test_score_attempt_rejects_oversized_metrics_payload() -> None:
-    oversized = "x" * (METRICS_MAX_BYTES + 1)
+def test_score_attempt_rejects_oversized_metrics_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "METRICS_MAX_BYTES", 1024)
+    oversized = "x" * (records_models.METRICS_MAX_BYTES + 1)
     with pytest.raises(ValidationError, match="metrics:"):
         ScoreAttemptRecord(
             **_score_attempt_base_kwargs(),
@@ -911,8 +913,11 @@ def test_score_attempt_accepts_many_per_test_results_under_byte_cap() -> None:
     assert len(record.per_test_results) == 600
 
 
-def test_score_attempt_rejects_oversized_per_test_results_payload() -> None:
-    oversized = "x" * (PER_TEST_RESULTS_MAX_BYTES + 1)
+def test_score_attempt_rejects_oversized_per_test_results_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(records_models, "PER_TEST_RESULTS_MAX_BYTES", 1024)
+    oversized = "x" * (records_models.PER_TEST_RESULTS_MAX_BYTES + 1)
     with pytest.raises(ValidationError, match="per_test_results:"):
         ScoreAttemptRecord(
             **_score_attempt_base_kwargs(),

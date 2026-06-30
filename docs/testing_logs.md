@@ -4,6 +4,311 @@ Chronological record of manual / live pipeline runs. Newest entries at the top.
 
 ---
 
+## 2026-06-30 — Tier-1 limit raise + enc-dec backfill smoke r2
+
+**Branch:** `today_exp`  
+**Change:** Domain payload caps raised to serialization ceiling — see [Limit enforcement points](ref/limit_enforcement_points.md#changelog)  
+**Target experiment:** `v0_encdec_backfill_smoke_20260630_r2`  
+**Operator:** agent (Cursor)
+
+### Code changes under test
+
+1. **[`src/dr_dspy/records/limits.py`](../src/dr_dspy/records/limits.py):** all tier-1 byte caps → `DOMAIN_PAYLOAD_MAX_BYTES` = `PAYLOAD_MAX_BYTES` (~768 MiB); `METRICS_STAGES_MAX_COUNT` 64 → 10_000.
+2. **[`tests/test_records_limits.py`](../tests/test_records_limits.py):** policy guard (byte caps == `PAYLOAD_MAX_BYTES`, stages count ≥ 1000).
+3. Oversized rejection tests updated to monkeypatch small caps on `records.models` (avoid ~768 MiB test allocations).
+
+Tier-2 (Postgres/serialization) and tier-3 (preview/truncation) unchanged.
+
+### Pre-backfill limit audit
+
+```bash
+uv run pytest tests/test_records_limits.py -q   # → 2 passed
+# one-liner: all byte caps == PAYLOAD_MAX_BYTES, METRICS_STAGES_MAX_COUNT >= 1000
+# → tier-1 limits OK
+rg "256 \* 1024|128 \* 1024" src/dr_dspy/records/  # → no matches
+```
+
+### Dry-run (after limit raise)
+
+```bash
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec --dry-run
+```
+
+| Metric | Before limits raise | After limits raise |
+|--------|--------------------:|-------------------:|
+| `selected_v0_rows` | 54,041 | 54,041 |
+| `reshaped_specs` | 53,397 | **54,041** |
+| `reshape_failures` | **644** | **0** |
+| Writes | 0 | 0 |
+
+Wall clock: ~61s. All former `TaskInputsPayload` failures (oversized v0 `test` fields ~502 KiB) now reshape successfully.
+
+### Tiny backfill r2
+
+```bash
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
+  --limit 10 \
+  --target-experiment-name v0_encdec_backfill_smoke_20260630_r2
+```
+
+10 specs inserted, 10 runs, 20 node attempts, 0 reshape failures.
+
+### Tiny rescore r2
+
+```bash
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name v0_encdec_backfill_smoke_20260630_r2 \
+  --generation-status success \
+  --generation-status partial
+```
+
+| Metric | Value |
+|--------|------:|
+| `scheduled_count` | 10 |
+| `failed_count` | 0 |
+| Score attempts | 10 × `success` |
+| HumanEval evaluation passed | 6 / 10 |
+
+### Verdict
+
+**Pass.** Tier-1 limits no longer block enc-dec v0 backfill reshape. Full-table dry-run is clean (`reshape_failures: 0`). Repo ready for operator full enc-dec backfill.
+
+### Full enc-dec backfill/rescore commands
+
+```bash
+# Confirm schema head
+uv run alembic current
+
+# Full enc-dec backfill (preserves legacy experiment_name per row)
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec
+
+# Discover legacy experiment names (if needed)
+psql "$DATABASE_URL" -c "
+SELECT DISTINCT experiment_name
+FROM dr_dspy_encdec_eval_predictions
+WHERE generation_status IN ('generated', 'generation_error')
+ORDER BY experiment_name;
+"
+
+# Per-experiment rescore under humaneval@v1
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --generation-status partial
+
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-smoke \
+  --generation-status success \
+  --generation-status partial
+```
+
+---
+
+## 2026-06-30 — HPM selection analysis scripts
+
+**Branch:** `today_exp`  
+**Command/feature:** `scripts/analysis/q1–q4` (new)  
+**Target experiment:** `v0_encdec_backfill_smoke_20260630`  
+**Operator:** agent (Cursor)
+
+### Code changes under test
+
+1. **New package:** [`src/dr_dspy/analysis/`](../src/dr_dspy/analysis/) — `db.py`, `frames.py`, `plotting.py`, `cli_options.py`; loads v1 enc-dec rows into pandas, normalizes `compression_target` from `dimensions.values.compression_target` or `budget_ratio`.
+2. **New scripts:** [`scripts/analysis/`](../scripts/analysis/) — `q1_model_candidates.py`, `q2_compression_range.py`, `q3_repeat_stability.py`, `q4_task_variation.py`.
+3. **Dependencies:** direct `pandas`, `matplotlib` via `uv add`.
+4. **Tests:** [`tests/test_analysis_frames.py`](../tests/test_analysis_frames.py), [`tests/test_analysis_scripts.py`](../tests/test_analysis_scripts.py).
+
+### Tests run
+
+```bash
+uv run pytest tests/test_analysis_frames.py tests/test_analysis_scripts.py
+# → 15 passed
+```
+
+### Live analysis run
+
+```bash
+uv run python scripts/analysis/q1_model_candidates.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q2_compression_range.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q3_repeat_stability.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q4_task_variation.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+```
+
+Output layout (per run, shared timestamp):
+
+- Tabular: `artifacts/{script_name}/{timestamp}_{stem}.csv|md` (gitignored)
+- Figures: `figs/{script_name}/{timestamp}_{stem}.png` (tracked in git)
+
+| Metric | Value |
+|--------|------:|
+| Generation runs loaded | 10 |
+| Score-success rows | 10 |
+| Models in Q1 summary | 7 |
+| Compression targets observed | 0.25, 0.5, 0.75, 1.5, 2.0 (+ 1 missing) |
+
+### Artifacts
+
+Example Q1 outputs:
+
+- `artifacts/q1_model_candidates/{timestamp}_model_candidates.csv|md`
+- `figs/q1_model_candidates/{timestamp}_pass_rate_by_model.png`
+- `figs/q1_model_candidates/{timestamp}_generation_score_health.png`
+
+### Caveats
+
+- N=10 smoke sample is too sparse for Q3 bootstrap intervals or Q4 useful-signal flags; scripts report that explicitly in `.md` summaries.
+- One migrated row lacks `budget_ratio` in dimensions (shows as `nan` compression target).
+- Q3/Q4 need full backfill + repeats before optimization-signal conclusions are trustworthy.
+
+### Verdict
+
+Analysis scripts run end-to-end against migrated v1 enc-dec data. Ready for use after full enc-dec backfill/rescore populates more rows.
+
+---
+
+## 2026-06-30 — Enc-dec v0 backfill smoke
+
+**Branch:** `today_exp`  
+**Command/feature:** `backfill-v0-encdec` (new) + `rescore` on migrated sample  
+**Target experiment:** `v0_encdec_backfill_smoke_20260630`  
+**Operator:** agent (Cursor)
+
+### Code changes under test
+
+1. **New module:** [`src/dr_dspy/migration/v0_encdec_backfill.py`](../src/dr_dspy/migration/v0_encdec_backfill.py) — reads `dr_dspy_encdec_eval_predictions`, reshapes terminal rows via `reshape_v0_encdec_row`, idempotent v1 inserts.
+2. **New CLI:** `uv run python -m dr_dspy.platform.worker backfill-v0-encdec` with `--dry-run`, `--limit`, `--target-experiment-name`, `--database-url`, `--env-file`.
+3. **Tests:** [`tests/test_v0_encdec_backfill.py`](../tests/test_v0_encdec_backfill.py), CLI wiring in [`tests/test_platform_worker_cli.py`](../tests/test_platform_worker_cli.py).
+
+### Schema head check
+
+```bash
+uv run alembic current
+# → 20260630_0005 (head)
+```
+
+### Tests run
+
+```bash
+uv run pytest tests/test_v0_reshape.py tests/integration/test_v0_reshape_outcomes.py tests/test_v0_encdec_backfill.py tests/test_platform_worker_cli.py
+# → 29 passed
+```
+
+### Dry-run
+
+```bash
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec --dry-run
+```
+
+| Metric | Count |
+|--------|------:|
+| `selected_v0_rows` (terminal) | 54,041 |
+| `non_terminal_v0_rows` | 1,175 |
+| `reshaped_specs` | 53,397 |
+| `reshape_failures` | 644 |
+| Writes | 0 |
+
+**First reshape error:** `TaskInputsPayload` byte limit (262144) exceeded on rows with very large `test` fields (~502 KiB). These rows fail reshape today; full backfill will skip ~644 terminal rows unless limits or reshape handling change.
+
+Wall clock: ~75s (full-table dry-run reshape, no writes).
+
+### Tiny backfill
+
+```bash
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
+  --limit 10 \
+  --target-experiment-name v0_encdec_backfill_smoke_20260630
+```
+
+| Metric | First run | Idempotent rerun |
+|--------|----------:|-----------------:|
+| `selected_v0_rows` | 10 | 10 |
+| `reshaped_specs` | 10 | 10 |
+| `specs_inserted` | 10 | 0 |
+| `specs_already_present` | 0 | 10 |
+| `runs_inserted` | 10 | 0 |
+| `runs_already_present` | 0 | 10 |
+| `node_attempts_inserted` | 20 | 0 |
+| `node_attempts_already_present` | 0 | 20 |
+
+All 10 selected rows had `generation_status=generated` (scoreable). Ordering `generation_status ASC, prediction_id ASC` surfaces successes first.
+
+### Validation queries/results
+
+| Check | Result |
+|-------|--------|
+| Prediction specs | 10 for `v0_encdec_backfill_smoke_20260630` |
+| Generation run statuses | 10 × `success` |
+| Node attempts per run | 2 each (encoder + decoder) on spot-check |
+| `v0_source` metadata | Present (e.g. v0 ids `000869a65f496d4a…`, `000079233ab1eabf…`) |
+
+### Tiny rescore
+
+```bash
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name v0_encdec_backfill_smoke_20260630 \
+  --generation-status success \
+  --generation-status partial
+```
+
+| Metric | Value |
+|--------|------:|
+| `selected_count` | 10 |
+| `scheduled_count` | 10 |
+| `failed_count` | 0 |
+| Persisted score attempts | 10 |
+| Score attempt status | 10 × `success` |
+| HumanEval evaluation passed | 5 / 10 |
+
+Scoring profile: `humaneval@v1`. DBOS shutdown clean (~35s).
+
+### Verdict
+
+**Pass** for enc-dec v0 backfill smoke path: CLI, dry-run counts, tiny write, idempotent rerun, v1 row shapes, and `humaneval@v1` rescoring all work on live data.
+
+### Blockers / caveats
+
+1. **644 terminal rows** fail reshape due to `TaskInputsPayload` 256 KiB cap on oversized v0 `test` fields — investigate before full backfill if those rows matter.
+2. **Full dry-run is slow** (~75s) because it reshapes all 54k terminal rows; acceptable for preflight but consider `--limit` for quick checks.
+3. **Legacy experiment names** in v0 data: `encdec-budget-full-v0`, `encdec-smoke` (full backfill preserves these when `--target-experiment-name` is omitted).
+
+### Full enc-dec backfill/rescore commands
+
+```bash
+# Confirm schema head
+uv run alembic current
+
+# Full enc-dec backfill (preserves legacy experiment_name per row)
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec
+
+# Discover legacy experiment names (if needed)
+psql "$DATABASE_URL" -c "
+SELECT DISTINCT experiment_name
+FROM dr_dspy_encdec_eval_predictions
+WHERE generation_status IN ('generated', 'generation_error')
+ORDER BY experiment_name;
+"
+
+# Per-experiment rescore under humaneval@v1
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --generation-status partial
+
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-smoke \
+  --generation-status success \
+  --generation-status partial
+```
+
+---
+
 ## 2026-06-30 — HumanEval enc-dec smoke r2 (fixes validation)
 
 **Branch:** `today_exp`  
