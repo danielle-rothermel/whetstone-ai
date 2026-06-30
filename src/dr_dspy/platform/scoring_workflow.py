@@ -7,10 +7,11 @@ from dbos import DBOS, SetWorkflowID
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine
 
-from dr_dspy.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-    resolve_parser_profile,
+from dr_dspy.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    HumanEvalScoringProfile,
+    resolve_humaneval_scoring_profile,
 )
 from dr_dspy.humaneval.sampling import load_human_eval_rows
 from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
@@ -22,12 +23,7 @@ from dr_dspy.platform.persistence import (
     load_prediction_spec,
     persist_score_attempt,
 )
-from dr_dspy.platform.scoring import (
-    DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-    score_generation_run,
-)
+from dr_dspy.platform.scoring import score_generation_run
 from dr_dspy.records import (
     GenerationRunRecord,
     NodeAttemptRecord,
@@ -61,9 +57,6 @@ def run_score_generation_workflow(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    parser_profile_id: str = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    parser_version: str = PARSER_PROFILE_VERSION,
-    timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
     dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
 ) -> dict[str, Any]:
@@ -83,12 +76,16 @@ def run_score_generation_workflow(
             spec.task_id,
         )
     )
-    score_attempt_id = stable_score_attempt_id(
-        generation_run_id=generation_run_id,
+    scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
+    )
+    score_attempt_id = stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
         attempt_index=score_attempt_index,
     )
     started_at = datetime.fromisoformat(
@@ -99,12 +96,8 @@ def run_score_generation_workflow(
         generation_run.model_dump(mode="json"),
         [attempt.model_dump(mode="json") for attempt in node_attempts],
         task.model_dump(mode="json"),
-        scoring_profile_id,
-        scoring_profile_version,
-        parser_profile_id,
-        parser_version,
+        scoring_profile.model_dump(mode="json"),
         score_attempt_index,
-        timeout_seconds,
         started_at.isoformat(),
     )
     insert_result = ScoreAttemptInsertResult.model_validate(
@@ -122,9 +115,6 @@ def start_score_generation_workflow(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    parser_profile_id: str = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    parser_version: str = PARSER_PROFILE_VERSION,
-    timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
     dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
 ) -> str:
@@ -134,9 +124,6 @@ def start_score_generation_workflow(
         score_attempt_index=score_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
-        timeout_seconds=timeout_seconds,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
     )
@@ -149,9 +136,6 @@ def run_score_generation_workflow_once(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    parser_profile_id: str = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    parser_version: str = PARSER_PROFILE_VERSION,
-    timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
     dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
 ) -> ScoreGenerationWorkflowResult:
@@ -161,9 +145,6 @@ def run_score_generation_workflow_once(
         score_attempt_index=score_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
-        timeout_seconds=timeout_seconds,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
     )
@@ -184,18 +165,19 @@ def _start_score_generation_workflow_handle(
     score_attempt_index: int,
     scoring_profile_id: str,
     scoring_profile_version: str,
-    parser_profile_id: str,
-    parser_version: str,
-    timeout_seconds: float,
     dataset_name: str,
     dataset_split: str,
 ) -> tuple[str, Any]:
-    score_attempt_id = stable_score_attempt_id(
-        generation_run_id=generation_run_id,
+    scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
+    )
+    score_attempt_id = stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
         attempt_index=score_attempt_index,
     )
     with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
@@ -206,9 +188,6 @@ def _start_score_generation_workflow_handle(
             score_attempt_index,
             scoring_profile_id,
             scoring_profile_version,
-            parser_profile_id,
-            parser_version,
-            timeout_seconds,
             dataset_name,
             dataset_split,
         )
@@ -279,17 +258,12 @@ def score_generation_step(
     generation_run_payload: dict[str, Any],
     node_attempt_payloads: list[dict[str, Any]],
     task_payload: dict[str, Any],
-    scoring_profile_id: str,
-    scoring_profile_version: str,
-    parser_profile_id: str,
-    parser_version: str,
+    scoring_profile_payload: dict[str, Any],
     score_attempt_index: int,
-    timeout_seconds: float,
     started_at: str,
 ) -> dict[str, Any]:
-    parser_profile = resolve_parser_profile(
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
+    scoring_profile = HumanEvalScoringProfile.model_validate(
+        scoring_profile_payload
     )
     record = score_generation_run(
         spec=PredictionSpecRecord.model_validate(spec_payload),
@@ -301,11 +275,8 @@ def score_generation_step(
             for payload in node_attempt_payloads
         ),
         task=humaneval_task_from_payload(task_payload),
-        parser_profile=parser_profile,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
+        scoring_profile=scoring_profile,
         score_attempt_index=score_attempt_index,
-        timeout_seconds=timeout_seconds,
         started_at=datetime.fromisoformat(started_at),
     )
     return record.model_dump(mode="json")

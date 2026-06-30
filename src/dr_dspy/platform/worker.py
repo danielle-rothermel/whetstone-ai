@@ -10,9 +10,9 @@ from rich.console import Console
 from sqlalchemy import create_engine
 
 from dr_dspy.harness import dbos as shared_dbos
-from dr_dspy.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
+from dr_dspy.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
@@ -22,11 +22,6 @@ from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
-)
-from dr_dspy.platform.scoring import (
-    DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 from dr_dspy.platform.scoring_workflow import (
     DEFAULT_HUMANEVAL_DATASET_NAME,
@@ -161,18 +156,6 @@ def score_one(
         str,
         typer.Option("--scoring-profile-version"),
     ] = HUMANEVAL_SCORING_PROFILE_VERSION,
-    parser_profile_id: Annotated[
-        str,
-        typer.Option("--parser-profile-id"),
-    ] = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    parser_version: Annotated[
-        str,
-        typer.Option("--parser-version"),
-    ] = PARSER_PROFILE_VERSION,
-    timeout_seconds: Annotated[
-        float,
-        typer.Option("--timeout-seconds", min=0.1),
-    ] = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: Annotated[
         str,
         typer.Option("--dataset-name"),
@@ -210,9 +193,6 @@ def score_one(
             score_attempt_index=score_attempt_index,
             scoring_profile_id=scoring_profile_id,
             scoring_profile_version=scoring_profile_version,
-            parser_profile_id=parser_profile_id,
-            parser_version=parser_version,
-            timeout_seconds=timeout_seconds,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
         )

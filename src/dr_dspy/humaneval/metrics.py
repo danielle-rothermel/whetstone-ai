@@ -6,16 +6,18 @@ import re
 import string
 from typing import Any
 
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+)
+
 from dr_dspy.humaneval.compression import compression_metrics
 from dr_dspy.humaneval.task import HumanEvalTask
-from dr_dspy.records import (
-    AstMetricsPayload,
-    MetricsPayload,
-    MetricsStagePayload,
-    NodeAttemptRecord,
-    PythonLeakageMetricsPayload,
-    TextMetricsPayload,
-)
 
 HUMANEVAL_METRICS_PROFILE_ID = "humaneval-metrics"
 HUMANEVAL_METRICS_PROFILE_VERSION = "v1"
@@ -40,12 +42,85 @@ BRANCH_NODES = (
 )
 
 
+class TextMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    character_count: StrictInt
+    byte_count: StrictInt
+    line_count: StrictInt
+    nonempty_line_count: StrictInt
+    word_count: StrictInt
+    average_word_length: StrictFloat | None = None
+    punctuation_count: StrictInt
+    symbol_count: StrictInt
+
+
+class PythonLeakageMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keyword_count: StrictInt
+    code_marker_count: StrictInt
+    fenced_code_block_count: StrictInt
+    code_like_line_count: StrictInt
+    operator_count: StrictInt
+    punctuation_density: StrictFloat | None = None
+    task_name_hit_count: StrictInt
+
+
+class AstMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parse_ok: StrictBool
+    parse_error: StrictStr | None = None
+    top_level_function_count: StrictInt = 0
+    class_count: StrictInt = 0
+    import_count: StrictInt = 0
+    ast_node_count: StrictInt = 0
+    statement_count: StrictInt = 0
+    branch_count: StrictInt = 0
+
+
+class MetricsStagePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage_id: StrictStr
+    source_kind: StrictStr
+    text: TextMetricsPayload
+    python_leakage: PythonLeakageMetricsPayload
+    ast: AstMetricsPayload | None = None
+    compression: dict[StrictStr, Any] = Field(default_factory=dict)
+    custom: dict[StrictStr, Any] = Field(default_factory=dict)
+
+
+class MetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: StrictStr
+    profile_version: StrictStr
+    text: TextMetricsPayload | None = None
+    python_leakage: PythonLeakageMetricsPayload | None = None
+    ast: AstMetricsPayload | None = None
+    compression: dict[StrictStr, Any] = Field(default_factory=dict)
+    stages: tuple[MetricsStagePayload, ...] = ()
+    custom: dict[StrictStr, Any] = Field(default_factory=dict)
+
+
+class NodeOutputMetricsSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: StrictStr
+    field_name: StrictStr
+    text: StrictStr
+
+
 def build_metrics_payload(
     *,
     raw_generation: str,
     extracted_code: str | None,
     task: HumanEvalTask,
-    node_attempts: tuple[NodeAttemptRecord, ...] = (),
+    node_output_sources: tuple[NodeOutputMetricsSource, ...] = (),
+    profile_id: str = HUMANEVAL_METRICS_PROFILE_ID,
+    profile_version: str = HUMANEVAL_METRICS_PROFILE_VERSION,
 ) -> MetricsPayload:
     stages: list[MetricsStagePayload] = [
         build_metrics_stage(
@@ -68,11 +143,13 @@ def build_metrics_payload(
             include_compression=True,
         )
         stages.append(extracted_stage)
-    stages.extend(node_output_stages(node_attempts=node_attempts, task=task))
+    stages.extend(
+        node_output_stages(node_output_sources=node_output_sources, task=task)
+    )
     terminal_stage = stages[0]
     return MetricsPayload(
-        profile_id=HUMANEVAL_METRICS_PROFILE_ID,
-        profile_version=HUMANEVAL_METRICS_PROFILE_VERSION,
+        profile_id=profile_id,
+        profile_version=profile_version,
         text=terminal_stage.text,
         python_leakage=terminal_stage.python_leakage,
         ast=extracted_stage.ast if extracted_stage is not None else None,
@@ -121,26 +198,24 @@ def build_metrics_stage(
 
 def node_output_stages(
     *,
-    node_attempts: tuple[NodeAttemptRecord, ...],
+    node_output_sources: tuple[NodeOutputMetricsSource, ...],
     task: HumanEvalTask,
 ) -> tuple[MetricsStagePayload, ...]:
     stages: list[MetricsStagePayload] = []
-    for attempt in node_attempts:
-        if attempt.output is None:
-            continue
-        for field_name, value in sorted(attempt.output.values.items()):
-            if not isinstance(value, str):
-                continue
-            stages.append(
-                build_metrics_stage(
-                    stage_id=f"node:{attempt.node_id}:{field_name}",
-                    source_kind="node_output",
-                    text=value,
-                    task=task,
-                    include_ast=True,
-                    include_compression=False,
-                )
+    for source in sorted(
+        node_output_sources,
+        key=lambda item: (item.node_id, item.field_name),
+    ):
+        stages.append(
+            build_metrics_stage(
+                stage_id=f"node:{source.node_id}:{source.field_name}",
+                source_kind="node_output",
+                text=source.text,
+                task=task,
+                include_ast=True,
+                include_compression=False,
             )
+        )
     return tuple(stages)
 
 

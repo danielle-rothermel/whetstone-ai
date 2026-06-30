@@ -17,8 +17,8 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_dspy.humaneval import scoring as humaneval_scoring
 from dr_dspy.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
     STRICT_FIELD_MARKER_PARSER_PROFILE,
@@ -27,17 +27,23 @@ from dr_dspy.humaneval.code_parsing import (
     extract_best_effort_code,
     extract_strict_field_marker_code,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import HumanEvalTask
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import scoring_workflow
-from dr_dspy.platform.metrics import (
+from dr_dspy.humaneval.metrics import (
     HUMANEVAL_METRICS_PROFILE_ID,
+    NodeOutputMetricsSource,
     ast_metrics,
     build_metrics_payload,
     python_leakage_metrics,
     text_metrics,
 )
+from dr_dspy.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    HumanEvalScoringProfile,
+)
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.humaneval.task import EvaluationTaskResult, HumanEvalTask
+from dr_dspy.lm.boundary import EndpointKind, ProviderKind
+from dr_dspy.platform import scoring_workflow
 from dr_dspy.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -45,8 +51,6 @@ from dr_dspy.platform.persistence import (
     persist_score_attempt,
 )
 from dr_dspy.platform.scoring import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
     score_generation_run,
 )
 from dr_dspy.records import (
@@ -295,16 +299,15 @@ def test_strict_parser_only_accepts_field_marker_format() -> None:
 
 
 def test_metrics_payload_includes_full_stage_metrics() -> None:
-    spec = _spec(layout="encdec")
     metrics = build_metrics_payload(
         raw_generation="```python\ndef add_one(x):\n    return x + 1\n```",
         extracted_code="def add_one(x):\n    return x + 1",
         task=_task(),
-        node_attempts=(
-            _node_attempt(
-                spec,
+        node_output_sources=(
+            NodeOutputMetricsSource(
                 node_id="encoder",
-                values={"description": "Use return and add_one carefully."},
+                field_name="description",
+                text="Use return and add_one carefully.",
             ),
         ),
     )
@@ -350,7 +353,6 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -375,7 +377,6 @@ def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
     )
 
@@ -391,7 +392,6 @@ def test_score_generation_run_persists_tests_failed_as_success() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -424,7 +424,6 @@ def test_score_generation_run_persists_extraction_failures_as_success(
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -444,7 +443,6 @@ def test_score_generation_run_persists_infrastructure_error() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -478,7 +476,6 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
             ),
         ),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -502,7 +499,6 @@ def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -532,7 +528,6 @@ def test_persist_score_attempt_reports_conflict_status() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
         started_at=NOW,
         completed_at=LATER,
     )
@@ -584,13 +579,27 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         return NOW.isoformat()
 
     def score_step(*args: Any) -> dict[str, Any]:
-        calls.append(("score", args[4:]))
+        scoring_profile = HumanEvalScoringProfile.model_validate(args[4])
+        calls.append(
+            (
+                "score",
+                (
+                    scoring_profile.profile_id,
+                    scoring_profile.version,
+                    scoring_profile.parser_profile.profile_id,
+                    scoring_profile.parser_profile.version,
+                    scoring_profile.timeout_seconds,
+                    args[5],
+                    args[6],
+                ),
+            )
+        )
         return score_generation_run(
             spec=spec,
             generation_run=run,
             node_attempts=(),
             task=_task(),
-            parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+            scoring_profile=scoring_profile,
             started_at=NOW,
             completed_at=LATER,
         ).model_dump(mode="json")
@@ -660,8 +669,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 HUMANEVAL_SCORING_PROFILE_VERSION,
                 BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
                 PARSER_PROFILE_VERSION,
-                0,
                 2.0,
+                0,
                 NOW.isoformat(),
             ),
         ),
@@ -669,11 +678,44 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
     ]
 
 
-def test_strict_profile_can_be_used_for_scoring() -> None:
+def test_scoring_profile_controls_parser_timeout_and_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spec = _spec()
     run = _generation_run(
         spec,
         "[[ ## code ## ]]\ndef add_one(x):\n    return x + 1\n",
+    )
+    observed_timeouts: list[float] = []
+    scoring_profile = HumanEvalScoringProfile(
+        profile_id="humaneval-field-marker",
+        version="v1",
+        parser_profile=STRICT_FIELD_MARKER_PARSER_PROFILE,
+        timeout_seconds=0.25,
+        metrics_profile_id="humaneval-metrics-field-marker",
+        metrics_profile_version="v1",
+    )
+
+    def evaluate(
+        *,
+        task: HumanEvalTask,
+        candidate_code: str,
+        timeout_seconds: float,
+    ) -> EvaluationTaskResult:
+        assert candidate_code == "def add_one(x):\n    return x + 1"
+        observed_timeouts.append(timeout_seconds)
+        return EvaluationTaskResult(
+            task_id=task.task_id,
+            entry_point=task.entry_point,
+            function_names=[task.entry_point],
+            total_cases=0,
+            results=[],
+        )
+
+    monkeypatch.setattr(
+        humaneval_scoring,
+        "evaluate_human_eval_code",
+        evaluate,
     )
 
     score = score_generation_run(
@@ -681,11 +723,15 @@ def test_strict_profile_can_be_used_for_scoring() -> None:
         generation_run=run,
         node_attempts=(),
         task=_task(),
-        parser_profile=STRICT_FIELD_MARKER_PARSER_PROFILE,
+        scoring_profile=scoring_profile,
         started_at=NOW,
         completed_at=LATER,
     )
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 1.0
+    assert score.scoring_profile_id == "humaneval-field-marker"
     assert score.parser_profile_id == STRICT_FIELD_MARKER_PARSER_PROFILE_ID
+    assert score.metrics is not None
+    assert score.metrics.profile_id == "humaneval-metrics-field-marker"
+    assert observed_timeouts == [0.25]

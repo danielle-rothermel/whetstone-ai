@@ -10,11 +10,17 @@ records belongs to the schema/scoring-profile stage.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from dr_dspy.humaneval.code_extraction import validate_python_source
-from dr_dspy.humaneval.code_parsing import extract_best_effort_code
+from dr_dspy.humaneval.code_parsing import (
+    CodeExtractionResult,
+    CodeParserProfile,
+    extract_best_effort_code,
+    extract_code_with_profile,
+)
 from dr_dspy.humaneval.compression import (
     CompressionMetric,
     CompressionMetrics,
@@ -81,6 +87,71 @@ class HumanEvalScoreResult(BaseModel):
     raw_compression_ratio: float | None = None
     best_compression_ratio: float | None = None
     best_compression_percent_reduction: float | None = None
+
+
+class HumanEvalGenerationScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    raw_generation: str
+    extraction: CodeExtractionResult
+    outcome: GeneratedCodeOutcome
+    score: float
+    evaluation: EvaluationTaskResult | None = None
+
+
+def score_humaneval_generation(
+    *,
+    raw_generation: Any,
+    task: HumanEvalTask,
+    parser_profile: CodeParserProfile,
+    timeout_seconds: float,
+) -> HumanEvalGenerationScore:
+    extraction = extract_code_with_profile(
+        raw_generation,
+        profile=parser_profile,
+    )
+    raw_generation_text = extraction.raw_generation or ""
+    if extraction.extracted_code is None:
+        outcome = extraction_failure_outcome(extraction)
+        return HumanEvalGenerationScore(
+            raw_generation=raw_generation_text,
+            extraction=extraction,
+            outcome=outcome,
+            score=0.0,
+            evaluation=None,
+        )
+
+    evaluation = evaluate_human_eval_code(
+        task=task,
+        candidate_code=extraction.extracted_code,
+        timeout_seconds=timeout_seconds,
+    )
+    outcome = evaluation_outcome(evaluation)
+    return HumanEvalGenerationScore(
+        raw_generation=raw_generation_text,
+        extraction=extraction,
+        outcome=outcome,
+        score=1.0 if outcome is GeneratedCodeOutcome.PASSED else 0.0,
+        evaluation=evaluation,
+    )
+
+
+def extraction_failure_outcome(
+    extraction: CodeExtractionResult,
+) -> GeneratedCodeOutcome:
+    if extraction.extraction_error == "empty raw generation":
+        return GeneratedCodeOutcome.EMPTY_GENERATION
+    return GeneratedCodeOutcome.EXTRACTION_FAILED
+
+
+def evaluation_outcome(
+    evaluation: EvaluationTaskResult,
+) -> GeneratedCodeOutcome:
+    if not evaluation.function_names:
+        return GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
+    if evaluation.passed:
+        return GeneratedCodeOutcome.PASSED
+    return GeneratedCodeOutcome.TESTS_FAILED
 
 
 def best_compression_metric(

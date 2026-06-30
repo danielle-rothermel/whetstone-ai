@@ -59,13 +59,14 @@ uv run python -m dr_dspy.platform.worker score-one \
 ```
 
 The default scoring surface persists one append-only
-`ScoreAttemptRecord` using scoring profile `humaneval@v1`, parser profile
-`humaneval-best-effort@v1`, and metrics profile `humaneval-metrics@v1`.
-The CLI exposes profile id/version options so parser or scoring changes create
-new score attempts instead of mutating old results. The default HumanEval task
+`ScoreAttemptRecord` using scoring profile `humaneval@v1`. That profile owns
+the parser profile `humaneval-best-effort@v1`, metrics profile
+`humaneval-metrics@v1`, and HumanEval timeout. The CLI exposes scoring profile
+id/version options so parser, metric, timeout, or scoring changes create new
+score attempts instead of mutating old results. The default HumanEval task
 loader reads `evalplus/humanevalplus` split `test` and selects the task by the
 stored v1 prediction spec `task_id`. The command prints `insert_status` as
-`inserted` or `already_present`; rerunning the same generation/profile/parser
+`inserted` or `already_present`; rerunning the same generation/scoring-profile
 attempt is idempotent and reports `already_present`.
 
 Score attempts use `status=success` for completed domain scoring, including

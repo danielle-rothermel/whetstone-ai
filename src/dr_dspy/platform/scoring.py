@@ -8,25 +8,27 @@ from dr_dspy.eval_failures import (
     exception_type_name,
     failure_metadata_from_exception,
 )
-from dr_dspy.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-    CodeExtractionResult,
-    CodeParserProfile,
-    extract_code_with_profile,
+from dr_dspy.humaneval.metrics import (
+    NodeOutputMetricsSource,
+    build_metrics_payload,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import (
-    EvaluationTaskResult,
-    HumanEvalTask,
-    evaluate_human_eval_code,
+from dr_dspy.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    HumanEvalScoringProfile,
+    resolve_humaneval_scoring_profile,
 )
-from dr_dspy.platform.metrics import build_metrics_payload
+from dr_dspy.humaneval.scoring import (
+    HumanEvalGenerationScore,
+    score_humaneval_generation,
+)
+from dr_dspy.humaneval.task import HumanEvalTask
 from dr_dspy.records import (
     ExtractedCodePayload,
     FailureMetadataPayload,
     GenerationRunRecord,
     GenerationRunStatus,
+    MetricsPayload,
     NodeAttemptRecord,
     PerTestResultPayload,
     PredictionSpecRecord,
@@ -35,10 +37,6 @@ from dr_dspy.records import (
     stable_score_attempt_id,
 )
 
-HUMANEVAL_SCORING_PROFILE_ID = "humaneval"
-HUMANEVAL_SCORING_PROFILE_VERSION = "v1"
-DEFAULT_HUMANEVAL_TIMEOUT_SECONDS = 2.0
-
 
 def score_generation_run(
     *,
@@ -46,32 +44,34 @@ def score_generation_run(
     generation_run: GenerationRunRecord,
     node_attempts: tuple[NodeAttemptRecord, ...],
     task: HumanEvalTask,
-    parser_profile: CodeParserProfile,
+    scoring_profile: HumanEvalScoringProfile | None = None,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     score_attempt_index: int = 0,
-    timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     started_at: datetime,
     completed_at: datetime | None = None,
 ) -> ScoreAttemptRecord:
+    scoring_profile = scoring_profile or resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
     try:
         validate_generation_run_for_scoring(spec=spec, run=generation_run)
         raw_generation = terminal_generation_text(generation_run)
-        extraction = extract_code_with_profile(
-            raw_generation,
-            profile=parser_profile,
+        domain_score = score_humaneval_generation(
+            raw_generation=raw_generation,
+            task=task,
+            parser_profile=scoring_profile.parser_profile,
+            timeout_seconds=scoring_profile.timeout_seconds,
         )
-        return score_attempt_from_extraction(
+        return score_attempt_from_domain_score(
             spec=spec,
             generation_run=generation_run,
             node_attempts=node_attempts,
             task=task,
-            parser_profile=parser_profile,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
+            scoring_profile=scoring_profile,
             score_attempt_index=score_attempt_index,
-            timeout_seconds=timeout_seconds,
-            extraction=extraction,
+            domain_score=domain_score,
             started_at=started_at,
             completed_at=completed_at,
         )
@@ -79,9 +79,7 @@ def score_generation_run(
         return error_score_attempt(
             spec=spec,
             generation_run=generation_run,
-            parser_profile=parser_profile,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
+            scoring_profile=scoring_profile,
             score_attempt_index=score_attempt_index,
             error=error,
             started_at=started_at,
@@ -89,62 +87,26 @@ def score_generation_run(
         )
 
 
-def score_attempt_from_extraction(
+def score_attempt_from_domain_score(
     *,
     spec: PredictionSpecRecord,
     generation_run: GenerationRunRecord,
     node_attempts: tuple[NodeAttemptRecord, ...],
     task: HumanEvalTask,
-    parser_profile: CodeParserProfile,
-    scoring_profile_id: str,
-    scoring_profile_version: str,
+    scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
-    timeout_seconds: float,
-    extraction: CodeExtractionResult,
+    domain_score: HumanEvalGenerationScore,
     started_at: datetime,
     completed_at: datetime | None,
 ) -> ScoreAttemptRecord:
-    if extraction.extracted_code is None:
-        outcome = extraction_failure_outcome(extraction)
-        raw_generation = extraction.raw_generation or ""
-        return successful_score_attempt(
-            spec=spec,
-            generation_run=generation_run,
-            node_attempts=node_attempts,
-            task=task,
-            parser_profile=parser_profile,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
-            score_attempt_index=score_attempt_index,
-            outcome=outcome,
-            score=0.0,
-            extraction=extraction,
-            evaluation=None,
-            raw_generation=raw_generation,
-            started_at=started_at,
-            completed_at=resolve_completed_at(completed_at),
-        )
-
-    evaluation = evaluate_human_eval_code(
-        task=task,
-        candidate_code=extraction.extracted_code,
-        timeout_seconds=timeout_seconds,
-    )
-    outcome = evaluation_outcome(evaluation)
     return successful_score_attempt(
         spec=spec,
         generation_run=generation_run,
         node_attempts=node_attempts,
         task=task,
-        parser_profile=parser_profile,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
+        scoring_profile=scoring_profile,
         score_attempt_index=score_attempt_index,
-        outcome=outcome,
-        score=1.0 if outcome is GeneratedCodeOutcome.PASSED else 0.0,
-        extraction=extraction,
-        evaluation=evaluation,
-        raw_generation=extraction.raw_generation or "",
+        domain_score=domain_score,
         started_at=started_at,
         completed_at=resolve_completed_at(completed_at),
     )
@@ -156,18 +118,14 @@ def successful_score_attempt(
     generation_run: GenerationRunRecord,
     node_attempts: tuple[NodeAttemptRecord, ...],
     task: HumanEvalTask,
-    parser_profile: CodeParserProfile,
-    scoring_profile_id: str,
-    scoring_profile_version: str,
+    scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
-    outcome: GeneratedCodeOutcome,
-    score: float,
-    extraction: CodeExtractionResult,
-    evaluation: EvaluationTaskResult | None,
-    raw_generation: str,
+    domain_score: HumanEvalGenerationScore,
     started_at: datetime,
     completed_at: datetime,
 ) -> ScoreAttemptRecord:
+    extraction = domain_score.extraction
+    parser_profile = scoring_profile.parser_profile
     extracted_payload = ExtractedCodePayload(
         raw_generation=extraction.raw_generation,
         extracted_code=extraction.extracted_code,
@@ -186,16 +144,16 @@ def successful_score_attempt(
         },
     )
     per_test_results = ()
-    if evaluation is not None:
+    if domain_score.evaluation is not None:
         per_test_results = tuple(
             PerTestResultPayload.from_evaluation_case(result.to_summary())
-            for result in evaluation.results
+            for result in domain_score.evaluation.results
         )
     return ScoreAttemptRecord(
         score_attempt_id=stable_score_attempt_id(
             generation_run_id=generation_run.generation_run_id,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
             parser_profile_id=parser_profile.profile_id,
             parser_version=parser_profile.version,
             attempt_index=score_attempt_index,
@@ -203,19 +161,25 @@ def successful_score_attempt(
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
         attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
         parser_profile_id=parser_profile.profile_id,
         parser_version=parser_profile.version,
         status=ScoreAttemptStatus.SUCCESS,
-        generated_code_outcome=outcome,
-        score=score,
+        generated_code_outcome=domain_score.outcome,
+        score=domain_score.score,
         extracted_code=extracted_payload,
-        metrics=build_metrics_payload(
-            raw_generation=raw_generation,
-            extracted_code=extraction.extracted_code,
-            task=task,
-            node_attempts=node_attempts,
+        metrics=MetricsPayload.model_validate(
+            build_metrics_payload(
+                raw_generation=domain_score.raw_generation,
+                extracted_code=extraction.extracted_code,
+                task=task,
+                node_output_sources=node_output_metrics_sources(
+                    node_attempts
+                ),
+                profile_id=scoring_profile.metrics_profile_id,
+                profile_version=scoring_profile.metrics_profile_version,
+            ).model_dump(mode="json")
         ),
         per_test_results=per_test_results,
         started_at=started_at,
@@ -227,9 +191,7 @@ def error_score_attempt(
     *,
     spec: PredictionSpecRecord,
     generation_run: GenerationRunRecord,
-    parser_profile: CodeParserProfile,
-    scoring_profile_id: str,
-    scoring_profile_version: str,
+    scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
     error: BaseException,
     started_at: datetime,
@@ -238,19 +200,19 @@ def error_score_attempt(
     return ScoreAttemptRecord(
         score_attempt_id=stable_score_attempt_id(
             generation_run_id=generation_run.generation_run_id,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
-            parser_profile_id=parser_profile.profile_id,
-            parser_version=parser_profile.version,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=scoring_profile.parser_profile.profile_id,
+            parser_version=scoring_profile.parser_profile.version,
             attempt_index=score_attempt_index,
         ),
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
         attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile.profile_id,
-        parser_version=parser_profile.version,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
         status=ScoreAttemptStatus.ERROR,
         failure=failure_payload(
             error,
@@ -258,10 +220,10 @@ def error_score_attempt(
                 "prediction_id": spec.prediction_id,
                 "generation_run_id": generation_run.generation_run_id,
                 "task_id": spec.task_id,
-                "parser_profile_id": parser_profile.profile_id,
-                "parser_version": parser_profile.version,
-                "scoring_profile_id": scoring_profile_id,
-                "scoring_profile_version": scoring_profile_version,
+                "parser_profile_id": scoring_profile.parser_profile.profile_id,
+                "parser_version": scoring_profile.parser_profile.version,
+                "scoring_profile_id": scoring_profile.profile_id,
+                "scoring_profile_version": scoring_profile.version,
             },
         ),
         started_at=started_at,
@@ -293,22 +255,23 @@ def terminal_generation_text(run: GenerationRunRecord) -> Any:
     )
 
 
-def extraction_failure_outcome(
-    extraction: CodeExtractionResult,
-) -> GeneratedCodeOutcome:
-    if extraction.extraction_error == "empty raw generation":
-        return GeneratedCodeOutcome.EMPTY_GENERATION
-    return GeneratedCodeOutcome.EXTRACTION_FAILED
-
-
-def evaluation_outcome(
-    evaluation: EvaluationTaskResult,
-) -> GeneratedCodeOutcome:
-    if not evaluation.function_names:
-        return GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
-    if evaluation.passed:
-        return GeneratedCodeOutcome.PASSED
-    return GeneratedCodeOutcome.TESTS_FAILED
+def node_output_metrics_sources(
+    node_attempts: tuple[NodeAttemptRecord, ...],
+) -> tuple[NodeOutputMetricsSource, ...]:
+    sources: list[NodeOutputMetricsSource] = []
+    for attempt in node_attempts:
+        if attempt.output is None:
+            continue
+        for field_name, value in sorted(attempt.output.values.items()):
+            if isinstance(value, str):
+                sources.append(
+                    NodeOutputMetricsSource(
+                        node_id=attempt.node_id,
+                        field_name=field_name,
+                        text=value,
+                    )
+                )
+    return tuple(sources)
 
 
 def failure_payload(
@@ -321,13 +284,6 @@ def failure_payload(
         error_type=exception_type_name(error),
         message=str(error),
         metadata={**metadata, **failure_metadata_from_exception(error)},
-    )
-
-
-def default_parser_profile() -> CodeParserProfile:
-    return CodeParserProfile(
-        profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-        version=PARSER_PROFILE_VERSION,
     )
 
 
