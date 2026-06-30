@@ -154,6 +154,21 @@ uv run python scripts/analysis/q4_task_variation.py \
 Each run prints Rich tables to the terminal and saves `{timestamp}_run.html`
 alongside PNGs in the matching `figs/{script_name}/` folder.
 
+### Sample run inspector
+
+Spot-check one enc-dec run end-to-end (ground truth through test failures)
+as a horizontal-scroll HTML report plus a sibling JSON debug bundle for `jq`:
+
+```bash
+uv run python scripts/analysis/sample_run_inspector.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630 \
+  --sample-index 0
+```
+
+Outputs go to `analysis/samples/{experiment_name}/{timestamp}_{index}.html`
+(tracked in git) and `.json` (gitignored, for local `jq`). Prompts are
+reconstructed from the graph snapshot, not stored verbatim on node attempts.
+
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the

@@ -1,0 +1,2750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>v0_encdec_backfill_smoke_20260630 sample 0</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      padding: 1rem;
+      background: #f5f5f5;
+      color: #111;
+    }
+    h1 { margin-top: 0; }
+    .pipeline {
+      display: flex;
+      flex-direction: row;
+      gap: 1rem;
+      overflow-x: auto;
+      padding-bottom: 1rem;
+    }
+    .card {
+      min-width: 28rem;
+      max-width: 36rem;
+      flex: 0 0 auto;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+    }
+    .card h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+    }
+    .card-subtitle {
+      font-size: 0.8rem;
+      color: #555;
+      margin-bottom: 0.5rem;
+    }
+    .card-body { font-size: 0.85rem; }
+    .code-block {
+      overflow-x: auto;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 0.25rem;
+      background: #fafafa;
+    }
+    pre.plain {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #fafafa;
+      border: 1px solid #ddd;
+      padding: 0.5rem;
+      border-radius: 4px;
+    }
+    .note { font-size: 0.85rem; color: #444; }
+    .error { color: #a00; }
+    .metadata {
+      margin-top: 1.5rem;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 1rem;
+    }
+    .metadata pre {
+      overflow-x: auto;
+      white-space: pre;
+      font-size: 0.75rem;
+    }
+    ul.fail-list {
+      padding-left: 1.2rem;
+      font-size: 0.8rem;
+    }
+    pre { line-height: 125%; }
+td.linenos .normal { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: inherit; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.highlight .hll { background-color: #ffffcc }
+.highlight { background: #f8f8f8; }
+.highlight .c { color: #3D7B7B; font-style: italic } /* Comment */
+.highlight .err { border: 1px solid #F00 } /* Error */
+.highlight .k { color: #008000; font-weight: bold } /* Keyword */
+.highlight .o { color: #666 } /* Operator */
+.highlight .ch { color: #3D7B7B; font-style: italic } /* Comment.Hashbang */
+.highlight .cm { color: #3D7B7B; font-style: italic } /* Comment.Multiline */
+.highlight .cp { color: #9C6500 } /* Comment.Preproc */
+.highlight .cpf { color: #3D7B7B; font-style: italic } /* Comment.PreprocFile */
+.highlight .c1 { color: #3D7B7B; font-style: italic } /* Comment.Single */
+.highlight .cs { color: #3D7B7B; font-style: italic } /* Comment.Special */
+.highlight .gd { color: #A00000 } /* Generic.Deleted */
+.highlight .ge { font-style: italic } /* Generic.Emph */
+.highlight .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.highlight .gr { color: #E40000 } /* Generic.Error */
+.highlight .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+.highlight .gi { color: #008400 } /* Generic.Inserted */
+.highlight .go { color: #717171 } /* Generic.Output */
+.highlight .gp { color: #000080; font-weight: bold } /* Generic.Prompt */
+.highlight .gs { font-weight: bold } /* Generic.Strong */
+.highlight .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+.highlight .gt { color: #04D } /* Generic.Traceback */
+.highlight .kc { color: #008000; font-weight: bold } /* Keyword.Constant */
+.highlight .kd { color: #008000; font-weight: bold } /* Keyword.Declaration */
+.highlight .kn { color: #008000; font-weight: bold } /* Keyword.Namespace */
+.highlight .kp { color: #008000 } /* Keyword.Pseudo */
+.highlight .kr { color: #008000; font-weight: bold } /* Keyword.Reserved */
+.highlight .kt { color: #B00040 } /* Keyword.Type */
+.highlight .m { color: #666 } /* Literal.Number */
+.highlight .s { color: #BA2121 } /* Literal.String */
+.highlight .na { color: #687822 } /* Name.Attribute */
+.highlight .nb { color: #008000 } /* Name.Builtin */
+.highlight .nc { color: #00F; font-weight: bold } /* Name.Class */
+.highlight .no { color: #800 } /* Name.Constant */
+.highlight .nd { color: #A2F } /* Name.Decorator */
+.highlight .ni { color: #717171; font-weight: bold } /* Name.Entity */
+.highlight .ne { color: #CB3F38; font-weight: bold } /* Name.Exception */
+.highlight .nf { color: #00F } /* Name.Function */
+.highlight .nl { color: #767600 } /* Name.Label */
+.highlight .nn { color: #00F; font-weight: bold } /* Name.Namespace */
+.highlight .nt { color: #008000; font-weight: bold } /* Name.Tag */
+.highlight .nv { color: #19177C } /* Name.Variable */
+.highlight .ow { color: #A2F; font-weight: bold } /* Operator.Word */
+.highlight .w { color: #BBB } /* Text.Whitespace */
+.highlight .mb { color: #666 } /* Literal.Number.Bin */
+.highlight .mf { color: #666 } /* Literal.Number.Float */
+.highlight .mh { color: #666 } /* Literal.Number.Hex */
+.highlight .mi { color: #666 } /* Literal.Number.Integer */
+.highlight .mo { color: #666 } /* Literal.Number.Oct */
+.highlight .sa { color: #BA2121 } /* Literal.String.Affix */
+.highlight .sb { color: #BA2121 } /* Literal.String.Backtick */
+.highlight .sc { color: #BA2121 } /* Literal.String.Char */
+.highlight .dl { color: #BA2121 } /* Literal.String.Delimiter */
+.highlight .sd { color: #BA2121; font-style: italic } /* Literal.String.Doc */
+.highlight .s2 { color: #BA2121 } /* Literal.String.Double */
+.highlight .se { color: #AA5D1F; font-weight: bold } /* Literal.String.Escape */
+.highlight .sh { color: #BA2121 } /* Literal.String.Heredoc */
+.highlight .si { color: #A45A77; font-weight: bold } /* Literal.String.Interpol */
+.highlight .sx { color: #008000 } /* Literal.String.Other */
+.highlight .sr { color: #A45A77 } /* Literal.String.Regex */
+.highlight .s1 { color: #BA2121 } /* Literal.String.Single */
+.highlight .ss { color: #19177C } /* Literal.String.Symbol */
+.highlight .bp { color: #008000 } /* Name.Builtin.Pseudo */
+.highlight .fm { color: #00F } /* Name.Function.Magic */
+.highlight .vc { color: #19177C } /* Name.Variable.Class */
+.highlight .vg { color: #19177C } /* Name.Variable.Global */
+.highlight .vi { color: #19177C } /* Name.Variable.Instance */
+.highlight .vm { color: #19177C } /* Name.Variable.Magic */
+.highlight .il { color: #666 } /* Literal.Number.Integer.Long */
+  </style>
+</head>
+<body>
+  <h1>HumanEval/36 — sample 0</h1>
+  <p>Experiment: v0_encdec_backfill_smoke_20260630</p>
+  <div class="pipeline">
+    <section class="card"><h2>Run summary</h2><div class="card-body"><pre class='plain'>Experiment: v0_encdec_backfill_smoke_20260630
+Sample index: 0 / 9
+Task: HumanEval/36
+Outcome: FAIL / incomplete
+Generation: success
+Score: success
+Compression target: 0.25
+Model: qwen/qwen3-coder-next
+Prediction ID: 5cd3b6ee3ae54b0eeb2422b9
+Generation run ID: 087d15c29975f1038a647265
+Score attempt ID: 77cd190b20e16d219a5b271c806329c3</pre><p class='note'>Prompts are <strong>reconstructed_from_graph_snapshot</strong> (not stored verbatim on node attempts).</p></div></section><section class="card"><h2>Ground truth</h2><div class="card-body"><div class="code-block">
+</div><h3>Task prompt</h3><div class="code-block">def fizz_buzz(n: int):
+    &quot;&quot;&quot;Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.
+    &gt;&gt;&gt; fizz_buzz(50)
+    0
+    &gt;&gt;&gt; fizz_buzz(78)
+    2
+    &gt;&gt;&gt; fizz_buzz(79)
+    3
+    &quot;&quot;&quot;
+</div></div></section><section class="card"><h2>Encoder prompt</h2><div class="card-subtitle">reconstructed_from_graph_snapshot</div><div class="card-body"><div class="code-block">[user]
+Describe 
+
+def fizz_buzz(n: int):
+    &quot;&quot;&quot;Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.
+    &gt;&gt;&gt; fizz_buzz(50)
+    0
+    &gt;&gt;&gt; fizz_buzz(78)
+    2
+    &gt;&gt;&gt; fizz_buzz(79)
+    3
+    &quot;&quot;&quot;
+</div></div></section><section class="card"><h2>Encoder output</h2><div class="card-body"><div class="code-block">[[ ## description ## ]]
+Count occurrences of digit &#39;7&#39; in numbers less than n divisible by 11 or 13.
+
+[[ ## completed ## ]]
+</div></div></section><section class="card"><h2>Decoder prompt</h2><div class="card-subtitle">reconstructed_from_graph_snapshot</div><div class="card-body"><div class="code-block">[user]
+Write code from [[ ## description ## ]]
+Count occurrences of digit &#39;7&#39; in numbers less than n divisible by 11 or 13.
+
+[[ ## completed ## ]]
+</div></div></section><section class="card"><h2>Decoder output</h2><div class="card-body"><div class="code-block"><span class="k">def</span><span class="w"> </span><span class="nf">count_sevens</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">11</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">13</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">count</span> <span class="o">+=</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s1">&#39;7&#39;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">count</span>
+</div></div></section><section class="card"><h2>Extraction</h2><div class="card-body"><pre class='plain'>Method: bare_python
+Parser: humaneval-best-effort@v1
+Compile OK: True</pre><h3>Raw generation</h3><div class="code-block"><span class="k">def</span><span class="w"> </span><span class="nf">count_sevens</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">11</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">13</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">count</span> <span class="o">+=</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s1">&#39;7&#39;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">count</span>
+</div></div></section><section class="card"><h2>Scored code</h2><div class="card-subtitle">outcome=tests_failed, score=0.0</div><div class="card-body"><div class="code-block"><span class="k">def</span><span class="w"> </span><span class="nf">count_sevens</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">11</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">i</span> <span class="o">%</span> <span class="mi">13</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">count</span> <span class="o">+=</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span><span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s1">&#39;7&#39;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">count</span>
+</div></div></section><section class="card"><h2>Tests</h2><div class="card-body"><pre class='plain'>Total: 152
+Passed: 0
+Failed: 0
+Error/timeout: 152</pre><h3>Failing tests</h3><ul class='fail-list'><li><strong>case_0</strong> (timeout): Batch timed out</li><li><strong>case_1</strong> (timeout): Batch timed out</li><li><strong>case_2</strong> (timeout): Batch timed out</li><li><strong>case_3</strong> (timeout): Batch timed out</li><li><strong>case_4</strong> (timeout): Batch timed out</li><li><strong>case_5</strong> (timeout): Batch timed out</li><li><strong>case_6</strong> (timeout): Batch timed out</li><li><strong>case_7</strong> (timeout): Batch timed out</li><li><strong>case_8</strong> (timeout): Batch timed out</li><li><strong>case_9</strong> (timeout): Batch timed out</li><li><strong>case_10</strong> (timeout): Batch timed out</li><li><strong>case_11</strong> (timeout): Batch timed out</li><li><strong>case_12</strong> (timeout): Batch timed out</li><li><strong>case_13</strong> (timeout): Batch timed out</li><li><strong>case_14</strong> (timeout): Batch timed out</li><li><strong>case_15</strong> (timeout): Batch timed out</li><li><strong>case_16</strong> (timeout): Batch timed out</li><li><strong>case_17</strong> (timeout): Batch timed out</li><li><strong>case_18</strong> (timeout): Batch timed out</li><li><strong>case_19</strong> (timeout): Batch timed out</li></ul><p>… and 132 more failures (see JSON bundle)</p></div></section>
+  </div>
+  <section class="metadata">
+    <h2>Debug metadata (copy for jq)</h2>
+    <p>Sibling JSON file: <code>/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.json</code></p>
+    <p>Example: <code>jq '.spec.prediction_id' /Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.json</code></p>
+    <pre id="debug-metadata">{
+  &quot;inspector&quot;: {
+    &quot;script&quot;: &quot;sample_run_inspector&quot;,
+    &quot;generated_at&quot;: &quot;2026-06-30T23:00:04.101392+00:00&quot;,
+    &quot;sample_index&quot;: 0,
+    &quot;sample_count&quot;: 10,
+    &quot;prompts_source&quot;: &quot;reconstructed_from_graph_snapshot&quot;,
+    &quot;output_paths&quot;: {
+      &quot;html&quot;: &quot;/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.html&quot;,
+      &quot;json&quot;: &quot;/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.json&quot;
+    }
+  },
+  &quot;experiment&quot;: {
+    &quot;experiment_name&quot;: &quot;v0_encdec_backfill_smoke_20260630&quot;,
+    &quot;fair_order_key&quot;: &quot;2d5b8d9cb13ca6053715448815890bac&quot;,
+    &quot;fair_order_seed&quot;: &quot;legacy-v0-migration&quot;
+  },
+  &quot;spec&quot;: {
+    &quot;prediction_id&quot;: &quot;5cd3b6ee3ae54b0eeb2422b9&quot;,
+    &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+    &quot;repetition_seed&quot;: 2,
+    &quot;dimensions&quot;: {
+      &quot;budget_ratio&quot;: 0.25,
+      &quot;decoder_model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+      &quot;encoder_model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+      &quot;decoder_reasoning&quot;: {},
+      &quot;encoder_reasoning&quot;: {},
+      &quot;decoder_temperature&quot;: 0.0,
+      &quot;encoder_temperature&quot;: 0.0
+    },
+    &quot;dimensions_digest&quot;: &quot;8ce43de90903ac07&quot;,
+    &quot;graph_layout&quot;: &quot;encdec&quot;,
+    &quot;graph_digest&quot;: &quot;ec4e636b819ecfbf&quot;,
+    &quot;provider_axis&quot;: {
+      &quot;provider_kind&quot;: &quot;openrouter&quot;,
+      &quot;endpoint_kind&quot;: &quot;chat_completions&quot;,
+      &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+      &quot;config_id&quot;: &quot;decoder&quot;,
+      &quot;throttle_key&quot;: &quot;openrouter:chat_completions:qwen/qwen3-coder-next&quot;,
+      &quot;parameters&quot;: {
+        &quot;temperature&quot;: 0.0
+      }
+    },
+    &quot;provider_configs&quot;: [
+      {
+        &quot;provider_kind&quot;: &quot;openrouter&quot;,
+        &quot;endpoint_kind&quot;: &quot;chat_completions&quot;,
+        &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+        &quot;config_id&quot;: &quot;encoder&quot;,
+        &quot;throttle_key&quot;: &quot;openrouter:chat_completions:qwen/qwen3-coder-next&quot;,
+        &quot;parameters&quot;: {
+          &quot;temperature&quot;: 0.0
+        }
+      },
+      {
+        &quot;provider_kind&quot;: &quot;openrouter&quot;,
+        &quot;endpoint_kind&quot;: &quot;chat_completions&quot;,
+        &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+        &quot;config_id&quot;: &quot;decoder&quot;,
+        &quot;throttle_key&quot;: &quot;openrouter:chat_completions:qwen/qwen3-coder-next&quot;,
+        &quot;parameters&quot;: {
+          &quot;temperature&quot;: 0.0
+        }
+      }
+    ],
+    &quot;compression_target&quot;: 0.25,
+    &quot;encoder_model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+    &quot;decoder_model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+    &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;
+  },
+  &quot;task_snapshot&quot;: {
+    &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+    &quot;inputs&quot;: {
+      &quot;values&quot;: {
+        &quot;test&quot;: &quot;\n\nimport numpy as np\n\ndef is_floats(x) -&gt; bool:\n    # check if it is float; List[float]; Tuple[float]\n    if isinstance(x, float):\n        return True\n    if isinstance(x, (list, tuple)):\n        return all(isinstance(i, float) for i in x)\n    if isinstance(x, np.ndarray):\n        return x.dtype == np.float64 or x.dtype == np.float32\n    return False\n\n\ndef assertion(out, exp, atol):\n    exact_match = out == exp\n\n    if atol == 0 and is_floats(exp):\n        atol = 1e-6\n    if not exact_match and atol != 0:\n        assert np.allclose(out, exp, rtol=1e-07, atol=atol)\n    else:\n        assert exact_match\n\n\ndef check(candidate):\n    inputs = [[50], [78], [79], [100], [200], [4000], [10000], [100000], [1], [10], [20], [30], [70], [71], [72], [73], [74], [75], [31], [69], [9], [77], [76], [8], [2], [21], [68], [22], [29], [23], [32], [3], [11], [33], [19], [86], [7], [12], [4], [28], [6], [60], [85], [5], [80], [61], [59], [62], [63], [84], [18], [27], [81], [64], [26], [83], [82], [13], [66], [24], [34], [43], [42], [14], [65], [67], [94], [25], [51], [17], [52], [41], [40], [16], [58], [15], [555555], [303], [12345], [2000], [9999], [123456], [304], [9998], [12344], [302], [12346], [12347], [12348], [12343], [123455], [123454], [555554], [123453], [10001], [301], [123457], [12341], [1999], [12342], [123452], [555556], [9997], [92], [90], [91], [123451], [93], [12350], [555552], [12351], [555551], [123458], [9996], [12352], [555550], [555557], [12340], [10002], [555553], [555558], [44], [12349], [555549], [45], [123459], [12339], [305], [49], [300], [555559], [555560], [123460], [95], [1000], [2001], [2002], [2004], [1998], [2003], [53], [54], [2005], [555561], [1997], [55], [48], [555562], [1996], [47], [306], [307]]\n    results = [0, 2, 3, 3, 6, 192, 639, 8026, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 43688, 10, 747, 95, 639, 9487, 10, 639, 747, 10, 747, 747, 747, 747, 9487, 9487, 43688, 9487, 639, 10, 9487, 747, 95, 747, 9487, 43688, 638, 3, 3, 3, 9487, 3, 747, 43688, 747, 43688, 9487, 638, 747, 43688, 43688, 747, 639, 43688, 43688, 0, 747, 43688, 0, 9487, 747, 10, 0, 10, 43688, 43688, 9487, 3, 47, 95, 95, 95, 95, 95, 0, 0, 95, 43688, 95, 0, 0, 43688, 95, 0, 10, 10]\n    for i, (inp, exp) in enumerate(zip(inputs, results)):\n        assertion(candidate(*inp), exp, 0)\n&quot;,
+        &quot;prompt&quot;: &quot;\n\ndef fizz_buzz(n: int):\n    \&quot;\&quot;\&quot;Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.\n    &gt;&gt;&gt; fizz_buzz(50)\n    0\n    &gt;&gt;&gt; fizz_buzz(78)\n    2\n    &gt;&gt;&gt; fizz_buzz(79)\n    3\n    \&quot;\&quot;\&quot;\n&quot;,
+        &quot;entry_point&quot;: &quot;fizz_buzz&quot;
+      }
+    },
+    &quot;source&quot;: null,
+    &quot;metadata&quot;: {
+      &quot;ground_truth_code&quot;: &quot;def fizz_buzz(n: int):\n    cnt = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            cnt += len(list(filter(lambda c: c == &#x27;7&#x27;, str(i))))\n    return cnt&quot;,
+      &quot;canonical_solution&quot;: &quot;\n    cnt = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            cnt += len(list(filter(lambda c: c == \&quot;7\&quot;, str(i))))\n    return cnt\n\n&quot;
+    }
+  },
+  &quot;generation_run&quot;: {
+    &quot;generation_run_id&quot;: &quot;087d15c29975f1038a647265&quot;,
+    &quot;prediction_id&quot;: &quot;5cd3b6ee3ae54b0eeb2422b9&quot;,
+    &quot;attempt_index&quot;: 0,
+    &quot;status&quot;: &quot;success&quot;,
+    &quot;terminal_node_id&quot;: &quot;decoder&quot;,
+    &quot;terminal_output_node_id&quot;: &quot;decoder&quot;,
+    &quot;started_at&quot;: &quot;2026-06-28T01:14:22.131537-04:00&quot;,
+    &quot;completed_at&quot;: &quot;2026-06-28T01:15:02.106982-04:00&quot;,
+    &quot;summary&quot;: {
+      &quot;execution_order&quot;: [
+        &quot;encoder&quot;,
+        &quot;decoder&quot;
+      ],
+      &quot;terminal_node_id&quot;: &quot;decoder&quot;,
+      &quot;terminal_output&quot;: &quot;def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count(&#x27;7&#x27;)\n    return count&quot;,
+      &quot;terminal_error&quot;: null,
+      &quot;metadata&quot;: {
+        &quot;v0_source&quot;: {
+          &quot;v0_layout&quot;: &quot;encdec&quot;,
+          &quot;v0_prediction_id&quot;: &quot;000869a65f496d4acac673c084e3c3ad&quot;,
+          &quot;v0_scoring_status&quot;: &quot;scored&quot;,
+          &quot;v0_generation_status&quot;: &quot;generated&quot;
+        },
+        &quot;extraction_error&quot;: null
+      }
+    },
+    &quot;v0_source&quot;: {
+      &quot;v0_layout&quot;: &quot;encdec&quot;,
+      &quot;v0_prediction_id&quot;: &quot;000869a65f496d4acac673c084e3c3ad&quot;,
+      &quot;v0_scoring_status&quot;: &quot;scored&quot;,
+      &quot;v0_generation_status&quot;: &quot;generated&quot;
+    }
+  },
+  &quot;node_attempts&quot;: [
+    {
+      &quot;node_id&quot;: &quot;decoder&quot;,
+      &quot;node_attempt_id&quot;: &quot;b08f27c6fe483d380ab9bb397c141f4c&quot;,
+      &quot;attempt_index&quot;: 0,
+      &quot;status&quot;: &quot;success&quot;,
+      &quot;provider_config&quot;: {
+        &quot;provider_kind&quot;: &quot;openrouter&quot;,
+        &quot;endpoint_kind&quot;: &quot;chat_completions&quot;,
+        &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+        &quot;config_id&quot;: &quot;decoder&quot;,
+        &quot;throttle_key&quot;: &quot;openrouter:chat_completions:qwen/qwen3-coder-next&quot;,
+        &quot;parameters&quot;: {
+          &quot;temperature&quot;: 0.0
+        }
+      },
+      &quot;output&quot;: {
+        &quot;values&quot;: {
+          &quot;code&quot;: &quot;def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count(&#x27;7&#x27;)\n    return count&quot;
+        },
+        &quot;metadata&quot;: {}
+      },
+      &quot;usage_cost&quot;: {
+        &quot;usage_metadata&quot;: {
+          &quot;cost&quot;: 0.00012078,
+          &quot;is_byok&quot;: false,
+          &quot;cost_details&quot;: {
+            &quot;upstream_inference_cost&quot;: 0.00012078,
+            &quot;upstream_inference_prompt_cost&quot;: 4.248e-05,
+            &quot;upstream_inference_completions_cost&quot;: 7.83e-05
+          },
+          &quot;total_tokens&quot;: 294,
+          &quot;prompt_tokens&quot;: 236,
+          &quot;completion_tokens&quot;: 58,
+          &quot;prompt_tokens_details&quot;: {
+            &quot;audio_tokens&quot;: 0,
+            &quot;video_tokens&quot;: 0,
+            &quot;cached_tokens&quot;: 0,
+            &quot;cache_write_tokens&quot;: 0
+          },
+          &quot;completion_tokens_details&quot;: {
+            &quot;audio_tokens&quot;: 0,
+            &quot;image_tokens&quot;: 0,
+            &quot;reasoning_tokens&quot;: 0,
+            &quot;accepted_prediction_tokens&quot;: null,
+            &quot;rejected_prediction_tokens&quot;: null
+          }
+        },
+        &quot;provider_cost&quot;: 0.00012078
+      },
+      &quot;response_metadata&quot;: {
+        &quot;response_metadata&quot;: {
+          &quot;id&quot;: &quot;gen-1782623661-aQuBPlRnaO09RRcQyb1j&quot;,
+          &quot;model&quot;: &quot;qwen/qwen3-coder-next-2025-02-03&quot;,
+          &quot;usage&quot;: {
+            &quot;cost&quot;: 0.00012078,
+            &quot;is_byok&quot;: false,
+            &quot;cost_details&quot;: {
+              &quot;upstream_inference_cost&quot;: 0.00012078,
+              &quot;upstream_inference_prompt_cost&quot;: 4.248e-05,
+              &quot;upstream_inference_completions_cost&quot;: 7.83e-05
+            },
+            &quot;total_tokens&quot;: 294,
+            &quot;prompt_tokens&quot;: 236,
+            &quot;completion_tokens&quot;: 58,
+            &quot;prompt_tokens_details&quot;: {
+              &quot;audio_tokens&quot;: 0,
+              &quot;video_tokens&quot;: 0,
+              &quot;cached_tokens&quot;: 0,
+              &quot;cache_write_tokens&quot;: 0
+            },
+            &quot;completion_tokens_details&quot;: {
+              &quot;audio_tokens&quot;: 0,
+              &quot;image_tokens&quot;: 0,
+              &quot;reasoning_tokens&quot;: 0,
+              &quot;accepted_prediction_tokens&quot;: null,
+              &quot;rejected_prediction_tokens&quot;: null
+            }
+          },
+          &quot;object&quot;: &quot;chat.completion&quot;,
+          &quot;choices&quot;: [
+            {
+              &quot;index&quot;: 0,
+              &quot;message&quot;: {
+                &quot;role&quot;: &quot;assistant&quot;,
+                &quot;audio&quot;: null,
+                &quot;content&quot;: &quot;```python\ndef count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count(&#x27;7&#x27;)\n    return count\n```&quot;,
+                &quot;refusal&quot;: null,
+                &quot;reasoning&quot;: null,
+                &quot;tool_calls&quot;: null,
+                &quot;annotations&quot;: null,
+                &quot;function_call&quot;: null
+              },
+              &quot;logprobs&quot;: null,
+              &quot;finish_reason&quot;: &quot;stop&quot;,
+              &quot;native_finish_reason&quot;: &quot;stop&quot;
+            }
+          ],
+          &quot;created&quot;: 1782623661,
+          &quot;provider&quot;: &quot;AtlasCloud&quot;,
+          &quot;moderation&quot;: null,
+          &quot;service_tier&quot;: null,
+          &quot;system_fingerprint&quot;: null
+        }
+      },
+      &quot;failure&quot;: null,
+      &quot;started_at&quot;: &quot;2026-06-28T01:14:22.131537-04:00&quot;,
+      &quot;completed_at&quot;: &quot;2026-06-28T01:15:02.106982-04:00&quot;
+    },
+    {
+      &quot;node_id&quot;: &quot;encoder&quot;,
+      &quot;node_attempt_id&quot;: &quot;069726a651ff027d758b0f9e2a46c11e&quot;,
+      &quot;attempt_index&quot;: 0,
+      &quot;status&quot;: &quot;success&quot;,
+      &quot;provider_config&quot;: {
+        &quot;provider_kind&quot;: &quot;openrouter&quot;,
+        &quot;endpoint_kind&quot;: &quot;chat_completions&quot;,
+        &quot;model&quot;: &quot;qwen/qwen3-coder-next&quot;,
+        &quot;config_id&quot;: &quot;encoder&quot;,
+        &quot;throttle_key&quot;: &quot;openrouter:chat_completions:qwen/qwen3-coder-next&quot;,
+        &quot;parameters&quot;: {
+          &quot;temperature&quot;: 0.0
+        }
+      },
+      &quot;output&quot;: {
+        &quot;values&quot;: {
+          &quot;description&quot;: &quot;[[ ## description ## ]]\nCount occurrences of digit &#x27;7&#x27; in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]&quot;
+        },
+        &quot;metadata&quot;: {}
+      },
+      &quot;usage_cost&quot;: {
+        &quot;usage_metadata&quot;: {
+          &quot;cost&quot;: 9.063e-05,
+          &quot;is_byok&quot;: false,
+          &quot;cost_details&quot;: {
+            &quot;upstream_inference_cost&quot;: 9.063e-05,
+            &quot;upstream_inference_prompt_cost&quot;: 4.608e-05,
+            &quot;upstream_inference_completions_cost&quot;: 4.455e-05
+          },
+          &quot;total_tokens&quot;: 289,
+          &quot;prompt_tokens&quot;: 256,
+          &quot;completion_tokens&quot;: 33,
+          &quot;prompt_tokens_details&quot;: {
+            &quot;audio_tokens&quot;: 0,
+            &quot;video_tokens&quot;: 0,
+            &quot;cached_tokens&quot;: 0,
+            &quot;cache_write_tokens&quot;: 0
+          },
+          &quot;completion_tokens_details&quot;: {
+            &quot;audio_tokens&quot;: 0,
+            &quot;image_tokens&quot;: 0,
+            &quot;reasoning_tokens&quot;: 0,
+            &quot;accepted_prediction_tokens&quot;: null,
+            &quot;rejected_prediction_tokens&quot;: null
+          }
+        },
+        &quot;provider_cost&quot;: 9.063e-05
+      },
+      &quot;response_metadata&quot;: {
+        &quot;response_metadata&quot;: {
+          &quot;id&quot;: &quot;gen-1782623659-p39ySJTfkCJzt53fSdB9&quot;,
+          &quot;model&quot;: &quot;qwen/qwen3-coder-next-2025-02-03&quot;,
+          &quot;usage&quot;: {
+            &quot;cost&quot;: 9.063e-05,
+            &quot;is_byok&quot;: false,
+            &quot;cost_details&quot;: {
+              &quot;upstream_inference_cost&quot;: 9.063e-05,
+              &quot;upstream_inference_prompt_cost&quot;: 4.608e-05,
+              &quot;upstream_inference_completions_cost&quot;: 4.455e-05
+            },
+            &quot;total_tokens&quot;: 289,
+            &quot;prompt_tokens&quot;: 256,
+            &quot;completion_tokens&quot;: 33,
+            &quot;prompt_tokens_details&quot;: {
+              &quot;audio_tokens&quot;: 0,
+              &quot;video_tokens&quot;: 0,
+              &quot;cached_tokens&quot;: 0,
+              &quot;cache_write_tokens&quot;: 0
+            },
+            &quot;completion_tokens_details&quot;: {
+              &quot;audio_tokens&quot;: 0,
+              &quot;image_tokens&quot;: 0,
+              &quot;reasoning_tokens&quot;: 0,
+              &quot;accepted_prediction_tokens&quot;: null,
+              &quot;rejected_prediction_tokens&quot;: null
+            }
+          },
+          &quot;object&quot;: &quot;chat.completion&quot;,
+          &quot;choices&quot;: [
+            {
+              &quot;index&quot;: 0,
+              &quot;message&quot;: {
+                &quot;role&quot;: &quot;assistant&quot;,
+                &quot;audio&quot;: null,
+                &quot;content&quot;: &quot;[[ ## description ## ]]\nCount occurrences of digit &#x27;7&#x27; in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]&quot;,
+                &quot;refusal&quot;: null,
+                &quot;reasoning&quot;: null,
+                &quot;tool_calls&quot;: null,
+                &quot;annotations&quot;: null,
+                &quot;function_call&quot;: null
+              },
+              &quot;logprobs&quot;: null,
+              &quot;finish_reason&quot;: &quot;stop&quot;,
+              &quot;native_finish_reason&quot;: &quot;stop&quot;
+            }
+          ],
+          &quot;created&quot;: 1782623659,
+          &quot;provider&quot;: &quot;AtlasCloud&quot;,
+          &quot;moderation&quot;: null,
+          &quot;service_tier&quot;: null,
+          &quot;system_fingerprint&quot;: null
+        }
+      },
+      &quot;failure&quot;: null,
+      &quot;started_at&quot;: &quot;2026-06-28T01:14:22.131537-04:00&quot;,
+      &quot;completed_at&quot;: &quot;2026-06-28T01:15:02.106982-04:00&quot;
+    }
+  ],
+  &quot;score_attempt&quot;: {
+    &quot;score_attempt_id&quot;: &quot;77cd190b20e16d219a5b271c806329c3&quot;,
+    &quot;generation_run_id&quot;: &quot;087d15c29975f1038a647265&quot;,
+    &quot;prediction_id&quot;: &quot;5cd3b6ee3ae54b0eeb2422b9&quot;,
+    &quot;attempt_index&quot;: 0,
+    &quot;scoring_profile_id&quot;: &quot;humaneval&quot;,
+    &quot;scoring_profile_version&quot;: &quot;v1&quot;,
+    &quot;parser_profile_id&quot;: &quot;humaneval-best-effort&quot;,
+    &quot;parser_version&quot;: &quot;v1&quot;,
+    &quot;dataset_name&quot;: &quot;evalplus/humanevalplus&quot;,
+    &quot;dataset_split&quot;: &quot;test&quot;,
+    &quot;status&quot;: &quot;success&quot;,
+    &quot;score&quot;: 0.0,
+    &quot;generated_code_outcome&quot;: &quot;tests_failed&quot;,
+    &quot;extracted_code&quot;: {
+      &quot;raw_generation&quot;: &quot;def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count(&#x27;7&#x27;)\n    return count&quot;,
+      &quot;extracted_code&quot;: &quot;def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count(&#x27;7&#x27;)\n    return count&quot;,
+      &quot;extraction_method&quot;: &quot;bare_python&quot;,
+      &quot;parser_profile_id&quot;: &quot;humaneval-best-effort&quot;,
+      &quot;parser_version&quot;: &quot;v1&quot;,
+      &quot;metadata&quot;: {
+        &quot;compile_ok&quot;: true,
+        &quot;compile_error&quot;: null,
+        &quot;candidate_count&quot;: 1,
+        &quot;extraction_error&quot;: null,
+        &quot;selected_candidate_index&quot;: 0
+      }
+    },
+    &quot;metrics&quot;: {
+      &quot;profile_id&quot;: &quot;humaneval-metrics&quot;,
+      &quot;profile_version&quot;: &quot;v1&quot;,
+      &quot;task_tests&quot;: {
+        &quot;parse_ok&quot;: true,
+        &quot;parse_error&quot;: null,
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;entry_point&quot;: &quot;fizz_buzz&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;case_count&quot;: 152,
+        &quot;support_code_character_count&quot;: 552,
+        &quot;support_code_line_count&quot;: 19,
+        &quot;original_test_character_count&quot;: 2466,
+        &quot;original_test_line_count&quot;: 32,
+        &quot;assertion_name&quot;: &quot;assertion&quot;,
+        &quot;check_name&quot;: &quot;check&quot;,
+        &quot;candidate_arg_name&quot;: &quot;candidate&quot;,
+        &quot;input_repr_character_total&quot;: 792,
+        &quot;expected_output_repr_character_total&quot;: 304,
+        &quot;expected_output_expr_count&quot;: 0,
+        &quot;oracle_case_count&quot;: 0,
+        &quot;input_result_case_count&quot;: 152,
+        &quot;input_expression_case_count&quot;: 0
+      },
+      &quot;text&quot;: {
+        &quot;character_count&quot;: 152,
+        &quot;byte_count&quot;: 152,
+        &quot;line_count&quot;: 6,
+        &quot;nonempty_line_count&quot;: 6,
+        &quot;word_count&quot;: 25,
+        &quot;average_word_length&quot;: 2.88,
+        &quot;punctuation_count&quot;: 24,
+        &quot;symbol_count&quot;: 12
+      },
+      &quot;python_leakage&quot;: {
+        &quot;keyword_count&quot;: 6,
+        &quot;code_marker_count&quot;: 2,
+        &quot;fenced_code_block_count&quot;: 0,
+        &quot;code_like_line_count&quot;: 5,
+        &quot;operator_count&quot;: 12,
+        &quot;punctuation_density&quot;: 0.15789473684210525,
+        &quot;task_name_hit_count&quot;: 0
+      },
+      &quot;ast&quot;: {
+        &quot;parse_ok&quot;: true,
+        &quot;parse_error&quot;: null,
+        &quot;top_level_function_count&quot;: 1,
+        &quot;top_level_function_names&quot;: [
+          &quot;count_sevens&quot;
+        ],
+        &quot;nested_function_count&quot;: 0,
+        &quot;async_function_count&quot;: 0,
+        &quot;lambda_count&quot;: 0,
+        &quot;class_count&quot;: 0,
+        &quot;import_count&quot;: 0,
+        &quot;ast_node_count&quot;: 51,
+        &quot;statement_count&quot;: 6,
+        &quot;branch_count&quot;: 3,
+        &quot;return_count&quot;: 1,
+        &quot;yield_count&quot;: 0,
+        &quot;call_count&quot;: 3,
+        &quot;assignment_count&quot;: 2,
+        &quot;comprehension_count&quot;: 0,
+        &quot;literal_count&quot;: 6,
+        &quot;max_branch_depth&quot;: 3,
+        &quot;function_count&quot;: 1,
+        &quot;total_argument_count&quot;: 1,
+        &quot;positional_only_argument_count&quot;: 0,
+        &quot;keyword_only_argument_count&quot;: 0,
+        &quot;vararg_count&quot;: 0,
+        &quot;kwarg_count&quot;: 0,
+        &quot;decorated_function_count&quot;: 0,
+        &quot;annotated_return_count&quot;: 0,
+        &quot;docstring_function_count&quot;: 0,
+        &quot;total_function_body_statement_count&quot;: 3,
+        &quot;max_function_body_statement_count&quot;: 3,
+        &quot;max_function_line_span&quot;: 6
+      },
+      &quot;compression&quot;: {
+        &quot;bz2&quot;: {
+          &quot;method&quot;: &quot;bz2&quot;,
+          &quot;compressed_bytes&quot;: 134,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.3489583333333333,
+          &quot;percent_reduction_vs_ground_truth&quot;: 65.10416666666667
+        },
+        &quot;raw&quot;: {
+          &quot;method&quot;: &quot;raw&quot;,
+          &quot;compressed_bytes&quot;: 152,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.3958333333333333,
+          &quot;percent_reduction_vs_ground_truth&quot;: 60.41666666666667
+        },
+        &quot;gzip&quot;: {
+          &quot;method&quot;: &quot;gzip&quot;,
+          &quot;compressed_bytes&quot;: 115,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+          &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+        },
+        &quot;lzma&quot;: {
+          &quot;method&quot;: &quot;lzma&quot;,
+          &quot;compressed_bytes&quot;: 164,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.4270833333333333,
+          &quot;percent_reduction_vs_ground_truth&quot;: 57.29166666666667
+        },
+        &quot;zlib&quot;: {
+          &quot;method&quot;: &quot;zlib&quot;,
+          &quot;compressed_bytes&quot;: 103,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.2682291666666667,
+          &quot;percent_reduction_vs_ground_truth&quot;: 73.17708333333333
+        },
+        &quot;zstd&quot;: {
+          &quot;method&quot;: &quot;zstd&quot;,
+          &quot;compressed_bytes&quot;: 115,
+          &quot;ground_truth_bytes&quot;: 384,
+          &quot;representation_bytes&quot;: 152,
+          &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+          &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+        }
+      },
+      &quot;stages&quot;: [
+        {
+          &quot;stage_id&quot;: &quot;terminal&quot;,
+          &quot;source_kind&quot;: &quot;terminal_raw_generation&quot;,
+          &quot;text&quot;: {
+            &quot;character_count&quot;: 152,
+            &quot;byte_count&quot;: 152,
+            &quot;line_count&quot;: 6,
+            &quot;nonempty_line_count&quot;: 6,
+            &quot;word_count&quot;: 25,
+            &quot;average_word_length&quot;: 2.88,
+            &quot;punctuation_count&quot;: 24,
+            &quot;symbol_count&quot;: 12
+          },
+          &quot;python_leakage&quot;: {
+            &quot;keyword_count&quot;: 6,
+            &quot;code_marker_count&quot;: 2,
+            &quot;fenced_code_block_count&quot;: 0,
+            &quot;code_like_line_count&quot;: 5,
+            &quot;operator_count&quot;: 12,
+            &quot;punctuation_density&quot;: 0.15789473684210525,
+            &quot;task_name_hit_count&quot;: 0
+          },
+          &quot;ast&quot;: null,
+          &quot;compression&quot;: {
+            &quot;bz2&quot;: {
+              &quot;method&quot;: &quot;bz2&quot;,
+              &quot;compressed_bytes&quot;: 134,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.3489583333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 65.10416666666667
+            },
+            &quot;raw&quot;: {
+              &quot;method&quot;: &quot;raw&quot;,
+              &quot;compressed_bytes&quot;: 152,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.3958333333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 60.41666666666667
+            },
+            &quot;gzip&quot;: {
+              &quot;method&quot;: &quot;gzip&quot;,
+              &quot;compressed_bytes&quot;: 115,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+            },
+            &quot;lzma&quot;: {
+              &quot;method&quot;: &quot;lzma&quot;,
+              &quot;compressed_bytes&quot;: 164,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.4270833333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 57.29166666666667
+            },
+            &quot;zlib&quot;: {
+              &quot;method&quot;: &quot;zlib&quot;,
+              &quot;compressed_bytes&quot;: 103,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2682291666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 73.17708333333333
+            },
+            &quot;zstd&quot;: {
+              &quot;method&quot;: &quot;zstd&quot;,
+              &quot;compressed_bytes&quot;: 115,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+            }
+          },
+          &quot;custom&quot;: {}
+        },
+        {
+          &quot;stage_id&quot;: &quot;extracted_code&quot;,
+          &quot;source_kind&quot;: &quot;extracted_code&quot;,
+          &quot;text&quot;: {
+            &quot;character_count&quot;: 152,
+            &quot;byte_count&quot;: 152,
+            &quot;line_count&quot;: 6,
+            &quot;nonempty_line_count&quot;: 6,
+            &quot;word_count&quot;: 25,
+            &quot;average_word_length&quot;: 2.88,
+            &quot;punctuation_count&quot;: 24,
+            &quot;symbol_count&quot;: 12
+          },
+          &quot;python_leakage&quot;: {
+            &quot;keyword_count&quot;: 6,
+            &quot;code_marker_count&quot;: 2,
+            &quot;fenced_code_block_count&quot;: 0,
+            &quot;code_like_line_count&quot;: 5,
+            &quot;operator_count&quot;: 12,
+            &quot;punctuation_density&quot;: 0.15789473684210525,
+            &quot;task_name_hit_count&quot;: 0
+          },
+          &quot;ast&quot;: {
+            &quot;parse_ok&quot;: true,
+            &quot;parse_error&quot;: null,
+            &quot;top_level_function_count&quot;: 1,
+            &quot;top_level_function_names&quot;: [
+              &quot;count_sevens&quot;
+            ],
+            &quot;nested_function_count&quot;: 0,
+            &quot;async_function_count&quot;: 0,
+            &quot;lambda_count&quot;: 0,
+            &quot;class_count&quot;: 0,
+            &quot;import_count&quot;: 0,
+            &quot;ast_node_count&quot;: 51,
+            &quot;statement_count&quot;: 6,
+            &quot;branch_count&quot;: 3,
+            &quot;return_count&quot;: 1,
+            &quot;yield_count&quot;: 0,
+            &quot;call_count&quot;: 3,
+            &quot;assignment_count&quot;: 2,
+            &quot;comprehension_count&quot;: 0,
+            &quot;literal_count&quot;: 6,
+            &quot;max_branch_depth&quot;: 3,
+            &quot;function_count&quot;: 1,
+            &quot;total_argument_count&quot;: 1,
+            &quot;positional_only_argument_count&quot;: 0,
+            &quot;keyword_only_argument_count&quot;: 0,
+            &quot;vararg_count&quot;: 0,
+            &quot;kwarg_count&quot;: 0,
+            &quot;decorated_function_count&quot;: 0,
+            &quot;annotated_return_count&quot;: 0,
+            &quot;docstring_function_count&quot;: 0,
+            &quot;total_function_body_statement_count&quot;: 3,
+            &quot;max_function_body_statement_count&quot;: 3,
+            &quot;max_function_line_span&quot;: 6
+          },
+          &quot;compression&quot;: {
+            &quot;bz2&quot;: {
+              &quot;method&quot;: &quot;bz2&quot;,
+              &quot;compressed_bytes&quot;: 134,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.3489583333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 65.10416666666667
+            },
+            &quot;raw&quot;: {
+              &quot;method&quot;: &quot;raw&quot;,
+              &quot;compressed_bytes&quot;: 152,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.3958333333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 60.41666666666667
+            },
+            &quot;gzip&quot;: {
+              &quot;method&quot;: &quot;gzip&quot;,
+              &quot;compressed_bytes&quot;: 115,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+            },
+            &quot;lzma&quot;: {
+              &quot;method&quot;: &quot;lzma&quot;,
+              &quot;compressed_bytes&quot;: 164,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.4270833333333333,
+              &quot;percent_reduction_vs_ground_truth&quot;: 57.29166666666667
+            },
+            &quot;zlib&quot;: {
+              &quot;method&quot;: &quot;zlib&quot;,
+              &quot;compressed_bytes&quot;: 103,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2682291666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 73.17708333333333
+            },
+            &quot;zstd&quot;: {
+              &quot;method&quot;: &quot;zstd&quot;,
+              &quot;compressed_bytes&quot;: 115,
+              &quot;ground_truth_bytes&quot;: 384,
+              &quot;representation_bytes&quot;: 152,
+              &quot;ratio_to_ground_truth&quot;: 0.2994791666666667,
+              &quot;percent_reduction_vs_ground_truth&quot;: 70.05208333333333
+            }
+          },
+          &quot;custom&quot;: {}
+        },
+        {
+          &quot;stage_id&quot;: &quot;node:decoder:code&quot;,
+          &quot;source_kind&quot;: &quot;node_output&quot;,
+          &quot;text&quot;: {
+            &quot;character_count&quot;: 152,
+            &quot;byte_count&quot;: 152,
+            &quot;line_count&quot;: 6,
+            &quot;nonempty_line_count&quot;: 6,
+            &quot;word_count&quot;: 25,
+            &quot;average_word_length&quot;: 2.88,
+            &quot;punctuation_count&quot;: 24,
+            &quot;symbol_count&quot;: 12
+          },
+          &quot;python_leakage&quot;: {
+            &quot;keyword_count&quot;: 6,
+            &quot;code_marker_count&quot;: 2,
+            &quot;fenced_code_block_count&quot;: 0,
+            &quot;code_like_line_count&quot;: 5,
+            &quot;operator_count&quot;: 12,
+            &quot;punctuation_density&quot;: 0.15789473684210525,
+            &quot;task_name_hit_count&quot;: 0
+          },
+          &quot;ast&quot;: {
+            &quot;parse_ok&quot;: true,
+            &quot;parse_error&quot;: null,
+            &quot;top_level_function_count&quot;: 1,
+            &quot;top_level_function_names&quot;: [
+              &quot;count_sevens&quot;
+            ],
+            &quot;nested_function_count&quot;: 0,
+            &quot;async_function_count&quot;: 0,
+            &quot;lambda_count&quot;: 0,
+            &quot;class_count&quot;: 0,
+            &quot;import_count&quot;: 0,
+            &quot;ast_node_count&quot;: 51,
+            &quot;statement_count&quot;: 6,
+            &quot;branch_count&quot;: 3,
+            &quot;return_count&quot;: 1,
+            &quot;yield_count&quot;: 0,
+            &quot;call_count&quot;: 3,
+            &quot;assignment_count&quot;: 2,
+            &quot;comprehension_count&quot;: 0,
+            &quot;literal_count&quot;: 6,
+            &quot;max_branch_depth&quot;: 3,
+            &quot;function_count&quot;: 1,
+            &quot;total_argument_count&quot;: 1,
+            &quot;positional_only_argument_count&quot;: 0,
+            &quot;keyword_only_argument_count&quot;: 0,
+            &quot;vararg_count&quot;: 0,
+            &quot;kwarg_count&quot;: 0,
+            &quot;decorated_function_count&quot;: 0,
+            &quot;annotated_return_count&quot;: 0,
+            &quot;docstring_function_count&quot;: 0,
+            &quot;total_function_body_statement_count&quot;: 3,
+            &quot;max_function_body_statement_count&quot;: 3,
+            &quot;max_function_line_span&quot;: 6
+          },
+          &quot;compression&quot;: {},
+          &quot;custom&quot;: {}
+        },
+        {
+          &quot;stage_id&quot;: &quot;node:encoder:description&quot;,
+          &quot;source_kind&quot;: &quot;node_output&quot;,
+          &quot;text&quot;: {
+            &quot;character_count&quot;: 123,
+            &quot;byte_count&quot;: 123,
+            &quot;line_count&quot;: 4,
+            &quot;nonempty_line_count&quot;: 3,
+            &quot;word_count&quot;: 17,
+            &quot;average_word_length&quot;: 4.647058823529412,
+            &quot;punctuation_count&quot;: 19,
+            &quot;symbol_count&quot;: 0
+          },
+          &quot;python_leakage&quot;: {
+            &quot;keyword_count&quot;: 2,
+            &quot;code_marker_count&quot;: 0,
+            &quot;fenced_code_block_count&quot;: 0,
+            &quot;code_like_line_count&quot;: 0,
+            &quot;operator_count&quot;: 0,
+            &quot;punctuation_density&quot;: 0.15447154471544716,
+            &quot;task_name_hit_count&quot;: 0
+          },
+          &quot;ast&quot;: {
+            &quot;parse_ok&quot;: false,
+            &quot;parse_error&quot;: &quot;SyntaxError: invalid syntax. Perhaps you forgot a comma? (&lt;unknown&gt;, line 2)&quot;,
+            &quot;top_level_function_count&quot;: 0,
+            &quot;top_level_function_names&quot;: [],
+            &quot;nested_function_count&quot;: 0,
+            &quot;async_function_count&quot;: 0,
+            &quot;lambda_count&quot;: 0,
+            &quot;class_count&quot;: 0,
+            &quot;import_count&quot;: 0,
+            &quot;ast_node_count&quot;: 0,
+            &quot;statement_count&quot;: 0,
+            &quot;branch_count&quot;: 0,
+            &quot;return_count&quot;: 0,
+            &quot;yield_count&quot;: 0,
+            &quot;call_count&quot;: 0,
+            &quot;assignment_count&quot;: 0,
+            &quot;comprehension_count&quot;: 0,
+            &quot;literal_count&quot;: 0,
+            &quot;max_branch_depth&quot;: 0,
+            &quot;function_count&quot;: 0,
+            &quot;total_argument_count&quot;: 0,
+            &quot;positional_only_argument_count&quot;: 0,
+            &quot;keyword_only_argument_count&quot;: 0,
+            &quot;vararg_count&quot;: 0,
+            &quot;kwarg_count&quot;: 0,
+            &quot;decorated_function_count&quot;: 0,
+            &quot;annotated_return_count&quot;: 0,
+            &quot;docstring_function_count&quot;: 0,
+            &quot;total_function_body_statement_count&quot;: 0,
+            &quot;max_function_body_statement_count&quot;: 0,
+            &quot;max_function_line_span&quot;: 0
+          },
+          &quot;compression&quot;: {},
+          &quot;custom&quot;: {}
+        }
+      ],
+      &quot;custom&quot;: {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;evaluation&quot;: {
+          &quot;passed&quot;: false,
+          &quot;error_count&quot;: 0,
+          &quot;total_cases&quot;: 152,
+          &quot;failed_count&quot;: 0,
+          &quot;passed_count&quot;: 0,
+          &quot;result_count&quot;: 152,
+          &quot;failure_count&quot;: 152,
+          &quot;status_counts&quot;: {
+            &quot;timeout&quot;: 152
+          },
+          &quot;timeout_count&quot;: 152,
+          &quot;function_names&quot;: [
+            &quot;count_sevens&quot;
+          ]
+        },
+        &quot;entry_point&quot;: &quot;fizz_buzz&quot;,
+        &quot;stage_count&quot;: 4
+      }
+    },
+    &quot;test_summary&quot;: {
+      &quot;total&quot;: 152,
+      &quot;passed&quot;: 0,
+      &quot;failed&quot;: 0,
+      &quot;error&quot;: 152,
+      &quot;truncated&quot;: false
+    },
+    &quot;per_test_results&quot;: [
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_0&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[50]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_1&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[78]&quot;,
+        &quot;expected_output_repr&quot;: &quot;2&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_2&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[79]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_3&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[100]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_4&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[200]&quot;,
+        &quot;expected_output_repr&quot;: &quot;6&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_5&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[4000]&quot;,
+        &quot;expected_output_repr&quot;: &quot;192&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_6&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[10000]&quot;,
+        &quot;expected_output_repr&quot;: &quot;639&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_7&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[100000]&quot;,
+        &quot;expected_output_repr&quot;: &quot;8026&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_8&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_9&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[10]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_10&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[20]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_11&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[30]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_12&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[70]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_13&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[71]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_14&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[72]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_15&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[73]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_16&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[74]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_17&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[75]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_18&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[31]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_19&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[69]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_20&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[9]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_21&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[77]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_22&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[76]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_23&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[8]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_24&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_25&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[21]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_26&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[68]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_27&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[22]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_28&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[29]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_29&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[23]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_30&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[32]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_31&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[3]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_32&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[11]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_33&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[33]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_34&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[19]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_35&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[86]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_36&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[7]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_37&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_38&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[4]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_39&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[28]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_40&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[6]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_41&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[60]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_42&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[85]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_43&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[5]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_44&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[80]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_45&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[61]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_46&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[59]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_47&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[62]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_48&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[63]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_49&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[84]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_50&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[18]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_51&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[27]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_52&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[81]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_53&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[64]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_54&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[26]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_55&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[83]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_56&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[82]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_57&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[13]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_58&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[66]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_59&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[24]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_60&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[34]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_61&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[43]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_62&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[42]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_63&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[14]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_64&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[65]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_65&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[67]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_66&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[94]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_67&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[25]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_68&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[51]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_69&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[17]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_70&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[52]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_71&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[41]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_72&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[40]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_73&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[16]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_74&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[58]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_75&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[15]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_76&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555555]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_77&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[303]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_78&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12345]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_79&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2000]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_80&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[9999]&quot;,
+        &quot;expected_output_repr&quot;: &quot;639&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_81&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123456]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_82&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[304]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_83&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[9998]&quot;,
+        &quot;expected_output_repr&quot;: &quot;639&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_84&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12344]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_85&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[302]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_86&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12346]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_87&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12347]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_88&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12348]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_89&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12343]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_90&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123455]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_91&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123454]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_92&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555554]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_93&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123453]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_94&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[10001]&quot;,
+        &quot;expected_output_repr&quot;: &quot;639&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_95&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[301]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_96&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123457]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_97&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12341]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_98&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1999]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_99&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12342]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_100&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123452]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_101&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555556]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_102&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[9997]&quot;,
+        &quot;expected_output_repr&quot;: &quot;638&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_103&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[92]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_104&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[90]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_105&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[91]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_106&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123451]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_107&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[93]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_108&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12350]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_109&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555552]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_110&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12351]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_111&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555551]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_112&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123458]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_113&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[9996]&quot;,
+        &quot;expected_output_repr&quot;: &quot;638&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_114&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12352]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_115&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555550]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_116&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555557]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_117&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12340]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_118&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[10002]&quot;,
+        &quot;expected_output_repr&quot;: &quot;639&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_119&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555553]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_120&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555558]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_121&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[44]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_122&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12349]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_123&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555549]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_124&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[45]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_125&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123459]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_126&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[12339]&quot;,
+        &quot;expected_output_repr&quot;: &quot;747&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_127&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[305]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_128&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[49]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_129&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[300]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_130&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555559]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_131&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555560]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_132&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[123460]&quot;,
+        &quot;expected_output_repr&quot;: &quot;9487&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_133&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[95]&quot;,
+        &quot;expected_output_repr&quot;: &quot;3&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_134&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1000]&quot;,
+        &quot;expected_output_repr&quot;: &quot;47&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_135&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2001]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_136&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2002]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_137&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2004]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_138&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1998]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_139&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2003]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_140&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[53]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_141&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[54]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_142&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[2005]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_143&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555561]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_144&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1997]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_145&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[55]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_146&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[48]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_147&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[555562]&quot;,
+        &quot;expected_output_repr&quot;: &quot;43688&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_148&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[1996]&quot;,
+        &quot;expected_output_repr&quot;: &quot;95&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_149&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[47]&quot;,
+        &quot;expected_output_repr&quot;: &quot;0&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_150&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[306]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      },
+      {
+        &quot;task_id&quot;: &quot;HumanEval/36&quot;,
+        &quot;test_id&quot;: &quot;case_151&quot;,
+        &quot;function_name&quot;: &quot;count_sevens&quot;,
+        &quot;status&quot;: &quot;timeout&quot;,
+        &quot;message&quot;: &quot;Batch timed out&quot;,
+        &quot;test_type&quot;: &quot;input_result&quot;,
+        &quot;input_repr&quot;: &quot;[307]&quot;,
+        &quot;expected_output_repr&quot;: &quot;10&quot;,
+        &quot;actual_output_repr&quot;: &quot;&quot;
+      }
+    ],
+    &quot;failure&quot;: null,
+    &quot;started_at&quot;: &quot;2026-06-30T18:21:11.633824-04:00&quot;,
+    &quot;completed_at&quot;: &quot;2026-06-30T18:21:16.602293-04:00&quot;
+  },
+  &quot;reconstructed_prompts&quot;: {
+    &quot;encoder&quot;: [
+      {
+        &quot;role&quot;: &quot;user&quot;,
+        &quot;content&quot;: &quot;Describe \n\ndef fizz_buzz(n: int):\n    \&quot;\&quot;\&quot;Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.\n    &gt;&gt;&gt; fizz_buzz(50)\n    0\n    &gt;&gt;&gt; fizz_buzz(78)\n    2\n    &gt;&gt;&gt; fizz_buzz(79)\n    3\n    \&quot;\&quot;\&quot;\n&quot;
+      }
+    ],
+    &quot;decoder&quot;: [
+      {
+        &quot;role&quot;: &quot;user&quot;,
+        &quot;content&quot;: &quot;Write code from [[ ## description ## ]]\nCount occurrences of digit &#x27;7&#x27; in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]&quot;
+      }
+    ]
+  },
+  &quot;reconstruction_errors&quot;: []
+}</pre>
+  </section>
+  <script type="application/json" id="debug-metadata-json">
+{"inspector": {"script": "sample_run_inspector", "generated_at": "2026-06-30T23:00:04.101392+00:00", "sample_index": 0, "sample_count": 10, "prompts_source": "reconstructed_from_graph_snapshot", "output_paths": {"html": "/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.html", "json": "/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_190004_0.json"}}, "experiment": {"experiment_name": "v0_encdec_backfill_smoke_20260630", "fair_order_key": "2d5b8d9cb13ca6053715448815890bac", "fair_order_seed": "legacy-v0-migration"}, "spec": {"prediction_id": "5cd3b6ee3ae54b0eeb2422b9", "task_id": "HumanEval/36", "repetition_seed": 2, "dimensions": {"budget_ratio": 0.25, "decoder_model": "qwen/qwen3-coder-next", "encoder_model": "qwen/qwen3-coder-next", "decoder_reasoning": {}, "encoder_reasoning": {}, "decoder_temperature": 0.0, "encoder_temperature": 0.0}, "dimensions_digest": "8ce43de90903ac07", "graph_layout": "encdec", "graph_digest": "ec4e636b819ecfbf", "provider_axis": {"provider_kind": "openrouter", "endpoint_kind": "chat_completions", "model": "qwen/qwen3-coder-next", "config_id": "decoder", "throttle_key": "openrouter:chat_completions:qwen/qwen3-coder-next", "parameters": {"temperature": 0.0}}, "provider_configs": [{"provider_kind": "openrouter", "endpoint_kind": "chat_completions", "model": "qwen/qwen3-coder-next", "config_id": "encoder", "throttle_key": "openrouter:chat_completions:qwen/qwen3-coder-next", "parameters": {"temperature": 0.0}}, {"provider_kind": "openrouter", "endpoint_kind": "chat_completions", "model": "qwen/qwen3-coder-next", "config_id": "decoder", "throttle_key": "openrouter:chat_completions:qwen/qwen3-coder-next", "parameters": {"temperature": 0.0}}], "compression_target": 0.25, "encoder_model": "qwen/qwen3-coder-next", "decoder_model": "qwen/qwen3-coder-next", "model": "qwen/qwen3-coder-next"}, "task_snapshot": {"task_id": "HumanEval/36", "inputs": {"values": {"test": "\n\nimport numpy as np\n\ndef is_floats(x) -> bool:\n    # check if it is float; List[float]; Tuple[float]\n    if isinstance(x, float):\n        return True\n    if isinstance(x, (list, tuple)):\n        return all(isinstance(i, float) for i in x)\n    if isinstance(x, np.ndarray):\n        return x.dtype == np.float64 or x.dtype == np.float32\n    return False\n\n\ndef assertion(out, exp, atol):\n    exact_match = out == exp\n\n    if atol == 0 and is_floats(exp):\n        atol = 1e-6\n    if not exact_match and atol != 0:\n        assert np.allclose(out, exp, rtol=1e-07, atol=atol)\n    else:\n        assert exact_match\n\n\ndef check(candidate):\n    inputs = [[50], [78], [79], [100], [200], [4000], [10000], [100000], [1], [10], [20], [30], [70], [71], [72], [73], [74], [75], [31], [69], [9], [77], [76], [8], [2], [21], [68], [22], [29], [23], [32], [3], [11], [33], [19], [86], [7], [12], [4], [28], [6], [60], [85], [5], [80], [61], [59], [62], [63], [84], [18], [27], [81], [64], [26], [83], [82], [13], [66], [24], [34], [43], [42], [14], [65], [67], [94], [25], [51], [17], [52], [41], [40], [16], [58], [15], [555555], [303], [12345], [2000], [9999], [123456], [304], [9998], [12344], [302], [12346], [12347], [12348], [12343], [123455], [123454], [555554], [123453], [10001], [301], [123457], [12341], [1999], [12342], [123452], [555556], [9997], [92], [90], [91], [123451], [93], [12350], [555552], [12351], [555551], [123458], [9996], [12352], [555550], [555557], [12340], [10002], [555553], [555558], [44], [12349], [555549], [45], [123459], [12339], [305], [49], [300], [555559], [555560], [123460], [95], [1000], [2001], [2002], [2004], [1998], [2003], [53], [54], [2005], [555561], [1997], [55], [48], [555562], [1996], [47], [306], [307]]\n    results = [0, 2, 3, 3, 6, 192, 639, 8026, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 3, 0, 3, 0, 0, 0, 0, 3, 0, 0, 3, 0, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 43688, 10, 747, 95, 639, 9487, 10, 639, 747, 10, 747, 747, 747, 747, 9487, 9487, 43688, 9487, 639, 10, 9487, 747, 95, 747, 9487, 43688, 638, 3, 3, 3, 9487, 3, 747, 43688, 747, 43688, 9487, 638, 747, 43688, 43688, 747, 639, 43688, 43688, 0, 747, 43688, 0, 9487, 747, 10, 0, 10, 43688, 43688, 9487, 3, 47, 95, 95, 95, 95, 95, 0, 0, 95, 43688, 95, 0, 0, 43688, 95, 0, 10, 10]\n    for i, (inp, exp) in enumerate(zip(inputs, results)):\n        assertion(candidate(*inp), exp, 0)\n", "prompt": "\n\ndef fizz_buzz(n: int):\n    \"\"\"Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.\n    >>> fizz_buzz(50)\n    0\n    >>> fizz_buzz(78)\n    2\n    >>> fizz_buzz(79)\n    3\n    \"\"\"\n", "entry_point": "fizz_buzz"}}, "source": null, "metadata": {"ground_truth_code": "def fizz_buzz(n: int):\n    cnt = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            cnt += len(list(filter(lambda c: c == '7', str(i))))\n    return cnt", "canonical_solution": "\n    cnt = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            cnt += len(list(filter(lambda c: c == \"7\", str(i))))\n    return cnt\n\n"}}, "generation_run": {"generation_run_id": "087d15c29975f1038a647265", "prediction_id": "5cd3b6ee3ae54b0eeb2422b9", "attempt_index": 0, "status": "success", "terminal_node_id": "decoder", "terminal_output_node_id": "decoder", "started_at": "2026-06-28T01:14:22.131537-04:00", "completed_at": "2026-06-28T01:15:02.106982-04:00", "summary": {"execution_order": ["encoder", "decoder"], "terminal_node_id": "decoder", "terminal_output": "def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count('7')\n    return count", "terminal_error": null, "metadata": {"v0_source": {"v0_layout": "encdec", "v0_prediction_id": "000869a65f496d4acac673c084e3c3ad", "v0_scoring_status": "scored", "v0_generation_status": "generated"}, "extraction_error": null}}, "v0_source": {"v0_layout": "encdec", "v0_prediction_id": "000869a65f496d4acac673c084e3c3ad", "v0_scoring_status": "scored", "v0_generation_status": "generated"}}, "node_attempts": [{"node_id": "decoder", "node_attempt_id": "b08f27c6fe483d380ab9bb397c141f4c", "attempt_index": 0, "status": "success", "provider_config": {"provider_kind": "openrouter", "endpoint_kind": "chat_completions", "model": "qwen/qwen3-coder-next", "config_id": "decoder", "throttle_key": "openrouter:chat_completions:qwen/qwen3-coder-next", "parameters": {"temperature": 0.0}}, "output": {"values": {"code": "def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count('7')\n    return count"}, "metadata": {}}, "usage_cost": {"usage_metadata": {"cost": 0.00012078, "is_byok": false, "cost_details": {"upstream_inference_cost": 0.00012078, "upstream_inference_prompt_cost": 4.248e-05, "upstream_inference_completions_cost": 7.83e-05}, "total_tokens": 294, "prompt_tokens": 236, "completion_tokens": 58, "prompt_tokens_details": {"audio_tokens": 0, "video_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, "completion_tokens_details": {"audio_tokens": 0, "image_tokens": 0, "reasoning_tokens": 0, "accepted_prediction_tokens": null, "rejected_prediction_tokens": null}}, "provider_cost": 0.00012078}, "response_metadata": {"response_metadata": {"id": "gen-1782623661-aQuBPlRnaO09RRcQyb1j", "model": "qwen/qwen3-coder-next-2025-02-03", "usage": {"cost": 0.00012078, "is_byok": false, "cost_details": {"upstream_inference_cost": 0.00012078, "upstream_inference_prompt_cost": 4.248e-05, "upstream_inference_completions_cost": 7.83e-05}, "total_tokens": 294, "prompt_tokens": 236, "completion_tokens": 58, "prompt_tokens_details": {"audio_tokens": 0, "video_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, "completion_tokens_details": {"audio_tokens": 0, "image_tokens": 0, "reasoning_tokens": 0, "accepted_prediction_tokens": null, "rejected_prediction_tokens": null}}, "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "audio": null, "content": "```python\ndef count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count('7')\n    return count\n```", "refusal": null, "reasoning": null, "tool_calls": null, "annotations": null, "function_call": null}, "logprobs": null, "finish_reason": "stop", "native_finish_reason": "stop"}], "created": 1782623661, "provider": "AtlasCloud", "moderation": null, "service_tier": null, "system_fingerprint": null}}, "failure": null, "started_at": "2026-06-28T01:14:22.131537-04:00", "completed_at": "2026-06-28T01:15:02.106982-04:00"}, {"node_id": "encoder", "node_attempt_id": "069726a651ff027d758b0f9e2a46c11e", "attempt_index": 0, "status": "success", "provider_config": {"provider_kind": "openrouter", "endpoint_kind": "chat_completions", "model": "qwen/qwen3-coder-next", "config_id": "encoder", "throttle_key": "openrouter:chat_completions:qwen/qwen3-coder-next", "parameters": {"temperature": 0.0}}, "output": {"values": {"description": "[[ ## description ## ]]\nCount occurrences of digit '7' in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]"}, "metadata": {}}, "usage_cost": {"usage_metadata": {"cost": 9.063e-05, "is_byok": false, "cost_details": {"upstream_inference_cost": 9.063e-05, "upstream_inference_prompt_cost": 4.608e-05, "upstream_inference_completions_cost": 4.455e-05}, "total_tokens": 289, "prompt_tokens": 256, "completion_tokens": 33, "prompt_tokens_details": {"audio_tokens": 0, "video_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, "completion_tokens_details": {"audio_tokens": 0, "image_tokens": 0, "reasoning_tokens": 0, "accepted_prediction_tokens": null, "rejected_prediction_tokens": null}}, "provider_cost": 9.063e-05}, "response_metadata": {"response_metadata": {"id": "gen-1782623659-p39ySJTfkCJzt53fSdB9", "model": "qwen/qwen3-coder-next-2025-02-03", "usage": {"cost": 9.063e-05, "is_byok": false, "cost_details": {"upstream_inference_cost": 9.063e-05, "upstream_inference_prompt_cost": 4.608e-05, "upstream_inference_completions_cost": 4.455e-05}, "total_tokens": 289, "prompt_tokens": 256, "completion_tokens": 33, "prompt_tokens_details": {"audio_tokens": 0, "video_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0}, "completion_tokens_details": {"audio_tokens": 0, "image_tokens": 0, "reasoning_tokens": 0, "accepted_prediction_tokens": null, "rejected_prediction_tokens": null}}, "object": "chat.completion", "choices": [{"index": 0, "message": {"role": "assistant", "audio": null, "content": "[[ ## description ## ]]\nCount occurrences of digit '7' in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]", "refusal": null, "reasoning": null, "tool_calls": null, "annotations": null, "function_call": null}, "logprobs": null, "finish_reason": "stop", "native_finish_reason": "stop"}], "created": 1782623659, "provider": "AtlasCloud", "moderation": null, "service_tier": null, "system_fingerprint": null}}, "failure": null, "started_at": "2026-06-28T01:14:22.131537-04:00", "completed_at": "2026-06-28T01:15:02.106982-04:00"}], "score_attempt": {"score_attempt_id": "77cd190b20e16d219a5b271c806329c3", "generation_run_id": "087d15c29975f1038a647265", "prediction_id": "5cd3b6ee3ae54b0eeb2422b9", "attempt_index": 0, "scoring_profile_id": "humaneval", "scoring_profile_version": "v1", "parser_profile_id": "humaneval-best-effort", "parser_version": "v1", "dataset_name": "evalplus/humanevalplus", "dataset_split": "test", "status": "success", "score": 0.0, "generated_code_outcome": "tests_failed", "extracted_code": {"raw_generation": "def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count('7')\n    return count", "extracted_code": "def count_sevens(n):\n    count = 0\n    for i in range(n):\n        if i % 11 == 0 or i % 13 == 0:\n            count += str(i).count('7')\n    return count", "extraction_method": "bare_python", "parser_profile_id": "humaneval-best-effort", "parser_version": "v1", "metadata": {"compile_ok": true, "compile_error": null, "candidate_count": 1, "extraction_error": null, "selected_candidate_index": 0}}, "metrics": {"profile_id": "humaneval-metrics", "profile_version": "v1", "task_tests": {"parse_ok": true, "parse_error": null, "task_id": "HumanEval/36", "entry_point": "fizz_buzz", "test_type": "input_result", "case_count": 152, "support_code_character_count": 552, "support_code_line_count": 19, "original_test_character_count": 2466, "original_test_line_count": 32, "assertion_name": "assertion", "check_name": "check", "candidate_arg_name": "candidate", "input_repr_character_total": 792, "expected_output_repr_character_total": 304, "expected_output_expr_count": 0, "oracle_case_count": 0, "input_result_case_count": 152, "input_expression_case_count": 0}, "text": {"character_count": 152, "byte_count": 152, "line_count": 6, "nonempty_line_count": 6, "word_count": 25, "average_word_length": 2.88, "punctuation_count": 24, "symbol_count": 12}, "python_leakage": {"keyword_count": 6, "code_marker_count": 2, "fenced_code_block_count": 0, "code_like_line_count": 5, "operator_count": 12, "punctuation_density": 0.15789473684210525, "task_name_hit_count": 0}, "ast": {"parse_ok": true, "parse_error": null, "top_level_function_count": 1, "top_level_function_names": ["count_sevens"], "nested_function_count": 0, "async_function_count": 0, "lambda_count": 0, "class_count": 0, "import_count": 0, "ast_node_count": 51, "statement_count": 6, "branch_count": 3, "return_count": 1, "yield_count": 0, "call_count": 3, "assignment_count": 2, "comprehension_count": 0, "literal_count": 6, "max_branch_depth": 3, "function_count": 1, "total_argument_count": 1, "positional_only_argument_count": 0, "keyword_only_argument_count": 0, "vararg_count": 0, "kwarg_count": 0, "decorated_function_count": 0, "annotated_return_count": 0, "docstring_function_count": 0, "total_function_body_statement_count": 3, "max_function_body_statement_count": 3, "max_function_line_span": 6}, "compression": {"bz2": {"method": "bz2", "compressed_bytes": 134, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3489583333333333, "percent_reduction_vs_ground_truth": 65.10416666666667}, "raw": {"method": "raw", "compressed_bytes": 152, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3958333333333333, "percent_reduction_vs_ground_truth": 60.41666666666667}, "gzip": {"method": "gzip", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}, "lzma": {"method": "lzma", "compressed_bytes": 164, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.4270833333333333, "percent_reduction_vs_ground_truth": 57.29166666666667}, "zlib": {"method": "zlib", "compressed_bytes": 103, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2682291666666667, "percent_reduction_vs_ground_truth": 73.17708333333333}, "zstd": {"method": "zstd", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}}, "stages": [{"stage_id": "terminal", "source_kind": "terminal_raw_generation", "text": {"character_count": 152, "byte_count": 152, "line_count": 6, "nonempty_line_count": 6, "word_count": 25, "average_word_length": 2.88, "punctuation_count": 24, "symbol_count": 12}, "python_leakage": {"keyword_count": 6, "code_marker_count": 2, "fenced_code_block_count": 0, "code_like_line_count": 5, "operator_count": 12, "punctuation_density": 0.15789473684210525, "task_name_hit_count": 0}, "ast": null, "compression": {"bz2": {"method": "bz2", "compressed_bytes": 134, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3489583333333333, "percent_reduction_vs_ground_truth": 65.10416666666667}, "raw": {"method": "raw", "compressed_bytes": 152, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3958333333333333, "percent_reduction_vs_ground_truth": 60.41666666666667}, "gzip": {"method": "gzip", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}, "lzma": {"method": "lzma", "compressed_bytes": 164, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.4270833333333333, "percent_reduction_vs_ground_truth": 57.29166666666667}, "zlib": {"method": "zlib", "compressed_bytes": 103, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2682291666666667, "percent_reduction_vs_ground_truth": 73.17708333333333}, "zstd": {"method": "zstd", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}}, "custom": {}}, {"stage_id": "extracted_code", "source_kind": "extracted_code", "text": {"character_count": 152, "byte_count": 152, "line_count": 6, "nonempty_line_count": 6, "word_count": 25, "average_word_length": 2.88, "punctuation_count": 24, "symbol_count": 12}, "python_leakage": {"keyword_count": 6, "code_marker_count": 2, "fenced_code_block_count": 0, "code_like_line_count": 5, "operator_count": 12, "punctuation_density": 0.15789473684210525, "task_name_hit_count": 0}, "ast": {"parse_ok": true, "parse_error": null, "top_level_function_count": 1, "top_level_function_names": ["count_sevens"], "nested_function_count": 0, "async_function_count": 0, "lambda_count": 0, "class_count": 0, "import_count": 0, "ast_node_count": 51, "statement_count": 6, "branch_count": 3, "return_count": 1, "yield_count": 0, "call_count": 3, "assignment_count": 2, "comprehension_count": 0, "literal_count": 6, "max_branch_depth": 3, "function_count": 1, "total_argument_count": 1, "positional_only_argument_count": 0, "keyword_only_argument_count": 0, "vararg_count": 0, "kwarg_count": 0, "decorated_function_count": 0, "annotated_return_count": 0, "docstring_function_count": 0, "total_function_body_statement_count": 3, "max_function_body_statement_count": 3, "max_function_line_span": 6}, "compression": {"bz2": {"method": "bz2", "compressed_bytes": 134, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3489583333333333, "percent_reduction_vs_ground_truth": 65.10416666666667}, "raw": {"method": "raw", "compressed_bytes": 152, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.3958333333333333, "percent_reduction_vs_ground_truth": 60.41666666666667}, "gzip": {"method": "gzip", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}, "lzma": {"method": "lzma", "compressed_bytes": 164, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.4270833333333333, "percent_reduction_vs_ground_truth": 57.29166666666667}, "zlib": {"method": "zlib", "compressed_bytes": 103, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2682291666666667, "percent_reduction_vs_ground_truth": 73.17708333333333}, "zstd": {"method": "zstd", "compressed_bytes": 115, "ground_truth_bytes": 384, "representation_bytes": 152, "ratio_to_ground_truth": 0.2994791666666667, "percent_reduction_vs_ground_truth": 70.05208333333333}}, "custom": {}}, {"stage_id": "node:decoder:code", "source_kind": "node_output", "text": {"character_count": 152, "byte_count": 152, "line_count": 6, "nonempty_line_count": 6, "word_count": 25, "average_word_length": 2.88, "punctuation_count": 24, "symbol_count": 12}, "python_leakage": {"keyword_count": 6, "code_marker_count": 2, "fenced_code_block_count": 0, "code_like_line_count": 5, "operator_count": 12, "punctuation_density": 0.15789473684210525, "task_name_hit_count": 0}, "ast": {"parse_ok": true, "parse_error": null, "top_level_function_count": 1, "top_level_function_names": ["count_sevens"], "nested_function_count": 0, "async_function_count": 0, "lambda_count": 0, "class_count": 0, "import_count": 0, "ast_node_count": 51, "statement_count": 6, "branch_count": 3, "return_count": 1, "yield_count": 0, "call_count": 3, "assignment_count": 2, "comprehension_count": 0, "literal_count": 6, "max_branch_depth": 3, "function_count": 1, "total_argument_count": 1, "positional_only_argument_count": 0, "keyword_only_argument_count": 0, "vararg_count": 0, "kwarg_count": 0, "decorated_function_count": 0, "annotated_return_count": 0, "docstring_function_count": 0, "total_function_body_statement_count": 3, "max_function_body_statement_count": 3, "max_function_line_span": 6}, "compression": {}, "custom": {}}, {"stage_id": "node:encoder:description", "source_kind": "node_output", "text": {"character_count": 123, "byte_count": 123, "line_count": 4, "nonempty_line_count": 3, "word_count": 17, "average_word_length": 4.647058823529412, "punctuation_count": 19, "symbol_count": 0}, "python_leakage": {"keyword_count": 2, "code_marker_count": 0, "fenced_code_block_count": 0, "code_like_line_count": 0, "operator_count": 0, "punctuation_density": 0.15447154471544716, "task_name_hit_count": 0}, "ast": {"parse_ok": false, "parse_error": "SyntaxError: invalid syntax. Perhaps you forgot a comma? (<unknown>, line 2)", "top_level_function_count": 0, "top_level_function_names": [], "nested_function_count": 0, "async_function_count": 0, "lambda_count": 0, "class_count": 0, "import_count": 0, "ast_node_count": 0, "statement_count": 0, "branch_count": 0, "return_count": 0, "yield_count": 0, "call_count": 0, "assignment_count": 0, "comprehension_count": 0, "literal_count": 0, "max_branch_depth": 0, "function_count": 0, "total_argument_count": 0, "positional_only_argument_count": 0, "keyword_only_argument_count": 0, "vararg_count": 0, "kwarg_count": 0, "decorated_function_count": 0, "annotated_return_count": 0, "docstring_function_count": 0, "total_function_body_statement_count": 0, "max_function_body_statement_count": 0, "max_function_line_span": 0}, "compression": {}, "custom": {}}], "custom": {"task_id": "HumanEval/36", "evaluation": {"passed": false, "error_count": 0, "total_cases": 152, "failed_count": 0, "passed_count": 0, "result_count": 152, "failure_count": 152, "status_counts": {"timeout": 152}, "timeout_count": 152, "function_names": ["count_sevens"]}, "entry_point": "fizz_buzz", "stage_count": 4}}, "test_summary": {"total": 152, "passed": 0, "failed": 0, "error": 152, "truncated": false}, "per_test_results": [{"task_id": "HumanEval/36", "test_id": "case_0", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[50]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_1", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[78]", "expected_output_repr": "2", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_2", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[79]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_3", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[100]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_4", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[200]", "expected_output_repr": "6", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_5", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[4000]", "expected_output_repr": "192", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_6", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[10000]", "expected_output_repr": "639", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_7", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[100000]", "expected_output_repr": "8026", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_8", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_9", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[10]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_10", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[20]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_11", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[30]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_12", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[70]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_13", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[71]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_14", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[72]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_15", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[73]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_16", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[74]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_17", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[75]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_18", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[31]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_19", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[69]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_20", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[9]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_21", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[77]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_22", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[76]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_23", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[8]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_24", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_25", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[21]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_26", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[68]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_27", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[22]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_28", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[29]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_29", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[23]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_30", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[32]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_31", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[3]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_32", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[11]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_33", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[33]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_34", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[19]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_35", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[86]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_36", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[7]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_37", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_38", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[4]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_39", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[28]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_40", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[6]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_41", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[60]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_42", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[85]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_43", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[5]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_44", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[80]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_45", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[61]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_46", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[59]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_47", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[62]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_48", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[63]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_49", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[84]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_50", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[18]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_51", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[27]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_52", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[81]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_53", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[64]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_54", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[26]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_55", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[83]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_56", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[82]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_57", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[13]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_58", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[66]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_59", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[24]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_60", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[34]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_61", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[43]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_62", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[42]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_63", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[14]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_64", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[65]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_65", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[67]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_66", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[94]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_67", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[25]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_68", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[51]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_69", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[17]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_70", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[52]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_71", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[41]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_72", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[40]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_73", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[16]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_74", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[58]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_75", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[15]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_76", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555555]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_77", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[303]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_78", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12345]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_79", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2000]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_80", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[9999]", "expected_output_repr": "639", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_81", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123456]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_82", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[304]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_83", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[9998]", "expected_output_repr": "639", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_84", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12344]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_85", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[302]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_86", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12346]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_87", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12347]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_88", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12348]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_89", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12343]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_90", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123455]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_91", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123454]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_92", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555554]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_93", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123453]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_94", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[10001]", "expected_output_repr": "639", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_95", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[301]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_96", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123457]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_97", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12341]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_98", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1999]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_99", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12342]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_100", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123452]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_101", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555556]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_102", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[9997]", "expected_output_repr": "638", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_103", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[92]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_104", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[90]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_105", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[91]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_106", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123451]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_107", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[93]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_108", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12350]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_109", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555552]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_110", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12351]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_111", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555551]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_112", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123458]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_113", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[9996]", "expected_output_repr": "638", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_114", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12352]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_115", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555550]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_116", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555557]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_117", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12340]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_118", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[10002]", "expected_output_repr": "639", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_119", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555553]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_120", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555558]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_121", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[44]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_122", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12349]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_123", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555549]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_124", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[45]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_125", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123459]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_126", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[12339]", "expected_output_repr": "747", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_127", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[305]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_128", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[49]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_129", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[300]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_130", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555559]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_131", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555560]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_132", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[123460]", "expected_output_repr": "9487", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_133", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[95]", "expected_output_repr": "3", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_134", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1000]", "expected_output_repr": "47", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_135", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2001]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_136", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2002]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_137", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2004]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_138", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1998]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_139", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2003]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_140", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[53]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_141", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[54]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_142", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[2005]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_143", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555561]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_144", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1997]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_145", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[55]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_146", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[48]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_147", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[555562]", "expected_output_repr": "43688", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_148", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[1996]", "expected_output_repr": "95", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_149", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[47]", "expected_output_repr": "0", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_150", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[306]", "expected_output_repr": "10", "actual_output_repr": ""}, {"task_id": "HumanEval/36", "test_id": "case_151", "function_name": "count_sevens", "status": "timeout", "message": "Batch timed out", "test_type": "input_result", "input_repr": "[307]", "expected_output_repr": "10", "actual_output_repr": ""}], "failure": null, "started_at": "2026-06-30T18:21:11.633824-04:00", "completed_at": "2026-06-30T18:21:16.602293-04:00"}, "reconstructed_prompts": {"encoder": [{"role": "user", "content": "Describe \n\ndef fizz_buzz(n: int):\n    \"\"\"Return the number of times the digit 7 appears in integers less than n which are divisible by 11 or 13.\n    >>> fizz_buzz(50)\n    0\n    >>> fizz_buzz(78)\n    2\n    >>> fizz_buzz(79)\n    3\n    \"\"\"\n"}], "decoder": [{"role": "user", "content": "Write code from [[ ## description ## ]]\nCount occurrences of digit '7' in numbers less than n divisible by 11 or 13.\n\n[[ ## completed ## ]]"}]}, "reconstruction_errors": []}
+  </script>
+</body>
+</html>

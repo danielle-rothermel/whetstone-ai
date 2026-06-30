@@ -171,6 +171,21 @@ Example Q1 outputs:
 
 Analysis scripts run end-to-end against migrated v1 enc-dec data. Ready for use after full enc-dec backfill/rescore populates more rows.
 
+### Sample run inspector (added)
+
+All 10 smoke samples inspected (`--sample-index 0..9`); HTML reports tracked in
+`analysis/samples/v0_encdec_backfill_smoke_20260630/` (JSON bundles gitignored).
+
+```bash
+uv run python scripts/analysis/sample_run_inspector.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630 \
+  --sample-index 0
+```
+
+Q1–Q4 re-run on 2026-06-30 (`20260630_185954`–`20260630_185959` timestamps).
+
+- Unit tests: `tests/test_analysis_inspect.py` (5 passed)
+
 ---
 
 ## 2026-06-30 — Enc-dec v0 backfill smoke

@@ -66,3 +66,39 @@ class FigureRun:
         extension = suffix.lstrip(".")
         filename = f"{self.timestamp}_{stem}.{extension}"
         return root / filename
+
+
+@dataclass(frozen=True)
+class SampleInspectionRun:
+    experiment_name: str
+    sample_index: int
+    timestamp: str
+
+    @classmethod
+    def start(
+        cls,
+        experiment_name: str,
+        sample_index: int,
+    ) -> SampleInspectionRun:
+        return cls(
+            experiment_name=experiment_name,
+            sample_index=sample_index,
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+        )
+
+    @property
+    def directory(self) -> Path:
+        return repo_root() / "analysis" / "samples" / self.experiment_name
+
+    @property
+    def stem(self) -> str:
+        return f"{self.timestamp}_{self.sample_index}"
+
+    def html_path(self) -> Path:
+        return self.directory / f"{self.stem}.html"
+
+    def json_path(self) -> Path:
+        return self.directory / f"{self.stem}.json"
+
+    def ensure_directory(self) -> None:
+        self.directory.mkdir(parents=True, exist_ok=True)

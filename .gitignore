@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 logs/
 artifacts/
+analysis/samples/**/*.json
 .env
 .coverage
 .DS_Store
