@@ -1,17 +1,23 @@
 # dr-dspy
 
-Durable HumanEval evaluation workers built on DBOS: submit predictions, generate
-code with LLMs, score against HumanEval tests, and persist every inference
-output. Experiment backends live under `src/dr_dspy/`.
+Graph-based HumanEval evaluation platform workbench. The current migration path
+is toward graph-shaped generation specs, explicit LM/prompt boundaries, and
+append-only terminal outcomes. The old direct and enc-dec DBOS workers remain in
+the tree as legacy v0 data-generation surfaces until migration validation is
+complete.
 
 ## Package layout
 
 - `humaneval/` — task parsing, code extraction, scoring, compression metrics
-- `lm/` — DSPy signatures, OpenRouter LM adapter, predictor runner
-- `harness/` — DBOS workflows, batch operations, repair, worker monitoring
-- `experiments/` — HumanEval direct and enc-dec DBOS backends
+- `lm/boundary.py` — forward prompt/provider request and response boundary
+- `lm/runner.py`, `lm/signatures.py`, `lm/openrouter.py` — legacy DSPy compatibility for v0 workflows
+- `lm/utils.py` — shared JSON/text helpers used by the forward boundary
+- `lm/logging.py` — legacy-adjacent DSPy LM telemetry mixins (recordability at log time)
+- `graph/` — pure graph execution and graph-spec hashing
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
+- `harness/` — legacy v0 DBOS workflows, batch operations, repair, worker monitoring
+- `experiments/` — legacy v0 HumanEval direct and enc-dec DBOS backends
 
 ## Design notes
 
@@ -19,6 +25,12 @@ output. Experiment backends live under `src/dr_dspy/`.
   captures the planned migration toward graph-shaped generation specs,
   append-only outcomes, explicit prompt/LM boundaries, rescoring, metrics, and
   Unitbench-facing projections.
+
+The legacy v0 direct and enc-dec workflows write mutable prediction rows that
+mix requested specs, workflow status, generation artifacts, scores, and repair
+state. Those rows remain source data for migration/backfill, but new
+implementation work should not build domain contracts, graph workflows,
+rescoring, or reporting on top of v0 repair/status/reporting flows.
 
 ## Failure handling (`eval_failures`)
 
@@ -41,23 +53,25 @@ All storable JSON/JSONB values pass through `ensure_recordable` or
 `recordable_jsonb`. Unencodable LM telemetry or persistence payloads raise
 `RecordingFailureError` (permanent, no step retry) instead of being silently
 dropped or stored as empty objects. Call sites include LM logging, predictor
-metadata, experiment DB writes, and harness batch operations.
+metadata, legacy v0 experiment DB writes, and legacy v0 harness batch
+operations.
 
 ### Generation boundary
 
 Typed generation failures (`EmptyGenerationError`, `PredictionParseError`) are
-raised from `eval_failures.generation.require_generation_text` and
-`lm.runner.run_predictor`. Humaneval job builders call
+raised from `eval_failures.generation.require_generation_text` on the forward
+path and from legacy `lm.runner.run_predictor` for v0 DSPy experiment workflows.
+Humaneval job builders call
 `validate_encdec_generation` / `validate_direct_generation` before constructing
 `GenerationResult`, so empty or unparseable LM output becomes
 `generation_error` rather than a false `generated` row.
 
 ### Worker workflow pattern
 
-Experiment DBOS workflows catch step exceptions, call `summarize_exception`,
-and record errors via `failure_summary_payload`. Retryable failures
-(`transient`, `rate_limited`) return recoverable status strings; permanent
-failures do not step-retry.
+Legacy v0 experiment DBOS workflows catch step exceptions, call
+`summarize_exception`, and record errors via `failure_summary_payload`.
+Retryable failures (`transient`, `rate_limited`) return recoverable status
+strings; permanent failures do not step-retry.
 
 Scoring test failures are domain semantics: a wrong answer records `score=0`
 with `scoring_status='scored'`. That is not a worker failure.

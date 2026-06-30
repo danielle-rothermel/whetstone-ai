@@ -1,3 +1,5 @@
+"""Legacy v0 batch-operation helpers for mutable prediction-table workflows."""
+
 from __future__ import annotations
 
 import hashlib

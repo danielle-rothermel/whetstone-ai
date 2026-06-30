@@ -1,3 +1,5 @@
+"""Legacy v0 worker resource helpers for DBOS experiment workers."""
+
 from __future__ import annotations
 
 import os

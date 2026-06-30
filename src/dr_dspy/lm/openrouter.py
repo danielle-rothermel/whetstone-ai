@@ -1,4 +1,8 @@
-"""OpenRouter-backed DSPy LM wrappers."""
+"""Legacy OpenRouter-backed DSPy LM wrappers.
+
+The forward provider boundary lives in ``dr_dspy.lm.boundary``. Keep this
+module for v0 DSPy compatibility, not new graph-platform execution paths.
+"""
 
 from __future__ import annotations
 

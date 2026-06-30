@@ -1,4 +1,4 @@
-"""First-class sweep-dimension spec for the HumanEval eval harness.
+"""Legacy v0 sweep-dimension spec for the HumanEval eval harness.
 
 A `Dimension` is one axis of an experiment sweep (model, temperature,
 reasoning, budget ratio, ...). The spec is the single source of truth that
@@ -9,6 +9,9 @@ change instead of edits scattered across schema, SQL, and reporting.
 Payload columns (generation output, scores, metadata) stay explicit
 hand-written SQL in each experiment module; only the dimension columns are
 generated from this spec.
+
+These helpers describe mutable prediction-table schemas and should not become
+the new graph/spec/outcome platform boundary.
 """
 
 from __future__ import annotations

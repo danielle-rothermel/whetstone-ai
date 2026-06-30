@@ -1,3 +1,9 @@
+"""Legacy v0 data-repair CLI for enc-dec mutable prediction rows.
+
+This command updates historical v0 rows so they can be interpreted during
+migration. It is not part of the new append-only graph execution path.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -1,3 +1,5 @@
+"""Legacy v0 worker monitor for DBOS experiment workers."""
+
 from __future__ import annotations
 
 import threading

@@ -1,3 +1,5 @@
+"""Legacy v0 repair and status reconciliation for mutable prediction rows."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence

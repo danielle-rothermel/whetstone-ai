@@ -1,3 +1,5 @@
+"""Legacy v0 shared command flow for DBOS experiment scripts."""
+
 from __future__ import annotations
 
 import hashlib

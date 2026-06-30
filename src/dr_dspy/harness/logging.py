@@ -1,3 +1,5 @@
+"""Legacy v0 operator and worker logging helpers."""
+
 from __future__ import annotations
 
 import logging

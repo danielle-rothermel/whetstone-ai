@@ -1,4 +1,10 @@
-"""Shared helpers for DSPy LM request/response telemetry."""
+"""Legacy-adjacent DSPy LM request/response telemetry helpers.
+
+These mixins serialize and record LM telemetry at log time for v0 DSPy LM
+wrappers. New graph-platform execution should emit telemetry from
+``dr_dspy.lm.boundary`` call sites instead of wiring new paths through DSPy
+logging mixins.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,8 @@
-"""Typed contract for shared HumanEval command orchestration."""
+"""Legacy v0 typed contract for shared HumanEval command orchestration.
+
+This protocol belongs to the old DBOS experiment surfaces. Keep it available
+for v0 data migration and validation, not as the new graph platform boundary.
+"""
 
 from __future__ import annotations
 

@@ -1,4 +1,9 @@
-"""Shared script runtime setup."""
+"""Legacy-adjacent script runtime setup.
+
+These helpers are used by the v0 Typer CLIs and are intentionally forbidden
+from pure graph/platform modules. New platform entrypoints should keep runtime
+setup at their CLI boundary.
+"""
 
 from __future__ import annotations
 

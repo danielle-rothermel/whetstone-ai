@@ -1,3 +1,12 @@
+"""Legacy v0 enc-dec HumanEval DBOS workflow.
+
+This module remains as a migration source and historical data-generation
+surface. Do not use it as the implementation path for new graph/domain
+contracts, append-only persistence, rescoring, or reporting work. Its submit
+sample manifest semantics are also v0-only and should not define new batch or
+spec contracts.
+"""
+
 from __future__ import annotations
 
 import json

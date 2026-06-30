@@ -1,3 +1,5 @@
+"""Legacy v0 stable ordering helpers for old batch and repair flows."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
