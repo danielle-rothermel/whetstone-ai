@@ -14,6 +14,10 @@ complete.
 - `lm/utils.py` — shared JSON/text helpers used by the forward boundary
 - `lm/logging.py` — legacy-adjacent DSPy LM telemetry mixins (recordability at log time)
 - `graph/` — pure graph execution and graph-spec hashing
+- `records/` — Pydantic domain contracts, stable ids, and fair-order keys
+- `db/schema.py` — SQLAlchemy Core table definitions for v1 eval records
+- `db/io.py` — typed row builders, row parsers, and insert/select helpers
+- `db/migrations/` — Alembic migrations for the v1 schema
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
 - `harness/` — legacy v0 DBOS workflows, batch operations, repair, worker monitoring
@@ -31,6 +35,33 @@ mix requested specs, workflow status, generation artifacts, scores, and repair
 state. Those rows remain source data for migration/backfill, but new
 implementation work should not build domain contracts, graph workflows,
 rescoring, or reporting on top of v0 repair/status/reporting flows.
+
+## Database migrations
+
+The v1 eval schema lives under `db/` and is applied with Alembic from the
+`dr-dspy/` package root.
+
+Connection config uses the same `DATABASE_URL` env var as the legacy v0
+workers. When unset, Alembic falls back to peer-auth
+`postgresql+psycopg:///dr_dspy` (your OS Postgres role, database `dr_dspy`).
+Copy `.env.example` to `.env` and adjust the URL if your local role or database
+name differs.
+
+```bash
+# Apply all migrations
+uv run alembic upgrade head
+
+# Inspect current revision
+uv run alembic current
+
+# Render SQL without connecting (offline mode)
+uv run alembic upgrade head --sql
+```
+
+Alembic reads `DATABASE_URL` in `db/migrations/env.py` and normalizes
+`postgresql://` URLs to the project's `postgresql+psycopg://` driver form.
+The `sqlalchemy.url` value in `alembic.ini` is only a fallback when
+`DATABASE_URL` is not set.
 
 ## Failure handling (`eval_failures`)
 

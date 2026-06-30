@@ -293,7 +293,11 @@ work for one task, graph, and repetition. It should include:
 - experiment identity
 - task id and task inputs
 - graph spec, including node configs and instructions
-- dimensions digest / stable prediction id
+- dimensions digest
+- provider axis identity (`provider_kind`, `endpoint_kind`, `model`,
+  `throttle_key`, and optional `config_id` when graph specs reuse the same
+  endpoint/model pair for multiple node roles)
+- stable prediction id derived from the axes above plus repetition seed
 
 The prediction spec is not a mutable workflow-status row. It describes what was
 requested.
@@ -310,6 +314,13 @@ failed in a way that affects coverage/cost/outcomes.
 
 It does not store transient states such as queued, started, retrying, or
 deduplicated. Those belong to DBOS.
+
+The pure graph runner may also return `blocked` outcomes for nodes that were not
+invoked because an upstream dependency errored. `blocked` is runner
+bookkeeping, not a node-attempt outcome, and should not be persisted as a node
+attempt row by default. Persist the invoked upstream node's `error` outcome; a
+later graph or generation-run summary may record that the terminal node was
+blocked and reference the upstream error path.
 
 ### Keep batch submission for scale
 
@@ -329,6 +340,13 @@ A submit operation should:
 Batch records answer "what work did we request and enqueue?" They do not answer
 "what workflow is currently running?" DBOS owns the latter.
 
+Batch operation summary counts are derived from terminal batch-item rows.
+`inserted_count` and `already_present_count` track spec dedupe outcomes;
+`enqueued_count` and `failed_count` track enqueue outcomes. Completed
+operations must account for every requested item in `enqueued_count` or
+`failed_count`. Enqueued items record whether the spec insert was new via
+`enqueue_metadata.spec_outcome`.
+
 ### Mix queued work deterministically
 
 Work should not be enqueued in raw cross-product order. That order can hammer a
@@ -346,6 +364,13 @@ experiment seed and stable spec identity, mixed across axes such as:
 
 This gives reproducible queue order while interleaving models and configs. It
 also keeps early partial results more representative.
+
+The v1 prediction-spec contract stores both the `fair_order_seed` used for this
+mixing and the derived `fair_order_key`. Inserts should validate the key by
+recomputing it from the persisted provider/endpoint/model, throttle key,
+graph/layout, task id, repetition seed, dimensions digest, and stable prediction
+id. The seed is not part of prediction identity; it only controls reproducible
+queue ordering.
 
 ### Add config-key-aware rate-limit backoff
 
@@ -366,6 +391,8 @@ The active backoff state is operational state, not scientific output state. It
 can live in DBOS-managed scheduling state or a small operational throttle table
 if DBOS needs an app-visible coordination point. If retries are exhausted, the
 terminal node failure is persisted as a normal append-only error outcome.
+The initial v1 schema intentionally omits a throttle-state table; add one in
+the scheduling/backoff phase only if DBOS does not provide enough coordination.
 
 ### Store score attempts as append-only outcomes
 
@@ -452,6 +479,15 @@ The parser/scoring profile we discussed should include:
 - existing HumanEval code cleaning
 - rejection of empty strings and dict/list literals as valid extracted code
 - intentional unwrap of DSPy `Code` objects instead of relying on `str(value)`
+
+This phase only persists score-attempt profile and parser identifiers as
+`(id, version)` references plus typed score/metric payloads. First-class
+`ScoringProfileRecord` and `ParserProfileRecord` tables belong to the
+scoring-profile execution phase, where extraction rules, metric sets, and
+versioning semantics can be specified together. Likewise, graph layout remains
+a strict string until the graph-layout vocabulary is stable enough for a closed
+enum, and compression metrics remain a typed metrics sub-shape candidate for
+the HumanEval scoring-profile phase.
 
 ## Prompt/control implications
 
