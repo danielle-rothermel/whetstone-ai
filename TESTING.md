@@ -51,7 +51,6 @@ scripts/ci/                   # portable CI entrypoints (package-root cwd)
   unit.sh
   integration.sh
   lint.sh
-  ensure_pypi_dspy.sh         # reinstall PyPI dspy wheel in fork monorepo
 src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
 
@@ -113,10 +112,8 @@ workflows are under test.
 
 ## CI
 
-GitHub Actions workflow: [`.github/workflows/dr_dspy_tests.yml`](../.github/workflows/dr_dspy_tests.yml)
-(path-scoped to `dr-dspy/**`). While the package still lives inside the DSPy
-fork, jobs use `working-directory: dr-dspy`; after
-[repo extraction](docs/repo-split-and-naming-plan.md), drop that prefix.
+GitHub Actions workflow: [`.github/workflows/whetstone_tests.yml`](.github/workflows/whetstone_tests.yml).
+Jobs run from the standalone repository root.
 
 | Job | Script | Notes |
 |-----|--------|-------|
@@ -132,24 +129,25 @@ Local equivalents (from the package root):
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
-The fork monorepo still vendors DSPy at the workspace root. CI runs
-[`scripts/ci/ensure_pypi_dspy.sh`](scripts/ci/ensure_pypi_dspy.sh) to reinstall
-`dspy==3.3.0b1` from PyPI and prove the post-extraction dependency cut. Drop
-that script after `git filter-repo`.
+DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 
 [`Dockerfile.ci`](Dockerfile.ci) builds a unit-test image for future Depot
 wiring after the org repo is created.
 
-Upstream DSPy workflows ([`run_tests.yml`](../.github/workflows/run_tests.yml))
-skip when a PR touches only `dr-dspy/**`.
-
 ## Changelog
+
+### 2026-06-30 — Standalone repository CI
+
+- Added `.github/workflows/whetstone_tests.yml` for root-based lint, unit, and
+  integration jobs.
+- Updated `Dockerfile.ci` for the standalone root layout.
+- Removed the fork-only `ensure_pypi_dspy.sh` workflow step.
 
 ### 2026-06-30 — CI scripts and GitHub workflow
 
-- Added `scripts/ci/{unit,integration,lint,ensure_pypi_dspy}.sh`.
-- Added `.github/workflows/dr_dspy_tests.yml` (lint, unit, integration).
-- Pinned `dspy==3.3.0b1`; CI reinstalls the PyPI wheel in the fork monorepo.
+- Added `scripts/ci/{unit,integration,lint}.sh`.
+- Added the original fork-scoped GitHub workflow before extraction.
+- Pinned `dspy==3.3.0b1`.
 - Fixed `tests/test_serialization.py` import path.
 - Added `Dockerfile.ci` for future Depot wiring.
 

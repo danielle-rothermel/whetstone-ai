@@ -37,8 +37,8 @@ complete.
 - [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
   model, shared fixtures, CI scripts, and conventions for adding coverage.
 - [Repo split and naming plan](docs/repo-split-and-naming-plan.md) describes
-  the planned move to a standalone `<personal-org>/whetstone-ai` repository.
-  The `dr_dspy` → `whetstone` rename is deferred until after extraction.
+  the standalone `whetstone-ai` repository and deferred `dr_dspy` → `whetstone`
+  rename.
 
 ## Testing
 
@@ -85,7 +85,7 @@ rescoring, or reporting on top of v0 repair/status/reporting flows.
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the
-`dr-dspy/` package root.
+repository root.
 
 Connection config uses the same `DATABASE_URL` env var as the legacy v0
 workers. When unset, Alembic falls back to peer-auth
