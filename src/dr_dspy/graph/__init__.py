@@ -27,6 +27,8 @@ from dr_dspy.graph.models import (
     NodeOutput,
     NodeSpec,
     TerminalError,
+    task_binding_fields,
+    validate_task_bindings,
 )
 
 __all__ = [
@@ -55,4 +57,6 @@ __all__ = [
     "canonical_graph_payload",
     "execute_graph",
     "graph_digest",
+    "task_binding_fields",
+    "validate_task_bindings",
 ]

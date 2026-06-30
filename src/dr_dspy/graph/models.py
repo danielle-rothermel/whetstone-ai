@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from enum import StrEnum
 from typing import Any
 
@@ -14,6 +15,15 @@ from pydantic import (
 
 TASK_SOURCE = "task"
 REF_SEPARATOR = "."
+
+
+def validate_ref_identifier(identifier: str, *, kind: str) -> None:
+    if REF_SEPARATOR in identifier:
+        raise ValueError(
+            f"{kind} {identifier!r} cannot contain {REF_SEPARATOR!r}"
+        )
+    if identifier == TASK_SOURCE:
+        raise ValueError(f"{kind} {identifier!r} is reserved")
 
 
 class NodeOp(StrEnum):
@@ -98,6 +108,7 @@ class BindingRef(BaseModel):
             return self
         if not self.node_id:
             raise ValueError("node binding refs require node_id")
+        validate_ref_identifier(self.node_id, kind="node id")
         if self.field is not None and not self.field:
             raise ValueError("node binding refs require a non-empty field")
         return self
@@ -184,6 +195,11 @@ class NodeSpec(BaseModel):
     config: NodeConfig
     op: NodeOp = NodeOp.LLM_CALL
 
+    @model_validator(mode="after")
+    def validate_id(self) -> NodeSpec:
+        validate_ref_identifier(self.id, kind="node id")
+        return self
+
     def dependencies(self) -> set[str]:
         return {
             node_id
@@ -197,7 +213,6 @@ class GraphSpec(BaseModel):
 
     nodes: tuple[NodeSpec, ...]
     terminal_node_id: StrictStr
-    task_fields: tuple[StrictStr, ...] = ()
 
     def node_ids(self) -> list[str]:
         return [node.id for node in self.nodes]
@@ -225,6 +240,12 @@ class NodeOutput(BaseModel):
 
 
 class NodeError(BaseModel):
+    """Lightweight JSON-safe error snapshot for graph run summaries.
+
+    Authoritative failure diagnostics belong on node-attempt records at the
+    platform boundary, not in this runner-local shape.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     error_type: StrictStr
@@ -346,15 +367,7 @@ class TerminalError(BaseModel):
                     "blocked terminal outcomes cannot include error"
                 )
             return self
-        if self.error is not None:
-            raise ValueError(
-                "successful terminal outcomes cannot include error"
-            )
-        if self.blocked_by:
-            raise ValueError(
-                "successful terminal outcomes cannot include blocked_by"
-            )
-        return self
+        raise ValueError("terminal error status must be error or blocked")
 
 
 class GraphRunResult(BaseModel):
@@ -366,6 +379,57 @@ class GraphRunResult(BaseModel):
     terminal_node_id: StrictStr
     terminal_output: Any | None = None
     terminal_error: TerminalError | None = None
+
+    @model_validator(mode="after")
+    def validate_result(self) -> GraphRunResult:
+        for key, outcome in self.outcomes.items():
+            if key != outcome.node_id:
+                raise ValueError(
+                    f"outcome key {key!r} does not match "
+                    f"node_id {outcome.node_id!r}"
+                )
+
+        if (
+            self.terminal_output is not None
+            and self.terminal_error is not None
+        ):
+            raise ValueError(
+                "graph run result cannot include both "
+                "terminal_output and terminal_error"
+            )
+
+        if self.status in (GraphRunStatus.SUCCESS, GraphRunStatus.PARTIAL):
+            if self.terminal_error is not None:
+                raise ValueError(
+                    f"{self.status.value} graph runs cannot include "
+                    "terminal_error"
+                )
+            return self
+
+        if self.terminal_error is None:
+            raise ValueError(
+                f"{self.status.value} graph runs require terminal_error"
+            )
+        if self.terminal_output is not None:
+            raise ValueError(
+                f"{self.status.value} graph runs cannot include "
+                "terminal_output"
+            )
+        if self.terminal_error.node_id != self.terminal_node_id:
+            raise ValueError(
+                "terminal_error node_id must match terminal_node_id"
+            )
+        if self.status is GraphRunStatus.ERROR:
+            if self.terminal_error.status is not NodeOutcomeStatus.ERROR:
+                raise ValueError(
+                    "terminal_error status must be error for error graph runs"
+                )
+            return self
+        if self.terminal_error.status is not NodeOutcomeStatus.BLOCKED:
+            raise ValueError(
+                "terminal_error status must be blocked for blocked graph runs"
+            )
+        return self
 
 
 class GraphExecutionError(Exception):
@@ -398,30 +462,32 @@ def validate_graph_spec(graph: GraphSpec) -> None:
     for node in graph.nodes:
         for ref in node.config.input_bindings.values():
             validate_binding_ref(ref, nodes_by_id)
-    validate_task_binding_fields(graph)
     validate_acyclic_graph(graph.nodes)
 
 
-def validate_task_binding_fields(graph: GraphSpec) -> None:
-    task_binding_fields = {
+def task_binding_fields(graph: GraphSpec) -> frozenset[str]:
+    return frozenset(
         ref.field
         for node in graph.nodes
         for ref in node.config.input_bindings.values()
         if ref.source is BindingSource.TASK and ref.field is not None
-    }
-    if not task_binding_fields:
+    )
+
+
+def validate_task_bindings(
+    graph: GraphSpec,
+    *,
+    allowed_task_fields: Collection[str],
+) -> None:
+    bound = task_binding_fields(graph)
+    if not bound:
         return
-    if not graph.task_fields:
-        raise GraphValidationError(
-            "graph uses task bindings but declares no task_fields; "
-            "set task_fields to the allowed task input names"
-        )
-    allowed = set(graph.task_fields)
-    unknown = sorted(task_binding_fields - allowed)
+    allowed = set(allowed_task_fields)
+    unknown = sorted(bound - allowed)
     if unknown:
         unknown_list = ", ".join(repr(field) for field in unknown)
         raise GraphValidationError(
-            f"task binding field(s) {unknown_list} not in task_fields"
+            f"task binding field(s) {unknown_list} not in allowed task fields"
         )
 
 
@@ -494,16 +560,25 @@ def _exception_error_type(error: BaseException) -> str:
     return f"{type(error).__module__}.{type(error).__qualname__}"
 
 
+def _exception_type_name(error: BaseException) -> str:
+    return f"{type(error).__module__}.{type(error).__qualname__}"
+
+
+def _root_exception(error: BaseException) -> BaseException:
+    current = error
+    while True:
+        underlying = getattr(current, "underlying", None)
+        if not isinstance(underlying, BaseException):
+            return current
+        current = underlying
+
+
 def _exception_metadata(error: BaseException) -> dict[str, Any]:
     metadata = getattr(error, "metadata", None)
     result = dict(metadata) if isinstance(metadata, dict) else {}
     if getattr(error, "underlying", None) is not None:
-        from dr_dspy.eval_failures.policy import (
-            underlying_exception_type_name,
-        )
-
         result.setdefault(
             "underlying_exception_type",
-            underlying_exception_type_name(error),
+            _exception_type_name(_root_exception(error)),
         )
     return result

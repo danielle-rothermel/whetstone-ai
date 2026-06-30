@@ -10,16 +10,21 @@ from dr_dspy.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
+    GraphRunResult,
     GraphRunStatus,
     GraphSpec,
     InputResolutionError,
     NodeConfig,
+    NodeError,
     NodeExecutionError,
+    NodeOutcome,
     NodeOutcomeStatus,
     NodeOutput,
     NodeSpec,
+    TerminalError,
     execute_graph,
     graph_digest,
+    validate_task_bindings,
 )
 
 
@@ -55,12 +60,10 @@ def _output(value: Any, *, field: str = "output") -> NodeOutput:
 def _graph(
     *nodes: NodeSpec,
     terminal_node_id: str,
-    task_fields: tuple[str, ...] = (),
 ) -> GraphSpec:
     return GraphSpec(
         nodes=nodes,
         terminal_node_id=terminal_node_id,
-        task_fields=task_fields,
     )
 
 
@@ -68,7 +71,6 @@ def test_direct_one_node_graph_success() -> None:
     graph = _graph(
         _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
-        task_fields=("prompt",),
     )
 
     result = execute_graph(
@@ -98,7 +100,6 @@ def test_two_node_graph_binds_upstream_output_into_downstream_input() -> None:
         decoder,
         encoder,
         terminal_node_id="decoder",
-        task_fields=("prompt",),
     )
     seen_inputs: dict[str, Mapping[str, Any]] = {}
 
@@ -226,27 +227,30 @@ def test_node_config_rejects_binding_to_undeclared_input_field() -> None:
 
 
 def test_unknown_task_binding_field_validation() -> None:
-    with pytest.raises(ValueError, match="task binding field\\(s\\) 'promt'"):
-        _graph(
-            _node("direct", bindings={"prompt": "task.promt"}),
-            terminal_node_id="direct",
-            task_fields=("prompt",),
-        )
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.promt"}),
+        terminal_node_id="direct",
+    )
+    with pytest.raises(
+        ValueError,
+        match="task binding field\\(s\\) 'promt' not in allowed task fields",
+    ):
+        validate_task_bindings(graph, allowed_task_fields=("prompt",))
 
 
-def test_task_bindings_require_task_fields() -> None:
-    with pytest.raises(ValueError, match="declares no task_fields"):
-        _graph(
-            _node("direct", bindings={"prompt": "task.prompt"}),
-            terminal_node_id="direct",
-        )
+def test_graph_with_task_bindings_does_not_require_task_fields() -> None:
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.prompt"}),
+        terminal_node_id="direct",
+    )
+    assert graph.model_dump(mode="json")["nodes"]
+    validate_task_bindings(graph, allowed_task_fields=("prompt",))
 
 
 def test_missing_task_input_becomes_error_outcome() -> None:
     graph = _graph(
         _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
-        task_fields=("prompt",),
     )
 
     result = execute_graph(
@@ -382,6 +386,29 @@ def test_node_error_preserves_underlying_exception_type() -> None:
     }
 
 
+def test_node_error_preserves_chained_underlying_exception_type() -> None:
+    graph = _graph(_node("direct"), terminal_node_id="direct")
+    error = PermanentFailureError(
+        "outer",
+        underlying=PermanentFailureError(
+            "middle",
+            underlying=ValueError("inner"),
+        ),
+        metadata={"stage": "parse"},
+    )
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        raise error
+
+    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+
+    outcome = result.outcomes["direct"]
+    assert outcome.error is not None
+    assert outcome.error.metadata["underlying_exception_type"] == (
+        "builtins.ValueError"
+    )
+
+
 def test_independent_nodes_continue_after_unrelated_failure() -> None:
     graph = _graph(
         _node("terminal"),
@@ -407,7 +434,6 @@ def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
         _node("encoder", bindings={"prompt": "task.prompt"}),
         _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
-        task_fields=("prompt",),
     )
 
     def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
@@ -435,7 +461,6 @@ def test_blocked_nodes_do_not_invoke_run_node() -> None:
         _node("encoder", bindings={"prompt": "task.prompt"}),
         _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
-        task_fields=("prompt",),
     )
     invoked: list[str] = []
 
@@ -524,11 +549,24 @@ def test_graph_digest_is_stable_for_equivalent_graph_specs() -> None:
     graph = _graph(
         _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
-        task_fields=("prompt",),
     )
     same_graph = GraphSpec.model_validate(graph.model_dump(mode="json"))
 
     assert graph_digest(graph) == graph_digest(same_graph)
+
+
+def test_graph_digest_does_not_depend_on_allowed_task_fields() -> None:
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.prompt"}),
+        terminal_node_id="direct",
+    )
+    digest = graph_digest(graph)
+    validate_task_bindings(graph, allowed_task_fields=("prompt",))
+    validate_task_bindings(
+        graph,
+        allowed_task_fields=("prompt", "task_id", "entry_point"),
+    )
+    assert graph_digest(graph) == digest
 
 
 def test_graph_digest_changes_with_node_declaration_order() -> None:
@@ -630,7 +668,6 @@ def test_blocked_outcome_json_dump_is_persistable_shape() -> None:
         _node("encoder", bindings={"prompt": "task.prompt"}),
         _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
-        task_fields=("prompt",),
     )
 
     result = execute_graph(
@@ -742,7 +779,6 @@ def test_binding_ref_round_trips_through_graph_spec_json_dump() -> None:
             output_field="code",
         ),
         terminal_node_id="decoder",
-        task_fields=("prompt",),
     )
 
     payload = graph.model_dump(mode="json")
@@ -755,3 +791,57 @@ def test_binding_ref_round_trips_through_graph_spec_json_dump() -> None:
 
     round_tripped = GraphSpec.model_validate(payload)
     assert round_tripped == graph
+
+
+def test_node_id_rejects_ref_grammar_tokens() -> None:
+    with pytest.raises(ValueError, match=r"cannot contain '\.'"):
+        _node("a.b")
+    with pytest.raises(ValueError, match=r"'task' is reserved"):
+        _node("task")
+
+
+def test_binding_ref_rejects_reserved_node_id() -> None:
+    with pytest.raises(ValueError, match=r"'task' is reserved"):
+        BindingRef.model_validate("task")
+
+
+def test_terminal_error_rejects_success_status() -> None:
+    with pytest.raises(ValueError, match="must be error or blocked"):
+        TerminalError(
+            node_id="direct",
+            status=NodeOutcomeStatus.SUCCESS,
+        )
+
+
+def test_graph_run_result_rejects_mismatched_outcome_keys() -> None:
+    outcome = NodeOutcome.success(
+        node_id="direct",
+        output=_output("ok"),
+    )
+    with pytest.raises(ValueError, match="does not match node_id"):
+        GraphRunResult(
+            status=GraphRunStatus.SUCCESS,
+            outcomes={"other": outcome},
+            execution_order=("direct",),
+            terminal_node_id="direct",
+            terminal_output="ok",
+        )
+
+
+def test_graph_run_result_rejects_conflicting_terminal_fields() -> None:
+    with pytest.raises(
+        ValueError,
+        match="both terminal_output and terminal_error",
+    ):
+        GraphRunResult(
+            status=GraphRunStatus.ERROR,
+            outcomes={},
+            execution_order=(),
+            terminal_node_id="direct",
+            terminal_output="ok",
+            terminal_error=TerminalError(
+                node_id="direct",
+                status=NodeOutcomeStatus.ERROR,
+                error=NodeError(error_type="test", message="failed"),
+            ),
+        )

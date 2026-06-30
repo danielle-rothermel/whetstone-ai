@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from dr_dspy.graph.models import GraphSpec
-from dr_dspy.lm.utils import sha256_json_digest
+from dr_dspy.hashing import sha256_json_digest
 
 GRAPH_DIGEST_LENGTH = 16
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from dr_dspy.hashing import canonical_json
 
 
 class ModelConfig(BaseModel):
@@ -50,30 +50,8 @@ class LmEventBuffer:
         return None
 
 
-SHA256_HEX_DIGEST_LENGTH = 64
-TEXT_ENCODING = "utf-8"
-
-
 def stable_json(data: Any) -> str:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"))
-
-
-def sha256_json_digest(
-    data: Any,
-    *,
-    length: int | None = None,
-) -> str:
-    digest = hashlib.sha256(
-        stable_json(data).encode(TEXT_ENCODING)
-    ).hexdigest()
-    if length is None:
-        return digest
-    if length < 1 or length > SHA256_HEX_DIGEST_LENGTH:
-        raise ValueError(
-            f"digest length must be between 1 and "
-            f"{SHA256_HEX_DIGEST_LENGTH}, got {length}"
-        )
-    return digest[:length]
+    return canonical_json(data)
 
 
 def response_text(response: Any) -> str | None:
