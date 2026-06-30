@@ -668,9 +668,9 @@ class BatchSubmitOperationRecord(BaseModel):
         if self.status is BatchSubmitOperationStatus.COMPLETED:
             if terminal_enqueue != self.requested_count:
                 raise ValueError(
-                    "completed batch submit operations must account for every "
-                    "requested item in enqueued_count, already_scheduled_count, "
-                    "or failed_count"
+                    "completed batch submit operations must account for "
+                    "every requested item in enqueued_count, "
+                    "already_scheduled_count, or failed_count"
                 )
         if (
             self.completed_at is not None

@@ -29,9 +29,9 @@ from dr_dspy.platform import (
     worker,
 )
 from dr_dspy.records import (
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
-    ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -351,7 +351,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert engine.begin_count == 13
 
 
-def test_submit_prediction_specs_iterable_materializes_all_specs_before_enqueue(
+def test_submit_specs_iterable_materializes_all_before_enqueue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Iterable submit globally sorts before chunked persist, so enqueue cannot
@@ -439,8 +439,8 @@ def test_submit_prediction_specs_iterable_materializes_all_specs_before_enqueue(
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
-        lambda connection, *, operation_key, item, **kwargs: pending_ids.discard(
-            item.prediction_id
+        lambda connection, *, operation_key, item, **kwargs: (
+            pending_ids.discard(item.prediction_id)
         ),
     )
     monkeypatch.setattr(
@@ -738,7 +738,9 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
                     {},
                 )
 
-    def reset_stale_claims(connection: Connection, *, operation_key: str) -> None:
+    def reset_stale_claims(
+        connection: Connection, *, operation_key: str
+    ) -> None:
         stale_claim_operation_keys.append(operation_key)
         for prediction_id, (status, _metadata) in item_state.items():
             if status is BatchSubmitItemEnqueueStatus.CLAIMING:
@@ -883,7 +885,9 @@ def test_outcome_update_raises_when_claim_id_mismatch() -> None:
             return self
 
         def one(self) -> dict[str, str]:
-            return {"insert_status": BatchSubmitItemInsertStatus.INSERTED.value}
+            return {
+                "insert_status": BatchSubmitItemInsertStatus.INSERTED.value,
+            }
 
     class ZeroRowResult:
         rowcount = 0

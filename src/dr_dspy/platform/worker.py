@@ -52,7 +52,11 @@ def configure_platform_dbos_runtime(
         database_url_error_suffix="for platform graph workflow",
     )
     try:
-        DBOS(config=shared_dbos.build_dbos_config(config, app_name=DBOS_APP_NAME))
+        DBOS(
+            config=shared_dbos.build_dbos_config(
+                config, app_name=DBOS_APP_NAME
+            )
+        )
         if consume_generation_queue:
             listen_to_platform_generation_queue()
         else:

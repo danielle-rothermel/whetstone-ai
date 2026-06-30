@@ -1,24 +1,26 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 from sqlalchemy import create_engine, text
 
 from dr_dspy.graph import GraphSpec
 from dr_dspy.platform import queue_worker, submission
 from dr_dspy.records import (
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
-    ENQUEUE_CLAIMED_AT_METADATA_KEY,
-    ENQUEUE_CLAIM_ID_METADATA_KEY,
     PredictionSpecRecord,
     stable_generation_run_id,
 )
-from tests.support.platform_workflow_fixtures import NOW, direct_node, prediction_spec
+from tests.support.platform_workflow_fixtures import (
+    NOW,
+    direct_node,
+    prediction_spec,
+)
 from tests.support.postgres_fixtures import (
     seed_batch_submit_item,
     seed_batch_submit_operation,

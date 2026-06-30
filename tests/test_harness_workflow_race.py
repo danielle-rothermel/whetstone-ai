@@ -36,7 +36,8 @@ def test_workflow_start_raced_returns_true_for_typed_dbos_errors(
     error: BaseException,
 ) -> None:
     assert isinstance(error, WORKFLOW_START_RACE_ERRORS)
-    with patch("dr_dspy.platform.dbos_compat.DBOS.get_workflow_status") as status:
+    patch_target = "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status"
+    with patch(patch_target) as status:
         raced = workflow_start_raced(workflow_id=WORKFLOW_ID, error=error)
         assert raced is True
         status.assert_not_called()

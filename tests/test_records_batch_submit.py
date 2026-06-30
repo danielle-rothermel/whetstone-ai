@@ -128,7 +128,7 @@ def test_completed_batch_operation_requires_full_enqueue_accounting() -> None:
         )
 
 
-def test_completed_batch_operation_allows_already_scheduled_accounting() -> None:
+def test_completed_batch_allows_already_scheduled_accounting() -> None:
     operation = BatchSubmitOperationRecord(
         operation_key="op-1",
         experiment_name="exp",
