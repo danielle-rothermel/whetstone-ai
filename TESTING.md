@@ -11,7 +11,7 @@ and skip gracefully when PostgreSQL is unavailable.
 
 | Command | What runs |
 |---------|-----------|
-| `./scripts/ci/unit.sh` | Unit tests (294 tests; excludes integration marker) |
+| `./scripts/ci/unit.sh` | Unit tests (excludes integration marker) |
 | `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (generation + scoring) |
 | `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
@@ -25,7 +25,7 @@ and skip gracefully when PostgreSQL is unavailable.
 | **1 — DB steps** | Generation: `load_prediction_spec_step` / `persist_generation_result_step` Postgres round-trip. Scoring: `load_scoring_target_step` / `persist_score_attempt_step` idempotency and profile uniqueness | [`tests/integration/test_platform_db_steps.py`](tests/integration/test_platform_db_steps.py), [`tests/integration/test_platform_scoring_db_steps.py`](tests/integration/test_platform_scoring_db_steps.py) |
 | **2 — Workflow** | Generation: `run_prediction_graph_workflow_once` happy path with mocked LM. Scoring: `run_score_generation_workflow_once` with mocked HumanEval task load | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
 | **3 — Recovery** | Generation: retry-exhaustion step/timestamp assertions, upstream `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, persist idempotency, persist failure surfacing. Scoring: workflow replay idempotency, task-loader memoization, orphan workflow recovery | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
-| **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
+| **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through (only remaining v0-related tier until backfill completes) | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
 
 Design context: [append-only eval platform design](docs/append-only-eval-records-design.md),
 [platform graph workflow notes](docs/platform-graph-workflow-implementation.md).
@@ -92,8 +92,9 @@ Seed helpers live in [`tests/support/postgres_fixtures.py`](tests/support/postgr
 ### v0 sample fixtures
 
 Legacy rows live in [`tests/fixtures/v0_samples/`](tests/fixtures/v0_samples/) as
-committed JSON. CI does not require live v0 tables. Refresh samples from a local
-database with an ad-hoc script when legacy schema rows change materially.
+committed JSON. CI does not require live v0 tables. Delete fixtures and Tier 3.5
+tests after backfill validation — see
+[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ### Adding new tests
 
@@ -121,8 +122,8 @@ Jobs run from the standalone repository root.
 | Job | Script | Notes |
 |-----|--------|-------|
 | lint | `./scripts/ci/lint.sh` | ruff + ty |
-| unit | `./scripts/ci/unit.sh` | 294 unit tests |
-| integration | `./scripts/ci/integration.sh` | Postgres 16 service; 27 tests |
+| unit | `./scripts/ci/unit.sh` | unit tests |
+| integration | `./scripts/ci/integration.sh` | Postgres 16 service; integration tests |
 
 Local equivalents (from the package root):
 
@@ -159,6 +160,13 @@ wiring after the org repo is created.
 - Pinned `dspy==3.3.0b1`.
 - Fixed `tests/test_serialization.py` import path.
 - Added `Dockerfile.ci` for future Depot wiring.
+
+### 2026-06-30 — v0 runtime archive
+
+- Removed v0 experiment/harness/legacy LM runtime code; platform DBOS bootstrap
+  now lives under `src/dr_dspy/platform/`.
+- Kept `migration/v0_reshape.py` and Tier 3.5 fixtures for backfill.
+- Added [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ### 2026-06-30 — Platform integration + v0 migration smoke tiers
 

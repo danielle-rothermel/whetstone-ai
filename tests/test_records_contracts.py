@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -16,7 +18,6 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.harness.flow import stable_prediction_id_from_dimensions
 from dr_dspy.humaneval import metrics as humaneval_metrics
 from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
@@ -26,6 +27,7 @@ from dr_dspy.lm.boundary import (
     ProviderKind,
     openai_responses_config,
 )
+from dr_dspy.lm.utils import stable_json
 from dr_dspy.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -362,9 +364,28 @@ def test_stable_prediction_id_changes_with_provider_axis() -> None:
     assert base.prediction_id != changed_provider.prediction_id
 
 
+def _legacy_v0_prediction_id_from_dimensions(
+    *,
+    experiment_name: str,
+    task_id: str,
+    dimensions: Mapping[str, Any],
+    repetition_seed: int,
+    digest_length: int,
+) -> str:
+    raw = stable_json(
+        {
+            "experiment_name": experiment_name,
+            "task_id": task_id,
+            **dict(dimensions),
+            "repetition_seed": repetition_seed,
+        }
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:digest_length]
+
+
 def test_v1_prediction_ids_are_not_v0_compatible() -> None:
     v1 = _prediction_spec()
-    v0 = stable_prediction_id_from_dimensions(
+    v0 = _legacy_v0_prediction_id_from_dimensions(
         experiment_name=v1.experiment_name,
         task_id=v1.task_id,
         dimensions=v1.dimensions.values,

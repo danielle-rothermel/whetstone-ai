@@ -1,28 +1,28 @@
 # dr-dspy
 
-Graph-based HumanEval evaluation platform workbench. The current migration path
-is toward graph-shaped generation specs, explicit LM/prompt boundaries, and
-append-only terminal outcomes. The old direct and enc-dec DBOS workers remain in
-the tree as legacy v0 data-generation surfaces until migration validation is
-complete.
+Graph-based HumanEval evaluation platform workbench. Generation and scoring run
+through graph-shaped specs, explicit LM/prompt boundaries, and append-only
+terminal outcomes under `dr_dspy.platform`.
+
+Legacy v0 runtime code (mutable prediction-table workflows, repair CLIs, DSPy
+`Predict` experiment backends) has been **removed**. Frozen v0 row reshape logic
+remains under `migration/` for backfill — see
+[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ## Package layout
 
 - `humaneval/` — task parsing, code extraction, scoring, compression metrics
 - `lm/boundary.py` — forward prompt/provider request and response boundary
-- `lm/runner.py`, `lm/signatures.py`, `lm/openrouter.py` — legacy DSPy compatibility for v0 workflows
 - `lm/utils.py` — shared JSON/text helpers used by the forward boundary
-- `lm/logging.py` — legacy-adjacent DSPy LM telemetry mixins (recordability at log time)
 - `graph/` — pure graph execution and graph-spec hashing
 - `records/` — Pydantic domain contracts, stable ids, and fair-order keys
 - `db/schema.py` — SQLAlchemy Core table definitions for v1 eval records
 - `db/io.py` — typed row builders, row parsers, and insert/select helpers
 - `db/migrations/` — Alembic migrations for the v1 schema
-- `platform/` — v1 DBOS graph workflow, plain-prompt node execution, and append-only generation/node persistence
+- `platform/` — v1 DBOS graph workflow, plain-prompt node execution, append-only persistence, CLI entrypoints
+- `migration/` — v0 row → v1 record reshape (backfill only; delete after migration validated)
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
-- `harness/` — legacy v0 DBOS workflows, batch operations, repair, worker monitoring
-- `experiments/` — legacy v0 HumanEval direct and enc-dec DBOS backends
 
 ## Design notes
 
@@ -34,6 +34,8 @@ complete.
   describe the current v1 workflow entrypoint, DBOS timing boundaries,
   node-attempt indexing semantics, provider-config scope, integration-test
   status, and follow-up work.
+- [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
+  documents backfill retention and post-migration cleanup.
 - [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
   model, shared fixtures, CI scripts, and conventions for adding coverage.
 - [Repo split and naming plan](docs/repo-split-and-naming-plan.md) describes
@@ -100,25 +102,19 @@ LM node call. Rate-limited and transient provider failures update the throttle
 state; later workflows with the same key durably sleep before calling the
 provider.
 
-Scoring, Unitbench-facing projections, and v0 migration/backfill remain
-deferred.
-
-The legacy v0 direct and enc-dec workflows write mutable prediction rows that
-mix requested specs, workflow status, generation artifacts, scores, and repair
-state. Those rows remain source data for migration/backfill, but new
-implementation work should not build domain contracts, graph workflows,
-rescoring, or reporting on top of v0 repair/status/reporting flows.
+Scoring workflows and batch rescoring are available via `score-one` and
+`rescore`. Unitbench-facing projections and the full v0 backfill job remain
+deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the
 repository root.
 
-Connection config uses the same `DATABASE_URL` env var as the legacy v0
-workers. When unset, Alembic falls back to peer-auth
-`postgresql+psycopg:///dr_dspy` (your OS Postgres role, database `dr_dspy`).
-Copy `.env.example` to `.env` and adjust the URL if your local role or database
-name differs.
+Connection config uses the `DATABASE_URL` env var. When unset, Alembic falls
+back to peer-auth `postgresql+psycopg:///dr_dspy` (your OS Postgres role,
+database `dr_dspy`). Copy `.env.example` to `.env` and adjust the URL if your
+local role or database name differs.
 
 ```bash
 # Apply all migrations
@@ -156,26 +152,20 @@ with structured metadata. This package is **not** a global exception registry.
 All storable JSON/JSONB values pass through `ensure_recordable` or
 `recordable_jsonb`. Unencodable LM telemetry or persistence payloads raise
 `RecordingFailureError` (permanent, no step retry) instead of being silently
-dropped or stored as empty objects. Call sites include LM logging, predictor
-metadata, legacy v0 experiment DB writes, and legacy v0 harness batch
-operations.
+dropped or stored as empty objects.
 
 ### Generation boundary
 
 Typed generation failures (`EmptyGenerationError`, `PredictionParseError`) are
 raised from `eval_failures.generation.require_generation_text` on the forward
-path and from legacy `lm.runner.run_predictor` for v0 DSPy experiment workflows.
-Humaneval job builders call
-`validate_encdec_generation` / `validate_direct_generation` before constructing
-`GenerationResult`, so empty or unparseable LM output becomes
-`generation_error` rather than a false `generated` row.
+LM boundary path.
 
 ### Worker workflow pattern
 
-Legacy v0 experiment DBOS workflows catch step exceptions, call
-`summarize_exception`, and record errors via `failure_summary_payload`.
-Retryable failures (`transient`, `rate_limited`) return recoverable status
-strings; permanent failures do not step-retry.
+Platform DBOS workflows catch step exceptions, call `summarize_exception`, and
+persist structured failure metadata on terminal outcome rows. Retryable failures
+(`transient`, `rate_limited`) may step-retry per policy; permanent failures do
+not.
 
-Scoring test failures are domain semantics: a wrong answer records `score=0`
-with `scoring_status='scored'`. That is not a worker failure.
+Scoring test failures are domain semantics: a wrong answer records a failed test
+outcome in score-attempt metrics. That is not a worker failure.

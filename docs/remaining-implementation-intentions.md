@@ -13,16 +13,16 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 | Step | Scope | Status |
 |---|---|---|
 | 1 | Design doc as north star | **Done** |
-| 2 | Core primitives (HumanEval, scoring, parsing, serialization, error classification) | **Partial** — persistable summaries exist; v0 write paths still use legacy score columns |
+| 2 | Core primitives (HumanEval, scoring, parsing, serialization, error classification) | **Partial** — persistable summaries exist; v1 score-attempt path landed |
 | 3 | LM and prompt boundary (plain adapter, OpenRouter/OpenAI callers, tests) | **Partial** — see deferred LM items below |
 | 4 | Pure graph execution core | **Done** (reusable runner, no DB/DBOS knowledge) |
-| 5 | Archive v0 surfaces (old CLIs, manifests, repair, reporting, `experiments/`) | **Not done** |
+| 5 | Archive v0 surfaces (old CLIs, manifests, repair, reporting, `experiments/`) | **Done** — runtime removed; see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) |
 | 6 | Domain contracts (graph specs, provider configs, outcomes, metrics, stable ids) | **Partial** — records exist; several contracts still string/metadata-based |
 | 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — pre-deployment; draft migration history not frozen |
 | 8 | Platform graph workflow (DBOS + append-only persistence) | **Done** (first path under `dr_dspy.platform`) |
 | 9 | Batch submission, fairness, backoff | **Done** (chunked submit, fair-order enqueue, throttle table) |
 | 10 | HumanEval scoring and metrics | **Partial** — scoring workflow + `humaneval@v1` landed; profile record tables and projection movement not |
-| 11 | Migration and validation (v0 backfill) | **Not done** |
+| 11 | Migration and validation (v0 backfill) | **Partial** — `migration/v0_reshape.py` + Tier 3.5 tests kept; full backfill job not done |
 | 12 | Rescoring (workflow/CLI + projection movement) | **Partial** — `score-one` / `rescore` exist; projection movement command not |
 | 13 | Unitbench/export (Neon projections, generated TS types) | **Not done** |
 
@@ -53,7 +53,6 @@ From `platform-graph-workflow-implementation.md`:
 ### Runtime and infrastructure
 
 - Move **SQLAlchemy engine/pool ownership** into the platform worker runtime — stop creating short-lived engines inside each DBOS step.
-- Move **DBOS bootstrap** out of `dr_dspy.harness.dbos` into a shared runtime module (currently shared with v0 for coexistence).
 - **DBOS queue-worker submit/resume E2E** — full path from enqueue through worker consumption; integration fixtures not yet standardized.
 
 ### Analysis and projections
@@ -82,8 +81,6 @@ From core-primitives / LM boundary implementation notes:
 
 - **`LoggingOpenAILM` wrapper** — deferred until a caller needs direct OpenAI outside the graph-runner path.
 - **Consolidate chat-style text extraction** between strict provider response parsing (typed failures) and `lm.utils.response_text()` (telemetry preview) if shapes drift.
-- **`lm.logging` import isolation** — recordability pulled at log time is intentional; pure boundary modules stay import-isolated, logging payload persistence is separate concern.
-- v0 direct/enc-dec workflows still call **`dspy.Predict`** with ChatAdapter formatting — graph-runner stage should adopt caller-built messages via plain prompt path; **do not rewrite v0 experiments** in the same PR as LM boundary work.
 
 ---
 
@@ -105,20 +102,20 @@ From core-primitives / LM boundary implementation notes:
 
 ---
 
-## v0 migration and cutover — not started
+## v0 migration and cutover — partial
+
+v0 runtime code is **removed**. Reshape logic and frozen fixtures remain for backfill.
 
 Operational cutover steps still ahead:
 
-1. **Freeze v0** for new experimental writes (policy/process, not just code).
-2. **Backfill** existing v0 direct and enc-dec rows into append-only model (`migration/v0_reshape.py` exists for Tier 3.5 tests; full backfill job not done).
+1. **Freeze v0** for new experimental writes (policy/process; code path already gone).
+2. **Backfill** existing v0 direct and enc-dec rows into append-only model (full job not done; reshape in [`migration/v0_reshape.py`](../src/dr_dspy/migration/v0_reshape.py)).
 3. **Validate** migrated counts, artifacts, costs, legacy scores, and projections.
 4. **Rescore** migrated terminal artifacts under new parser/scoring profiles.
 5. **Run next COPRO experiments** on new path only.
-6. **Retire v0 as active path** while keeping tables as backup until trusted.
+6. **Delete migration package** after validation — see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md).
 
-Also: **archive v0 surfaces** (step 5 in implementation sequence) — move or clearly mark legacy CLIs, manifests, repair flow, old reporting, and `experiments/` implementation details.
-
-Prompt for archiving work exists at `docs/prompts/archive-v0-surfaces.md` in the design sequence (file may need to be (re)created when that step starts).
+Legacy v0 Postgres tables may remain as backup until explicitly dropped.
 
 ---
 
@@ -193,7 +190,7 @@ Suggested ordering implied across docs (not a new decision — synthesis of exis
 1. Freeze v1 migrations + finish schema hardening
 2. v0 backfill + validation + rescoring on migrated artifacts
 3. Projection movement command + Unitbench/types
-4. Archive v0 surfaces; adopt plain prompt path everywhere on v1
+4. Delete migration reshape package after backfill validated (see completion checklist)
 5. Provider config contract extension + typed graph prompt fields
 6. Worker runtime pooling + DBOS bootstrap consolidation + E2E submit/worker tests
 7. Land graph-workflow → extract repo → rename to whetstone

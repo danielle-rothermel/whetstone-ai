@@ -1186,11 +1186,7 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
         configure_runtime,
     )
     monkeypatch.setattr(worker, "run_prediction_graph_workflow_once", run_once)
-    monkeypatch.setattr(
-        worker.shared_dbos,
-        "destroy_dbos_runtime",
-        destroy_runtime,
-    )
+    monkeypatch.setattr(worker, "destroy_dbos_runtime", destroy_runtime)
 
     worker.run_one(
         prediction_id="prediction-1",

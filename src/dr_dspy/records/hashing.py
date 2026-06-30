@@ -40,9 +40,9 @@ def stable_prediction_id(
 ) -> str:
     """Return the v1 graph-aware prediction id.
 
-    This is intentionally not compatible with legacy v0 prediction ids from
-    ``dr_dspy.harness.flow``. Backfills should store v0 ids as source metadata
-    and compute fresh v1 ids from graph, dimensions, and provider axes.
+    This is intentionally not compatible with legacy v0 dimension-based
+    prediction ids. Backfills should store v0 ids as source metadata and
+    compute fresh v1 ids from graph, dimensions, and provider axes.
     """
 
     return _sha256_digest(

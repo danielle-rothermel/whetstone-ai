@@ -1,9 +1,4 @@
-"""Legacy v0 DBOS enqueue-race regression coverage.
-
-These tests protect old harness behavior that remains useful while interpreting
-and migrating v0 workflow data. They are not a signal that harness is the
-forward graph-platform orchestration surface.
-"""
+"""Platform DBOS enqueue-race regression coverage."""
 
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ from dbos._error import (
     DBOSWorkflowConflictIDError,
 )
 
-from dr_dspy.harness.dbos import (
+from dr_dspy.platform.dbos_compat import (
     WORKFLOW_START_RACE_ERRORS,
     workflow_start_raced,
 )

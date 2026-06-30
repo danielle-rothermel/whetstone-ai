@@ -9,10 +9,18 @@ from dbos import DBOS
 from rich.console import Console
 from sqlalchemy import create_engine
 
-from dr_dspy.harness import dbos as shared_dbos
 from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
+)
+from dr_dspy.platform.cli_env import load_env_file, run_typer_app
+from dr_dspy.platform.dbos_bootstrap import (
+    DBOS_SYSTEM_DATABASE_URL_ENV,
+    EvalDbosConfig,
+    build_dbos_config,
+    build_eval_dbos_config,
+    destroy_dbos_runtime,
+    resolve_database_url,
 )
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
@@ -40,13 +48,12 @@ from dr_dspy.records import (
     DEFAULT_SCORE_DATASET_SPLIT,
     GenerationRunStatus,
 )
-from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
 DEFAULT_WORKER_CONCURRENCY = 1
 DBOS_SYSTEM_DATABASE_URL_HELP = (
     "DBOS system database URL; defaults to "
-    f"{shared_dbos.DBOS_SYSTEM_DATABASE_URL_ENV} or the resolved app "
+    f"{DBOS_SYSTEM_DATABASE_URL_ENV} or the resolved app "
     "database URL."
 )
 
@@ -61,8 +68,8 @@ def configure_platform_dbos_runtime(
     worker_concurrency: int = DEFAULT_WORKER_CONCURRENCY,
     consume_generation_queue: bool = False,
     database_url_error_suffix: str = "for platform graph workflow",
-) -> shared_dbos.EvalDbosConfig:
-    config = shared_dbos.build_eval_dbos_config(
+) -> EvalDbosConfig:
+    config = build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=worker_concurrency,
@@ -71,7 +78,7 @@ def configure_platform_dbos_runtime(
     )
     try:
         DBOS(
-            config=shared_dbos.build_dbos_config(
+            config=build_dbos_config(
                 config, app_name=DBOS_APP_NAME
             )
         )
@@ -85,7 +92,7 @@ def configure_platform_dbos_runtime(
                 worker_concurrency=worker_concurrency,
             )
     except Exception:
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()
         raise
     return config
 
@@ -140,7 +147,7 @@ def run_one(
             }
         )
     finally:
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()
 
 
 @APP.command("score-one")
@@ -216,7 +223,7 @@ def score_one(
             }
         )
     finally:
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()
 
 
 @APP.command("rescore")
@@ -306,7 +313,7 @@ def rescore(
 
     launched_dbos = False
     if dry_run:
-        resolved_database_url = shared_dbos.resolve_database_url(
+        resolved_database_url = resolve_database_url(
             database_url=database_url,
             error_suffix="for platform batch rescoring",
         )
@@ -340,7 +347,7 @@ def rescore(
     finally:
         engine.dispose()
         if launched_dbos:
-            shared_dbos.destroy_dbos_runtime()
+            destroy_dbos_runtime()
 
 
 @APP.command(help="Launch a queue-consuming v1 generation worker.")
@@ -385,7 +392,7 @@ def worker(
     except KeyboardInterrupt:
         CONSOLE.print("platform graph DBOS runtime stopping")
     finally:
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()
 
 
 @APP.command("submit-jsonl")
@@ -472,7 +479,7 @@ def submit_jsonl(
         CONSOLE.print(result.model_dump(mode="json"))
     finally:
         engine.dispose()
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()
 
 
 def main() -> None:

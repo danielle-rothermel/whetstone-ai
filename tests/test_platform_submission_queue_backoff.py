@@ -1570,12 +1570,12 @@ def test_platform_worker_config_listens_to_v1_queue(
 
     monkeypatch.setattr(worker, "DBOS", FakeDbos())
     monkeypatch.setattr(
-        worker.shared_dbos,
+        worker,
         "build_eval_dbos_config",
         lambda **kwargs: config,
     )
     monkeypatch.setattr(
-        worker.shared_dbos,
+        worker,
         "build_dbos_config",
         lambda config, app_name: {"name": app_name},
     )
@@ -1638,7 +1638,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
         raise AssertionError("dry-run should not resolve DBOS config")
 
     monkeypatch.setattr(
-        worker.shared_dbos,
+        worker,
         "build_eval_dbos_config",
         fail_build_eval_dbos_config,
     )
@@ -1722,12 +1722,12 @@ def test_run_one_runtime_keeps_empty_queue_listener(
 
     monkeypatch.setattr(worker, "DBOS", FakeDbos())
     monkeypatch.setattr(
-        worker.shared_dbos,
+        worker,
         "build_eval_dbos_config",
         lambda **kwargs: config,
     )
     monkeypatch.setattr(
-        worker.shared_dbos,
+        worker,
         "build_dbos_config",
         lambda config, app_name: {"name": app_name},
     )

@@ -7,7 +7,7 @@ from dbos import DBOS, SetWorkflowID
 from sqlalchemy import create_engine, select
 
 from dr_dspy.db import schema
-from dr_dspy.harness.dbos import (
+from dr_dspy.platform.dbos_compat import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
     DbosWorkflowStatus,

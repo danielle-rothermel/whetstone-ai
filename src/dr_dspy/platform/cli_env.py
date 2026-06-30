@@ -1,9 +1,4 @@
-"""Legacy-adjacent script runtime setup.
-
-These helpers are used by the v0 Typer CLIs and are intentionally forbidden
-from pure graph/platform modules. New platform entrypoints should keep runtime
-setup at their CLI boundary.
-"""
+"""Platform Typer CLI environment setup."""
 
 from __future__ import annotations
 
@@ -16,7 +11,7 @@ from typing import Any, Protocol
 
 from dotenv import load_dotenv
 
-DEFAULT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+DEFAULT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 __all__ = ["configure_multiprocessing", "load_env_file", "run_typer_app"]
 

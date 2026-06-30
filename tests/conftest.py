@@ -20,7 +20,12 @@ import dr_dspy.platform.graph_workflow
 import dr_dspy.platform.scoring_workflow  # noqa: F401
 import tests.integration.dbos_test_workflows  # noqa: F401
 from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
-from dr_dspy.harness import dbos as shared_dbos
+from dr_dspy.platform.dbos_bootstrap import (
+    EvalDbosConfig,
+    build_dbos_config,
+    build_eval_dbos_config,
+    destroy_dbos_runtime,
+)
 from dr_dspy.platform.worker import DBOS_APP_NAME
 
 
@@ -142,11 +147,11 @@ def app_postgres_schema(
 def reset_dbos(
     app_postgres_schema: AppPostgresSchema,
     tmp_path: Path,
-) -> Iterator[shared_dbos.EvalDbosConfig]:
-    shared_dbos.destroy_dbos_runtime()
+) -> Iterator[EvalDbosConfig]:
+    destroy_dbos_runtime()
     system_db_path = tmp_path / "dbos_system.sqlite"
     system_database_url = f"sqlite:///{system_db_path}"
-    config = shared_dbos.build_eval_dbos_config(
+    config = build_eval_dbos_config(
         database_url=app_postgres_schema.database_url,
         dbos_system_database_url=system_database_url,
         generation_concurrency=1,
@@ -154,7 +159,7 @@ def reset_dbos(
         database_url_error_suffix="for integration tests",
     )
     DBOS(
-        config=shared_dbos.build_dbos_config(
+        config=build_dbos_config(
             config,
             app_name=DBOS_APP_NAME,
         )
@@ -165,4 +170,4 @@ def reset_dbos(
     try:
         yield config
     finally:
-        shared_dbos.destroy_dbos_runtime()
+        destroy_dbos_runtime()

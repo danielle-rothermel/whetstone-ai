@@ -25,10 +25,8 @@ FORBIDDEN_PLATFORM_IMPORTS = (
     "psycopg_pool",
     "sqlalchemy",
     "dr_dspy.db",
-    "dr_dspy.experiments",
-    "dr_dspy.harness",
+    "dr_dspy.migration",
     "dr_dspy.records",
-    "dr_dspy.runtime",
 )
 FORBIDDEN_DSPY_IMPORTS = ("dspy",)
 ALLOWED_EXISTING_IMPORTS = {
