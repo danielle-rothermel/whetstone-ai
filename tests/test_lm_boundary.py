@@ -27,10 +27,12 @@ from dr_dspy.lm.boundary import (
     build_chat_completions_request,
     build_responses_request,
     call_provider_request,
+    message_dicts,
     openai_chat_config,
     openai_responses_config,
     openrouter_chat_config,
     parse_provider_response,
+    translate_provider_error,
 )
 from dr_dspy.lm.openrouter import LoggingOpenRouterLM
 from dr_dspy.lm.utils import LmEventBuffer
@@ -117,6 +119,41 @@ def test_openrouter_request_places_reasoning_in_extra_body() -> None:
             "reasoning": {"effort": "low"},
         },
     }
+
+
+def test_chat_request_merges_config_and_per_request_extra_body() -> None:
+    config = openrouter_chat_config(model="model/test").model_copy(
+        update={
+            "extra_body": {
+                "provider": {"order": ["Anthropic"]},
+                "route": "fallback",
+            },
+        },
+    )
+
+    request = build_chat_completions_request(
+        config=config,
+        messages=[{"role": "user", "content": "hello"}],
+        extra_body={"provider": {"order": ["OpenAI"]}},
+    )
+
+    assert request.kwargs["extra_body"] == {
+        "provider": {"order": ["OpenAI"]},
+        "route": "fallback",
+    }
+
+
+def test_provider_request_uses_custom_throttle_key() -> None:
+    config = openrouter_chat_config(model="model/test").model_copy(
+        update={"throttle_key": "openrouter:custom"},
+    )
+
+    request = build_chat_completions_request(
+        config=config,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    assert request.throttle_key == "openrouter:custom"
 
 
 def test_chat_request_suppresses_unsupported_temperature() -> None:
@@ -253,7 +290,11 @@ def test_parse_succeeds_when_response_metadata_is_unrecordable() -> None:
     )
 
     assert result.text == "ok"
-    assert result.response_metadata == {}
+    assert result.response_metadata["choices"] == [
+        {"message": {"content": "ok"}, "finish_reason": "stop"}
+    ]
+    with pytest.raises(RecordingFailureError):
+        ensure_recordable(result.response_metadata)
 
 
 def test_parse_metadata_exceeds_recordable_size_but_parse_succeeds() -> None:
@@ -288,6 +329,25 @@ def test_openrouter_chat_boundary_round_trip() -> None:
 
     assert result.text == "ok"
     assert client.completions.kwargs == request.kwargs
+
+
+def test_plain_prompt_adapter_round_trip_through_provider_boundary() -> None:
+    adapter = PlainPromptAdapter(output_field="code")
+    config = openrouter_chat_config(model="model/test")
+    client = _FakeClient()
+    request = build_chat_completions_request(
+        config=config,
+        messages=adapter.messages(user_content="solve this"),
+        token_limit=12,
+    )
+
+    response = call_provider_request(client, request)
+    result = parse_provider_response(response, config=config)
+
+    assert message_dicts(adapter.messages(user_content="solve this")) == (
+        request.kwargs["messages"]
+    )
+    assert adapter.output_from_result(result) == {"code": "ok"}
 
 
 def test_parse_responses_response_extracts_output_text() -> None:
@@ -407,6 +467,26 @@ def test_call_provider_request_uses_responses_client() -> None:
 
     assert response == {"output_text": "ok"}
     assert client.responses.kwargs == request.kwargs
+
+
+def test_translate_provider_error_preserves_original_message() -> None:
+    request = build_chat_completions_request(
+        config=openrouter_chat_config(model="model/test"),
+        messages=[{"role": "user", "content": "hello"}],
+    )
+
+    translated = translate_provider_error(
+        RuntimeError("provider said no"),
+        request=request,
+    )
+
+    assert str(translated) == "provider said no"
+    assert isinstance(translated.underlying, RuntimeError)
+    assert translated.metadata == {
+        "provider_kind": "openrouter",
+        "endpoint_kind": "chat_completions",
+        "method": "chat.completions.create",
+    }
 
 
 def test_provider_error_translation_preserves_rate_limit_cause() -> None:
