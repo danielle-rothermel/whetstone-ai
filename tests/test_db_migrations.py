@@ -22,6 +22,17 @@ from sqlalchemy.exc import IntegrityError
 from dr_dspy.db import schema
 
 
+def test_alembic_env_normalizes_database_url_driver() -> None:
+    from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
+
+    assert normalize_postgresql_driver_url(
+        "postgresql://localhost/dr_dspy"
+    ) == "postgresql+psycopg://localhost/dr_dspy"
+    assert normalize_postgresql_driver_url(
+        "postgresql+psycopg:///dr_dspy"
+    ) == "postgresql+psycopg:///dr_dspy"
+
+
 def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
