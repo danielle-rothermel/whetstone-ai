@@ -845,3 +845,274 @@ def test_graph_run_result_rejects_conflicting_terminal_fields() -> None:
                 error=NodeError(error_type="test", message="failed"),
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (
+            {"source": "task", "field": "prompt", "node_id": "n1"},
+            "task binding refs cannot include node_id",
+        ),
+        (
+            {"source": "task", "field": ""},
+            "task binding refs require a field",
+        ),
+        (
+            {"source": "task"},
+            "task binding refs require a field",
+        ),
+        (
+            {"source": "node", "field": "out"},
+            "node binding refs require node_id",
+        ),
+        (
+            {"source": "node", "node_id": "", "field": "out"},
+            "node binding refs require node_id",
+        ),
+        (
+            {"source": "node", "node_id": "enc", "field": ""},
+            "non-empty field",
+        ),
+        (
+            {"source": "node", "node_id": "task"},
+            "'task' is reserved",
+        ),
+        (
+            {"source": "node", "node_id": "a.b"},
+            "cannot contain '.'",
+        ),
+    ],
+)
+def test_binding_ref_rejects_invalid_dict_shapes(
+    payload: dict[str, str],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        BindingRef.model_validate(payload)
+
+
+def _node_error() -> NodeError:
+    return NodeError(error_type="test", message="failed")
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"node_id": "n", "status": NodeOutcomeStatus.SUCCESS},
+            "require output",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.SUCCESS,
+                "output": _output("ok"),
+                "error": _node_error(),
+            },
+            "cannot include error",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.SUCCESS,
+                "output": _output("ok"),
+                "blocked_by": ("upstream",),
+            },
+            "cannot include blocked_by",
+        ),
+        (
+            {"node_id": "n", "status": NodeOutcomeStatus.ERROR},
+            "require error",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.ERROR,
+                "error": _node_error(),
+                "output": _output("ok"),
+            },
+            "cannot include output",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.ERROR,
+                "error": _node_error(),
+                "blocked_by": ("upstream",),
+            },
+            "cannot include blocked_by",
+        ),
+        (
+            {"node_id": "n", "status": NodeOutcomeStatus.BLOCKED},
+            "require blocked_by",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.BLOCKED,
+                "blocked_by": ("upstream",),
+                "output": _output("ok"),
+            },
+            "cannot include output",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.BLOCKED,
+                "blocked_by": ("upstream",),
+                "error": _node_error(),
+            },
+            "cannot include error",
+        ),
+    ],
+)
+def test_node_outcome_rejects_invalid_field_combinations(
+    kwargs: dict[str, Any],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        NodeOutcome(**kwargs)
+
+
+def _terminal_error(
+    *,
+    status: NodeOutcomeStatus,
+    node_id: str = "direct",
+) -> TerminalError:
+    if status is NodeOutcomeStatus.ERROR:
+        return TerminalError(
+            node_id=node_id,
+            status=status,
+            error=_node_error(),
+        )
+    return TerminalError(
+        node_id=node_id,
+        status=status,
+        blocked_by=("upstream",),
+    )
+
+
+@pytest.mark.parametrize(
+    ("status", "kwargs", "match"),
+    [
+        (
+            GraphRunStatus.SUCCESS,
+            {
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.ERROR
+                ),
+            },
+            "cannot include terminal_error",
+        ),
+        (
+            GraphRunStatus.PARTIAL,
+            {
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.ERROR
+                ),
+            },
+            "cannot include terminal_error",
+        ),
+        (
+            GraphRunStatus.ERROR,
+            {},
+            "require terminal_error",
+        ),
+        (
+            GraphRunStatus.BLOCKED,
+            {},
+            "require terminal_error",
+        ),
+        (
+            GraphRunStatus.ERROR,
+            {
+                "terminal_output": "ok",
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.ERROR
+                ),
+            },
+            "both terminal_output and terminal_error",
+        ),
+        (
+            GraphRunStatus.ERROR,
+            {
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.ERROR,
+                    node_id="other",
+                ),
+            },
+            "must match terminal_node_id",
+        ),
+        (
+            GraphRunStatus.ERROR,
+            {
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.BLOCKED
+                ),
+            },
+            "must be error for error graph runs",
+        ),
+        (
+            GraphRunStatus.BLOCKED,
+            {
+                "terminal_error": _terminal_error(
+                    status=NodeOutcomeStatus.ERROR
+                ),
+            },
+            "must be blocked for blocked graph runs",
+        ),
+    ],
+)
+def test_graph_run_result_rejects_invalid_terminal_shape(
+    status: GraphRunStatus,
+    kwargs: dict[str, Any],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        GraphRunResult(
+            status=status,
+            outcomes={},
+            execution_order=(),
+            terminal_node_id="direct",
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        (
+            {"node_id": "n", "status": NodeOutcomeStatus.ERROR},
+            "require error",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.ERROR,
+                "error": _node_error(),
+                "blocked_by": ("upstream",),
+            },
+            "cannot include blocked_by",
+        ),
+        (
+            {"node_id": "n", "status": NodeOutcomeStatus.BLOCKED},
+            "require blocked_by",
+        ),
+        (
+            {
+                "node_id": "n",
+                "status": NodeOutcomeStatus.BLOCKED,
+                "blocked_by": ("upstream",),
+                "error": _node_error(),
+            },
+            "cannot include error",
+        ),
+    ],
+)
+def test_terminal_error_rejects_invalid_field_combinations(
+    kwargs: dict[str, Any],
+    match: str,
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        TerminalError(**kwargs)

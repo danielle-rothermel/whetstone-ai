@@ -248,3 +248,178 @@ def test_submit_prediction_specs_round_trips_summary(
         assert row[2] is not None
     finally:
         engine.dispose()
+
+
+def test_submit_prediction_specs_reports_already_present(
+    app_postgres_schema,
+) -> None:
+    graph = GraphSpec(nodes=(direct_node(),), terminal_node_id="direct")
+    existing_spec = prediction_spec(graph, task_id="HumanEval/0")
+    new_spec = prediction_spec(graph, task_id="HumanEval/1")
+    operation_key = "integration-already-present"
+    engine = create_engine(app_postgres_schema.database_url)
+
+    def noop_enqueue(
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+        queue_name: str,
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    try:
+        with engine.begin() as connection:
+            seed_prediction_spec(connection, existing_spec)
+
+        result = submission.submit_prediction_specs(
+            engine,
+            database_url=app_postgres_schema.database_url,
+            operation_key=operation_key,
+            experiment_name="exp",
+            specs=(existing_spec, new_spec),
+            chunk_size=2,
+            enqueue_workflow=noop_enqueue,
+        )
+
+        assert result.requested_count == 2
+        assert result.inserted_count == 1
+        assert result.already_present_count == 1
+        assert result.enqueued_count == 2
+
+        with engine.connect() as connection:
+            spec_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM dr_dspy_prediction_specs "
+                    "WHERE prediction_id IN (:existing_id, :new_id)"
+                ),
+                {
+                    "existing_id": existing_spec.prediction_id,
+                    "new_id": new_spec.prediction_id,
+                },
+            ).scalar_one()
+        assert spec_count == 2
+    finally:
+        engine.dispose()
+
+
+def test_submit_batch_operation_is_idempotent(
+    app_postgres_schema,
+) -> None:
+    graph = GraphSpec(nodes=(direct_node(),), terminal_node_id="direct")
+    spec = prediction_spec(graph)
+    operation_key = "integration-operation-idempotent"
+    engine = create_engine(app_postgres_schema.database_url)
+
+    def noop_enqueue(
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+        queue_name: str,
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    try:
+        first = submission.submit_prediction_specs(
+            engine,
+            database_url=app_postgres_schema.database_url,
+            operation_key=operation_key,
+            experiment_name="exp",
+            specs=(spec,),
+            chunk_size=1,
+            enqueue_workflow=noop_enqueue,
+        )
+        second = submission.submit_prediction_specs(
+            engine,
+            database_url=app_postgres_schema.database_url,
+            operation_key=operation_key,
+            experiment_name="exp",
+            specs=(spec,),
+            chunk_size=1,
+            enqueue_workflow=noop_enqueue,
+        )
+
+        assert first.inserted_count == 1
+        assert second.requested_count == 1
+
+        with engine.connect() as connection:
+            operation_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM dr_dspy_batch_submit_operations "
+                    "WHERE operation_key = :operation_key"
+                ),
+                {"operation_key": operation_key},
+            ).scalar_one()
+            spec_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM dr_dspy_prediction_specs "
+                    "WHERE prediction_id = :prediction_id"
+                ),
+                {"prediction_id": spec.prediction_id},
+            ).scalar_one()
+        assert operation_count == 1
+        assert spec_count == 1
+    finally:
+        engine.dispose()
+
+
+def test_submit_batch_item_conflict_is_silent(
+    app_postgres_schema,
+) -> None:
+    graph = GraphSpec(nodes=(direct_node(),), terminal_node_id="direct")
+    spec = prediction_spec(graph)
+    operation_key = "integration-batch-item-idempotent"
+    engine = create_engine(app_postgres_schema.database_url)
+
+    try:
+        with engine.begin() as connection:
+            seed_prediction_spec(connection, spec)
+            submission.prepare_submission_records(
+                connection,
+                operation_key=operation_key,
+                experiment_name="exp",
+                ordered_specs=(spec,),
+                submit_spec={},
+                metadata={},
+                chunk_size=1,
+            )
+            submission.prepare_submission_records(
+                connection,
+                operation_key=operation_key,
+                experiment_name="exp",
+                ordered_specs=(spec,),
+                submit_spec={},
+                metadata={},
+                chunk_size=1,
+            )
+
+        with engine.connect() as connection:
+            item_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM dr_dspy_batch_submit_items "
+                    "WHERE operation_key = :operation_key "
+                    "AND prediction_id = :prediction_id"
+                ),
+                {
+                    "operation_key": operation_key,
+                    "prediction_id": spec.prediction_id,
+                },
+            ).scalar_one()
+        assert item_count == 1
+    finally:
+        engine.dispose()

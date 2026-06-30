@@ -304,11 +304,8 @@ def reshape_v0_encdec_row(row: Mapping[str, Any]) -> V0ReshapeResult:
                 failure=failure,
             ),
         )
-        terminal_error = GenerationTerminalErrorPayload(
-            node_id="decoder",
-            status=GenerationRunStatus.ERROR,
-            failure=failure,
-        )
+        terminal_node_id = "decoder"
+        summary_terminal_error = None
     else:
         run_status = GenerationRunStatus.ERROR
         execution_order = ("encoder",)
@@ -329,7 +326,8 @@ def reshape_v0_encdec_row(row: Mapping[str, Any]) -> V0ReshapeResult:
                 completed_at=completed_at,
             ),
         )
-        terminal_error = GenerationTerminalErrorPayload(
+        terminal_node_id = "encoder"
+        summary_terminal_error = GenerationTerminalErrorPayload(
             node_id="encoder",
             status=GenerationRunStatus.ERROR,
             failure=failure,
@@ -339,11 +337,11 @@ def reshape_v0_encdec_row(row: Mapping[str, Any]) -> V0ReshapeResult:
         prediction_id=spec.prediction_id,
         attempt_index=0,
         status=run_status,
-        terminal_node_id=terminal_error.node_id,
+        terminal_node_id=terminal_node_id,
         summary=GenerationRunSummaryPayload(
             execution_order=execution_order,
-            terminal_node_id=terminal_error.node_id,
-            terminal_error=terminal_error,
+            terminal_node_id=terminal_node_id,
+            terminal_error=summary_terminal_error,
             metadata={V0_SOURCE_METADATA_KEY: source_metadata},
         ),
         started_at=started_at,

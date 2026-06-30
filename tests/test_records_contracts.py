@@ -18,6 +18,7 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_dspy.hashing import canonical_json
 from dr_dspy.humaneval import metrics as humaneval_metrics
 from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
@@ -27,7 +28,6 @@ from dr_dspy.lm.boundary import (
     ProviderKind,
     openai_responses_config,
 )
-from dr_dspy.lm.utils import stable_json
 from dr_dspy.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -372,7 +372,7 @@ def _legacy_v0_prediction_id_from_dimensions(
     repetition_seed: int,
     digest_length: int,
 ) -> str:
-    raw = stable_json(
+    raw = canonical_json(
         {
             "experiment_name": experiment_name,
             "task_id": task_id,
@@ -997,3 +997,29 @@ def test_projection_requires_selected_generation_or_score() -> None:
             projection_version="v1",
             selected_at=NOW,
         )
+
+
+def test_projection_accepts_generation_run_only() -> None:
+    projection = PredictionProjectionRecord(
+        prediction_id="prediction-1",
+        generation_run_id="run-1",
+        projection_profile_id="analysis",
+        projection_version="v1",
+        selected_at=NOW,
+    )
+
+    assert projection.generation_run_id == "run-1"
+    assert projection.score_attempt_id is None
+
+
+def test_projection_accepts_score_attempt_only() -> None:
+    projection = PredictionProjectionRecord(
+        prediction_id="prediction-1",
+        score_attempt_id="score-1",
+        projection_profile_id="analysis",
+        projection_version="v1",
+        selected_at=NOW,
+    )
+
+    assert projection.score_attempt_id == "score-1"
+    assert projection.generation_run_id is None

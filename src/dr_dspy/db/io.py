@@ -5,7 +5,6 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import Select, and_, null, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql.dml import Insert, Update
 
 from dr_dspy.db import schema
@@ -447,16 +446,6 @@ def insert_prediction_spec(record: PredictionSpecRecord) -> Insert:
     )
 
 
-def insert_prediction_spec_on_conflict_do_nothing(
-    record: PredictionSpecRecord,
-) -> Insert:
-    return (
-        pg_insert(schema.prediction_specs)
-        .values(prediction_spec_row(record))
-        .on_conflict_do_nothing(index_elements=["prediction_id"])
-    )
-
-
 def insert_generation_run(record: GenerationRunRecord) -> Insert:
     return schema.generation_runs.insert().values(generation_run_row(record))
 
@@ -485,16 +474,6 @@ def insert_batch_submit_operation(
     )
 
 
-def insert_batch_submit_operation_on_conflict_do_nothing(
-    record: BatchSubmitOperationRecord,
-) -> Insert:
-    return (
-        pg_insert(schema.batch_submit_operations)
-        .values(batch_submit_operation_row(record))
-        .on_conflict_do_nothing(index_elements=["operation_key"])
-    )
-
-
 def update_batch_submit_operation(
     record: BatchSubmitOperationRecord,
 ) -> Update:
@@ -510,18 +489,6 @@ def update_batch_submit_operation(
 def insert_batch_submit_item(record: BatchSubmitItemRecord) -> Insert:
     return schema.batch_submit_items.insert().values(
         batch_submit_item_insert_values(record)
-    )
-
-
-def insert_batch_submit_item_on_conflict_do_nothing(
-    record: BatchSubmitItemRecord,
-) -> Insert:
-    return (
-        pg_insert(schema.batch_submit_items)
-        .values(batch_submit_item_insert_values(record))
-        .on_conflict_do_nothing(
-            constraint="uq_dr_dspy_batch_items_operation_prediction"
-        )
     )
 
 

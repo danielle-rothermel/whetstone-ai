@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -260,6 +261,66 @@ def test_optional_exception_type_skips_unloaded_modules(
 
     assert policy.classify_exception(error) is FailureClass.UNKNOWN
     assert module_name not in sys.modules
+
+
+def test_is_open_file_exhaustion_detects_emfile_errno() -> None:
+    error = OSError(errno.EMFILE, "Too many open files")
+
+    assert policy.is_open_file_exhaustion(error) is True
+    assert policy.classify_exception(error) is FailureClass.RESOURCE_EXHAUSTION
+
+
+def test_is_open_file_exhaustion_detects_message_substring() -> None:
+    error = Exception("Too Many Open Files in process")
+
+    assert policy.is_open_file_exhaustion(error) is True
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_class", "expected_retry"),
+    [
+        (TimeoutError("deadline exceeded"), FailureClass.TRANSIENT, True),
+        (ValueError("bad input"), FailureClass.PERMANENT, False),
+    ],
+)
+def test_builtin_exception_classification(
+    error: BaseException,
+    expected_class: FailureClass,
+    expected_retry: bool,
+) -> None:
+    assert policy.classify_exception(error) is expected_class
+    assert should_retry_step(error) is expected_retry
+
+
+def test_find_classified_exception_walks_cause_chain() -> None:
+    root = PermanentFailureError("root cause", metadata={"node": "decoder"})
+    wrapped = RuntimeError("wrapper")
+    wrapped.__cause__ = root
+
+    assert policy.find_classified_exception(wrapped) is root
+
+
+def test_lazy_openai_connection_error_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAPIConnectionError(Exception):
+        pass
+
+    module_name = "tests.fake_openai_connection"
+    monkeypatch.setitem(
+        sys.modules,
+        module_name,
+        _fake_module(
+            module_name,
+            APIConnectionError=FakeAPIConnectionError,
+        ),
+    )
+    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
+
+    error = FakeAPIConnectionError("connection reset")
+
+    assert policy.classify_exception(error) is FailureClass.TRANSIENT
+    assert policy.should_retry_step(error) is True
 
 
 def test_policy_import_does_not_load_runtime_exception_modules() -> None:

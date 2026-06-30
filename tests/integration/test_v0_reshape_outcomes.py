@@ -21,6 +21,7 @@ DIRECT_TERMINAL_FIXTURES = (
 ENC_DEC_TERMINAL_FIXTURES = (
     "encdec_success.json",
     "encdec_encoder_failure.json",
+    "encdec_decoder_failure.json",
     "encdec_extraction_edge.json",
 )
 

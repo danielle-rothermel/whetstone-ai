@@ -31,6 +31,7 @@ ALL_FIXTURES = (
     ("direct_generation_error.json", reshape_v0_direct_row),
     ("encdec_success.json", reshape_v0_encdec_row),
     ("encdec_encoder_failure.json", reshape_v0_encdec_row),
+    ("encdec_decoder_failure.json", reshape_v0_encdec_row),
     ("encdec_extraction_edge.json", reshape_v0_encdec_row),
 )
 

@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
+from dbos import DBOS
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Row
 
+from dr_dspy.platform.dbos_compat import (
+    DBOS_ACTIVE_WORKFLOW_STATUSES,
+    DBOS_FAILED_WORKFLOW_STATUSES,
+    DbosWorkflowStatus,
+)
+from dr_dspy.platform.scoring_workflow_state import dbos_workflow_status_value
 from dr_dspy.records import (
     GenerationRunRecord,
     NodeAttemptRecord,
@@ -75,6 +83,54 @@ def fetch_workflow_run_snapshot(
     finally:
         engine.dispose()
     return WorkflowRunSnapshot(row, int(node_count))
+
+
+def wait_for_workflow_result(
+    workflow_id: str,
+    *,
+    timeout_s: float = 30.0,
+    poll_interval_s: float = 0.1,
+) -> object:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        status_value = dbos_workflow_status_value(
+            DBOS.get_workflow_status(workflow_id)
+        )
+        if status_value == DbosWorkflowStatus.SUCCESS.value:
+            return DBOS.retrieve_workflow(workflow_id).get_result()
+        if status_value in DBOS_FAILED_WORKFLOW_STATUSES:
+            raise RuntimeError(
+                f"workflow {workflow_id} failed with status {status_value}"
+            )
+        if (
+            status_value not in DBOS_ACTIVE_WORKFLOW_STATUSES
+            and status_value is not None
+        ):
+            return DBOS.retrieve_workflow(workflow_id).get_result()
+        time.sleep(poll_interval_s)
+    raise TimeoutError(
+        f"timed out waiting for workflow {workflow_id} after {timeout_s}s"
+    )
+
+
+def fetch_batch_submit_operation_status(
+    database_url: str,
+    operation_key: str,
+) -> str:
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            return str(
+                connection.execute(
+                    text(
+                        "SELECT status FROM dr_dspy_batch_submit_operations "
+                        "WHERE operation_key = :operation_key"
+                    ),
+                    {"operation_key": operation_key},
+                ).scalar_one()
+            )
+    finally:
+        engine.dispose()
 
 
 def count_generation_runs(

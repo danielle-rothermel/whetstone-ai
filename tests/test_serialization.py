@@ -29,6 +29,7 @@ from dr_dspy.serialization import (
     SignatureSummaryError,
     sanitize_lm_kwargs,
     to_jsonable,
+    to_metadata_dict,
 )
 from tests.serialization_support import (
     BadModel,
@@ -381,3 +382,53 @@ class TestStructuredErrors:
             assert isinstance(diag, dict)
             assert "path" in diag
             assert issubclass(type(exc), exc_type)
+
+
+class TestMetadataAndEdgePaths:
+    def test_to_metadata_dict_passthrough_dict_on_serialization_error(
+        self,
+    ) -> None:
+        nested: list[Any] = []
+        current: list[Any] = nested
+        for _ in range(101):
+            inner: list[Any] = []
+            current.append(inner)
+            current = inner
+        payload = {"bad": nested}
+        metadata = to_metadata_dict(payload)
+
+        assert metadata == payload
+
+    def test_to_metadata_dict_returns_empty_for_non_dict_failure(self) -> None:
+        nested: list[Any] = []
+        current: list[Any] = nested
+        for _ in range(101):
+            inner: list[Any] = []
+            current.append(inner)
+            current = inner
+        assert to_metadata_dict(nested) == {}
+
+    def test_to_metadata_dict_wraps_scalar_success(self) -> None:
+        assert to_metadata_dict("hello") == {"response": "hello"}
+
+    def test_json_encode_error_reports_nested_path(self) -> None:
+        with pytest.raises(JsonEncodeError) as exc_info:
+            to_jsonable({"a": [{"b": object()}]})
+
+        assert exc_info.value.path == ("a", 0, "b")
+
+    def test_payload_too_large_error_uses_empty_tail_for_short_payload(
+        self,
+    ) -> None:
+        payload = {"data": "x" * 120}
+        with pytest.raises(PayloadTooLargeError) as exc_info:
+            to_jsonable(payload, max_bytes=100)
+
+        assert exc_info.value.preview_tail == ""
+
+    def test_async_generator_serializes_to_placeholder(self) -> None:
+        async def async_gen() -> Any:
+            yield 1
+
+        result = to_jsonable(async_gen())
+        assert result == "<async_generator>"

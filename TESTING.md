@@ -14,6 +14,7 @@ and skip gracefully when PostgreSQL is unavailable.
 | `./scripts/ci/unit.sh` | Unit tests (excludes integration marker) |
 | `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (generation + scoring) |
 | `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
+| `./scripts/ci/coverage.sh` | Unit + integration tests with combined coverage report |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
 ## Test tiers
@@ -26,6 +27,7 @@ and skip gracefully when PostgreSQL is unavailable.
 | **2 — Workflow** | Generation: `run_prediction_graph_workflow_once` happy path with mocked LM. Scoring: `run_score_generation_workflow_once` with mocked HumanEval task load | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
 | **3 — Recovery** | Generation: retry-exhaustion step/timestamp assertions, upstream `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, persist idempotency, persist failure surfacing. Scoring: workflow replay idempotency, task-loader memoization, orphan workflow recovery | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
 | **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through (only remaining v0-related tier until backfill completes) | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
+| **4 — Pipeline E2E** | JSONL submit → real DBOS enqueue → in-process queue consumer → generation → scoring (mock LM + HumanEval loader only) | [`tests/integration/test_platform_pipeline_e2e.py`](tests/integration/test_platform_pipeline_e2e.py) |
 
 Design context: [append-only eval platform design](docs/append-only-eval-records-design.md),
 [platform graph workflow notes](docs/platform-graph-workflow-implementation.md).
@@ -40,6 +42,7 @@ tests/
     platform_integration_helpers.py
     platform_scoring_fixtures.py
     platform_workflow_fixtures.py
+    jsonl_fixtures.py
     postgres_fixtures.py
   fixtures/v0_samples/        # committed JSON rows from legacy v0 tables
   integration/                # @pytest.mark.integration tests
@@ -48,11 +51,13 @@ tests/
     test_platform_dbos_workflow.py
     test_platform_scoring_db_steps.py
     test_platform_scoring_dbos_workflow.py
+    test_platform_pipeline_e2e.py
     test_v0_reshape_outcomes.py
     test_v0_reshape_specs.py
 scripts/ci/                   # portable CI entrypoints (package-root cwd)
   unit.sh
   integration.sh
+  coverage.sh
   lint.sh
 src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
@@ -66,11 +71,20 @@ Defined in [`tests/conftest.py`](tests/conftest.py):
   that open their own SQLAlchemy engines.
 - **`reset_dbos`** — destroys/reconfigures DBOS, resets the system database
   (SQLite file under `tmp_path` by default), and launches the platform runtime.
+- **`reset_dbos_generation_consumer`** — like `reset_dbos`, but listens to the
+  platform generation queue and registers a worker before yielding (for Tier 4
+  pipeline tests).
 
 Seed helpers live in [`tests/support/postgres_fixtures.py`](tests/support/postgres_fixtures.py):
 
 - **`seed_prediction_spec(connection, spec)`** — inserts experiment + spec rows.
 - **`start_test_workflow(workflow, workflow_id, *args)`** — DBOS workflow helper.
+
+Integration polling helpers live in
+[`tests/support/platform_integration_helpers.py`](tests/support/platform_integration_helpers.py):
+
+- **`wait_for_workflow_result(workflow_id)`** — poll DBOS until a workflow
+  reaches a terminal status.
 
 ## Conventions
 
@@ -78,6 +92,9 @@ Seed helpers live in [`tests/support/postgres_fixtures.py`](tests/support/postgr
 
 - **Workflow integration tests:** mock only the LM boundary (`execute_lm_node` or
   provider caller). Do not mock DB steps under test.
+- **Pipeline E2E (Tier 4):** mock LM and HumanEval task load only; use real
+  JSONL submit, enqueue, queue consumption, Postgres persistence, and scoring
+  workflow steps.
 - **Unit orchestration tests:** may mock all steps and use `.__wrapped__` to
   verify call order without DBOS overhead.
 
@@ -112,7 +129,26 @@ tests after backfill validation — see
 | `DBOS_SYSTEM_DATABASE_URL` | Optional; integration tests use a per-test SQLite file when unset |
 
 Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
-workflows are under test.
+workflows are under test. Tier 4 pipeline tests use `reset_dbos_generation_consumer`
+instead.
+
+## Coverage
+
+Combined coverage runs unit tests first, then appends integration test
+coverage. The threshold is enforced on the merged report because migration
+backfill/downgrade proofs and submit idempotency live in the integration tier.
+
+| Command | Notes |
+|---------|-------|
+| `./scripts/ci/coverage.sh` | Requires Postgres (`DATABASE_URL`) for integration append |
+| `uv sync --group dev` | Installs `coverage` and `pytest-cov` dev dependencies |
+
+Current `fail_under` threshold: **88%** in [`pyproject.toml`](pyproject.toml)
+(`[tool.coverage.report]`). Combined unit + integration coverage is typically
+**~94%**; unit-only coverage alone is not sufficient for DB/migration gaps.
+
+CI runs a dedicated **Coverage** job (see below) that executes
+`./scripts/ci/coverage.sh` with a Postgres 16 service.
 
 ## CI
 
@@ -124,12 +160,14 @@ Jobs run from the standalone repository root.
 | lint | `./scripts/ci/lint.sh` | ruff + ty |
 | unit | `./scripts/ci/unit.sh` | unit tests |
 | integration | `./scripts/ci/integration.sh` | Postgres 16 service; integration tests |
+| coverage | `./scripts/ci/coverage.sh` | Postgres 16 service; combined coverage gate |
 
 Local equivalents (from the package root):
 
 ```bash
 ./scripts/ci/lint.sh
 ./scripts/ci/unit.sh
+./scripts/ci/coverage.sh
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
@@ -145,6 +183,31 @@ DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 wiring after the org repo is created.
 
 ## Changelog
+
+### 2026-06-30 — Remove unused `lm.utils` symbols
+
+- Deleted v0-only helpers (`LmEventBuffer`, `response_text`, `stable_json`,
+  `usage_metadata_from_response`, `ModelConfig`); boundary uses
+  `content_to_text` and `provider_cost_from_response` only.
+- Cleared outstanding testing backlog from planning docs; Tier 4 E2E marked done.
+
+### 2026-06-30 — Coverage gap closure
+
+- Added `./scripts/ci/coverage.sh` and a **Coverage** CI job with an 88%
+  combined threshold (`coverage` + `pytest-cov` dev dependencies).
+- Removed unused `db/io.py` `insert_*_on_conflict_do_nothing` helpers; added
+  Postgres submit idempotency integration tests.
+- Added validator, humaneval, serialization, migration backfill/downgrade, and
+  Alembic env offline SQL smoke tests.
+
+### 2026-06-30 — High-risk coverage: prompts, import inference, worker CLI, pipeline E2E
+
+- Added unit tests for `platform/prompts.py` error paths, `humaneval/import_inference.py`,
+  and `platform/worker.py` CLI wiring (`score-one`, `submit-jsonl`, `worker`, `rescore`).
+- Added Tier 4 pipeline integration test:
+  JSONL submit → DBOS enqueue → queue consumer → generation → scoring.
+- Added `reset_dbos_generation_consumer` fixture, `wait_for_workflow_result` helper,
+  and `tests/support/jsonl_fixtures.py`.
 
 ### 2026-06-30 — Standalone repository CI
 

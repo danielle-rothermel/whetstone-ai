@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+from dbos._error import DBOSWorkflowConflictIDError
 from sqlalchemy.dialects import postgresql
 
 from dr_dspy.db import io as db_io
@@ -19,13 +20,16 @@ from dr_dspy.graph import (
 )
 from dr_dspy.humaneval import scoring as humaneval_scoring
 from dr_dspy.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
     STRICT_FIELD_MARKER_PARSER_PROFILE,
     STRICT_FIELD_MARKER_PARSER_PROFILE_ID,
     ExtractionMethod,
     extract_best_effort_code,
+    extract_code_with_profile,
     extract_strict_field_marker_code,
+    resolve_parser_profile,
 )
 from dr_dspy.humaneval.metrics import (
     HUMANEVAL_METRICS_PROFILE_ID,
@@ -388,6 +392,87 @@ def test_strict_parser_only_accepts_field_marker_format() -> None:
     assert good.extraction_method is ExtractionMethod.FIELD_MARKER
     assert json_result.succeeded is False
     assert bare_result.succeeded is False
+
+
+def test_resolve_parser_profile_rejects_unknown_ids() -> None:
+    with pytest.raises(ValueError, match="unsupported parser profile id"):
+        resolve_parser_profile(
+            parser_profile_id="unknown",
+            parser_version=PARSER_PROFILE_VERSION,
+        )
+    with pytest.raises(ValueError, match="unsupported parser profile version"):
+        resolve_parser_profile(
+            parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+            parser_version="v99",
+        )
+
+
+def test_extract_code_with_profile_dispatches_best_effort() -> None:
+    result = extract_code_with_profile(
+        "def add_one(x):\n    return x + 1\n",
+        profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+    )
+
+    assert result.succeeded is True
+    assert result.extraction_method is ExtractionMethod.BARE_PYTHON
+
+
+def test_best_effort_parser_rejects_unsupported_raw_type() -> None:
+    result = extract_best_effort_code(123)
+
+    assert result.succeeded is False
+    assert result.extraction_error == (
+        "generation is not a supported code-bearing value"
+    )
+    assert result.metadata["raw_type"] == "int"
+
+
+def test_best_effort_parser_reports_missing_code_field_in_mapping() -> None:
+    result = extract_best_effort_code({"other": "value"})
+
+    assert result.succeeded is False
+    assert result.metadata["available_fields"] == ["other"]
+
+
+def test_best_effort_parser_reports_no_candidates() -> None:
+    result = extract_best_effort_code("plain prose without code anchors")
+
+    assert result.succeeded is False
+    assert result.extraction_error == "no code candidates extracted"
+
+
+def test_best_effort_parser_reports_no_compilable_candidate() -> None:
+    result = extract_best_effort_code("def bad(x)\n  pass")
+
+    assert result.succeeded is False
+    assert result.extraction_error == "no compilable extracted candidate"
+    assert result.compile_error is not None
+
+
+def test_strict_parser_rejects_non_string_generation() -> None:
+    result = extract_strict_field_marker_code({"code": "def f(): pass"})
+
+    assert result.succeeded is False
+    assert (
+        result.extraction_error
+        == "strict parser requires string generation"
+    )
+
+
+def test_strict_parser_rejects_empty_field_marker_body() -> None:
+    result = extract_strict_field_marker_code("[[ ## code ## ]]\n   \n")
+
+    assert result.succeeded is False
+    assert result.extraction_error == "empty field-marker code"
+
+
+def test_strict_parser_rejects_syntax_error_in_marker_body() -> None:
+    result = extract_strict_field_marker_code(
+        "[[ ## code ## ]]\ndef bad(x)\n  pass\n",
+    )
+
+    assert result.succeeded is False
+    assert result.extraction_error == "field-marker code is not compilable"
 
 
 def test_metrics_payload_includes_full_stage_metrics() -> None:
@@ -1696,6 +1781,135 @@ def test_schedule_score_generation_workflow_surfaces_unrelated_start_failure(
         )
 
 
+def _schedule_score_ids(
+    generation_run_id: str,
+) -> tuple[str, str]:
+    score_attempt_id = stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        attempt_index=0,
+    )
+    return (
+        score_attempt_id,
+        scoring_workflow.platform_scoring_workflow_id(score_attempt_id),
+    )
+
+
+@pytest.mark.parametrize(
+    ("presence", "recover_orphans", "recover_result", "expected"),
+    [
+        (
+            ScoringWorkflowPresence.COMPLETE,
+            False,
+            None,
+            {"scheduled": False, "recovered": False},
+        ),
+        (
+            ScoringWorkflowPresence.ABSENT,
+            False,
+            None,
+            {"scheduled": True, "recovered": False},
+        ),
+        (
+            ScoringWorkflowPresence.ORPHAN,
+            False,
+            None,
+            {"scheduled": False, "recovered": False},
+        ),
+        (
+            ScoringWorkflowPresence.ORPHAN,
+            True,
+            True,
+            {"scheduled": True, "recovered": True},
+        ),
+        (
+            ScoringWorkflowPresence.ORPHAN,
+            True,
+            False,
+            {"scheduled": False, "recovered": False},
+        ),
+    ],
+)
+def test_schedule_score_generation_workflow_presence_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    presence: ScoringWorkflowPresence,
+    recover_orphans: bool,
+    recover_result: bool | None,
+    expected: dict[str, bool],
+) -> None:
+    generation_run_id = "generation-run-schedule"
+    score_attempt_id, workflow_id = _schedule_score_ids(generation_run_id)
+    starts: list[Any] = []
+
+    monkeypatch.setattr(
+        scoring_workflow,
+        "classify_scoring_workflow_presence",
+        lambda **kwargs: presence,
+    )
+    if recover_result is not None:
+        monkeypatch.setattr(
+            scoring_workflow,
+            "recover_orphan_scoring_workflow",
+            lambda **kwargs: recover_result,
+        )
+
+    class FakeDbos:
+        def start_workflow(self, *args: Any) -> None:
+            starts.append(args)
+
+    monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
+
+    result = scoring_workflow.schedule_score_generation_workflow(
+        database_url="postgresql://example/db",
+        generation_run_id=generation_run_id,
+        recover_orphans=recover_orphans,
+    )
+
+    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+        scheduled=expected["scheduled"],
+        recovered=expected["recovered"],
+    )
+    if presence is ScoringWorkflowPresence.ABSENT:
+        assert len(starts) == 1
+    else:
+        assert starts == []
+
+
+def test_schedule_score_generation_workflow_treats_start_race_as_unscheduled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation_run_id = "generation-run-race"
+    score_attempt_id, workflow_id = _schedule_score_ids(generation_run_id)
+
+    monkeypatch.setattr(
+        scoring_workflow,
+        "classify_scoring_workflow_presence",
+        lambda **kwargs: ScoringWorkflowPresence.ABSENT,
+    )
+
+    class FakeDbos:
+        def start_workflow(self, *args: Any) -> None:
+            raise DBOSWorkflowConflictIDError(workflow_id)
+
+    monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
+
+    result = scoring_workflow.schedule_score_generation_workflow(
+        database_url="postgresql://example/db",
+        generation_run_id=generation_run_id,
+    )
+
+    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+        scheduled=False,
+    )
+
+
 def _rescore_candidate(
     index: int,
     *,
@@ -1795,6 +2009,42 @@ def test_classify_scoring_workflow_presence_matrix(
         is ScoringWorkflowPresence.ABSENT
     )
 
+    for failed_status in (
+        "ERROR",
+        "CANCELLED",
+        "MAX_RECOVERY_ATTEMPTS_EXCEEDED",
+    ):
+        monkeypatch.setattr(
+            scoring_workflow_state,
+            "score_attempt_exists",
+            lambda database_url, score_attempt_id: False,
+        )
+        monkeypatch.setattr(
+            scoring_workflow_state,
+            "DBOS",
+            type(
+                "FakeDbos",
+                (),
+                {
+                    "get_workflow_status": staticmethod(
+                        lambda workflow_id, status=failed_status: {
+                            "status": status
+                        }
+                    )
+                },
+            )(),
+        )
+        assert (
+            scoring_workflow_state.classify_scoring_workflow_presence(
+                database_url="postgresql://example/db",
+                score_attempt_id=f"orphan-{failed_status.lower()}",
+                workflow_id=(
+                    f"platform-score-v1:orphan-{failed_status.lower()}"
+                ),
+            )
+            is ScoringWorkflowPresence.ORPHAN
+        )
+
 
 def test_recover_orphan_scoring_workflow_replays_workflow(
     monkeypatch: pytest.MonkeyPatch,
@@ -1840,6 +2090,89 @@ def test_recover_orphan_scoring_workflow_replays_workflow(
     )
     assert recovered is True
     assert replay_calls == [("db", "run-1")]
+
+
+def test_recover_orphan_scoring_workflow_skips_replay_when_row_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_dspy.platform import scoring_workflow_state
+
+    replay_calls: list[tuple[Any, ...]] = []
+
+    def replay(*args: Any) -> None:
+        replay_calls.append(args)
+
+    class OrphanHandle:
+        @staticmethod
+        def get_result() -> None:
+            raise RuntimeError("orphan result unavailable")
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "score_attempt_exists",
+        lambda database_url, score_attempt_id: True,
+    )
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {
+                "retrieve_workflow": staticmethod(
+                    lambda workflow_id: OrphanHandle()
+                )
+            },
+        )(),
+    )
+
+    recovered = scoring_workflow_state.recover_orphan_scoring_workflow(
+        database_url="postgresql://example/db",
+        workflow_id="platform-score-v1:orphan",
+        score_attempt_id="existing",
+        replay_workflow=replay,
+        replay_args=("db", "run-1"),
+    )
+    assert recovered is True
+    assert replay_calls == []
+
+
+def test_recover_orphan_scoring_workflow_returns_false_when_replay_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_dspy.platform import scoring_workflow_state
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "score_attempt_exists",
+        lambda database_url, score_attempt_id: False,
+    )
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {
+                "retrieve_workflow": staticmethod(
+                    lambda workflow_id: type(
+                        "Handle",
+                        (),
+                        {"get_result": staticmethod(lambda: None)},
+                    )()
+                )
+            },
+        )(),
+    )
+
+    recovered = scoring_workflow_state.recover_orphan_scoring_workflow(
+        database_url="postgresql://example/db",
+        workflow_id="platform-score-v1:orphan",
+        score_attempt_id="pending",
+        replay_workflow=lambda *args: None,
+        replay_args=("db", "run-1"),
+    )
+    assert recovered is False
 
 
 def test_scoring_profile_controls_parser_timeout_and_metrics(

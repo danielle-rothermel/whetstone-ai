@@ -26,6 +26,10 @@ from dr_dspy.platform.dbos_bootstrap import (
     build_eval_dbos_config,
     destroy_dbos_runtime,
 )
+from dr_dspy.platform.queue_worker import (
+    listen_to_platform_generation_queue,
+    register_platform_generation_queue,
+)
 from dr_dspy.platform.worker import DBOS_APP_NAME
 
 
@@ -167,6 +171,37 @@ def reset_dbos(
     DBOS.reset_system_database()
     DBOS.listen_queues([])
     DBOS.launch()
+    try:
+        yield config
+    finally:
+        destroy_dbos_runtime()
+
+
+@pytest.fixture()
+def reset_dbos_generation_consumer(
+    app_postgres_schema: AppPostgresSchema,
+    tmp_path: Path,
+) -> Iterator[EvalDbosConfig]:
+    destroy_dbos_runtime()
+    system_db_path = tmp_path / "dbos_system_consumer.sqlite"
+    system_database_url = f"sqlite:///{system_db_path}"
+    config = build_eval_dbos_config(
+        database_url=app_postgres_schema.database_url,
+        dbos_system_database_url=system_database_url,
+        generation_concurrency=1,
+        scoring_concurrency=1,
+        database_url_error_suffix="for integration tests",
+    )
+    DBOS(
+        config=build_dbos_config(
+            config,
+            app_name=DBOS_APP_NAME,
+        )
+    )
+    DBOS.reset_system_database()
+    listen_to_platform_generation_queue()
+    DBOS.launch()
+    register_platform_generation_queue(worker_concurrency=1)
     try:
         yield config
     finally:

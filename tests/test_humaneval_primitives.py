@@ -7,6 +7,7 @@ import pytest
 
 from dr_dspy.humaneval.code_extraction import (
     apply_cleaning,
+    extract_dspy_code,
     validate_python_source,
 )
 from dr_dspy.humaneval.code_parsing import BEST_EFFORT_HUMANEVAL_PARSER_PROFILE
@@ -15,7 +16,10 @@ from dr_dspy.humaneval.compression import (
     compression_metrics,
 )
 from dr_dspy.humaneval.parsed_code import ParsedCode, ParsedCodeSummary
-from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_dspy.humaneval.parsed_tests import (
+    HumanEvalTestCaseKind,
+    UnsupportedTestFormatError,
+)
 from dr_dspy.humaneval.sampling import sample_human_eval_tasks_from_rows
 from dr_dspy.humaneval.scoring import (
     GeneratedCodeOutcome,
@@ -28,9 +32,13 @@ from dr_dspy.humaneval.task import (
     EvaluationCaseResult,
     EvaluationCaseStatus,
     EvaluationTaskResult,
+    HumanEvalOverride,
     HumanEvalTask,
+    apply_human_eval_override,
     evaluate_human_eval_code,
+    parse_human_eval_dataset,
     parse_human_eval_tests,
+    require_parsed_tests,
     run_subprocess_batch,
 )
 
@@ -657,3 +665,197 @@ def test_compression_metrics_keep_empty_ground_truth_ratio_null() -> None:
         metric.percent_reduction_vs_ground_truth is None
         for metric in metrics.values()
     )
+
+
+def test_apply_cleaning_returns_empty_for_blank_input() -> None:
+    assert apply_cleaning("") == []
+    assert apply_cleaning("   \n\t  ") == []
+
+
+def test_apply_cleaning_supports_tilde_fences() -> None:
+    source = "~~~python\ndef add_one(x):\n    return x + 1\n~~~"
+    candidates = apply_cleaning(source, apply_dedent=True)
+
+    assert candidates
+    assert "def add_one" in candidates[0]
+
+
+def test_validate_python_source_reports_syntax_errors() -> None:
+    validation = validate_python_source("def bad(x)\n  pass")
+
+    assert validation.parse_ok is False
+    assert validation.compile_ok is False
+    assert validation.parse_error is not None
+    assert validation.compile_error is not None
+
+
+def test_extract_dspy_code_reads_nested_and_plain_fields() -> None:
+    class CodeField:
+        code = "def f():\n    return 1\n"
+
+    class Prediction:
+        code = CodeField()
+
+    assert extract_dspy_code(Prediction()) == "def f():\n    return 1\n"
+
+    class PlainPrediction:
+        code = "def g():\n    return 2\n"
+
+    assert extract_dspy_code(PlainPrediction()) == "def g():\n    return 2\n"
+    assert extract_dspy_code(object()) == ""
+
+
+@pytest.mark.parametrize(
+    ("test_source", "match"),
+    [
+        ("def helper():\n    pass\n", "Could not find check"),
+        (
+            "def check(a, b):\n    pass\n",
+            "one positional argument",
+        ),
+        (
+            "def check(candidate):\n"
+            "    inputs = [(1,)]\n"
+            "    results = [1, 2]\n"
+            "    for inp, expected in zip(inputs, results):\n"
+            "        assertion(candidate(*inp), expected)\n",
+            "does not match",
+        ),
+        (
+            "def check(candidate):\n"
+            "    inputs = range(3)\n"
+            "    results = [0, 1, 2]\n"
+            "    for inp, expected in zip(inputs, results):\n"
+            "        assertion(candidate(*inp), expected)\n",
+            "not a literal",
+        ),
+    ],
+)
+def test_parse_human_eval_tests_rejects_invalid_formats(
+    test_source: str,
+    match: str,
+) -> None:
+    with pytest.raises(UnsupportedTestFormatError, match=match):
+        parse_human_eval_tests(test_source)
+
+
+def test_run_subprocess_batch_maps_nonzero_returncode_to_errors() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(
+            stdout="",
+            stderr="runner crashed",
+            returncode=1,
+        )
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        results = run_subprocess_batch(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            function_name="add_one",
+            timeout_seconds=2.0,
+        )
+
+    assert all(
+        result.status is EvaluationCaseStatus.ERROR for result in results
+    )
+    assert "runner crashed" in results[0].message
+
+
+def test_run_subprocess_batch_maps_invalid_json_to_errors() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(stdout="not-json")
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        results = run_subprocess_batch(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            function_name="add_one",
+            timeout_seconds=2.0,
+        )
+
+    assert all(
+        result.status is EvaluationCaseStatus.ERROR for result in results
+    )
+    assert "Could not decode runner output" in results[0].message
+
+
+def test_run_subprocess_batch_maps_non_list_json_to_errors() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(stdout='{"not": "a list"}')
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        results = run_subprocess_batch(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            function_name="add_one",
+            timeout_seconds=2.0,
+        )
+
+    assert "expected a JSON list" in results[0].message
+
+
+def test_run_subprocess_batch_assigns_fallback_case_id() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(
+            stdout='[{"status": "passed", "message": ""}]',
+        )
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        results = run_subprocess_batch(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            function_name="add_one",
+            timeout_seconds=2.0,
+        )
+
+    assert results[0].case_id == "case_0"
+
+
+def test_apply_human_eval_override_passthrough() -> None:
+    row = _row("HumanEval/99", 1)
+    assert apply_human_eval_override(row, {}) == dict(row)
+
+    updated = apply_human_eval_override(
+        row,
+        {
+            "HumanEval/99": HumanEvalOverride(
+                canonical_solution="    return x + 99\n",
+            ),
+        },
+    )
+    assert updated["canonical_solution"] == "    return x + 99\n"
+
+    with pytest.raises(ValueError, match="replacement text not found"):
+        apply_human_eval_override(
+            row,
+            {
+                "HumanEval/99": HumanEvalOverride(
+                    test_replacements={"missing": "text"},
+                ),
+            },
+        )
+
+
+def test_parse_human_eval_dataset_builds_tasks() -> None:
+    tasks = parse_human_eval_dataset([_row("HumanEval/0", 0)])
+
+    assert len(tasks) == 1
+    assert tasks[0].task_id == "HumanEval/0"
+    assert tasks[0].parsed_tests is not None
+
+
+def test_require_parsed_tests_raises_when_missing() -> None:
+    task = HumanEvalTask.model_construct(
+        task_id="HumanEval/fixture",
+        prompt="def add_one(x):\n",
+        canonical_solution="    return x + 1\n",
+        entry_point="add_one",
+        test=_input_result_test(),
+        parsed_tests=None,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"HumanEvalTask\.parsed_tests is required",
+    ):
+        require_parsed_tests(task)

@@ -14,7 +14,7 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 |---|---|---|
 | 1 | Design doc as north star | **Done** |
 | 2 | Core primitives (HumanEval, scoring, parsing, serialization, error classification) | **Partial** — persistable summaries exist; v1 score-attempt path landed |
-| 3 | LM and prompt boundary (plain adapter, OpenRouter/OpenAI callers, tests) | **Partial** — see deferred LM items below |
+| 3 | LM and prompt boundary (plain adapter, OpenRouter/OpenAI callers) | **Partial** — see deferred LM items below |
 | 4 | Pure graph execution core | **Done** (reusable runner, no DB/DBOS knowledge) |
 | 5 | Archive v0 surfaces (old CLIs, manifests, repair, reporting, `experiments/`) | **Done** — runtime removed; see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) |
 | 6 | Domain contracts (graph specs, provider configs, outcomes, metrics, stable ids) | **Partial** — records exist; several contracts still string/metadata-based |
@@ -82,7 +82,6 @@ From `platform-graph-workflow-implementation.md`:
 ### Runtime and infrastructure
 
 - Move **SQLAlchemy engine/pool ownership** into the platform worker runtime — stop creating short-lived engines inside each DBOS step.
-- **DBOS queue-worker submit/resume E2E** — full path from enqueue through worker consumption; integration fixtures not yet standardized.
 
 ### Analysis and projections
 
@@ -112,7 +111,6 @@ From `platform-graph-workflow-implementation.md`:
 From core-primitives / LM boundary implementation notes:
 
 - **`LoggingOpenAILM` wrapper** — deferred until a caller needs direct OpenAI outside the graph-runner path.
-- **Consolidate chat-style text extraction** between strict provider response parsing (typed failures) and `lm.utils.response_text()` (telemetry preview) if shapes drift.
 
 ---
 
@@ -150,16 +148,6 @@ may remain as backup until that work starts.
 - Unitbench/types/Neon/Drizzle items are **deferred** — see
   [Deferred platform phases](#deferred-platform-phases-postv1-core).
 - v1 migration history is **frozen** — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
-
----
-
-## Testing gaps
-
-| Gap | Notes |
-|---|---|
-| Full DBOS queue-worker submit/resume E2E | Follow-up after enqueue-to-worker fixtures standardized |
-| Live Postgres/DBOS integration for scoring | Exists under `tests/integration/test_platform_scoring_*.py` (opt-in `@pytest.mark.integration`) |
-| Projection movement | Deferred with analysis layer |
 
 ---
 
@@ -218,8 +206,8 @@ need be executed yet):
    `PARTIAL` generation runs are scoreable; align `rescore` defaults and
    `validate_generation_run_for_scoring`.
 3. ~~**Freeze v1 Alembic history**~~ — **Done** — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
-4. **Submit → worker E2E integration test** — enqueue through DBOS worker
-   consumption.
+4. ~~**Submit → worker E2E integration test**~~ — **Done** — Tier 4 in
+   [`TESTING.md`](../TESTING.md) (`test_platform_pipeline_e2e.py`).
 5. **Small code cleanup** — remove dead `_provider_axis_from_row`; dedupe
    `failure_payload_from_exception`.
 6. **`dspy` dependency review** — trim or dev-only now that v0 runtime is gone

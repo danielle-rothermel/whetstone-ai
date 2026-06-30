@@ -342,6 +342,7 @@ HumanEval task map cached process-locally by dataset name + split.
 - **Tier 1:** Postgres round-trip for load/persist steps, submit/resume helpers, scoring step idempotency
 - **Tier 2–3:** End-to-end workflows under DBOS with mocked LM; scoring replay, memoization, orphan recovery
 - **Tier 3.5:** Frozen v0 sample rows through `migration/v0_reshape.py`
+- **Tier 4:** JSONL submit → DBOS enqueue → queue consumer → generation → scoring (mock LM + HumanEval loader only)
 
 Default unit suite covers pure graph orchestration, record conversion, idempotent SQL, queue registration, submit/resume selection, throttle statement construction without Postgres/DBOS.
 
@@ -355,7 +356,7 @@ Default unit suite covers pure graph orchestration, record conversion, idempoten
 - Dataset defaults — centralized in `records/hashing.py`
 - Throttle clear failure swallowing — preserves generation outcome
 
-CLI reuses legacy `dr_dspy.harness.dbos` bootstrap during v0/v1 coexistence; workflow start-race in `dr_dspy.platform.dbos_compat`.
+Platform CLI bootstraps DBOS through `dr_dspy.platform.dbos_bootstrap`; workflow start-race handling lives in `dr_dspy.platform.dbos_compat`.
 
 ---
 

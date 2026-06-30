@@ -10,6 +10,8 @@ from dr_dspy.eval_failures import (
     require_generation_text,
     should_retry_step,
     summarize_exception,
+    validate_direct_generation,
+    validate_encdec_generation,
 )
 
 
@@ -63,3 +65,32 @@ def test_failure_metadata_from_eval_failure_error() -> None:
     )
     metadata = failure_metadata_dict_from_exception(error)
     assert metadata == {"output_field": "description"}
+
+
+def test_validate_encdec_generation_rejects_empty_description() -> None:
+    with pytest.raises(EmptyGenerationError) as exc_info:
+        validate_encdec_generation(description="", code="def f(): pass")
+    assert exc_info.value.metadata["output_field"] == "description"
+
+
+def test_validate_encdec_generation_rejects_empty_code() -> None:
+    with pytest.raises(EmptyGenerationError) as exc_info:
+        validate_encdec_generation(description="describe task", code="  ")
+    assert exc_info.value.metadata["output_field"] == "code"
+
+
+def test_validate_encdec_generation_accepts_non_empty_outputs() -> None:
+    validate_encdec_generation(
+        description="describe task",
+        code="def f(): pass",
+    )
+
+
+def test_validate_direct_generation_rejects_empty_code() -> None:
+    with pytest.raises(EmptyGenerationError) as exc_info:
+        validate_direct_generation(code="")
+    assert exc_info.value.metadata["output_field"] == "code"
+
+
+def test_validate_direct_generation_accepts_non_empty_code() -> None:
+    validate_direct_generation(code="def f(): pass")

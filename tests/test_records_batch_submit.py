@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
 from dr_dspy.records import (
+    BATCH_SUBMIT_SPEC_MAX_BYTES,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
@@ -15,6 +17,7 @@ from dr_dspy.records import (
     batch_submit_operation_counts_from_items,
     build_batch_submit_operation_record,
     insert_outcome_from_rowcount,
+    is_terminal_enqueue_status,
     operation_status_from_counts,
 )
 
@@ -188,3 +191,130 @@ def test_terminal_batch_operation_requires_completed_at() -> None:
             failed_count=1,
             created_at=NOW,
         )
+
+
+def _operation(**overrides: object) -> BatchSubmitOperationRecord:
+    payload = {
+        "operation_key": "op-1",
+        "experiment_name": "exp",
+        "status": BatchSubmitOperationStatus.ENQUEUING,
+        "requested_count": 2,
+        "created_at": NOW,
+    }
+    payload.update(overrides)
+    return BatchSubmitOperationRecord(**cast(Any, payload))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"requested_count": -1}, "non-negative"),
+        ({"enqueued_count": 3}, "cannot exceed requested_count"),
+        (
+            {
+                "inserted_count": 2,
+                "already_present_count": 1,
+            },
+            "already_present_count cannot exceed",
+        ),
+        (
+            {
+                "enqueued_count": 2,
+                "already_scheduled_count": 1,
+                "failed_count": 1,
+            },
+            "failed_count cannot exceed",
+        ),
+        (
+            {
+                "spec": {"x": "y" * BATCH_SUBMIT_SPEC_MAX_BYTES},
+            },
+            "batch submit spec",
+        ),
+        (
+            {
+                "status": BatchSubmitOperationStatus.COMPLETED,
+                "enqueued_count": 2,
+                "completed_at": NOW,
+                "created_at": NOW.replace(year=NOW.year + 1),
+            },
+            "completed_at must not precede created_at",
+        ),
+    ],
+)
+def test_batch_submit_operation_rejects_invalid_counts(
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValidationError, match=match):
+        _operation(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (BatchSubmitItemEnqueueStatus.ENQUEUED, True),
+        (BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT, True),
+        (BatchSubmitItemEnqueueStatus.FAILED, True),
+        (BatchSubmitItemEnqueueStatus.PENDING, False),
+        (BatchSubmitItemEnqueueStatus.CLAIMING, False),
+    ],
+)
+def test_is_terminal_enqueue_status(
+    status: BatchSubmitItemEnqueueStatus,
+    expected: bool,
+) -> None:
+    assert is_terminal_enqueue_status(status) is expected
+
+
+def _batch_item(**overrides: object) -> BatchSubmitItemRecord:
+    payload = {
+        "batch_submit_item_id": "item-1",
+        "operation_key": "op-1",
+        "item_index": 0,
+        "prediction_id": "prediction-1",
+        "fair_order_key": "abc",
+        "insert_status": BatchSubmitItemInsertStatus.INSERTED,
+        "enqueue_status": BatchSubmitItemEnqueueStatus.PENDING,
+        "created_at": NOW,
+    }
+    payload.update(overrides)
+    return BatchSubmitItemRecord(**cast(Any, payload))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"item_index": -1}, "item_index must be non-negative"),
+        (
+            {
+                "enqueue_status": BatchSubmitItemEnqueueStatus.FAILED,
+                "failure": None,
+            },
+            "failed batch submit items require failure",
+        ),
+        (
+            {
+                "enqueue_status": BatchSubmitItemEnqueueStatus.CLAIMING,
+                "enqueue_metadata": {"enqueue_claim_id": "claim-1"},
+            },
+            "require claimed_at",
+        ),
+        (
+            {
+                "enqueue_status": BatchSubmitItemEnqueueStatus.CLAIMING,
+                "enqueue_metadata": {
+                    "enqueue_claim_id": "",
+                    "claimed_at": NOW.isoformat(),
+                },
+            },
+            "require enqueue_claim_id",
+        ),
+    ],
+)
+def test_batch_submit_item_rejects_invalid_shape(
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(ValidationError, match=match):
+        _batch_item(**overrides)

@@ -205,18 +205,25 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     _mock_humaneval_task_step(monkeypatch)
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
-    original_persist = scoring_workflow.persist_score_attempt_step
+    persist_impl = getattr(
+        scoring_workflow.persist_score_attempt_step,
+        "__wrapped__",
+        scoring_workflow.persist_score_attempt_step,
+    )
+    persist_state = {"fail": True}
 
-    def fail_persist(
+    def persist_stub(
         database_url: str,
         score_attempt_payload: dict[str, Any],
     ) -> dict[str, Any]:
-        raise RuntimeError("simulated crash before score persist")
+        if persist_state["fail"]:
+            raise RuntimeError("simulated crash before score persist")
+        return persist_impl(database_url, score_attempt_payload)
 
     monkeypatch.setattr(
         scoring_workflow,
         "persist_score_attempt_step",
-        fail_persist,
+        persist_stub,
     )
 
     score_attempt_id = stable_score_attempt_id(
@@ -242,11 +249,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
             run.generation_run_id,
         )
 
-    monkeypatch.setattr(
-        scoring_workflow,
-        "persist_score_attempt_step",
-        original_persist,
-    )
+    persist_state["fail"] = False
 
     assert (
         count_score_attempts(
@@ -269,3 +272,24 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     )
     assert scheduled.scheduled is False
     assert scheduled.recovered is False
+
+    recovered = scoring_workflow.schedule_score_generation_workflow(
+        app_postgres_schema.database_url,
+        run.generation_run_id,
+        recover_orphans=True,
+    )
+    assert recovered.scheduled is True
+    assert recovered.recovered is True
+    assert (
+        count_score_attempts(
+            app_postgres_schema.database_url,
+            score_attempt_id,
+        )
+        == 1
+    )
+    snapshot = fetch_score_attempt_snapshot(
+        app_postgres_schema.database_url,
+        score_attempt_id,
+    )
+    assert snapshot is not None
+    assert snapshot.status == "success"

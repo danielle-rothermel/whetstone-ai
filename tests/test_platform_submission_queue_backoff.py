@@ -6,6 +6,11 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from dbos._error import (
+    DBOSConflictingWorkflowError,
+    DBOSQueueDeduplicatedError,
+    DBOSWorkflowConflictIDError,
+)
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
 from typer.testing import CliRunner
@@ -24,6 +29,7 @@ from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.platform import (
     backoff,
     fairness,
+    graph_workflow,
     queue_worker,
     submission,
     worker,
@@ -1493,6 +1499,152 @@ def test_queue_enqueue_uses_stable_workflow_ids(
     )
 
 
+def test_queue_enqueue_skips_when_workflow_status_exists(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    enqueue_calls: list[Any] = []
+
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "get_workflow_status",
+        lambda workflow_id: {"status": "PENDING"},
+    )
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "enqueue_workflow",
+        lambda *args: enqueue_calls.append(args),
+    )
+    prediction_id = "prediction-existing"
+
+    result = queue_worker.enqueue_prediction_graph_workflow(
+        database_url="postgresql://example/db",
+        prediction_id=prediction_id,
+    )
+
+    generation_run_id = stable_generation_run_id(
+        prediction_id=prediction_id,
+        attempt_index=0,
+    )
+    assert result.enqueued is False
+    assert result.generation_run_id == generation_run_id
+    assert result.workflow_id == (
+        f"platform-generate-v1:{generation_run_id}"
+    )
+    assert enqueue_calls == []
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        DBOSWorkflowConflictIDError("platform-generate-v1:run-1"),
+        DBOSQueueDeduplicatedError(
+            "platform-generate-v1:run-1",
+            "dr-dspy-platform-generation-v1",
+            "dedup-1",
+        ),
+        DBOSConflictingWorkflowError("platform-generate-v1:run-1"),
+    ],
+)
+def test_queue_enqueue_treats_start_race_as_existing(
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "get_workflow_status",
+        lambda workflow_id: None,
+    )
+
+    def raise_race(*args: Any) -> None:
+        raise error
+
+    monkeypatch.setattr(queue_worker.DBOS, "enqueue_workflow", raise_race)
+    prediction_id = "prediction-race"
+
+    result = queue_worker.enqueue_prediction_graph_workflow(
+        database_url="postgresql://example/db",
+        prediction_id=prediction_id,
+    )
+
+    assert result.enqueued is False
+    assert result.prediction_id == prediction_id
+
+
+def test_enqueue_prediction_graph_workflows_aggregates_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_status = {"status": "PENDING"}
+    race_error = DBOSWorkflowConflictIDError("platform-generate-v1:run-race")
+    existing_workflow_id = graph_workflow.platform_generation_workflow_id(
+        stable_generation_run_id(
+            prediction_id="prediction-existing",
+            attempt_index=0,
+        )
+    )
+
+    def status_for(workflow_id: str) -> dict[str, str] | None:
+        if workflow_id == existing_workflow_id:
+            return existing_status
+        return None
+
+    def enqueue_for(
+        queue_name: str,
+        workflow: Any,
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+    ) -> None:
+        if prediction_id == "prediction-race":
+            raise race_error
+
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "get_workflow_status",
+        status_for,
+    )
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "enqueue_workflow",
+        enqueue_for,
+    )
+
+    result = queue_worker.enqueue_prediction_graph_workflows(
+        database_url="postgresql://example/db",
+        prediction_ids=(
+            "prediction-new",
+            "prediction-existing",
+            "prediction-race",
+        ),
+    )
+
+    assert result.enqueued_count == 1
+    assert result.existing_count == 2
+    assert [item.prediction_id for item in result.workflows] == [
+        "prediction-new",
+        "prediction-existing",
+        "prediction-race",
+    ]
+    assert result.workflows[0].enqueued is True
+    assert result.workflows[1].enqueued is False
+    assert result.workflows[2].enqueued is False
+
+
+def test_listen_to_platform_generation_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "listen_queues",
+        lambda queues: captured.append(list(queues)),
+    )
+
+    queue_worker.listen_to_platform_generation_queue()
+
+    assert captured == [[queue_worker.PLATFORM_GENERATION_QUEUE_NAME]]
+
+
 def test_queue_enqueue_surfaces_unrelated_start_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1601,6 +1753,76 @@ def test_platform_worker_config_listens_to_v1_queue(
 
     assert ("listen_v1", None) in calls
     assert ("register", 3) in calls
+
+
+@pytest.mark.parametrize(
+    ("failure_stage", "consume_generation_queue"),
+    [
+        ("launch", True),
+        ("listen_queues", False),
+        ("register", True),
+    ],
+)
+def test_configure_platform_dbos_runtime_cleans_up_on_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+    consume_generation_queue: bool,
+) -> None:
+    destroy_calls: list[str] = []
+    config = SimpleNamespace(database_url="postgresql://example/db")
+
+    class FakeDbos:
+        def __call__(self, *, config: dict[str, Any]) -> None:
+            return None
+
+        def listen_queues(self, queues: list[str]) -> None:
+            if failure_stage == "listen_queues":
+                raise RuntimeError("listen failed")
+
+        def launch(self) -> None:
+            if failure_stage == "launch":
+                raise RuntimeError("launch failed")
+
+    def fail_register(*, worker_concurrency: int) -> None:
+        if failure_stage == "register":
+            raise RuntimeError("register failed")
+
+    monkeypatch.setattr(worker, "DBOS", FakeDbos())
+    monkeypatch.setattr(
+        worker,
+        "build_eval_dbos_config",
+        lambda **kwargs: config,
+    )
+    monkeypatch.setattr(
+        worker,
+        "build_dbos_config",
+        lambda config, app_name: {"name": app_name},
+    )
+    monkeypatch.setattr(
+        worker,
+        "listen_to_platform_generation_queue",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        worker,
+        "register_platform_generation_queue",
+        fail_register,
+    )
+    monkeypatch.setattr(
+        worker,
+        "destroy_dbos_runtime",
+        lambda: destroy_calls.append("destroy"),
+    )
+
+    with pytest.raises(RuntimeError):
+        worker.configure_platform_dbos_runtime(
+            database_url=None,
+            dbos_system_database_url=None,
+            worker_concurrency=3,
+            consume_generation_queue=consume_generation_queue,
+        )
+
+    assert destroy_calls == ["destroy"]
 
 
 def test_submit_jsonl_help_describes_queue_registration_concurrency() -> None:

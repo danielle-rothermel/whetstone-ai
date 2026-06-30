@@ -13,7 +13,12 @@ from dr_dspy.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from dr_dspy.serialization import JsonEncodeError, MaxDepthExceededError
+from dr_dspy.serialization import (
+    JsonEncodeError,
+    MaxDepthExceededError,
+    ModelDumpError,
+    PayloadTooLargeError,
+)
 
 
 def test_recordable_text_passthrough_str() -> None:
@@ -78,3 +83,17 @@ def test_failure_metadata_from_wrapped_error() -> None:
     metadata = failure_metadata_dict_from_exception(error)
     assert metadata["path"] == ["x"]
     assert metadata["type_name"] == "object"
+
+
+def test_ensure_recordable_wraps_payload_too_large_error() -> None:
+    with pytest.raises(RecordingFailureError) as exc_info:
+        ensure_recordable({"data": "x" * 500}, max_bytes=50)
+    assert isinstance(exc_info.value.underlying, PayloadTooLargeError)
+
+
+def test_ensure_recordable_wraps_model_dump_error() -> None:
+    from tests.serialization_support import BadModel
+
+    with pytest.raises(RecordingFailureError) as exc_info:
+        ensure_recordable(BadModel(x=object()))
+    assert isinstance(exc_info.value.underlying, ModelDumpError)

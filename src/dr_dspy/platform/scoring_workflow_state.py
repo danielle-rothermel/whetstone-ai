@@ -84,6 +84,7 @@ def recover_orphan_scoring_workflow(
         pass
     if score_attempt_exists(database_url, score_attempt_id):
         return True
+    replay = getattr(replay_workflow, "__wrapped__", replay_workflow)
     with SetWorkflowID(workflow_id):
-        replay_workflow(*replay_args)
+        replay(*replay_args)
     return score_attempt_exists(database_url, score_attempt_id)

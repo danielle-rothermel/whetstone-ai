@@ -1213,6 +1213,131 @@ def test_generation_clock_steps_have_distinct_dbos_names() -> None:
     assert len(step_names) == 2
 
 
+def test_sleep_for_backoff_seconds_falls_back_to_time_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dbos_calls: list[float] = []
+    time_calls: list[float] = []
+
+    def fail_dbos_sleep(seconds: float) -> None:
+        dbos_calls.append(seconds)
+        raise RuntimeError("dbos sleep unavailable")
+
+    monkeypatch.setattr(
+        graph_workflow.DBOS,
+        "sleep",
+        fail_dbos_sleep,
+    )
+    monkeypatch.setattr(
+        graph_workflow.time,
+        "sleep",
+        lambda seconds: time_calls.append(seconds),
+    )
+
+    graph_workflow.sleep_for_backoff_seconds(2.5)
+
+    assert dbos_calls == [2.5]
+    assert time_calls == [2.5]
+
+
+def test_execute_lm_node_step_swallows_clear_backoff_failure_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    spec = _spec(graph)
+    node = graph.nodes[0]
+
+    def succeed(**kwargs: Any) -> NodeStepResult:
+        return _step_success(node, "def add_one(x):\n    return x + 1")
+
+    def fail_clear(**kwargs: Any) -> None:
+        raise RuntimeError("clear backoff failed")
+
+    monkeypatch.setattr(graph_workflow, "execute_lm_node", succeed)
+    monkeypatch.setattr(
+        graph_workflow,
+        "clear_throttle_backoff_state",
+        fail_clear,
+    )
+
+    step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
+    result = step(
+        "postgresql://example/db",
+        spec.model_dump(mode="json"),
+        node.model_dump(mode="json"),
+        {"prompt": "write add"},
+    )
+
+    validated = NodeStepResult.model_validate(result)
+    assert validated.status is NodeAttemptStatus.SUCCESS
+
+
+def test_run_prediction_graph_workflow_records_preflight_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    spec = _spec(graph)
+    lm_calls: list[Any] = []
+    persisted: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "load_prediction_spec_step",
+        lambda database_url, prediction_id: spec.model_dump(mode="json"),
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "generation_started_at_step",
+        lambda generation_run_id: NOW.isoformat(),
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "generation_completed_at_step",
+        lambda generation_run_id: LATER.isoformat(),
+    )
+
+    def fail_preflight(*args: Any) -> float:
+        raise PermanentFailureError("provider unavailable")
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "throttle_preflight_step",
+        fail_preflight,
+    )
+
+    def track_lm(*args: Any) -> dict[str, Any]:
+        lm_calls.append(args)
+        raise AssertionError("LM step should not run after preflight failure")
+
+    monkeypatch.setattr(graph_workflow, "execute_lm_node_step", track_lm)
+
+    def capture_persist(*args: Any, **kwargs: Any) -> None:
+        persisted["args"] = args
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "persist_generation_result_step",
+        capture_persist,
+    )
+
+    workflow_fn = graph_workflow.run_prediction_graph_workflow
+    workflow = cast(Any, workflow_fn).__wrapped__
+    generation_run_id = workflow(
+        "postgresql://example/db",
+        spec.prediction_id,
+    )
+
+    assert generation_run_id == stable_generation_run_id(
+        prediction_id=spec.prediction_id,
+        attempt_index=0,
+    )
+    assert lm_calls == []
+    assert persisted["args"][3] == 0
+    node_results = persisted["args"][5]
+    assert len(node_results) == 1
+    assert node_results[0]["status"] == NodeAttemptStatus.ERROR.value
+
+
 class _RecordingConnection:
     def __init__(self) -> None:
         self.calls: list[Any] = []
