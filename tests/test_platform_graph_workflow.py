@@ -3,8 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
+from dbos._error import DBOSWorkflowConflictIDError
 from sqlalchemy.dialects import postgresql
 
 from dr_dspy.db import io as db_io
@@ -30,7 +32,11 @@ from dr_dspy.lm.boundary import (
     ProviderKind,
 )
 from dr_dspy.platform import graph_workflow
-from dr_dspy.platform.graph_workflow import execute_prediction_graph
+from dr_dspy.platform.graph_workflow import (
+    _start_prediction_graph_workflow_handle,
+    execute_prediction_graph,
+    platform_generation_workflow_id,
+)
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
     NodeStepStatus,
@@ -742,6 +748,83 @@ def test_persist_generation_result_executes_idempotent_statements() -> None:
     compiled = [_postgres_sql(statement) for statement in connection.calls]
     assert len(compiled) == 2
     assert all("ON CONFLICT" in statement for statement in compiled)
+
+
+def test_start_workflow_handle_retrieves_on_conflict() -> None:
+    prediction_id = "prediction-1"
+    attempt_index = 0
+    generation_run_id = stable_generation_run_id(
+        prediction_id=prediction_id,
+        attempt_index=attempt_index,
+    )
+    workflow_id = platform_generation_workflow_id(generation_run_id)
+    retrieved_handle = MagicMock()
+
+    with (
+        patch.object(
+            graph_workflow.DBOS,
+            "start_workflow",
+            side_effect=DBOSWorkflowConflictIDError(workflow_id),
+        ) as start_workflow,
+        patch.object(
+            graph_workflow.DBOS,
+            "retrieve_workflow",
+            return_value=retrieved_handle,
+        ) as retrieve_workflow,
+    ):
+        returned_generation_run_id, handle = (
+            _start_prediction_graph_workflow_handle(
+                database_url="postgresql://example/db",
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            )
+        )
+
+    start_workflow.assert_called_once()
+    retrieve_workflow.assert_called_once_with(workflow_id)
+    assert returned_generation_run_id == generation_run_id
+    assert handle is retrieved_handle
+
+
+def test_start_workflow_handle_retrieves_on_generic_race() -> None:
+    prediction_id = "prediction-1"
+    attempt_index = 0
+    generation_run_id = stable_generation_run_id(
+        prediction_id=prediction_id,
+        attempt_index=attempt_index,
+    )
+    workflow_id = platform_generation_workflow_id(generation_run_id)
+    retrieved_handle = MagicMock()
+
+    with (
+        patch.object(
+            graph_workflow.DBOS,
+            "start_workflow",
+            side_effect=RuntimeError("connection reset"),
+        ) as start_workflow,
+        patch.object(
+            graph_workflow.DBOS,
+            "get_workflow_status",
+            return_value={"status": "PENDING"},
+        ),
+        patch.object(
+            graph_workflow.DBOS,
+            "retrieve_workflow",
+            return_value=retrieved_handle,
+        ) as retrieve_workflow,
+    ):
+        returned_generation_run_id, handle = (
+            _start_prediction_graph_workflow_handle(
+                database_url="postgresql://example/db",
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            )
+        )
+
+    start_workflow.assert_called_once()
+    retrieve_workflow.assert_called_once_with(workflow_id)
+    assert returned_generation_run_id == generation_run_id
+    assert handle is retrieved_handle
 
 
 def test_platform_worker_import_registers_entrypoint() -> None:

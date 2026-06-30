@@ -34,6 +34,13 @@ complete.
   describe the current v1 workflow entrypoint, DBOS timing boundaries,
   node-attempt indexing semantics, provider-config scope, integration-test
   status, and follow-up work.
+- [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
+  model, shared fixtures, and conventions for adding coverage.
+
+## Testing
+
+See [TESTING.md](TESTING.md) for how to run unit vs integration tests, the tier
+model, shared fixtures, and conventions for adding new coverage.
 
 ## V1 graph workflow
 

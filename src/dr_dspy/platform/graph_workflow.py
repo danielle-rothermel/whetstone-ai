@@ -10,6 +10,10 @@ from sqlalchemy import create_engine
 
 from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
+from dr_dspy.harness.dbos import (
+    WORKFLOW_START_RACE_ERRORS,
+    workflow_start_raced,
+)
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
     attach_node_step_timing_to_exception,
@@ -234,13 +238,22 @@ def _start_prediction_graph_workflow_handle(
         prediction_id=prediction_id,
         attempt_index=attempt_index,
     )
-    with SetWorkflowID(platform_generation_workflow_id(generation_run_id)):
-        handle = DBOS.start_workflow(
-            run_prediction_graph_workflow,
-            database_url,
-            prediction_id,
-            attempt_index,
-        )
+    workflow_id = platform_generation_workflow_id(generation_run_id)
+    with SetWorkflowID(workflow_id):
+        try:
+            handle = DBOS.start_workflow(
+                run_prediction_graph_workflow,
+                database_url,
+                prediction_id,
+                attempt_index,
+            )
+        except WORKFLOW_START_RACE_ERRORS:
+            handle = DBOS.retrieve_workflow(workflow_id)
+        except Exception as error:
+            if workflow_start_raced(workflow_id=workflow_id, error=error):
+                handle = DBOS.retrieve_workflow(workflow_id)
+            else:
+                raise
     return generation_run_id, handle
 
 

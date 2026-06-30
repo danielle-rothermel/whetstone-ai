@@ -46,6 +46,23 @@ where the provider call happens. If DBOS exhausts retries before the node step
 returns, the workflow converts the step exception into a terminal node error in
 a separate DBOS step.
 
+## Workflow start idempotency
+
+Platform generation workflows use deterministic IDs:
+`platform-generate-v1:{generation_run_id}` where `generation_run_id` is derived
+from `(prediction_id, attempt_index)`.
+
+`_start_prediction_graph_workflow_handle` starts the workflow under
+`SetWorkflowID`. If another caller wins the start race, the platform catches
+DBOS workflow-conflict errors (via the shared `workflow_start_raced` helper from
+`dr_dspy.harness.dbos`) and calls `DBOS.retrieve_workflow(workflow_id)` to join
+the existing run.
+
+Sequential operator re-runs of `run-one` for the same `(prediction_id,
+attempt_index)` therefore return the existing completed result instead of
+surfacing a raw conflict error. Append-only persistence (`ON CONFLICT DO NOTHING`)
+keeps replay idempotent inside a single workflow outcome.
+
 ## Node attempt indexes
 
 Node-attempt persistence records one terminal outcome for each invoked node in a
@@ -78,8 +95,20 @@ in a later provider-config contract change.
 
 ## Integration-test status
 
-The default test suite covers the pure graph orchestration, node execution,
-record conversion, idempotent persistence statement shape, and worker import.
-It does not require a live DBOS system database. A narrow live DBOS/Postgres
-workflow test should be added once the project has a standard integration-test
-fixture for DBOS.
+Integration tests live under `tests/integration/` and are opt-in via
+`@pytest.mark.integration`. See [TESTING.md](../TESTING.md) for commands,
+fixtures, and the tier model:
+
+- **Tier 1:** Postgres round-trip for `load_prediction_spec_step` and
+  `persist_generation_result_step`.
+- **Tier 2–3:** End-to-end `run_prediction_graph_workflow_once` under DBOS with
+  mocked LM (happy path, retry-exhaustion error fallback with
+  `node_step_error_result_step` and preserved node-attempt timestamps, upstream
+  `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, and
+  persist idempotency).
+- **Tier 3.5:** Frozen v0 sample rows reshaped through
+  `src/dr_dspy/migration/v0_reshape.py` (outcome import and spec pass-through).
+
+The default unit suite still covers pure graph orchestration, node execution,
+record conversion, idempotent persistence SQL shape, and worker import without
+Postgres or DBOS.

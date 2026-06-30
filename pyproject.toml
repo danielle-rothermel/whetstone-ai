@@ -39,6 +39,9 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "integration: Postgres and DBOS integration tests (opt-in)",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
@@ -47,7 +50,7 @@ select = ["E", "F", "I", "UP", "B", "RUF"]
 known-first-party = ["dr_dspy", "dspy"]
 
 [tool.ty.environment]
-extra-paths = [".."]
+extra-paths = ["..", "tests"]
 
 [tool.ty.src]
 include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]

@@ -4,6 +4,7 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
@@ -167,6 +168,26 @@ def persist_generation_result(
         connection.execute(idempotent_insert_node_attempt(node_attempt))
 
 
+_NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
+    {"provider_config", "output", "failure"}
+)
+
+
+def _postgres_insert_values(
+    row: Mapping[str, Any],
+    *,
+    nullable_jsonb_columns: frozenset[str],
+) -> dict[str, Any]:
+    return {
+        key: (
+            null()
+            if value is None and key in nullable_jsonb_columns
+            else value
+        )
+        for key, value in row.items()
+    }
+
+
 def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
     return (
         insert(schema.generation_runs)
@@ -178,7 +199,12 @@ def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
 def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
     return (
         insert(schema.node_attempts)
-        .values(io.node_attempt_row(record))
+        .values(
+            _postgres_insert_values(
+                io.node_attempt_row(record),
+                nullable_jsonb_columns=_NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS,
+            )
+        )
         .on_conflict_do_nothing(index_elements=["node_attempt_id"])
     )
 
