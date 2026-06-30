@@ -81,6 +81,16 @@ far. The final summary changes the status to `completed`, `partial`, or `error`.
 If a submit process crashes mid-enqueue, operation status remains `enqueuing`
 and item rows show the exact pending/enqueued/failed state.
 
+Each batch submit item follows an enqueue lifecycle of
+`pending → claiming → enqueued | workflow_already_present | failed`. Claiming
+is an explicit in-flight status: a worker atomically moves a row from `pending`
+to `claiming` with claim metadata before calling DBOS enqueue, then transitions
+the row to a terminal enqueue status when the outcome is recorded. Outcome
+updates are claim-scoped and raise if they match zero rows. On resume, submit
+resets all `claiming` rows for the operation back to `pending` (along with
+retrying `failed` rows) before draining the pending queue again. Re-enqueue after
+reset is safe because platform generation workflows use deterministic IDs.
+
 The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
 avoid introducing a second DBOS configuration path while v1 and v0 coexist.
 

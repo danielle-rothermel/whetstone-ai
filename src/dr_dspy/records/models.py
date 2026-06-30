@@ -65,9 +65,24 @@ class BatchSubmitItemInsertStatus(StrEnum):
 
 class BatchSubmitItemEnqueueStatus(StrEnum):
     PENDING = "pending"
+    CLAIMING = "claiming"
     ENQUEUED = "enqueued"
     WORKFLOW_ALREADY_PRESENT = "workflow_already_present"
     FAILED = "failed"
+
+
+ENQUEUE_CLAIM_ID_METADATA_KEY = "enqueue_claim_id"
+ENQUEUE_CLAIMED_AT_METADATA_KEY = "claimed_at"
+
+
+def is_terminal_enqueue_status(
+    status: BatchSubmitItemEnqueueStatus,
+) -> bool:
+    return status in {
+        BatchSubmitItemEnqueueStatus.ENQUEUED,
+        BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
+        BatchSubmitItemEnqueueStatus.FAILED,
+    }
 
 
 class TaskInputsPayload(BaseModel):
@@ -689,4 +704,24 @@ class BatchSubmitItemRecord(BaseModel):
             and self.failure is None
         ):
             raise ValueError("failed batch submit items require failure")
+        if self.enqueue_status is BatchSubmitItemEnqueueStatus.PENDING:
+            if self.enqueue_metadata:
+                raise ValueError(
+                    "pending batch submit items require empty enqueue_metadata"
+                )
+        if self.enqueue_status is BatchSubmitItemEnqueueStatus.CLAIMING:
+            claim_id = self.enqueue_metadata.get(
+                ENQUEUE_CLAIM_ID_METADATA_KEY
+            )
+            claimed_at = self.enqueue_metadata.get(
+                ENQUEUE_CLAIMED_AT_METADATA_KEY
+            )
+            if not isinstance(claim_id, str) or not claim_id:
+                raise ValueError(
+                    "claiming batch submit items require enqueue_claim_id"
+                )
+            if not isinstance(claimed_at, str) or not claimed_at:
+                raise ValueError(
+                    "claiming batch submit items require claimed_at"
+                )
         return self

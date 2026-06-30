@@ -31,6 +31,7 @@ from dr_dspy.platform import (
 from dr_dspy.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -638,6 +639,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
     failed_prediction_id = specs[1].prediction_id
     prepare_operation_keys: list[str] = []
     reset_operation_keys: list[str] = []
+    stale_claim_operation_keys: list[str] = []
     enqueue_calls_by_run: list[list[str]] = []
     active_run_calls: list[str] = []
     item_state = {
@@ -733,6 +735,19 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
                     {},
                 )
 
+    def reset_stale_claims(connection: Connection, *, operation_key: str) -> None:
+        stale_claim_operation_keys.append(operation_key)
+        for prediction_id, (status, _metadata) in item_state.items():
+            if status is BatchSubmitItemEnqueueStatus.CLAIMING:
+                item_state[prediction_id] = (
+                    BatchSubmitItemEnqueueStatus.PENDING,
+                    {},
+                )
+
+    def prepare_retries(connection: Connection, *, operation_key: str) -> None:
+        reset_failed(connection, operation_key=operation_key)
+        reset_stale_claims(connection, operation_key=operation_key)
+
     def summary(
         connection: Connection,
         *,
@@ -780,7 +795,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
         "load_pending_enqueue_candidates",
         candidates,
     )
-    monkeypatch.setattr(submission, "reset_failed_enqueue_items", reset_failed)
+    monkeypatch.setattr(submission, "prepare_enqueue_retries", prepare_retries)
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
@@ -810,6 +825,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
 
     assert prepare_operation_keys == ["op-1", "op-1"]
     assert reset_operation_keys == ["op-1", "op-1"]
+    assert stale_claim_operation_keys == ["op-1", "op-1"]
     assert first.failed_count == 1
     assert second.failed_count == 0
     assert second.enqueued_count == 3
@@ -837,6 +853,335 @@ def test_pending_enqueue_selector_orders_operation_by_fair_key() -> None:
         "dr_dspy_batch_submit_items.prediction_id" in rendered
     )
     assert "LIMIT 500" in rendered
+
+
+def test_claim_update_transitions_pending_to_claiming() -> None:
+    connection = DummyConnection()
+    claim_id = submission.claim_pending_batch_item(
+        cast(Connection, connection),
+        operation_key="op-1",
+        prediction_id="prediction-1",
+    )
+
+    assert claim_id is not None
+    compiled = connection.statements[0].compile(dialect=postgresql.dialect())
+    assert compiled.params["enqueue_status"] == (
+        BatchSubmitItemEnqueueStatus.CLAIMING.value
+    )
+    assert ENQUEUE_CLAIM_ID_METADATA_KEY in compiled.params["enqueue_metadata"]
+    assert "claimed_at" in compiled.params["enqueue_metadata"]
+
+
+def test_outcome_update_raises_when_claim_id_mismatch() -> None:
+    spec = _spec(task_id="HumanEval/0")
+
+    class ExistingResult:
+        def mappings(self) -> ExistingResult:
+            return self
+
+        def one(self) -> dict[str, str]:
+            return {"insert_status": BatchSubmitItemInsertStatus.INSERTED.value}
+
+    class ZeroRowResult:
+        rowcount = 0
+
+    call_count = 0
+
+    def execute(statement: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return ExistingResult()
+        return ZeroRowResult()
+
+    connection = cast(Connection, SimpleNamespace(execute=execute))
+    item = submission.SubmittedPredictionItem(
+        prediction_id=spec.prediction_id,
+        fair_order_key=spec.fair_order_key,
+        insert_status=BatchSubmitItemInsertStatus.INSERTED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
+        workflow_id="workflow-1",
+        generation_run_id=stable_generation_run_id(
+            prediction_id=spec.prediction_id,
+            attempt_index=0,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="matched no rows"):
+        submission.update_batch_item_outcome(
+            connection,
+            operation_key="op-1",
+            item=item,
+            claim_id="missing-claim",
+        )
+
+
+def test_reset_stale_enqueue_claims_sql_targets_claiming_rows() -> None:
+    connection = DummyConnection()
+    submission.reset_stale_enqueue_claims(
+        cast(Connection, connection),
+        operation_key="op-1",
+    )
+    compiled = connection.statements[0].compile(dialect=postgresql.dialect())
+    assert compiled.params["enqueue_status"] == (
+        BatchSubmitItemEnqueueStatus.PENDING.value
+    )
+    assert compiled.params["enqueue_status_1"] == (
+        BatchSubmitItemEnqueueStatus.CLAIMING.value
+    )
+    assert compiled.params["enqueue_metadata"] == {}
+
+
+def test_update_operation_summary_keeps_enqueuing_when_incomplete() -> None:
+    spec = _spec(task_id="HumanEval/0")
+
+    class Result:
+        def __init__(self, rows: tuple[dict[str, Any], ...]) -> None:
+            self.rows = rows
+
+        def mappings(self) -> tuple[dict[str, Any], ...]:
+            return self.rows
+
+    class ConnectionWithRows:
+        def __init__(self, rows: tuple[dict[str, Any], ...]) -> None:
+            self.rows = rows
+            self.statements: list[Any] = []
+
+        def execute(self, statement: Any) -> Result:
+            self.statements.append(statement)
+            if len(self.statements) == 1:
+                return Result(self.rows)
+            return Result(())
+
+    rows = (
+        {
+            "prediction_id": spec.prediction_id,
+            "fair_order_key": spec.fair_order_key,
+            "insert_status": BatchSubmitItemInsertStatus.INSERTED.value,
+            "enqueue_status": BatchSubmitItemEnqueueStatus.ENQUEUED.value,
+            "enqueue_metadata": {"workflow_id": "workflow-1"},
+            "failure": None,
+        },
+        {
+            "prediction_id": "prediction-pending",
+            "fair_order_key": "zzz",
+            "insert_status": BatchSubmitItemInsertStatus.INSERTED.value,
+            "enqueue_status": BatchSubmitItemEnqueueStatus.PENDING.value,
+            "enqueue_metadata": {},
+            "failure": None,
+        },
+    )
+    connection = ConnectionWithRows(rows)
+
+    result = submission.update_operation_summary(
+        cast(Connection, connection),
+        operation_key="op-1",
+        experiment_name="exp",
+        queue_name="queue",
+    )
+
+    assert result.requested_count == 2
+    assert result.enqueued_count == 1
+    update_sql = str(
+        connection.statements[1].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "status='enqueuing'" in update_sql
+    assert "completed_at=NULL" in update_sql
+
+
+def test_enqueue_loop_terminates_when_only_claiming_rows_remain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = DummyEngine()
+    load_calls = 0
+
+    def candidates(
+        connection: Connection,
+        *,
+        operation_key: str,
+        limit: int,
+    ) -> tuple[submission.EnqueueCandidate, ...]:
+        nonlocal load_calls
+        load_calls += 1
+        return ()
+
+    monkeypatch.setattr(
+        submission,
+        "load_pending_enqueue_candidates",
+        candidates,
+    )
+
+    submission.enqueue_pending_batch_items(
+        cast(Any, engine),
+        database_url="postgresql://example/db",
+        operation_key="op-1",
+        page_size=500,
+        attempt_index=0,
+        queue_name="queue",
+        enqueue_workflow=lambda *args, **kwargs: (
+            queue_worker.EnqueuedPredictionWorkflow(
+                prediction_id="prediction-1",
+                generation_run_id="run-1",
+                workflow_id="workflow-1",
+                enqueued=True,
+            )
+        ),
+    )
+
+    assert load_calls == 1
+
+
+def test_submit_resume_recovers_orphaned_claiming_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec(task_id="HumanEval/0")
+    engine = DummyEngine()
+    item_state: dict[
+        str,
+        tuple[BatchSubmitItemEnqueueStatus, dict[str, Any]],
+    ] = {
+        spec.prediction_id: (
+            BatchSubmitItemEnqueueStatus.CLAIMING,
+            {"enqueue_claim_id": "stale-claim", "claimed_at": NOW.isoformat()},
+        ),
+    }
+    enqueue_calls: list[str] = []
+
+    monkeypatch.setattr(
+        submission,
+        "prepare_submission_records",
+        lambda *args, **kwargs: None,
+    )
+
+    def candidates(
+        connection: Connection,
+        *,
+        operation_key: str,
+        limit: int,
+    ) -> tuple[submission.EnqueueCandidate, ...]:
+        pending_ids = tuple(
+            prediction_id
+            for prediction_id, (status, _metadata) in item_state.items()
+            if status is BatchSubmitItemEnqueueStatus.PENDING
+        )[:limit]
+        return tuple(
+            submission.EnqueueCandidate(
+                prediction_id=prediction_id,
+                fair_order_key=spec.fair_order_key,
+                item_index=0,
+                insert_status=BatchSubmitItemInsertStatus.INSERTED,
+            )
+            for prediction_id in pending_ids
+        )
+
+    def claim(
+        connection: Connection,
+        *,
+        operation_key: str,
+        prediction_id: str,
+    ) -> str | None:
+        status, _metadata = item_state[prediction_id]
+        if status is not BatchSubmitItemEnqueueStatus.PENDING:
+            return None
+        claim_id = "new-claim"
+        item_state[prediction_id] = (
+            BatchSubmitItemEnqueueStatus.CLAIMING,
+            {
+                "enqueue_claim_id": claim_id,
+                "claimed_at": NOW.isoformat(),
+            },
+        )
+        return claim_id
+
+    def enqueue(
+        database_url: str,
+        prediction_id: str,
+        attempt_index: int,
+        queue_name: str,
+    ) -> queue_worker.EnqueuedPredictionWorkflow:
+        enqueue_calls.append(prediction_id)
+        return queue_worker.EnqueuedPredictionWorkflow(
+            prediction_id=prediction_id,
+            generation_run_id=stable_generation_run_id(
+                prediction_id=prediction_id,
+                attempt_index=attempt_index,
+            ),
+            workflow_id=f"workflow:{prediction_id}",
+            enqueued=True,
+        )
+
+    def update_item(
+        connection: Connection,
+        *,
+        operation_key: str,
+        item: submission.SubmittedPredictionItem,
+        claim_id: str,
+    ) -> None:
+        item_state[item.prediction_id] = (
+            item.enqueue_status,
+            {"workflow_id": item.workflow_id} if item.workflow_id else {},
+        )
+
+    def prepare_retries(connection: Connection, *, operation_key: str) -> None:
+        for prediction_id, (status, _metadata) in list(item_state.items()):
+            if status in {
+                BatchSubmitItemEnqueueStatus.FAILED,
+                BatchSubmitItemEnqueueStatus.CLAIMING,
+            }:
+                item_state[prediction_id] = (
+                    BatchSubmitItemEnqueueStatus.PENDING,
+                    {},
+                )
+
+    monkeypatch.setattr(
+        submission,
+        "load_pending_enqueue_candidates",
+        candidates,
+    )
+    monkeypatch.setattr(submission, "claim_pending_batch_item", claim)
+    monkeypatch.setattr(submission, "prepare_enqueue_retries", prepare_retries)
+    monkeypatch.setattr(
+        submission,
+        "update_batch_item_outcome",
+        update_item,
+    )
+    monkeypatch.setattr(
+        submission,
+        "update_operation_summary",
+        lambda connection, *, operation_key, experiment_name, queue_name: (
+            submission.SubmitPredictionSpecsResult(
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                queue_name=queue_name,
+                requested_count=1,
+                inserted_count=1,
+                already_present_count=0,
+                enqueued_count=1,
+                already_scheduled_count=0,
+                failed_count=0,
+                items=(),
+            )
+        ),
+    )
+
+    result = submission.submit_prediction_specs(
+        cast(Any, engine),
+        database_url="postgresql://example/db",
+        operation_key="op-1",
+        experiment_name="exp",
+        specs=(spec,),
+        enqueue_workflow=enqueue,
+    )
+
+    assert enqueue_calls == [spec.prediction_id]
+    assert (
+        item_state[spec.prediction_id][0]
+        is BatchSubmitItemEnqueueStatus.ENQUEUED
+    )
+    assert result.enqueued_count == 1
 
 
 def test_update_operation_summary_counts_already_scheduled_items() -> None:

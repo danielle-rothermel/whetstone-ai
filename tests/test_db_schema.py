@@ -153,6 +153,15 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         "ck_dr_dspy_batch_items_enqueue_status_payload"
         in _constraint_names(schema.batch_submit_items, CheckConstraint)
     )
+    batch_items_enqueue_status = next(
+        constraint
+        for constraint in schema.batch_submit_items.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_items_enqueue_status"
+        )
+    )
+    assert "claiming" in str(batch_items_enqueue_status.sqltext)
     assert "ck_dr_dspy_batch_ops_count_bounds" in _constraint_names(
         schema.batch_submit_operations,
         CheckConstraint,

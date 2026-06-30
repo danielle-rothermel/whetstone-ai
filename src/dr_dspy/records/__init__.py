@@ -41,6 +41,8 @@ from dr_dspy.records.models import (
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
     ExperimentRecord,
     ExtractedCodePayload,
     FailureMetadataPayload,
@@ -65,6 +67,7 @@ from dr_dspy.records.models import (
     TaskSnapshotPayload,
     TextMetricsPayload,
     UsageCostPayload,
+    is_terminal_enqueue_status,
 )
 
 __all__ = [
@@ -88,6 +91,8 @@ __all__ = [
     "BatchSubmitOperationCounts",
     "BatchSubmitOperationRecord",
     "BatchSubmitOperationStatus",
+    "ENQUEUE_CLAIMED_AT_METADATA_KEY",
+    "ENQUEUE_CLAIM_ID_METADATA_KEY",
     "DimensionsPayload",
     "ExperimentRecord",
     "ExtractedCodePayload",
@@ -124,6 +129,7 @@ __all__ = [
     "dimensions_digest",
     "fair_order_key",
     "insert_outcome_from_rowcount",
+    "is_terminal_enqueue_status",
     "stable_generation_run_id",
     "stable_node_attempt_id",
     "stable_prediction_id",

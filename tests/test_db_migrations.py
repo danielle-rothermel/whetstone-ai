@@ -37,7 +37,7 @@ def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "20260630_0002"
+    assert script.get_current_head() == "20260630_0003"
 
 
 def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
@@ -124,6 +124,31 @@ def test_alembic_terminal_enqueue_accounting_revision_renders_constraints(
     assert "ck_dr_dspy_batch_ops_completed" in rendered
 
 
+def test_alembic_claiming_status_revision_renders_constraint_and_heals_rows(
+    monkeypatch: Any,
+) -> None:
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0003_batch_submit_claiming_status"
+    )
+    statements: list[str] = []
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
+
+    migration.upgrade()
+    rendered = "\n".join(statements)
+
+    assert "enqueue_metadata = '{}'::jsonb" in rendered
+    assert "'claiming'" in rendered
+    assert "ck_dr_dspy_batch_items_enqueue_status" in rendered
+
+
 def test_alembic_v1_schema_revision_applies_to_postgres(
     monkeypatch: Any,
 ) -> None:
@@ -167,6 +192,10 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
     terminal_enqueue_migration = importlib.import_module(
         "dr_dspy.db.migrations.versions."
         "20260630_0002_batch_submit_terminal_enqueue_accounting"
+    )
+    claiming_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0003_batch_submit_claiming_status"
     )
 
     try:
@@ -220,6 +249,90 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
                 Operations(context),
             )
             terminal_enqueue_migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_experiments ("
+                    "experiment_name, config_metadata, created_at"
+                    ") VALUES ("
+                    "'exp-heal', '{}'::jsonb, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_prediction_specs ("
+                    "prediction_id, experiment_name, task_id, "
+                    "repetition_seed, graph_digest, dimensions_digest, "
+                    "graph_layout, provider_kind, endpoint_kind, model, "
+                    "throttle_key, fair_order_seed, fair_order_key, "
+                    "task_snapshot, graph_snapshot, dimensions, "
+                    "provider_configs, provider_axis_config_id, created_at"
+                    ") VALUES ("
+                    "'prediction-heal', 'exp-heal', 'HumanEval/0', 0, "
+                    "'graph', 'dims', 'direct', 'openai', 'responses', "
+                    "'model', 'openai:responses:model', 'seed', 'fair', "
+                    "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+                    "'[{\"provider_kind\": \"openai\", "
+                    "\"endpoint_kind\": \"responses\", \"model\": "
+                    "\"model\", \"throttle_key\": "
+                    "\"openai:responses:model\"}]'::jsonb, NULL, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_operations ("
+                    "operation_key, experiment_name, status, requested_count, "
+                    "inserted_count, already_present_count, enqueued_count, "
+                    "already_scheduled_count, failed_count, spec, metadata, "
+                    "created_at"
+                    ") VALUES ("
+                    "'op-claim-heal', 'exp-heal', 'enqueuing', 1, 1, 0, 0, "
+                    "0, 0, '{}'::jsonb, '{}'::jsonb, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_items ("
+                    "batch_submit_item_id, operation_key, item_index, "
+                    "prediction_id, fair_order_key, insert_status, "
+                    "enqueue_status, enqueue_metadata, failure, created_at"
+                    ") VALUES ("
+                    "'item-heal', 'op-claim-heal', 0, 'prediction-heal', "
+                    "'fair', 'inserted', 'pending', "
+                    "'{\"enqueue_claim_id\": \"stale\"}'::jsonb, NULL, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                claiming_migration,
+                "op",
+                Operations(context),
+            )
+            claiming_migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            healed = conn.execute(
+                text(
+                    "SELECT enqueue_metadata "
+                    "FROM dr_dspy_batch_submit_items "
+                    "WHERE batch_submit_item_id = 'item-heal'"
+                )
+            ).scalar_one()
+            assert healed == {}
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
@@ -305,6 +418,13 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                claiming_migration,
+                "op",
+                Operations(context),
+            )
+            claiming_migration.downgrade()
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(
                 terminal_enqueue_migration,

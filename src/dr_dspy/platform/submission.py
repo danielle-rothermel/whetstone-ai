@@ -24,6 +24,8 @@ from dr_dspy.records import (
     BatchSubmitItemRecord,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
     ExperimentRecord,
     FailureMetadataPayload,
     PredictionSpecRecord,
@@ -34,7 +36,7 @@ DEFAULT_SUBMIT_CHUNK_SIZE = 500
 BATCH_SUBMIT_ITEM_ID_LENGTH = 32
 WORKFLOW_ID_METADATA_KEY = "workflow_id"
 GENERATION_RUN_ID_METADATA_KEY = "generation_run_id"
-ENQUEUE_CLAIM_METADATA_KEY = "enqueue_claim_id"
+ENQUEUE_CLAIM_METADATA_KEY = ENQUEUE_CLAIM_ID_METADATA_KEY
 
 type EnqueueWorkflow = Callable[
     [str, str, int, str],
@@ -141,7 +143,7 @@ def submit_prediction_specs(
 
     if ordered_windows:
         with engine.begin() as connection:
-            reset_failed_enqueue_items(
+            prepare_enqueue_retries(
                 connection,
                 operation_key=operation_key,
             )
@@ -388,6 +390,40 @@ def reset_failed_enqueue_items(
     )
 
 
+def reset_stale_enqueue_claims(
+    connection: Connection,
+    *,
+    operation_key: str,
+) -> None:
+    connection.execute(
+        update(schema.batch_submit_items)
+        .where(schema.batch_submit_items.c.operation_key == operation_key)
+        .where(
+            schema.batch_submit_items.c.enqueue_status
+            == BatchSubmitItemEnqueueStatus.CLAIMING.value
+        )
+        .values(
+            enqueue_status=BatchSubmitItemEnqueueStatus.PENDING.value,
+            enqueue_metadata={},
+        )
+    )
+
+
+def prepare_enqueue_retries(
+    connection: Connection,
+    *,
+    operation_key: str,
+) -> None:
+    reset_failed_enqueue_items(
+        connection,
+        operation_key=operation_key,
+    )
+    reset_stale_enqueue_claims(
+        connection,
+        operation_key=operation_key,
+    )
+
+
 def enqueue_pending_batch_items(
     engine: Engine,
     *,
@@ -521,11 +557,12 @@ def claim_pending_batch_item(
     operation_key: str,
     prediction_id: str,
 ) -> str | None:
+    claimed_at = datetime.now(UTC).isoformat()
     claim_id = sha256_json_digest(
         {
             "operation_key": operation_key,
             "prediction_id": prediction_id,
-            "claimed_at": datetime.now(UTC).isoformat(),
+            "claimed_at": claimed_at,
         },
         length=BATCH_SUBMIT_ITEM_ID_LENGTH,
     )
@@ -537,9 +574,12 @@ def claim_pending_batch_item(
             schema.batch_submit_items.c.enqueue_status
             == BatchSubmitItemEnqueueStatus.PENDING.value
         )
-        .where(schema.batch_submit_items.c.enqueue_metadata == {})
         .values(
-            enqueue_metadata={ENQUEUE_CLAIM_METADATA_KEY: claim_id},
+            enqueue_status=BatchSubmitItemEnqueueStatus.CLAIMING.value,
+            enqueue_metadata={
+                ENQUEUE_CLAIM_ID_METADATA_KEY: claim_id,
+                ENQUEUE_CLAIMED_AT_METADATA_KEY: claimed_at,
+            },
         )
     )
     if result.rowcount != 1:
@@ -552,7 +592,7 @@ def update_batch_item_outcome(
     *,
     operation_key: str,
     item: SubmittedPredictionItem,
-    claim_id: str | None = None,
+    claim_id: str,
 ) -> None:
     existing = connection.execute(
         select(schema.batch_submit_items)
@@ -566,24 +606,21 @@ def update_batch_item_outcome(
             )
         }
     )
-    query = (
+    result = connection.execute(
         update(schema.batch_submit_items)
         .where(schema.batch_submit_items.c.operation_key == operation_key)
         .where(schema.batch_submit_items.c.prediction_id == item.prediction_id)
         .where(
             schema.batch_submit_items.c.enqueue_status
-            == BatchSubmitItemEnqueueStatus.PENDING.value
+            == BatchSubmitItemEnqueueStatus.CLAIMING.value
         )
-    )
-    if claim_id is not None:
-        query = query.where(
+        .where(
             schema.batch_submit_items.c.enqueue_metadata[
-                ENQUEUE_CLAIM_METADATA_KEY
+                ENQUEUE_CLAIM_ID_METADATA_KEY
             ].astext
             == claim_id
         )
-    connection.execute(
-        query.values(
+        .values(
             insert_status=updated_item.insert_status.value,
             enqueue_status=updated_item.enqueue_status.value,
             enqueue_metadata=enqueue_metadata_for_item(updated_item),
@@ -594,6 +631,13 @@ def update_batch_item_outcome(
             ),
         )
     )
+    if result.rowcount != 1:
+        raise RuntimeError(
+            "batch submit item outcome update matched no rows: "
+            f"operation_key={operation_key!r} "
+            f"prediction_id={item.prediction_id!r} "
+            f"claim_id={claim_id!r}"
+        )
 
 
 def update_operation_summary(
