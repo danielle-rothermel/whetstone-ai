@@ -115,7 +115,7 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as exc:
-        pytest.skip(f"PostgreSQL unavailable: {exc}")  # ty: ignore[too-many-positional-arguments]
+        pytest.skip(f"PostgreSQL unavailable: {exc}")
 
     migration = importlib.import_module(
         "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"

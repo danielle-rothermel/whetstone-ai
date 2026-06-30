@@ -1,3 +1,7 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.venv/
 logs/
 docs/prompts/*
 !docs/prompts/archive-v0-surfaces.md

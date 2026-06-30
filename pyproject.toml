@@ -29,9 +29,6 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.uv.sources]
-dspy = { workspace = true }
-
 [tool.ruff]
 include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 line-length = 79

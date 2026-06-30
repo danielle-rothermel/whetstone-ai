@@ -252,7 +252,7 @@ def test_postgresql_ddl_applies_composite_foreign_keys() -> None:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as exc:
-        pytest.skip(f"PostgreSQL unavailable: {exc}")  # ty: ignore[too-many-positional-arguments]
+        pytest.skip(f"PostgreSQL unavailable: {exc}")
 
     with engine.begin() as conn:
         conn.execute(text(f"CREATE SCHEMA {schema_name}"))

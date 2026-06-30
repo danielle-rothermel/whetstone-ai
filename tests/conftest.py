@@ -93,7 +93,7 @@ def postgres_base_url() -> str:
     skip_reason = _postgres_available(database_url)
     if skip_reason is not None:
         message = f"PostgreSQL unavailable: {skip_reason}"
-        pytest.skip(message)  # ty: ignore[too-many-positional-arguments]
+        pytest.skip(message)
     return database_url
 
 
