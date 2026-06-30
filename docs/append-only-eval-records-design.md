@@ -361,8 +361,9 @@ Batch operation summary counts are derived from terminal batch-item rows.
 `inserted_count` and `already_present_count` track spec dedupe outcomes;
 `enqueued_count`, `already_scheduled_count`, and `failed_count` track enqueue
 outcomes. Completed operations must account for every requested item in
-`enqueued_count`, `already_scheduled_count`, or `failed_count`. Enqueued items
-record whether the spec insert was new via `enqueue_metadata.spec_outcome`.
+`enqueued_count`, `already_scheduled_count`, or `failed_count`. Batch items
+record whether the spec insert was new via the `insert_status` column
+(`inserted` or `already_present`).
 
 ### Mix queued work deterministically
 

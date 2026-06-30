@@ -198,6 +198,10 @@ unless noted above:
 - **Legacy v0 / PlainPromptAdapter:** no new ChatAdapter coupling on the platform
   path.
 - **Raw vs parsed artifacts:** out of scope for this phase.
+- **Throttle clear after success:** a failed backoff clear on an otherwise
+  successful LM call is swallowed so the generation outcome is not lost; stale
+  `blocked_until` may linger until the next retryable failure or a later clear.
+  Preflight reads and failure writes still propagate DB errors.
 
 ## Follow-up notes
 
