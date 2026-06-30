@@ -13,7 +13,10 @@ LEGACY_MODULE_PATHS = (
     PROJECT_ROOT / "src" / "dr_dspy" / "experiments" / "__init__.py",
     PROJECT_ROOT / "src" / "dr_dspy" / "harness" / "__init__.py",
     PROJECT_ROOT / "src" / "dr_dspy" / "runtime.py",
+    PROJECT_ROOT / "src" / "dr_dspy" / "lm" / "__init__.py",
     PROJECT_ROOT / "src" / "dr_dspy" / "lm" / "runner.py",
+    PROJECT_ROOT / "src" / "dr_dspy" / "lm" / "openrouter.py",
+    PROJECT_ROOT / "src" / "dr_dspy" / "lm" / "signatures.py",
     PROJECT_ROOT / "src" / "dr_dspy" / "lm" / "logging.py",
 )
 
@@ -43,10 +46,25 @@ def test_legacy_module_docstrings_mark_v0_surfaces() -> None:
         assert "legacy" in docstring.lower(), path
 
 
+def readme_lines_containing(readme: str, needle: str) -> list[str]:
+    return [line for line in readme.splitlines() if needle in line]
+
+
 def test_readme_marks_legacy_package_layout_and_generation_path() -> None:
     readme = README_PATH.read_text(encoding="utf-8")
 
     assert "legacy v0" in readme.lower()
-    assert "`experiments/`" in readme and "legacy" in readme
-    assert "`harness/`" in readme and "legacy" in readme
+
+    experiments_lines = readme_lines_containing(readme, "`experiments/`")
+    assert experiments_lines, "README missing experiments package layout entry"
+    assert all("legacy" in line.lower() for line in experiments_lines), (
+        experiments_lines
+    )
+
+    harness_lines = readme_lines_containing(readme, "`harness/`")
+    assert harness_lines, "README missing harness package layout entry"
+    assert all("legacy" in line.lower() for line in harness_lines), (
+        harness_lines
+    )
+
     assert "legacy `lm.runner.run_predictor`" in readme
