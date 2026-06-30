@@ -613,10 +613,14 @@ def _failure_from_v0_generation(
             parsed_class = FailureClass(failure_class)
         except ValueError:
             parsed_class = FailureClass.PERMANENT
+    underlying = row.get("generation_underlying_exception_type")
     return FailureMetadataPayload(
         failure_class=parsed_class or FailureClass.PERMANENT,
         error_type=(
             row.get("generation_failure_exception_type") or "GenerationError"
+        ),
+        underlying_exception_type=(
+            underlying if isinstance(underlying, str) else None
         ),
         message=(
             row.get("generation_exception_message")

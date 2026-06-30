@@ -429,6 +429,7 @@ def failure_metadata_from_exception(
     return FailureMetadataPayload(
         failure_class=summary.failure_class,
         error_type=summary.failure_exception_type,
+        underlying_exception_type=summary.underlying_exception_type,
         message=summary.message,
         metadata=summary.failure_metadata,
     )

@@ -41,6 +41,7 @@ from dr_dspy.platform.node_execution import (
     NodeStepResult,
     NodeStepStatus,
     execute_lm_node,
+    failure_metadata_from_exception,
     provider_config_ref_for_node,
 )
 from dr_dspy.platform.persistence import (
@@ -213,6 +214,17 @@ def _step_error(node: NodeSpec, message: str) -> NodeStepResult:
         started_at=NOW,
         completed_at=NOW,
     )
+
+
+def test_failure_metadata_preserves_underlying_exception_type() -> None:
+    error = PermanentFailureError(
+        "provider failed",
+        underlying=ValueError("bad token"),
+    )
+
+    payload = failure_metadata_from_exception(error)
+
+    assert payload.underlying_exception_type == "builtins.ValueError"
 
 
 def test_direct_graph_success_persists_generation_and_node_attempt() -> None:
@@ -685,6 +697,19 @@ def test_prediction_spec_from_row_round_trips_db_io_shape() -> None:
     parsed = prediction_spec_from_row(db_io.prediction_spec_row(spec))
 
     assert parsed.model_dump(mode="json") == spec.model_dump(mode="json")
+
+
+def test_prediction_spec_from_row_rejects_mismatched_provider_axis() -> None:
+    graph = GraphSpec(
+        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+        terminal_node_id="direct",
+    )
+    spec = _spec(graph)
+    row = dict(db_io.prediction_spec_row(spec))
+    row["model"] = "other-model"
+
+    with pytest.raises(ValueError, match="provider_configs snapshot"):
+        prediction_spec_from_row(row)
 
 
 def test_persist_generation_result_uses_idempotent_inserts() -> None:

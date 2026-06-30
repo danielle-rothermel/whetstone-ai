@@ -27,6 +27,7 @@ from dr_dspy.records.limits import (
     NODE_OUTPUT_MAX_BYTES,
     PER_TEST_RESULTS_MAX_BYTES,
     PER_TEST_RESULTS_MAX_COUNT,
+    PROVIDER_TELEMETRY_MAX_BYTES,
     TASK_INPUTS_MAX_BYTES,
     validate_payload_size,
 )
@@ -148,11 +149,29 @@ class UsageCostPayload(BaseModel):
     usage_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
     provider_cost: StrictFloat | None = None
 
+    @model_validator(mode="after")
+    def validate_usage_metadata_size(self) -> UsageCostPayload:
+        validate_payload_size(
+            self.usage_metadata,
+            max_bytes=PROVIDER_TELEMETRY_MAX_BYTES,
+            label="usage metadata",
+        )
+        return self
+
 
 class ResponseMetadataPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     response_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_response_metadata_size(self) -> ResponseMetadataPayload:
+        validate_payload_size(
+            self.response_metadata,
+            max_bytes=PROVIDER_TELEMETRY_MAX_BYTES,
+            label="response metadata",
+        )
+        return self
 
 
 class FailureMetadataPayload(BaseModel):
@@ -160,6 +179,7 @@ class FailureMetadataPayload(BaseModel):
 
     failure_class: FailureClass | None = None
     error_type: StrictStr
+    underlying_exception_type: StrictStr | None = None
     message: StrictStr
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 

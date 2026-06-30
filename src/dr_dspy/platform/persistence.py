@@ -29,6 +29,7 @@ from dr_dspy.records import (
     ProviderConfigRef,
     stable_node_attempt_id,
 )
+from dr_dspy.records.providers import find_provider_config_ref
 
 
 def load_prediction_spec(
@@ -47,9 +48,13 @@ def prediction_spec_from_row(row: Mapping[str, Any]) -> PredictionSpecRecord:
         ProviderConfigRef.model_validate(provider_config)
         for provider_config in row["provider_configs"]
     )
-    provider_axis = _provider_axis_from_row(
-        row=row,
-        provider_configs=provider_configs,
+    provider_axis = find_provider_config_ref(
+        provider_configs,
+        provider_kind=row["provider_kind"],
+        endpoint_kind=row["endpoint_kind"],
+        model=row["model"],
+        throttle_key=row["throttle_key"],
+        config_id=row.get("provider_axis_config_id"),
     )
     return PredictionSpecRecord(
         prediction_id=row["prediction_id"],
@@ -206,27 +211,6 @@ def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
             )
         )
         .on_conflict_do_nothing(index_elements=["node_attempt_id"])
-    )
-
-
-def _provider_axis_from_row(
-    *,
-    row: Mapping[str, Any],
-    provider_configs: tuple[ProviderConfigRef, ...],
-) -> ProviderConfigRef:
-    for provider_config in provider_configs:
-        if (
-            provider_config.provider_kind.value == row["provider_kind"]
-            and provider_config.endpoint_kind.value == row["endpoint_kind"]
-            and provider_config.model == row["model"]
-            and provider_config.throttle_key == row["throttle_key"]
-        ):
-            return provider_config
-    return ProviderConfigRef(
-        provider_kind=row["provider_kind"],
-        endpoint_kind=row["endpoint_kind"],
-        model=row["model"],
-        throttle_key=row["throttle_key"],
     )
 
 

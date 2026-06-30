@@ -26,6 +26,7 @@ from dr_dspy.records.limits import (
     NODE_OUTPUT_MAX_BYTES,
     PER_TEST_RESULTS_MAX_BYTES,
     PER_TEST_RESULTS_MAX_COUNT,
+    PROVIDER_TELEMETRY_MAX_BYTES,
     TASK_INPUTS_MAX_BYTES,
     validate_payload_size,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "PER_TEST_RESULTS_MAX_BYTES",
     "PER_TEST_RESULTS_MAX_COUNT",
     "PREDICTION_ID_DIGEST_LENGTH",
+    "PROVIDER_TELEMETRY_MAX_BYTES",
     "SPEC_OUTCOME_METADATA_KEY",
     "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
