@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Select, null, select, update
+from sqlalchemy import Select, and_, null, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql.dml import Insert, Update
 
@@ -646,6 +646,66 @@ def select_node_attempts_by_generation_run(
             schema.node_attempts.c.attempt_index,
         )
     )
+
+
+    )
+
+
+def select_rescore_generation_candidates(
+    *,
+    experiment_name: str,
+    generation_status: GenerationRunStatus,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    score_attempt_index: int,
+    generation_attempt_index: int | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+) -> Select[tuple[Any, ...]]:
+    matching_score_attempt = and_(
+        schema.score_attempts.c.generation_run_id
+        == schema.generation_runs.c.generation_run_id,
+        schema.score_attempts.c.scoring_profile_id == scoring_profile_id,
+        schema.score_attempts.c.scoring_profile_version
+        == scoring_profile_version,
+        schema.score_attempts.c.parser_profile_id == parser_profile_id,
+        schema.score_attempts.c.parser_version == parser_version,
+        schema.score_attempts.c.attempt_index == score_attempt_index,
+    )
+    statement = (
+        select(
+            schema.prediction_specs.c.prediction_id,
+            schema.prediction_specs.c.fair_order_key,
+            schema.generation_runs.c.generation_run_id,
+            schema.score_attempts.c.score_attempt_id.label(
+                "existing_score_attempt_id"
+            ),
+        )
+        .select_from(
+            schema.generation_runs.join(
+                schema.prediction_specs,
+                schema.prediction_specs.c.prediction_id
+                == schema.generation_runs.c.prediction_id,
+            ).outerjoin(schema.score_attempts, matching_score_attempt)
+        )
+        .where(schema.prediction_specs.c.experiment_name == experiment_name)
+        .where(schema.generation_runs.c.status == generation_status.value)
+        .order_by(
+            schema.prediction_specs.c.fair_order_key,
+            schema.prediction_specs.c.prediction_id,
+            schema.generation_runs.c.generation_run_id,
+        )
+        .offset(offset)
+    )
+    if generation_attempt_index is not None:
+        statement = statement.where(
+            schema.generation_runs.c.attempt_index == generation_attempt_index
+        )
+    if limit is not None:
+        statement = statement.limit(limit)
+    return statement
 
 
 def _dump(value: BaseModel) -> dict[str, Any]:

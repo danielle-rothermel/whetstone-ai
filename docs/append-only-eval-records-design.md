@@ -620,6 +620,14 @@ top-level functions, classes, imports, AST node counts, and simple statement or
 branch counts. If parsing fails, still persist raw text metrics and the parse
 failure.
 
+Before the first v1 rescoring run, harden the scoring-owned metrics with
+deterministic HumanEval task/test shape metrics and richer stdlib `ast`
+code-shape summaries inside the existing metrics JSONB payload. Keep
+`humaneval-metrics@v1` for this pre-live hardening pass. External exploratory
+feature extraction such as textdescriptives/spaCy, MinHash, tree-sitter,
+radon/lizard/complexipy, parquet, and DuckDB belongs to a later analysis
+pipeline unless it is explicitly adopted into a future scoring profile.
+
 ## Schema and database tooling
 
 Use the Python eval platform as the schema authority. The durable workflows,

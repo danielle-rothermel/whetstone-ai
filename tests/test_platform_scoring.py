@@ -33,8 +33,10 @@ from dr_dspy.humaneval.metrics import (
     ast_metrics,
     build_metrics_payload,
     python_leakage_metrics,
+    task_test_metrics,
     text_metrics,
 )
+from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -43,7 +45,7 @@ from dr_dspy.humaneval.profiles import (
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.humaneval.task import EvaluationTaskResult, HumanEvalTask
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import scoring_workflow
+from dr_dspy.platform import rescoring, scoring_workflow
 from dr_dspy.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -61,6 +63,7 @@ from dr_dspy.records import (
     GenerationRunSummaryPayload,
     GenerationTerminalErrorPayload,
     GraphSnapshotPayload,
+    MetricsPayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
     NodeOutputPayload,
@@ -80,13 +83,43 @@ NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
 
 
-def _task() -> HumanEvalTask:
+class DummyConnection:
+    pass
+
+
+class DummyTransaction:
+    def __init__(self, engine: DummyEngine) -> None:
+        self.engine = engine
+
+    def __enter__(self) -> DummyConnection:
+        self.engine.begin_count += 1
+        return self.engine.connection
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> None:
+        pass
+
+
+class DummyEngine:
+    def __init__(self) -> None:
+        self.connection = DummyConnection()
+        self.begin_count = 0
+
+    def begin(self) -> DummyTransaction:
+        return DummyTransaction(self)
+
+
+def _task(*, test: str | None = None) -> HumanEvalTask:
     return HumanEvalTask(
         task_id="HumanEval/fixture",
         prompt="def add_one(x):\n",
         canonical_solution="    return x + 1\n",
         entry_point="add_one",
-        test=(
+        test=test or (
             "def check(candidate):\n"
             "    inputs = [(1,), (2,)]\n"
             "    results = [2, 3]\n"
@@ -356,6 +389,9 @@ def test_metrics_payload_includes_full_stage_metrics() -> None:
     )
 
     assert metrics.profile_id == HUMANEVAL_METRICS_PROFILE_ID
+    assert metrics.task_tests is not None
+    assert metrics.task_tests.case_count == 2
+    assert metrics.task_tests.input_result_case_count == 2
     assert metrics.text is not None
     assert metrics.text.line_count == 4
     assert metrics.python_leakage is not None
@@ -368,6 +404,107 @@ def test_metrics_payload_includes_full_stage_metrics() -> None:
         "extracted_code",
         "node:encoder:description",
     ]
+
+
+def test_task_test_metrics_summarize_input_result_tests() -> None:
+    metrics = task_test_metrics(_task())
+
+    assert metrics.parse_ok is True
+    assert metrics.task_id == "HumanEval/fixture"
+    assert metrics.entry_point == "add_one"
+    assert metrics.test_type is HumanEvalTestCaseKind.INPUT_RESULT
+    assert metrics.case_count == 2
+    assert metrics.input_result_case_count == 2
+    assert metrics.oracle_case_count == 0
+    assert metrics.input_expression_case_count == 0
+    assert metrics.assertion_name == "assertion"
+    assert metrics.check_name == "check"
+    assert metrics.candidate_arg_name == "candidate"
+    assert metrics.input_repr_character_total == len("[1]") + len("[2]")
+    assert metrics.expected_output_repr_character_total == len("2") + len("3")
+    assert metrics.expected_output_expr_count == 0
+    assert metrics.original_test_line_count > 0
+
+
+def test_task_test_metrics_summarize_oracle_tests() -> None:
+    task = _task(
+        test=(
+            "def ref(x):\n"
+            "    return x + 1\n"
+            "\n"
+            "def check(candidate):\n"
+            "    inputs = [(1,), (2,)]\n"
+            "    for inp in inputs:\n"
+            "        assertion(candidate(*inp), ref(*inp))\n"
+        ),
+    )
+
+    metrics = task_test_metrics(task)
+
+    assert metrics.parse_ok is True
+    assert metrics.test_type is HumanEvalTestCaseKind.INPUT_ORACLE
+    assert metrics.case_count == 2
+    assert metrics.oracle_case_count == 2
+    assert metrics.expected_output_expr_count == 2
+    assert metrics.input_result_case_count == 0
+    assert metrics.input_expression_case_count == 0
+    assert metrics.support_code_character_count > 0
+
+
+def test_ast_metrics_include_rich_function_and_code_shape() -> None:
+    source = (
+        "import math\n"
+        "from os import path\n"
+        "\n"
+        "def deco(fn):\n"
+        "    return fn\n"
+        "\n"
+        "@deco\n"
+        "def add_one(x, /, y: int = 1, *args, scale=1, **kwargs) -> int:\n"
+        "    \"\"\"doc\"\"\"\n"
+        "    total = x + y\n"
+        "    values = [item for item in args if item]\n"
+        "    if total > 0:\n"
+        "        for value in values:\n"
+        "            total += value\n"
+        "    def helper(z):\n"
+        "        return scale + z\n"
+        "    return helper(total)\n"
+        "\n"
+        "async def later(a):\n"
+        "    return await foo(a)\n"
+        "\n"
+        "lambda_value = lambda q: q\n"
+        "class Box:\n"
+        "    pass\n"
+    )
+
+    metrics = ast_metrics(source)
+
+    assert metrics.parse_ok is True
+    assert metrics.top_level_function_count == 3
+    assert metrics.top_level_function_names == ("deco", "add_one", "later")
+    assert metrics.function_count == 4
+    assert metrics.nested_function_count == 1
+    assert metrics.async_function_count == 1
+    assert metrics.lambda_count == 1
+    assert metrics.class_count == 1
+    assert metrics.import_count == 2
+    assert metrics.return_count == 4
+    assert metrics.call_count >= 2
+    assert metrics.assignment_count == 4
+    assert metrics.comprehension_count == 1
+    assert metrics.literal_count > 0
+    assert metrics.max_branch_depth == 2
+    assert metrics.total_argument_count == 8
+    assert metrics.positional_only_argument_count == 1
+    assert metrics.keyword_only_argument_count == 1
+    assert metrics.vararg_count == 1
+    assert metrics.kwarg_count == 1
+    assert metrics.decorated_function_count == 1
+    assert metrics.annotated_return_count == 1
+    assert metrics.docstring_function_count == 1
+    assert metrics.max_function_line_span > 0
 
 
 def test_metric_primitives_are_deterministic() -> None:
@@ -384,6 +521,7 @@ def test_metric_primitives_are_deterministic() -> None:
     assert leakage.code_marker_count == 2
     assert leakage.task_name_hit_count == 1
     assert ast_result.parse_ok is True
+    assert ast_result.function_count == 1
     assert ast_error.parse_ok is False
 
 
@@ -410,6 +548,10 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
         "passed",
     ]
     assert score.metrics is not None
+    assert score.metrics.task_tests is not None
+    assert score.metrics.task_tests.case_count == 2
+    assert score.metrics.ast is not None
+    assert score.metrics.ast.function_count == 1
     assert score.metrics.custom["evaluation"] == {
         "function_names": ["add_one"],
         "total_cases": 2,
@@ -481,6 +623,10 @@ def test_score_generation_run_persists_no_top_level_functions() -> None:
     )
     assert score.per_test_results == ()
     assert score.metrics is not None
+    assert score.metrics.task_tests is not None
+    assert score.metrics.task_tests.case_count == 2
+    assert score.metrics.ast is not None
+    assert score.metrics.ast.top_level_function_count == 0
     assert score.metrics.custom["evaluation"] == {
         "function_names": [],
         "total_cases": 2,
@@ -493,6 +639,42 @@ def test_score_generation_run_persists_no_top_level_functions() -> None:
         "passed": False,
         "status_counts": {},
     }
+
+
+def test_metrics_payload_round_trips_through_record_model() -> None:
+    metrics = build_metrics_payload(
+        raw_generation="def add_one(x):\n    return x + 1\n",
+        extracted_code="def add_one(x):\n    return x + 1\n",
+        task=_task(),
+    )
+
+    round_tripped = MetricsPayload.model_validate(
+        metrics.model_dump(mode="json")
+    )
+
+    assert round_tripped.task_tests is not None
+    assert round_tripped.task_tests.case_count == 2
+    assert round_tripped.ast is not None
+    assert round_tripped.ast.top_level_function_names == ("add_one",)
+
+
+def test_metrics_payload_preserves_extracted_code_parse_error() -> None:
+    metrics = build_metrics_payload(
+        raw_generation="def add_one(x)\n    return x + 1\n",
+        extracted_code="def add_one(x)\n    return x + 1\n",
+        task=_task(),
+    )
+
+    assert metrics.task_tests is not None
+    assert metrics.task_tests.case_count == 2
+    assert metrics.ast is not None
+    assert metrics.ast.parse_ok is False
+    assert metrics.ast.parse_error is not None
+    extracted_stage = next(
+        stage for stage in metrics.stages if stage.stage_id == "extracted_code"
+    )
+    assert extracted_stage.ast is not None
+    assert extracted_stage.ast.parse_ok is False
 
 
 @pytest.mark.parametrize(
@@ -527,6 +709,9 @@ def test_score_generation_run_persists_extraction_failures_as_success(
     assert score.generated_code_outcome is outcome
     assert score.per_test_results == ()
     assert score.metrics is not None
+    assert score.metrics.task_tests is not None
+    assert score.metrics.task_tests.case_count == 2
+    assert score.metrics.ast is None
 
 
 def test_score_generation_run_persists_infrastructure_error() -> None:
@@ -908,6 +1093,259 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         ),
         ("persist", ("postgresql://example/db", expected_score_id)),
     ]
+
+
+def test_rescore_selector_filters_and_orders_candidates() -> None:
+    statement = db_io.select_rescore_generation_candidates(
+        experiment_name="exp",
+        generation_status=GenerationRunStatus.SUCCESS,
+        generation_attempt_index=0,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        score_attempt_index=0,
+        limit=10,
+        offset=2,
+    )
+
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "LEFT OUTER JOIN dr_dspy_score_attempts" in compiled
+    assert "dr_dspy_prediction_specs.experiment_name = 'exp'" in compiled
+    assert "dr_dspy_generation_runs.status = 'success'" in compiled
+    assert "dr_dspy_generation_runs.attempt_index = 0" in compiled
+    assert (
+        "dr_dspy_score_attempts.scoring_profile_id = 'humaneval'"
+    ) in compiled
+    assert (
+        "dr_dspy_score_attempts.parser_profile_id = "
+        "'humaneval-best-effort'"
+    ) in compiled
+    assert (
+        "ORDER BY dr_dspy_prediction_specs.fair_order_key, "
+        "dr_dspy_prediction_specs.prediction_id, "
+        "dr_dspy_generation_runs.generation_run_id"
+    ) in compiled
+    assert "LIMIT 10 OFFSET 2" in compiled
+
+
+def test_batch_rescore_dry_run_skips_already_scored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = (
+        _rescore_candidate(0, existing_score_attempt_id="existing-score"),
+        _rescore_candidate(1),
+    )
+    scheduler_calls: list[str] = []
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        lambda connection, **kwargs: candidates,
+    )
+
+    def schedule(
+        **kwargs: Any,
+    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+        scheduler_calls.append(kwargs["generation_run_id"])
+        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            score_attempt_id="unused",
+            workflow_id="unused",
+            scheduled=True,
+        )
+
+    result = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        dry_run=True,
+        schedule_workflow=schedule,
+    )
+
+    assert scheduler_calls == []
+    assert result.selected_count == 2
+    assert result.already_scored_count == 1
+    assert result.pending_score_count == 1
+    assert result.scheduled_count == 0
+    assert [item.status for item in result.items] == [
+        rescoring.BatchRescoreItemStatus.ALREADY_SCORED,
+        rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE,
+    ]
+    assert result.items[0].existing_score_attempt_id == "existing-score"
+
+
+def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = (
+        _rescore_candidate(0),
+        _rescore_candidate(1),
+        _rescore_candidate(2),
+    )
+    pages: list[tuple[int, int]] = []
+    scheduler_calls: list[str] = []
+
+    def load_candidates(
+        connection: DummyConnection,
+        **kwargs: Any,
+    ) -> tuple[rescoring.RescoreGenerationCandidate, ...]:
+        pages.append((kwargs["limit"], kwargs["offset"]))
+        return candidates[kwargs["offset"]:kwargs["offset"] + kwargs["limit"]]
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        load_candidates,
+    )
+
+    def schedule(
+        **kwargs: Any,
+    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+        generation_run_id = kwargs["generation_run_id"]
+        scheduler_calls.append(generation_run_id)
+        score_attempt_id = stable_score_attempt_id(
+            generation_run_id=generation_run_id,
+            scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+            scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+            parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+            parser_version=PARSER_PROFILE_VERSION,
+            attempt_index=0,
+        )
+        if generation_run_id == "generation-run-1":
+            return scoring_workflow.ScheduledScoreGenerationWorkflow(
+                score_attempt_id=score_attempt_id,
+                workflow_id=f"platform-score-v1:{score_attempt_id}",
+                scheduled=False,
+            )
+        if generation_run_id == "generation-run-2":
+            raise RuntimeError("dbos unavailable")
+        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=f"platform-score-v1:{score_attempt_id}",
+            scheduled=True,
+        )
+
+    result = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        chunk_size=2,
+        schedule_workflow=schedule,
+    )
+
+    assert pages == [(2, 0), (2, 2)]
+    assert scheduler_calls == [
+        "generation-run-0",
+        "generation-run-1",
+        "generation-run-2",
+    ]
+    assert result.selected_count == 3
+    assert result.scheduled_count == 1
+    assert result.already_scheduled_count == 1
+    assert result.failed_count == 1
+    assert [item.status for item in result.items] == [
+        rescoring.BatchRescoreItemStatus.SCHEDULED,
+        rescoring.BatchRescoreItemStatus.WORKFLOW_ALREADY_PRESENT,
+        rescoring.BatchRescoreItemStatus.FAILED,
+    ]
+    assert result.items[2].failure is not None
+
+
+def test_batch_rescore_limit_caps_selected_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tuple(_rescore_candidate(index) for index in range(5))
+    pages: list[tuple[int, int]] = []
+
+    def load_candidates(
+        connection: DummyConnection,
+        **kwargs: Any,
+    ) -> tuple[rescoring.RescoreGenerationCandidate, ...]:
+        pages.append((kwargs["limit"], kwargs["offset"]))
+        return candidates[kwargs["offset"]:kwargs["offset"] + kwargs["limit"]]
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        load_candidates,
+    )
+
+    result = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        chunk_size=2,
+        limit=3,
+        dry_run=True,
+    )
+
+    assert pages == [(2, 0), (1, 2)]
+    assert result.selected_count == 3
+    assert [item.generation_run_id for item in result.items] == [
+        "generation-run-0",
+        "generation-run-1",
+        "generation-run-2",
+    ]
+
+
+def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    expected_score_id = stable_score_attempt_id(
+        generation_run_id=run.generation_run_id,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        attempt_index=0,
+    )
+    expected_workflow_id = scoring_workflow.platform_scoring_workflow_id(
+        expected_score_id
+    )
+    starts: list[Any] = []
+
+    class FakeDbos:
+        def get_workflow_status(self, workflow_id: str) -> dict[str, str]:
+            assert workflow_id == expected_workflow_id
+            return {"status": "PENDING"}
+
+        def start_workflow(self, *args: Any) -> None:
+            starts.append(args)
+
+    monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
+
+    result = scoring_workflow.schedule_score_generation_workflow(
+        database_url="postgresql://example/db",
+        generation_run_id=run.generation_run_id,
+    )
+
+    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+        score_attempt_id=expected_score_id,
+        workflow_id=expected_workflow_id,
+        scheduled=False,
+    )
+    assert starts == []
+
+
+def _rescore_candidate(
+    index: int,
+    *,
+    existing_score_attempt_id: str | None = None,
+) -> rescoring.RescoreGenerationCandidate:
+    return rescoring.RescoreGenerationCandidate(
+        prediction_id=f"prediction-{index}",
+        fair_order_key=f"{index:04}",
+        generation_run_id=f"generation-run-{index}",
+        existing_score_attempt_id=existing_score_attempt_id,
+    )
 
 
 def test_scoring_profile_controls_parser_timeout_and_metrics(

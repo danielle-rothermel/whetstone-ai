@@ -366,6 +366,7 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
     assert row["metrics"] == {
         "profile_id": "humaneval",
         "profile_version": "v1",
+        "task_tests": None,
         "text": {
             "character_count": 12,
             "byte_count": 12,

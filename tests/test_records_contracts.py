@@ -590,6 +590,32 @@ def test_score_attempt_success_and_error_shapes() -> None:
         )
 
 
+def test_metrics_payload_rejects_malformed_hardened_metrics() -> None:
+    with pytest.raises(ValidationError, match="task_id"):
+        MetricsPayload.model_validate(
+            {
+                "profile_id": "humaneval",
+                "profile_version": "v1",
+                "task_tests": {
+                    "parse_ok": True,
+                    "entry_point": "add",
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="top_level_function_names"):
+        MetricsPayload.model_validate(
+            {
+                "profile_id": "humaneval",
+                "profile_version": "v1",
+                "ast": {
+                    "parse_ok": True,
+                    "top_level_function_names": [1],
+                },
+            }
+        )
+
+
 def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
     success = {
         "score_attempt_id": "score-1",

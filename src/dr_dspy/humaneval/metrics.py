@@ -17,11 +17,16 @@ from pydantic import (
 )
 
 from dr_dspy.humaneval.compression import compression_metrics
+from dr_dspy.humaneval.parsed_tests import (
+    HumanEvalTestCaseKind,
+    ParsedTestsSummary,
+)
 from dr_dspy.humaneval.task import HumanEvalTask
 
 HUMANEVAL_METRICS_PROFILE_ID = "humaneval-metrics"
 HUMANEVAL_METRICS_PROFILE_VERSION = "v1"
 TEXT_ENCODING = "utf-8"
+MAX_TOP_LEVEL_FUNCTION_NAMES = 20
 WORD_RE = re.compile(r"\b\w+\b")
 FENCED_CODE_RE = re.compile(r"```|~~~")
 CODE_LIKE_LINE_RE = re.compile(
@@ -40,6 +45,15 @@ BRANCH_NODES = (
     ast.BoolOp,
     ast.Match,
 )
+ASSIGNMENT_NODES = (ast.Assign, ast.AnnAssign, ast.AugAssign)
+COMPREHENSION_NODES = (
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+LITERAL_NODES = (ast.Constant, ast.List, ast.Tuple, ast.Set, ast.Dict)
+FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 class TextMetricsPayload(BaseModel):
@@ -73,11 +87,58 @@ class AstMetricsPayload(BaseModel):
     parse_ok: StrictBool
     parse_error: StrictStr | None = None
     top_level_function_count: StrictInt = 0
+    top_level_function_names: tuple[StrictStr, ...] = ()
+    nested_function_count: StrictInt = 0
+    async_function_count: StrictInt = 0
+    lambda_count: StrictInt = 0
     class_count: StrictInt = 0
     import_count: StrictInt = 0
     ast_node_count: StrictInt = 0
     statement_count: StrictInt = 0
     branch_count: StrictInt = 0
+    return_count: StrictInt = 0
+    yield_count: StrictInt = 0
+    call_count: StrictInt = 0
+    assignment_count: StrictInt = 0
+    comprehension_count: StrictInt = 0
+    literal_count: StrictInt = 0
+    max_branch_depth: StrictInt = 0
+    function_count: StrictInt = 0
+    total_argument_count: StrictInt = 0
+    positional_only_argument_count: StrictInt = 0
+    keyword_only_argument_count: StrictInt = 0
+    vararg_count: StrictInt = 0
+    kwarg_count: StrictInt = 0
+    decorated_function_count: StrictInt = 0
+    annotated_return_count: StrictInt = 0
+    docstring_function_count: StrictInt = 0
+    total_function_body_statement_count: StrictInt = 0
+    max_function_body_statement_count: StrictInt = 0
+    max_function_line_span: StrictInt = 0
+
+
+class HumanEvalTaskTestMetricsPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    parse_ok: StrictBool
+    parse_error: StrictStr | None = None
+    task_id: StrictStr
+    entry_point: StrictStr
+    test_type: HumanEvalTestCaseKind | None = None
+    case_count: StrictInt = 0
+    support_code_character_count: StrictInt = 0
+    support_code_line_count: StrictInt = 0
+    original_test_character_count: StrictInt = 0
+    original_test_line_count: StrictInt = 0
+    assertion_name: StrictStr | None = None
+    check_name: StrictStr | None = None
+    candidate_arg_name: StrictStr | None = None
+    input_repr_character_total: StrictInt = 0
+    expected_output_repr_character_total: StrictInt = 0
+    expected_output_expr_count: StrictInt = 0
+    oracle_case_count: StrictInt = 0
+    input_result_case_count: StrictInt = 0
+    input_expression_case_count: StrictInt = 0
 
 
 class MetricsStagePayload(BaseModel):
@@ -97,6 +158,7 @@ class MetricsPayload(BaseModel):
 
     profile_id: StrictStr
     profile_version: StrictStr
+    task_tests: HumanEvalTaskTestMetricsPayload | None = None
     text: TextMetricsPayload | None = None
     python_leakage: PythonLeakageMetricsPayload | None = None
     ast: AstMetricsPayload | None = None
@@ -150,6 +212,7 @@ def build_metrics_payload(
     return MetricsPayload(
         profile_id=profile_id,
         profile_version=profile_version,
+        task_tests=task_test_metrics(task),
         text=terminal_stage.text,
         python_leakage=terminal_stage.python_leakage,
         ast=extracted_stage.ast if extracted_stage is not None else None,
@@ -263,6 +326,70 @@ def python_leakage_metrics(
     )
 
 
+def task_test_metrics(task: HumanEvalTask) -> HumanEvalTaskTestMetricsPayload:
+    if task.parsed_tests is None:
+        return HumanEvalTaskTestMetricsPayload(
+            parse_ok=False,
+            parse_error="HumanEvalTask.parsed_tests is missing",
+            task_id=task.task_id,
+            entry_point=task.entry_point,
+        )
+    summary = task.parsed_tests.to_summary()
+    return task_test_metrics_from_summary(
+        task_id=task.task_id,
+        entry_point=task.entry_point,
+        summary=summary,
+    )
+
+
+def task_test_metrics_from_summary(
+    *,
+    task_id: str,
+    entry_point: str,
+    summary: ParsedTestsSummary,
+) -> HumanEvalTaskTestMetricsPayload:
+    return HumanEvalTaskTestMetricsPayload(
+        parse_ok=True,
+        parse_error=None,
+        task_id=task_id,
+        entry_point=entry_point,
+        test_type=summary.test_type,
+        case_count=len(summary.cases),
+        support_code_character_count=len(summary.support_code),
+        support_code_line_count=line_count(summary.support_code),
+        original_test_character_count=len(summary.original_test),
+        original_test_line_count=line_count(summary.original_test),
+        assertion_name=summary.assertion_name,
+        check_name=summary.check_name,
+        candidate_arg_name=summary.candidate_arg_name,
+        input_repr_character_total=sum(
+            len(case.input_repr) for case in summary.cases
+        ),
+        expected_output_repr_character_total=sum(
+            len(case.expected_output_repr) for case in summary.cases
+        ),
+        expected_output_expr_count=sum(
+            case.expected_output_expr is not None for case in summary.cases
+        ),
+        oracle_case_count=sum(
+            case.kind is HumanEvalTestCaseKind.INPUT_ORACLE
+            for case in summary.cases
+        ),
+        input_result_case_count=sum(
+            case.kind is HumanEvalTestCaseKind.INPUT_RESULT
+            for case in summary.cases
+        ),
+        input_expression_case_count=sum(
+            case.kind is HumanEvalTestCaseKind.INPUT_EXPRESSION
+            for case in summary.cases
+        ),
+    )
+
+
+def line_count(value: str) -> int:
+    return len(value.split("\n")) if value else 0
+
+
 def ast_metrics(source: str) -> AstMetricsPayload:
     try:
         tree = ast.parse(source)
@@ -271,12 +398,26 @@ def ast_metrics(source: str) -> AstMetricsPayload:
             parse_ok=False,
             parse_error=f"{type(exc).__name__}: {exc}",
         )
+    top_level_functions = [
+        node for node in tree.body if isinstance(node, FUNCTION_NODES)
+    ]
+    all_functions = [
+        node for node in ast.walk(tree) if isinstance(node, FUNCTION_NODES)
+    ]
     return AstMetricsPayload(
         parse_ok=True,
         parse_error=None,
-        top_level_function_count=sum(
-            isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-            for node in tree.body
+        top_level_function_count=len(top_level_functions),
+        top_level_function_names=tuple(
+            node.name
+            for node in top_level_functions[:MAX_TOP_LEVEL_FUNCTION_NAMES]
+        ),
+        nested_function_count=len(all_functions) - len(top_level_functions),
+        async_function_count=sum(
+            isinstance(node, ast.AsyncFunctionDef) for node in all_functions
+        ),
+        lambda_count=sum(
+            isinstance(node, ast.Lambda) for node in ast.walk(tree)
         ),
         class_count=sum(
             isinstance(node, ast.ClassDef) for node in ast.walk(tree)
@@ -292,7 +433,94 @@ def ast_metrics(source: str) -> AstMetricsPayload:
         branch_count=sum(
             isinstance(node, BRANCH_NODES) for node in ast.walk(tree)
         ),
+        return_count=sum(
+            isinstance(node, ast.Return) for node in ast.walk(tree)
+        ),
+        yield_count=sum(
+            isinstance(node, ast.Yield | ast.YieldFrom)
+            for node in ast.walk(tree)
+        ),
+        call_count=sum(isinstance(node, ast.Call) for node in ast.walk(tree)),
+        assignment_count=sum(
+            isinstance(node, ASSIGNMENT_NODES) for node in ast.walk(tree)
+        ),
+        comprehension_count=sum(
+            isinstance(node, COMPREHENSION_NODES) for node in ast.walk(tree)
+        ),
+        literal_count=sum(
+            isinstance(node, LITERAL_NODES) for node in ast.walk(tree)
+        ),
+        max_branch_depth=max_branch_depth(tree),
+        function_count=len(all_functions),
+        total_argument_count=sum(
+            function_argument_count(node) for node in all_functions
+        ),
+        positional_only_argument_count=sum(
+            len(node.args.posonlyargs) for node in all_functions
+        ),
+        keyword_only_argument_count=sum(
+            len(node.args.kwonlyargs) for node in all_functions
+        ),
+        vararg_count=sum(
+            node.args.vararg is not None for node in all_functions
+        ),
+        kwarg_count=sum(node.args.kwarg is not None for node in all_functions),
+        decorated_function_count=sum(
+            bool(node.decorator_list) for node in all_functions
+        ),
+        annotated_return_count=sum(
+            node.returns is not None for node in all_functions
+        ),
+        docstring_function_count=sum(
+            ast.get_docstring(node) is not None for node in all_functions
+        ),
+        total_function_body_statement_count=sum(
+            len(node.body) for node in all_functions
+        ),
+        max_function_body_statement_count=max(
+            (len(node.body) for node in all_functions),
+            default=0,
+        ),
+        max_function_line_span=max(
+            (function_line_span(node) for node in all_functions),
+            default=0,
+        ),
     )
+
+
+def function_argument_count(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> int:
+    return (
+        len(node.args.posonlyargs)
+        + len(node.args.args)
+        + len(node.args.kwonlyargs)
+        + int(node.args.vararg is not None)
+        + int(node.args.kwarg is not None)
+    )
+
+
+def function_line_span(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+    end_lineno = getattr(node, "end_lineno", None)
+    if end_lineno is None:
+        return 0
+    return max(0, end_lineno - node.lineno + 1)
+
+
+def max_branch_depth(node: ast.AST, *, current_depth: int = 0) -> int:
+    next_depth = (
+        current_depth + 1
+        if isinstance(node, BRANCH_NODES)
+        else current_depth
+    )
+    child_depth = max(
+        (
+            max_branch_depth(child, current_depth=next_depth)
+            for child in ast.iter_child_nodes(node)
+        ),
+        default=next_depth,
+    )
+    return max(next_depth, child_depth)
 
 
 def compression_metrics_payload(

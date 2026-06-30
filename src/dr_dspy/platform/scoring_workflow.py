@@ -16,6 +16,7 @@ from dr_dspy.humaneval.profiles import (
 )
 from dr_dspy.humaneval.sampling import load_human_eval_rows
 from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_dspy.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from dr_dspy.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -49,6 +50,14 @@ class ScoreGenerationWorkflowResult(BaseModel):
 
     score_attempt_id: str
     insert_status: ScoreAttemptInsertStatus
+
+
+class ScheduledScoreGenerationWorkflow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_attempt_id: str
+    workflow_id: str
+    scheduled: bool
 
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
@@ -131,6 +140,61 @@ def start_score_generation_workflow(
     return score_attempt_id
 
 
+def schedule_score_generation_workflow(
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int = 0,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
+    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+) -> ScheduledScoreGenerationWorkflow:
+    score_attempt_id = score_attempt_id_for_workflow(
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    workflow_id = platform_scoring_workflow_id(score_attempt_id)
+    if DBOS.get_workflow_status(workflow_id) is not None:
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    with SetWorkflowID(workflow_id):
+        try:
+            DBOS.start_workflow(
+                run_score_generation_workflow,
+                database_url,
+                generation_run_id,
+                score_attempt_index,
+                scoring_profile_id,
+                scoring_profile_version,
+                dataset_name,
+                dataset_split,
+            )
+        except WORKFLOW_START_RACE_ERRORS:
+            return ScheduledScoreGenerationWorkflow(
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                scheduled=False,
+            )
+        except Exception as error:
+            if workflow_start_raced(workflow_id=workflow_id, error=error):
+                return ScheduledScoreGenerationWorkflow(
+                    score_attempt_id=score_attempt_id,
+                    workflow_id=workflow_id,
+                    scheduled=False,
+                )
+            raise
+    return ScheduledScoreGenerationWorkflow(
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+        scheduled=True,
+    )
+
+
 def run_score_generation_workflow_once(
     database_url: str,
     generation_run_id: str,
@@ -159,6 +223,35 @@ def platform_scoring_workflow_id(score_attempt_id: str) -> str:
     return f"{WORKFLOW_ID_PREFIX}:{score_attempt_id}"
 
 
+def score_attempt_id_for_workflow(
+    *,
+    generation_run_id: str,
+    score_attempt_index: int,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+) -> str:
+    scoring_profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    return stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
+        attempt_index=score_attempt_index,
+    )
+
+
+def workflow_start_raced(*, workflow_id: str, error: BaseException) -> bool:
+    if isinstance(error, WORKFLOW_START_RACE_ERRORS):
+        return True
+    if isinstance(error, Exception):
+        return DBOS.get_workflow_status(workflow_id) is not None
+    return False
+
+
 def _start_score_generation_workflow_handle(
     *,
     database_url: str,
@@ -169,17 +262,11 @@ def _start_score_generation_workflow_handle(
     dataset_name: str,
     dataset_split: str,
 ) -> tuple[str, Any]:
-    scoring_profile = resolve_humaneval_scoring_profile(
+    score_attempt_id = score_attempt_id_for_workflow(
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
-    )
-    score_attempt_id = stable_score_attempt_id(
-        generation_run_id=generation_run_id,
-        scoring_profile_id=scoring_profile.profile_id,
-        scoring_profile_version=scoring_profile.version,
-        parser_profile_id=scoring_profile.parser_profile.profile_id,
-        parser_version=scoring_profile.parser_profile.version,
-        attempt_index=score_attempt_index,
     )
     with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
         handle = DBOS.start_workflow(
