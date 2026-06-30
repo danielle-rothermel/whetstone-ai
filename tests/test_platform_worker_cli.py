@@ -364,13 +364,23 @@ def test_build_specs_writes_jsonl_from_config(
     from dr_dspy.platform import spec_builder
     from tests.test_platform_spec_builder import FIXTURES_DIR, _fixture_rows
 
-    def fake_iter(config: Any, *, rows: Any = None) -> Any:
+    def fake_iter_from_file(
+        path: Any,
+        *,
+        configs_root: Any = None,
+        rows: Any = None,
+    ) -> Any:
+        config = spec_builder.load_experiment_spec_config(path)
         return spec_builder.iter_experiment_specs(
             config,
             rows=_fixture_rows(),
         )
 
-    monkeypatch.setattr(worker, "iter_experiment_specs", fake_iter)
+    monkeypatch.setattr(
+        worker,
+        "iter_experiment_specs_from_file",
+        fake_iter_from_file,
+    )
 
     output = tmp_path / "specs.jsonl"
     result = CliRunner().invoke(
@@ -388,3 +398,55 @@ def test_build_specs_writes_jsonl_from_config(
     lines = output.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 8
     assert "direct-exp" in lines[0]
+
+
+def test_build_specs_composable_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tests.test_platform_spec_builder import (
+        _fixture_rows,
+        _write_composable_config_tree,
+    )
+
+    configs_root = tmp_path / "configs"
+    experiment_path = _write_composable_config_tree(configs_root)
+
+    def fake_iter_from_file(
+        path: Any,
+        *,
+        configs_root: Any = None,
+        rows: Any = None,
+    ) -> Any:
+        from dr_dspy.platform import spec_builder
+
+        return spec_builder.iter_experiment_specs_from_file(
+            path,
+            configs_root=configs_root,
+            rows=_fixture_rows(),
+        )
+
+    monkeypatch.setattr(
+        worker,
+        "iter_experiment_specs_from_file",
+        fake_iter_from_file,
+    )
+
+    output = tmp_path / "specs.jsonl"
+    result = CliRunner().invoke(
+        worker.APP,
+        [
+            "build-specs",
+            "--config-file",
+            str(experiment_path),
+            "--configs-root",
+            str(configs_root),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    lines = output.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 24
+    assert "composable_smoke_v1" in lines[0]

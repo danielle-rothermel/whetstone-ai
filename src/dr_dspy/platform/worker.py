@@ -41,8 +41,8 @@ from dr_dspy.platform.scoring_workflow import (
     run_score_generation_workflow_once,
 )
 from dr_dspy.platform.spec_builder import (
-    iter_experiment_specs,
-    load_experiment_spec_config,
+    DEFAULT_CONFIGS_ROOT,
+    iter_experiment_specs_from_file,
     write_prediction_specs_jsonl,
 )
 from dr_dspy.platform.submission import (
@@ -448,11 +448,31 @@ def build_specs(
             help="Postgres URL; required with --insert.",
         ),
     ] = None,
+    configs_root: Annotated[
+        Path,
+        typer.Option(
+            "--configs-root",
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help=(
+                "Root directory for composable config fragments "
+                "(split, model_configs paths)."
+            ),
+        ),
+    ] = DEFAULT_CONFIGS_ROOT,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
-    config = load_experiment_spec_config(config_file)
-    specs = tuple(iter_experiment_specs(config))
+    specs = tuple(
+        iter_experiment_specs_from_file(
+            config_file,
+            configs_root=configs_root,
+        )
+    )
+    if not specs:
+        raise typer.BadParameter("config produced no prediction specs")
+    experiment_name = specs[0].experiment_name
     destination = write_prediction_specs_jsonl(specs, output)
     inserted_count = 0
     if insert:
@@ -466,7 +486,7 @@ def build_specs(
                 connection.execute(
                     idempotent_insert_experiment(
                         ExperimentRecord(
-                            experiment_name=config.experiment_name,
+                            experiment_name=experiment_name,
                             config_metadata={"source": str(config_file)},
                         )
                     )
@@ -478,7 +498,7 @@ def build_specs(
             engine.dispose()
     CONSOLE.print(
         {
-            "experiment_name": config.experiment_name,
+            "experiment_name": experiment_name,
             "spec_count": len(specs),
             "output": str(destination),
             "inserted_count": inserted_count if insert else None,

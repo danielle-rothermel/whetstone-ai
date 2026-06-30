@@ -69,12 +69,16 @@ Build prediction specs from an experiment JSON config:
 
 ```bash
 uv run python -m dr_dspy.platform.worker build-specs \
-  --config-file experiment.json \
+  --config-file configs/experiments/humaneval_encdec_smoke.json \
+  --configs-root configs \
   --output specs.jsonl
 ```
 
-Example configs live under
-[`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/).
+Composable configs live under [`configs/`](configs/): `models/` (enc-dec provider
+pairs), `splits/` (HumanEval sampling), and `experiments/` (study definition +
+`model_configs` list). Fragment paths in experiment JSON are relative to
+`--configs-root` (default: repo `configs/`). Legacy flat single-file configs
+still work (see [`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/)).
 Generated JSONL is compatible with `submit-jsonl`. Optional `--insert` bulk-loads
 specs and the experiment row into Postgres.
 

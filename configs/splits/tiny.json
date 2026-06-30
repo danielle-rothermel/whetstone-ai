@@ -1,0 +1,9 @@
+{
+  "name": "tiny",
+  "dataset": {
+    "name": "evalplus/humanevalplus",
+    "split": "test",
+    "sample_seed": 0,
+    "sample_count": 1
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,13 +11,18 @@ from dr_dspy.platform import jsonl_specs, spec_builder
 from dr_dspy.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
     HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
+    ComposableExperimentConfig,
     ExperimentSpecConfig,
     GraphLayout,
     encoder_char_budget,
+    expand_composable_experiment,
     humaneval_gt_code,
     iter_experiment_specs,
+    iter_experiment_specs_from_file,
+    load_experiment_configs,
     load_experiment_spec_config,
     prediction_spec,
+    resolve_config_path,
     task_snapshot_from_humaneval,
 )
 from dr_dspy.records import PredictionSpecRecord
@@ -253,3 +259,151 @@ def test_humaneval_encdec_config_builds_target_spec() -> None:
         == HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE
     )
     assert spec.dimensions.values["compression_target"] == 0.5
+
+
+def _write_composable_config_tree(configs_root: Path) -> Path:
+    models_dir = configs_root / "models"
+    splits_dir = configs_root / "splits"
+    experiments_dir = configs_root / "experiments"
+    models_dir.mkdir(parents=True)
+    splits_dir.mkdir(parents=True)
+    experiments_dir.mkdir(parents=True)
+
+    for name in ("model-a", "model-b", "model-c"):
+        (models_dir / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "name": name,
+                    "providers": [
+                        {
+                            "model": f"{name}-encoder",
+                            "config_id": "encoder",
+                            "parameters": {"temperature": 0},
+                        },
+                        {
+                            "model": f"{name}-decoder",
+                            "config_id": "decoder",
+                            "parameters": {"temperature": 0},
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    (splits_dir / "tiny.json").write_text(
+        json.dumps(
+            {
+                "name": "tiny",
+                "dataset": {
+                    "name": "local/fixture",
+                    "split": "test",
+                    "sample_seed": 3,
+                    "sample_count": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    experiment_path = experiments_dir / "smoke.json"
+    experiment_path.write_text(
+        json.dumps(
+            {
+                "experiment_name": "composable_smoke_v1",
+                "graph_layout": "encdec",
+                "encdec_shape": "humaneval",
+                "split": "splits/tiny.json",
+                "model_configs": [
+                    "models/model-a.json",
+                    "models/model-b.json",
+                    "models/model-c.json",
+                ],
+                "repetition_seeds": [0, 1, 2, 3],
+                "dimensions_axes": [
+                    {"compression_target": 0.25},
+                    {"compression_target": 0.5},
+                ],
+                "humaneval_encdec": {"min_encoder_char_budget": 50},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return experiment_path
+
+
+def test_expand_composable_experiment_produces_one_config_per_model(
+    tmp_path: Path,
+) -> None:
+    configs_root = tmp_path / "configs"
+    experiment_path = _write_composable_config_tree(configs_root)
+    composable = ComposableExperimentConfig.model_validate(
+        json.loads(experiment_path.read_text(encoding="utf-8"))
+    )
+
+    configs = tuple(
+        expand_composable_experiment(composable, configs_root=configs_root)
+    )
+
+    assert len(configs) == 3
+    assert {cfg.providers[0].model for cfg in configs} == {
+        "model-a-encoder",
+        "model-b-encoder",
+        "model-c-encoder",
+    }
+
+
+def test_expand_composable_smoke_cardinality(tmp_path: Path) -> None:
+    configs_root = tmp_path / "configs"
+    experiment_path = _write_composable_config_tree(configs_root)
+    rows = _fixture_rows()
+
+    specs = tuple(
+        iter_experiment_specs_from_file(
+            experiment_path,
+            configs_root=configs_root,
+            rows=rows,
+        )
+    )
+
+    assert len(specs) == 24
+    assert {spec.experiment_name for spec in specs} == {"composable_smoke_v1"}
+    assert len({spec.prediction_id for spec in specs}) == 24
+
+
+def test_same_experiment_name_across_models(tmp_path: Path) -> None:
+    configs_root = tmp_path / "configs"
+    experiment_path = _write_composable_config_tree(configs_root)
+    rows = _fixture_rows()
+
+    specs = tuple(
+        iter_experiment_specs_from_file(
+            experiment_path,
+            configs_root=configs_root,
+            rows=rows,
+        )
+    )
+    models = {spec.provider_axis.model for spec in specs}
+
+    assert len(models) == 3
+    assert all(spec.experiment_name == "composable_smoke_v1" for spec in specs)
+
+
+def test_composable_rejects_path_traversal(tmp_path: Path) -> None:
+    configs_root = tmp_path / "configs"
+    configs_root.mkdir()
+
+    with pytest.raises(ValueError, match="escapes configs root"):
+        resolve_config_path(configs_root, "../outside.json")
+
+
+def test_load_experiment_configs_legacy_flat_still_works() -> None:
+    configs = tuple(
+        load_experiment_configs(
+            FIXTURES_DIR / "encdec_minimal.json",
+            configs_root=FIXTURES_DIR,
+        )
+    )
+
+    assert len(configs) == 1
+    assert configs[0].experiment_name == "encdec-exp"

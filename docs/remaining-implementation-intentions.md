@@ -221,6 +221,10 @@ need be executed yet):
    handlers in `serialization.py`; `dspy` in `[dependency-groups] dev`.
 7. ~~**Stale docs**~~ — **Done** — README/TESTING links and backlog docs
    aligned with post–v0-removal layout.
+8. ~~**Composable experiment configs**~~ — **Done** — `configs/{models,splits,experiments}/`
+   with `build-specs --configs-root`; expand `model_configs` × split × axes × repeats.
+   **Follow-up:** frozen production splits with explicit `task_id` lists (not just
+   `sample_count` / `sample_seed` sampling).
 
 ---
 

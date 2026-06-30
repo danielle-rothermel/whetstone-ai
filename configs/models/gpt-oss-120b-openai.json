@@ -1,0 +1,19 @@
+{
+  "name": "gpt-oss-120b-openai",
+  "providers": [
+    {
+      "model": "openai/gpt-oss-120b",
+      "config_id": "encoder",
+      "provider_kind": "openai",
+      "endpoint_kind": "responses",
+      "parameters": {"temperature": 0}
+    },
+    {
+      "model": "openai/gpt-oss-120b",
+      "config_id": "decoder",
+      "provider_kind": "openai",
+      "endpoint_kind": "responses",
+      "parameters": {"temperature": 0}
+    }
+  ]
+}
