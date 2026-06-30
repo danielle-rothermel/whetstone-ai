@@ -27,18 +27,22 @@ from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow_once,
 )
+from dr_dspy.platform.progress_log import (
+    DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    operation_progress,
+)
 from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
 )
 from dr_dspy.platform.rescoring import (
+    DEFAULT_MAX_IN_FLIGHT,
     DEFAULT_RESCORE_CHUNK_SIZE,
     parse_rescore_generation_statuses,
     rescore_generation_runs,
 )
 from dr_dspy.platform.scoring_workflow import (
-    await_scheduled_score_workflows,
     platform_scoring_workflow_id,
     run_score_generation_workflow_once,
 )
@@ -283,6 +287,17 @@ def rescore(
         int,
         typer.Option("--chunk-size", min=1),
     ] = DEFAULT_RESCORE_CHUNK_SIZE,
+    max_in_flight: Annotated[
+        int,
+        typer.Option(
+            "--max-in-flight",
+            min=1,
+            help=(
+                "Maximum number of scoring workflows scheduled before "
+                "awaiting completion."
+            ),
+        ),
+    ] = DEFAULT_MAX_IN_FLIGHT,
     limit: Annotated[
         int | None,
         typer.Option("--limit", min=1),
@@ -317,6 +332,17 @@ def rescore(
         ),
     ] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
+    progress_interval: Annotated[
+        float,
+        typer.Option(
+            "--progress-interval",
+            min=0,
+            help=(
+                "Seconds between Rich progress heartbeats on stderr; "
+                "0 disables heartbeats but keeps event lines."
+            ),
+        ),
+    ] = DEFAULT_PROGRESS_INTERVAL_SECONDS,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
     try:
@@ -342,24 +368,28 @@ def rescore(
         launched_dbos = True
     engine = create_engine(resolved_database_url)
     try:
-        execution = rescore_generation_runs(
-            engine,
-            database_url=resolved_database_url,
-            experiment_name=experiment_name,
-            generation_statuses=resolved_generation_statuses,
-            generation_attempt_index=generation_attempt_index,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
-            score_attempt_index=score_attempt_index,
-            dataset_name=dataset_name,
-            dataset_split=dataset_split,
-            chunk_size=chunk_size,
-            limit=limit,
-            dry_run=dry_run,
-            recover_orphans=recover_orphans,
-        )
-        if launched_dbos and execution.workflow_handles:
-            await_scheduled_score_workflows(execution.workflow_handles)
+        with operation_progress(
+            "rescore",
+            interval_seconds=progress_interval,
+        ) as progress:
+            execution = rescore_generation_runs(
+                engine,
+                database_url=resolved_database_url,
+                experiment_name=experiment_name,
+                generation_statuses=resolved_generation_statuses,
+                generation_attempt_index=generation_attempt_index,
+                scoring_profile_id=scoring_profile_id,
+                scoring_profile_version=scoring_profile_version,
+                score_attempt_index=score_attempt_index,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+                chunk_size=chunk_size,
+                limit=limit,
+                dry_run=dry_run,
+                recover_orphans=recover_orphans,
+                max_in_flight=max_in_flight,
+                progress=progress,
+            )
         CONSOLE.print(execution.result.model_dump(mode="json"))
     finally:
         engine.dispose()
@@ -387,6 +417,25 @@ def backfill_v0_encdec(
             ),
         ),
     ] = None,
+    chunk_size: Annotated[
+        int | None,
+        typer.Option(
+            "--chunk-size",
+            min=1,
+            help=(
+                "Process terminal v0 rows in chunks of this size, committing "
+                "each chunk independently."
+            ),
+        ),
+    ] = None,
+    reshape_workers: Annotated[
+        int,
+        typer.Option(
+            "--reshape-workers",
+            min=1,
+            help="Parallel workers for CPU-bound v0 row reshape.",
+        ),
+    ] = 1,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -395,6 +444,17 @@ def backfill_v0_encdec(
         ),
     ] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
+    progress_interval: Annotated[
+        float,
+        typer.Option(
+            "--progress-interval",
+            min=0,
+            help=(
+                "Seconds between Rich progress heartbeats on stderr; "
+                "0 disables heartbeats but keeps event lines."
+            ),
+        ),
+    ] = DEFAULT_PROGRESS_INTERVAL_SECONDS,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
     resolved_database_url = resolve_database_url(
@@ -403,12 +463,19 @@ def backfill_v0_encdec(
     )
     engine = create_engine(resolved_database_url)
     try:
-        result = run_v0_encdec_backfill(
-            engine,
-            dry_run=dry_run,
-            limit=limit,
-            target_experiment_name=target_experiment_name,
-        )
+        with operation_progress(
+            "backfill",
+            interval_seconds=progress_interval,
+        ) as progress:
+            result = run_v0_encdec_backfill(
+                engine,
+                dry_run=dry_run,
+                limit=limit,
+                target_experiment_name=target_experiment_name,
+                chunk_size=chunk_size,
+                reshape_workers=reshape_workers,
+                progress=progress,
+            )
         CONSOLE.print(result.model_dump(mode="json"))
     finally:
         engine.dispose()

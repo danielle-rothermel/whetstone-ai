@@ -4,6 +4,146 @@ Chronological record of manual / live pipeline runs. Newest entries at the top.
 
 ---
 
+## 2026-06-30 — Rescore schema fix (`evaluation_incomplete`) + progress `total_candidates`
+
+**Branch:** `today_exp`  
+**Change:** Fix score-attempt check constraint drift; add backlog denominator to progress heartbeats  
+**Operator:** agent (Cursor)
+
+### Problem
+
+Live `rescore` on `encdec-budget-full-v0` failed mid-batch with:
+
+```text
+CheckViolation: ck_dr_dspy_score_attempts_generated_code_outcome
+generated_code_outcome = evaluation_incomplete
+```
+
+The Python enum and live `schema.py` already allowed `evaluation_incomplete` (partial HumanEval coverage — score 0, not an error row), but the applied Alembic revision `20260629_0001` omitted it from the Postgres check constraint. A secondary `DBOSException: System database accessed before DBOS was launched` appeared while DBOS tried to record the failed workflow — treat that as fallout from the insert failure, not the root cause.
+
+### Fix
+
+Migration [`20260630_0006`](../src/dr_dspy/db/migrations/versions/20260630_0006_score_attempt_evaluation_incomplete_outcome.py) widens `ck_dr_dspy_score_attempts_generated_code_outcome` to include `evaluation_incomplete`.
+
+Progress heartbeats on `backfill-v0-encdec` and `rescore` now include **`total_candidates`** alongside **`selected`** (e.g. `selected=2 total_candidates=52593`).
+
+### Schema head — run before large rescore batches
+
+**Always upgrade the DB before a full enc-dec rescore.** Stale constraints will fail inserts mid-run; idempotent `ON CONFLICT DO NOTHING` means failed rows leave no score attempt and will retry on the next pass after upgrade.
+
+```bash
+uv run alembic current
+# expect 20260630_0006 (head)
+
+uv run alembic upgrade head
+# → 20260630_0006
+```
+
+### Automated tests
+
+```bash
+uv run pytest tests/test_db_migrations.py tests/test_platform_progress_log.py \
+  tests/test_v0_encdec_backfill.py tests/test_platform_scoring.py \
+  tests/test_platform_worker_cli.py -q
+# → 106 passed
+```
+
+### Retry command (operator)
+
+```bash
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --max-in-flight 200 \
+  --progress-interval 5
+```
+
+Use `--generation-status success` only for v0 backfill pass-rate work; many `partial` v0 rows lack scorable terminal output.
+
+---
+
+## 2026-06-30 — Backfill/rescore concurrency controls
+
+**Branch:** `today_exp`  
+**Change:** Operator-controlled throughput for enc-dec v0 backfill and batch rescore  
+**Operator:** agent (Cursor)
+
+### Code changes under test
+
+1. **[`src/dr_dspy/migration/v0_encdec_backfill.py`](../src/dr_dspy/migration/v0_encdec_backfill.py):** chunked backfill with per-chunk commits, offset paging, parallel reshape (`ThreadPoolExecutor`), Rich stderr progress (heartbeats + events).
+2. **[`src/dr_dspy/platform/progress_log.py`](../src/dr_dspy/platform/progress_log.py):** shared Rich progress helper for backfill and rescore.
+3. **[`src/dr_dspy/platform/rescoring.py`](../src/dr_dspy/platform/rescoring.py):** `--max-in-flight` wave scheduling with internal await (default **100**).
+4. **[`src/dr_dspy/platform/worker.py`](../src/dr_dspy/platform/worker.py):** new CLI flags on `backfill-v0-encdec` and `rescore`.
+
+### New CLI flags
+
+| Command | Flag | Default | Purpose |
+|---------|------|---------|---------|
+| `backfill-v0-encdec` | `--chunk-size` | omitted (legacy single transaction) | Commit after each chunk |
+| `backfill-v0-encdec` | `--reshape-workers` | `1` | Parallel CPU-bound reshape (writes stay serial) |
+| `rescore` | `--max-in-flight` | `100` | Cap scheduled scoring workflows before awaiting |
+| both | `--progress-interval` | `5` | Rich heartbeat interval on stderr (seconds); `0` = events only |
+
+Omitting `--chunk-size` preserves the legacy single-transaction backfill path.
+
+Progress stderr shows `selected` (processed so far) and `total_candidates` (batch denominator). Ensure schema head is current before large rescoring — see entry above (`20260630_0006`).
+
+### Automated tests
+
+```bash
+uv run pytest tests/test_v0_encdec_backfill.py tests/test_platform_worker_cli.py tests/test_platform_scoring.py -q
+# → 87 passed
+```
+
+### Verification commands (operator)
+
+```bash
+# Backfill dry-run smoke (chunked)
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
+  --dry-run --limit 100 --chunk-size 50 --reshape-workers 4
+
+# Rescore dry-run smoke
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --generation-status partial \
+  --limit 50 --max-in-flight 10 --dry-run
+```
+
+### Recommended full-run commands
+
+```bash
+# Full enc-dec backfill (chunked, parallel reshape)
+uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
+  --chunk-size 1000 \
+  --reshape-workers 4
+
+# Per-experiment rescore (explicit in-flight cap)
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --generation-status partial \
+  --max-in-flight 30
+
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-smoke \
+  --generation-status success \
+  --generation-status partial \
+  --max-in-flight 30
+```
+
+### Verdict
+
+**Pass (automated).** Chunked backfill, parallel reshape, and max-in-flight rescore wired with tests. Live full-run not executed in this pass.
+
+### Caveats
+
+1. Partial backfill commits are durable; rerun is idempotent (`already_present` counts rise).
+2. Rescore default `--max-in-flight 100` replaces prior unbounded schedule-then-await-at-end behavior.
+3. Offset paging is acceptable on the frozen read-only v0 table; no keyset cursor needed for this one-shot migration.
+
+---
+
 ## 2026-06-30 — Tier-1 limit raise + enc-dec backfill smoke r2
 
 **Branch:** `today_exp`  
@@ -205,7 +345,7 @@ Q1–Q4 re-run on 2026-06-30 (`20260630_185954`–`20260630_185959` timestamps).
 
 ```bash
 uv run alembic current
-# → 20260630_0005 (head)
+# → 20260630_0006 (head)
 ```
 
 ### Tests run
@@ -476,7 +616,7 @@ Using composable configs (3 models × `tiny` split × 2 compression targets × 4
 **Remediation:** Dropped partial `dr_dspy_experiments` + `alembic_version`, then:
 
 ```bash
-uv run alembic upgrade head   # → 20260630_0005 (head)
+uv run alembic upgrade head   # → 20260630_0006 (head)
 ```
 
 Legacy v0 tables (`dr_dspy_eval_predictions`, etc.) left untouched per project policy.

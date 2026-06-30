@@ -298,8 +298,6 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
         }
         return RuntimeConfig()
 
-    fake_handle = object()
-
     def fake_rescore(engine: FakeEngine, **kwargs: Any) -> SimpleNamespace:
         captured["engine"] = engine
         captured["kwargs"] = kwargs
@@ -307,12 +305,8 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
             result=SimpleNamespace(
                 model_dump=lambda mode: {"scheduled": 1}
             ),
-            workflow_handles=(fake_handle,),
+            workflow_handles=(),
         )
-
-    def fake_await(handles: Any) -> None:
-        lifecycle.append("await")
-        captured["await_handles"] = handles
 
     def fake_destroy() -> None:
         lifecycle.append("destroy")
@@ -330,11 +324,6 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
         lambda database_url: FakeEngine(),
     )
     monkeypatch.setattr(worker, "rescore_generation_runs", fake_rescore)
-    monkeypatch.setattr(
-        worker,
-        "await_scheduled_score_workflows",
-        fake_await,
-    )
     monkeypatch.setattr(worker, "destroy_dbos_runtime", fake_destroy)
 
     result = CliRunner().invoke(
@@ -347,6 +336,8 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
             "exp",
             "--generation-status",
             "success",
+            "--max-in-flight",
+            "30",
         ],
     )
 
@@ -354,10 +345,10 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     assert captured["configure"]["consume_generation_queue"] is False
     assert captured["kwargs"]["dry_run"] is False
     assert captured["kwargs"]["experiment_name"] == "exp"
+    assert captured["kwargs"]["max_in_flight"] == 30
     assert captured["disposed"] is True
     assert captured["destroyed"] is True
-    assert captured["await_handles"] == (fake_handle,)
-    assert lifecycle == ["await", "destroy"]
+    assert lifecycle == ["destroy"]
 
 
 def test_rescore_rejects_invalid_generation_status() -> None:
@@ -414,6 +405,10 @@ def test_backfill_v0_encdec_dry_run_calls_backfill_helper(
             "--dry-run",
             "--limit",
             "3",
+            "--chunk-size",
+            "2",
+            "--reshape-workers",
+            "4",
             "--target-experiment-name",
             "v0_encdec_backfill_smoke_20260630",
         ],
@@ -422,6 +417,8 @@ def test_backfill_v0_encdec_dry_run_calls_backfill_helper(
     assert result.exit_code == 0
     assert captured["kwargs"]["dry_run"] is True
     assert captured["kwargs"]["limit"] == 3
+    assert captured["kwargs"]["chunk_size"] == 2
+    assert captured["kwargs"]["reshape_workers"] == 4
     assert (
         captured["kwargs"]["target_experiment_name"]
         == "v0_encdec_backfill_smoke_20260630"

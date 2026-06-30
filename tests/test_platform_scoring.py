@@ -1591,6 +1591,11 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
         "load_rescore_generation_candidates",
         lambda connection, **kwargs: candidates,
     )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(1),
+    )
 
     def schedule(
         **kwargs: Any,
@@ -1617,6 +1622,7 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
 
     assert scheduler_calls == []
     assert result.selected_count == 1
+    assert result.total_candidates == 1
     assert result.dataset_name == "other/dataset"
     assert result.dataset_split == "train"
     assert (
@@ -1637,6 +1643,11 @@ def test_batch_rescore_dry_run_counts_needed_scores(
         rescoring,
         "load_rescore_generation_candidates",
         lambda connection, **kwargs: candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(1),
     )
 
     def schedule(
@@ -1660,6 +1671,7 @@ def test_batch_rescore_dry_run_counts_needed_scores(
 
     assert scheduler_calls == []
     assert result.selected_count == 1
+    assert result.total_candidates == 1
     assert result.already_scored_count == 0
     assert result.needs_score_count == 1
     assert result.in_flight_count == 0
@@ -1692,6 +1704,11 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
         rescoring,
         "load_rescore_generation_candidates",
         load_candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(3),
     )
     monkeypatch.setattr(
         rescoring,
@@ -1733,6 +1750,7 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
         experiment_name="exp",
         chunk_size=2,
         schedule_workflow=schedule,
+        await_workflows=lambda handles: None,
     )
     result = execution.result
 
@@ -1743,17 +1761,19 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
         "generation-run-2",
     ]
     assert result.selected_count == 3
+    assert result.total_candidates == 3
     assert result.scheduled_count == 1
     assert result.in_flight_count == 1
     assert result.orphan_count == 0
     assert result.failed_count == 1
+    assert result.max_in_flight == rescoring.DEFAULT_MAX_IN_FLIGHT
     assert [item.status for item in result.items] == [
         rescoring.BatchRescoreItemStatus.SCHEDULED,
         rescoring.BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
         rescoring.BatchRescoreItemStatus.FAILED,
     ]
     assert result.items[2].failure is not None
-    assert execution.workflow_handles == ("handle-generation-run-0",)
+    assert execution.workflow_handles == ()
 
 
 def test_batch_rescore_limit_caps_selected_candidates(
@@ -1774,6 +1794,11 @@ def test_batch_rescore_limit_caps_selected_candidates(
         "load_rescore_generation_candidates",
         load_candidates,
     )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(5),
+    )
 
     execution = rescoring.rescore_generation_runs(
         cast(Any, DummyEngine()),
@@ -1786,12 +1811,96 @@ def test_batch_rescore_limit_caps_selected_candidates(
     result = execution.result
 
     assert pages == [(2, 0), (1, 2)]
+    assert result.total_candidates == 3
     assert result.selected_count == 3
     assert [item.generation_run_id for item in result.items] == [
         "generation-run-0",
         "generation-run-1",
         "generation-run-2",
     ]
+
+
+def test_batch_rescore_max_in_flight_awaits_in_waves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tuple(_rescore_candidate(index) for index in range(5))
+    await_batches: list[tuple[Any, ...]] = []
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        lambda connection, **kwargs: candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(5),
+    )
+
+    def schedule(
+        **kwargs: Any,
+    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+        generation_run_id = kwargs["generation_run_id"]
+        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            score_attempt_id=f"score-{generation_run_id}",
+            workflow_id=f"workflow-{generation_run_id}",
+            scheduled=True,
+            workflow_handle=f"handle-{generation_run_id}",
+        )
+
+    def await_workflows(handles: list[Any]) -> None:
+        await_batches.append(tuple(handles))
+
+    execution = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        max_in_flight=2,
+        schedule_workflow=schedule,
+        await_workflows=await_workflows,
+    )
+    result = execution.result
+
+    assert await_batches == [
+        ("handle-generation-run-0", "handle-generation-run-1"),
+        ("handle-generation-run-2", "handle-generation-run-3"),
+        ("handle-generation-run-4",),
+    ]
+    assert result.max_in_flight == 2
+    assert result.total_candidates == 5
+    assert result.scheduled_count == 5
+    assert execution.workflow_handles == ()
+
+
+def test_batch_rescore_dry_run_does_not_await_workflows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = (_rescore_candidate(0),)
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        lambda connection, **kwargs: candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(1),
+    )
+
+    def fail_await(handles: list[Any]) -> None:
+        raise AssertionError("dry-run should not await workflows")
+
+    execution = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        dry_run=True,
+        await_workflows=fail_await,
+    )
+
+    assert execution.result.max_in_flight == rescoring.DEFAULT_MAX_IN_FLIGHT
+    assert execution.workflow_handles == ()
 
 
 def test_await_scheduled_score_workflows_waits_for_each_handle() -> None:
@@ -2006,6 +2115,10 @@ def test_schedule_score_generation_workflow_treats_start_race_as_unscheduled(
         workflow_id=workflow_id,
         scheduled=False,
     )
+
+
+def _mock_rescore_candidate_count(count: int):
+    return lambda connection, **kwargs: count
 
 
 def _rescore_candidate(

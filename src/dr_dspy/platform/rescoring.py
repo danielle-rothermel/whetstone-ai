@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import (
     BaseModel,
@@ -23,6 +23,7 @@ from dr_dspy.humaneval.profiles import (
 )
 from dr_dspy.platform.scoring_workflow import (
     ScheduledScoreGenerationWorkflow,
+    await_scheduled_score_workflows,
     platform_scoring_workflow_id,
     schedule_score_generation_workflow,
 )
@@ -38,7 +39,11 @@ from dr_dspy.records import (
     stable_score_attempt_id,
 )
 
+if TYPE_CHECKING:
+    from dr_dspy.platform.progress_log import OperationProgress
+
 DEFAULT_RESCORE_CHUNK_SIZE = 500
+DEFAULT_MAX_IN_FLIGHT = 100
 DEFAULT_RESCORE_GENERATION_STATUSES = (
     GenerationRunStatus.SUCCESS,
     GenerationRunStatus.PARTIAL,
@@ -91,6 +96,8 @@ class BatchRescoreResult(BaseModel):
     dataset_name: StrictStr
     dataset_split: StrictStr
     dry_run: StrictBool
+    max_in_flight: StrictInt
+    total_candidates: StrictInt
     selected_count: StrictInt
     already_scored_count: StrictInt
     needs_score_count: StrictInt
@@ -145,9 +152,12 @@ def rescore_generation_runs(
     limit: int | None = None,
     dry_run: bool = False,
     recover_orphans: bool = True,
+    max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
     schedule_workflow: ScheduleScoreWorkflow = (
         schedule_score_generation_workflow
     ),
+    await_workflows: Any = await_scheduled_score_workflows,
+    progress: OperationProgress | None = None,
 ) -> BatchRescoreExecution:
     validate_rescore_request(
         chunk_size=chunk_size,
@@ -155,14 +165,54 @@ def rescore_generation_runs(
         generation_attempt_index=generation_attempt_index,
         score_attempt_index=score_attempt_index,
         generation_statuses=generation_statuses,
+        max_in_flight=max_in_flight,
     )
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
     )
     items: list[BatchRescoreItem] = []
-    workflow_handles: list[Any] = []
+    pending_handles: list[Any] = []
+    waves_completed = 0
     offset = 0
+    with engine.begin() as connection:
+        total_candidates = count_rescore_generation_candidates(
+            connection,
+            experiment_name=experiment_name,
+            generation_statuses=generation_statuses,
+            generation_attempt_index=generation_attempt_index,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=scoring_profile.parser_profile.profile_id,
+            parser_version=scoring_profile.parser_profile.version,
+            score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        )
+    if limit is not None:
+        total_candidates = min(total_candidates, limit)
+    if progress is not None:
+        progress.event(
+            "started",
+            {
+                "experiment": experiment_name,
+                "max_in_flight": max_in_flight,
+                "chunk_size": chunk_size,
+                "dry_run": dry_run,
+                "limit": limit,
+                "total_candidates": total_candidates,
+            },
+        )
+        progress.update(
+            phase="selecting",
+            experiment=experiment_name,
+            max_in_flight=max_in_flight,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            limit=limit,
+            total_candidates=total_candidates,
+            selected=0,
+        )
     while limit is None or offset < limit:
         page_limit = (
             chunk_size if limit is None else min(chunk_size, limit - offset)
@@ -202,27 +252,165 @@ def rescore_generation_runs(
             )
             items.append(item)
             if handle is not None:
-                workflow_handles.append(handle)
+                pending_handles.append(handle)
+                if len(pending_handles) >= max_in_flight:
+                    if not dry_run:
+                        if progress is not None:
+                            progress.update(
+                                phase="awaiting",
+                                selected=len(items),
+                                awaiting=len(pending_handles),
+                                waves=waves_completed,
+                                **_rescore_count_metrics(items),
+                            )
+                            progress.event(
+                                "awaiting wave",
+                                {
+                                    "awaiting": len(pending_handles),
+                                    "selected": len(items),
+                                    "waves": waves_completed + 1,
+                                },
+                            )
+                        await_workflows(pending_handles)
+                        waves_completed += 1
+                        if progress is not None:
+                            wave_metrics = {
+                                "waves": waves_completed,
+                                "selected": len(items),
+                                **_rescore_count_metrics(items),
+                            }
+                            progress.event("wave complete", wave_metrics)
+                    pending_handles = []
+            if progress is not None:
+                progress.update(
+                    phase="scheduling",
+                    selected=len(items),
+                    pending=len(pending_handles),
+                    waves=waves_completed,
+                    **_rescore_count_metrics(items),
+                )
         offset += len(candidates)
         if len(candidates) < page_limit:
             break
 
+    if not dry_run and pending_handles:
+        if progress is not None:
+            progress.update(
+                phase="awaiting",
+                selected=len(items),
+                awaiting=len(pending_handles),
+                waves=waves_completed,
+                **_rescore_count_metrics(items),
+            )
+            progress.event(
+                "awaiting final wave",
+                {
+                    "awaiting": len(pending_handles),
+                    "selected": len(items),
+                },
+            )
+        await_workflows(pending_handles)
+        waves_completed += 1
+        if progress is not None:
+            wave_metrics = {
+                "waves": waves_completed,
+                "selected": len(items),
+                **_rescore_count_metrics(items),
+            }
+            progress.event("wave complete", wave_metrics)
+
+    result = batch_rescore_result(
+        experiment_name=experiment_name,
+        generation_statuses=tuple(generation_statuses),
+        generation_attempt_index=generation_attempt_index,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
+        score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        dry_run=dry_run,
+        max_in_flight=max_in_flight,
+        total_candidates=total_candidates,
+        items=tuple(items),
+    )
+    if progress is not None:
+        progress.complete(
+            {
+                "total_candidates": total_candidates,
+                "selected": result.selected_count,
+                "scheduled": result.scheduled_count,
+                "recovered": result.recovered_count,
+                "failed": result.failed_count,
+                "waves": waves_completed,
+                "max_in_flight": max_in_flight,
+            }
+        )
     return BatchRescoreExecution(
-        result=batch_rescore_result(
-            experiment_name=experiment_name,
-            generation_statuses=tuple(generation_statuses),
-            generation_attempt_index=generation_attempt_index,
-            scoring_profile_id=scoring_profile.profile_id,
-            scoring_profile_version=scoring_profile.version,
-            parser_profile_id=scoring_profile.parser_profile.profile_id,
-            parser_version=scoring_profile.parser_profile.version,
-            score_attempt_index=score_attempt_index,
-            dataset_name=dataset_name,
-            dataset_split=dataset_split,
-            dry_run=dry_run,
-            items=tuple(items),
-        ),
-        workflow_handles=tuple(workflow_handles),
+        result=result,
+        workflow_handles=(),
+    )
+
+
+def _rescore_count_metrics(
+    items: Sequence[BatchRescoreItem],
+) -> dict[str, int]:
+    scheduled = sum(
+        item.status
+        in {
+            BatchRescoreItemStatus.SCHEDULED,
+            BatchRescoreItemStatus.RECOVERED,
+        }
+        for item in items
+    )
+    already_scored = sum(
+        item.status is BatchRescoreItemStatus.ALREADY_SCORED for item in items
+    )
+    failed = sum(
+        item.status is BatchRescoreItemStatus.FAILED for item in items
+    )
+    in_flight = sum(
+        item.status is BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT
+        for item in items
+    )
+    return {
+        "scheduled": scheduled,
+        "already_scored": already_scored,
+        "failed": failed,
+        "in_flight": in_flight,
+    }
+
+
+def count_rescore_generation_candidates(
+    connection: Connection,
+    *,
+    experiment_name: str,
+    generation_statuses: Sequence[GenerationRunStatus],
+    generation_attempt_index: int | None,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+) -> int:
+    return int(
+        connection.execute(
+            io.count_rescore_generation_candidates(
+                experiment_name=experiment_name,
+                generation_statuses=tuple(generation_statuses),
+                generation_attempt_index=generation_attempt_index,
+                scoring_profile_id=scoring_profile_id,
+                scoring_profile_version=scoring_profile_version,
+                parser_profile_id=parser_profile_id,
+                parser_version=parser_version,
+                score_attempt_index=score_attempt_index,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+            )
+        ).scalar_one()
     )
 
 
@@ -413,6 +601,8 @@ def batch_rescore_result(
     dataset_name: str,
     dataset_split: str,
     dry_run: bool,
+    max_in_flight: int,
+    total_candidates: int,
     items: tuple[BatchRescoreItem, ...],
 ) -> BatchRescoreResult:
     already_scored_count = sum(
@@ -458,6 +648,8 @@ def batch_rescore_result(
         dataset_name=dataset_name,
         dataset_split=dataset_split,
         dry_run=dry_run,
+        max_in_flight=max_in_flight,
+        total_candidates=total_candidates,
         selected_count=len(items),
         already_scored_count=already_scored_count,
         needs_score_count=needs_score_count,
@@ -503,11 +695,14 @@ def validate_rescore_request(
     generation_attempt_index: int | None,
     score_attempt_index: int,
     generation_statuses: Sequence[GenerationRunStatus],
+    max_in_flight: int,
 ) -> None:
     if not generation_statuses:
         raise ValueError("generation_statuses must not be empty")
     if chunk_size < 1:
         raise ValueError("chunk_size must be positive")
+    if max_in_flight < 1:
+        raise ValueError("max_in_flight must be positive")
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive when provided")
     if generation_attempt_index is not None and generation_attempt_index < 0:

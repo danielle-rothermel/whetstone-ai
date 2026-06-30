@@ -46,6 +46,8 @@ V1_MIGRATION_MODULES = (
     "20260630_0004_batch_submit_remove_prepared_status",
     "dr_dspy.db.migrations.versions."
     "20260630_0005_score_attempt_dataset_axes",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0006_score_attempt_evaluation_incomplete_outcome",
 )
 
 
@@ -123,6 +125,30 @@ def test_alembic_score_attempt_dataset_revision_renders_constraint(
     assert "dataset_split" in rendered
     assert "uq_dr_dspy_score_attempts_profile" in rendered
     assert "UPDATE dr_dspy_score_attempts" in rendered
+
+
+def test_alembic_evaluation_incomplete_outcome_revision_renders_constraint(
+    monkeypatch: Any,
+) -> None:
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0006_score_attempt_evaluation_incomplete_outcome"
+    )
+    statements: list[str] = []
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
+
+    migration.upgrade()
+    rendered = "\n".join(statements)
+
+    assert "ck_dr_dspy_score_attempts_generated_code_outcome" in rendered
+    assert "evaluation_incomplete" in rendered
 
 
 def test_alembic_v1_schema_revision_matches_live_named_contracts(
@@ -593,6 +619,8 @@ def test_alembic_score_attempt_dataset_revision_allows_dual_rows(
         "20260630_0004_batch_submit_remove_prepared_status",
         "dr_dspy.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0006_score_attempt_evaluation_incomplete_outcome",
     )
 
     try:
@@ -869,7 +897,7 @@ def test_alembic_env_offline_mode_renders_upgrade_sql() -> None:
 
     assert result.returncode == 0, result.stderr
     assert "CREATE TABLE dr_dspy_experiments" in result.stdout
-    assert "20260630_0005" in result.stdout
+    assert "20260630_0006" in result.stdout
 
 
 def test_alembic_claiming_status_downgrade_resets_claiming_rows(
