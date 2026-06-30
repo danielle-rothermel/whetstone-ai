@@ -11,11 +11,10 @@ repository in a personal organization, along with the name chosen for it.
 
 ## Summary
 
-The dr-dspy eval platform currently lives at `dr-dspy/dr-dspy/` — a package
-nested two levels deep inside a fork of `stanfordnlp/dspy`. The fork only ever
-made sense as a path to contributing changes back upstream. There is no
-intention to upstream anything to DSPy, so the fork relationship is pure
-overhead.
+The dr-dspy eval platform currently lives at `dr-dspy/` inside a fork of
+`stanfordnlp/dspy`. The fork only ever made sense as a path to contributing
+changes back upstream. There is no intention to upstream anything to DSPy, so
+the fork relationship is pure overhead.
 
 The plan is to:
 
@@ -47,7 +46,7 @@ serves this project.
 
 This is the concrete blocker for the stated goal of better CI. Depot,
 branch-based CI, coverage gates, and release automation all assume *the repo
-root is the project root*. Right now the project root is `dr-dspy/dr-dspy/`,
+root is the project root*. Right now the project root is `dr-dspy/`, with
 with `pyproject.toml`, `src/`, tests, and Alembic config nested inside a
 directory whose parent is an unrelated library. Every CI tool wired up against
 this layout needs path gymnastics, and some will not cooperate. The "improve CI"
@@ -210,16 +209,17 @@ GitHub at ~59% developer preference — but the new entrants are real.
 
 History-preserving, low-risk, mechanical. Run against a fresh clone.
 
-1. **Land `graph-workflow` → `main`.** Finish/merge the in-flight `migration/`
-   and `tests/` work before moving the repo. One risky thing at a time.
+1. **Land `graph-workflow` → `main`.** Includes dr-dspy-scoped CI
+   (`dr_dspy_tests.yml`), portable `scripts/ci/` entrypoints, and pinned
+   `dspy==3.3.0b1`. One risky thing at a time.
 2. **Extract with history:**
-   `git filter-repo --subdirectory-filter dr-dspy/dr-dspy` against a fresh clone
+   `git filter-repo --subdirectory-filter dr-dspy` against a fresh clone
    → a new repo where this package is the root, every commit preserved, the
    vendored DSPy tree and upstream history dropped.
-3. **Cut the DSPy cord:** `uv add dspy` pinned in the new `pyproject.toml`, so
-   DSPy is a versioned dependency instead of a substrate.
+3. **Cut the DSPy cord:** remove `tool.uv.sources` workspace override and
+   `scripts/ci/ensure_pypi_dspy.sh`; keep `dspy==3.3.0b1` pinned from PyPI.
 4. **Create the repo in the personal org**, push, then wire **Depot + CI**
-   against the now-clean root (no two-levels-down path gymnastics).
+   against the now-clean root (drop `working-directory: dr-dspy` from workflows).
 5. **Rename the package** `dr_dspy` → `whetstone` as a *separate, dedicated
    commit* after extraction — a large mechanical diff, isolated from the
    structural move for a clean review.

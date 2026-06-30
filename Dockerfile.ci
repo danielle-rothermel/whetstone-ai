@@ -1,0 +1,25 @@
+# CI image for dr-dspy unit tests. Wire to Depot after org repo extraction.
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /workspace
+
+# Monorepo layout today: lockfile and workspace root live above the package.
+COPY pyproject.toml uv.lock ./
+COPY dr-dspy/pyproject.toml dr-dspy/pyproject.toml
+COPY dr-dspy/src dr-dspy/src
+COPY dr-dspy/scripts dr-dspy/scripts
+COPY dr-dspy/tests dr-dspy/tests
+
+RUN uv sync --frozen --package dr-dspy
+
+WORKDIR /workspace/dr-dspy
+RUN ./scripts/ci/ensure_pypi_dspy.sh
+
+CMD ["./scripts/ci/unit.sh"]

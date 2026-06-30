@@ -11,8 +11,9 @@ and skip gracefully when PostgreSQL is unavailable.
 
 | Command | What runs |
 |---------|-----------|
-| `uv run pytest tests/ --ignore=tests/test_serialization.py` | Unit tests (default local/CI path) |
-| `uv run pytest -m integration tests/integration/` | Postgres + DBOS integration proofs |
+| `./scripts/ci/unit.sh` | Unit tests (294 tests; excludes integration marker) |
+| `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (27 tests) |
+| `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
 ## Test tiers
@@ -34,8 +35,11 @@ Design context: [append-only eval platform design](docs/append-only-eval-records
 ```
 tests/
   conftest.py                 # integration fixtures (Postgres schema, reset_dbos)
+  serialization_support.py    # helpers for serialization contract tests
   support/                    # shared spec/node helpers for unit + integration
     platform_integration_helpers.py
+    platform_workflow_fixtures.py
+    postgres_fixtures.py
   fixtures/v0_samples/        # committed JSON rows from legacy v0 tables
   integration/                # @pytest.mark.integration tests
     dbos_test_workflows.py    # minimal workflows for step-level DBOS proofs
@@ -43,6 +47,11 @@ tests/
     test_platform_dbos_workflow.py
     test_v0_reshape_outcomes.py
     test_v0_reshape_specs.py
+scripts/ci/                   # portable CI entrypoints (package-root cwd)
+  unit.sh
+  integration.sh
+  lint.sh
+  ensure_pypi_dspy.sh         # reinstall PyPI dspy wheel in fork monorepo
 src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
 
@@ -55,10 +64,11 @@ Defined in [`tests/conftest.py`](tests/conftest.py):
   that open their own SQLAlchemy engines.
 - **`reset_dbos`** — destroys/reconfigures DBOS, resets the system database
   (SQLite file under `tmp_path` by default), and launches the platform runtime.
-- **`seed_prediction_spec(connection, spec)`** — inserts experiment + spec rows.
 
-Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
-workflows are under test.
+Seed helpers live in [`tests/support/postgres_fixtures.py`](tests/support/postgres_fixtures.py):
+
+- **`seed_prediction_spec(connection, spec)`** — inserts experiment + spec rows.
+- **`start_test_workflow(workflow, workflow_id, *args)`** — DBOS workflow helper.
 
 ## Conventions
 
@@ -98,14 +108,50 @@ database with an ad-hoc script when legacy schema rows change materially.
 | `DATABASE_URL` | App Postgres URL (defaults to `postgresql+psycopg:///dr_dspy`) |
 | `DBOS_SYSTEM_DATABASE_URL` | Optional; integration tests use a per-test SQLite file when unset |
 
+Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
+workflows are under test.
+
 ## CI
 
-- **Default job:** `uv run pytest tests/ --ignore=tests/test_serialization.py`
-  (unit tests only; integration tests are deselected unless explicitly invoked).
-- **Integration job:** provision Postgres, then
-  `uv run pytest -m integration tests/integration/`.
+GitHub Actions workflow: [`.github/workflows/dr_dspy_tests.yml`](../.github/workflows/dr_dspy_tests.yml)
+(path-scoped to `dr-dspy/**`). While the package still lives inside the DSPy
+fork, jobs use `working-directory: dr-dspy`; after
+[repo extraction](docs/repo-split-and-naming-plan.md), drop that prefix.
+
+| Job | Script | Notes |
+|-----|--------|-------|
+| lint | `./scripts/ci/lint.sh` | ruff + ty |
+| unit | `./scripts/ci/unit.sh` | 294 unit tests |
+| integration | `./scripts/ci/integration.sh` | Postgres 16 service; 27 tests |
+
+Local equivalents (from the package root):
+
+```bash
+./scripts/ci/lint.sh
+./scripts/ci/unit.sh
+DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
+```
+
+The fork monorepo still vendors DSPy at the workspace root. CI runs
+[`scripts/ci/ensure_pypi_dspy.sh`](scripts/ci/ensure_pypi_dspy.sh) to reinstall
+`dspy==3.3.0b1` from PyPI and prove the post-extraction dependency cut. Drop
+that script after `git filter-repo`.
+
+[`Dockerfile.ci`](Dockerfile.ci) builds a unit-test image for future Depot
+wiring after the org repo is created.
+
+Upstream DSPy workflows ([`run_tests.yml`](../.github/workflows/run_tests.yml))
+skip when a PR touches only `dr-dspy/**`.
 
 ## Changelog
+
+### 2026-06-30 — CI scripts and GitHub workflow
+
+- Added `scripts/ci/{unit,integration,lint,ensure_pypi_dspy}.sh`.
+- Added `.github/workflows/dr_dspy_tests.yml` (lint, unit, integration).
+- Pinned `dspy==3.3.0b1`; CI reinstalls the PyPI wheel in the fork monorepo.
+- Fixed `tests/test_serialization.py` import path.
+- Added `Dockerfile.ci` for future Depot wiring.
 
 ### 2026-06-30 — Platform integration + v0 migration smoke tiers
 

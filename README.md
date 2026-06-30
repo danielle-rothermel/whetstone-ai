@@ -35,7 +35,10 @@ complete.
   node-attempt indexing semantics, provider-config scope, integration-test
   status, and follow-up work.
 - [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
-  model, shared fixtures, and conventions for adding coverage.
+  model, shared fixtures, CI scripts, and conventions for adding coverage.
+- [Repo split and naming plan](docs/repo-split-and-naming-plan.md) describes
+  the planned move to a standalone `<personal-org>/whetstone-ai` repository.
+  The `dr_dspy` → `whetstone` rename is deferred until after extraction.
 
 ## Testing
 

@@ -13,20 +13,6 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from serialization_support import (
-    BadModel,
-    QASig,
-    SerializedNameModel,
-    SimpleObject,
-    assert_diagnostics,
-    assert_to_jsonable,
-    bad_pydantic_model,
-    large_payload,
-    minimal_example,
-    nested_list,
-    ok_pydantic_model,
-    stub_lm,
-)
 
 import dr_dspy.serialization as serialization
 import dspy
@@ -43,6 +29,20 @@ from dr_dspy.serialization import (
     SignatureSummaryError,
     sanitize_lm_kwargs,
     to_jsonable,
+)
+from tests.serialization_support import (
+    BadModel,
+    QASig,
+    SerializedNameModel,
+    SimpleObject,
+    assert_diagnostics,
+    assert_to_jsonable,
+    bad_pydantic_model,
+    large_payload,
+    minimal_example,
+    nested_list,
+    ok_pydantic_model,
+    stub_lm,
 )
 
 
