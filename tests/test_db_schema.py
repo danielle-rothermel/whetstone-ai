@@ -161,6 +161,24 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.batch_submit_operations,
         CheckConstraint,
     )
+    batch_ops_count_bounds = next(
+        constraint
+        for constraint in schema.batch_submit_operations.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_ops_count_bounds"
+        )
+    )
+    batch_ops_completed = next(
+        constraint
+        for constraint in schema.batch_submit_operations.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_ops_completed"
+        )
+    )
+    assert "already_scheduled_count" in str(batch_ops_count_bounds.sqltext)
+    assert "already_scheduled_count" in str(batch_ops_completed.sqltext)
     assert "ck_dr_dspy_throttle_backoff_failures" in _constraint_names(
         schema.throttle_backoff,
         CheckConstraint,

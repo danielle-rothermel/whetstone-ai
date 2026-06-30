@@ -15,6 +15,7 @@ from dr_dspy.records import (
     batch_submit_operation_counts_from_items,
     build_batch_submit_operation_record,
     insert_outcome_from_rowcount,
+    operation_status_from_counts,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -62,7 +63,7 @@ def test_batch_submit_operation_counts_from_items() -> None:
         _item(
             item_index=1,
             insert_status=BatchSubmitItemInsertStatus.ALREADY_PRESENT,
-            enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
+            enqueue_status=BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
         ),
         _item(
             item_index=2,
@@ -75,7 +76,8 @@ def test_batch_submit_operation_counts_from_items() -> None:
 
     assert counts.inserted_count == 2
     assert counts.already_present_count == 1
-    assert counts.enqueued_count == 2
+    assert counts.enqueued_count == 1
+    assert counts.already_scheduled_count == 1
     assert counts.failed_count == 1
 
 
@@ -111,7 +113,7 @@ def test_build_batch_submit_operation_record_derives_counts() -> None:
 def test_completed_batch_operation_requires_full_enqueue_accounting() -> None:
     with pytest.raises(
         ValidationError,
-        match="enqueued_count or failed_count",
+        match="already_scheduled_count",
     ):
         BatchSubmitOperationRecord(
             operation_key="op-1",
@@ -124,6 +126,56 @@ def test_completed_batch_operation_requires_full_enqueue_accounting() -> None:
             created_at=NOW,
             completed_at=NOW,
         )
+
+
+def test_completed_batch_operation_allows_already_scheduled_accounting() -> None:
+    operation = BatchSubmitOperationRecord(
+        operation_key="op-1",
+        experiment_name="exp",
+        status=BatchSubmitOperationStatus.COMPLETED,
+        requested_count=2,
+        inserted_count=2,
+        enqueued_count=0,
+        already_scheduled_count=2,
+        failed_count=0,
+        created_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert operation.already_scheduled_count == 2
+
+
+def test_operation_status_from_counts_all_already_scheduled() -> None:
+    status = operation_status_from_counts(
+        requested_count=2,
+        enqueued_count=0,
+        already_scheduled_count=2,
+        failed_count=0,
+    )
+
+    assert status is BatchSubmitOperationStatus.COMPLETED
+
+
+def test_operation_status_from_counts_partial_with_mixed_outcomes() -> None:
+    status = operation_status_from_counts(
+        requested_count=3,
+        enqueued_count=1,
+        already_scheduled_count=1,
+        failed_count=1,
+    )
+
+    assert status is BatchSubmitOperationStatus.PARTIAL
+
+
+def test_operation_status_from_counts_incomplete_enqueue() -> None:
+    status = operation_status_from_counts(
+        requested_count=3,
+        enqueued_count=1,
+        already_scheduled_count=0,
+        failed_count=0,
+    )
+
+    assert status is BatchSubmitOperationStatus.ENQUEUING
 
 
 def test_terminal_batch_operation_requires_completed_at() -> None:

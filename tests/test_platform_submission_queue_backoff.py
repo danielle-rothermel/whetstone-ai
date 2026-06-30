@@ -31,6 +31,8 @@ from dr_dspy.platform import (
 from dr_dspy.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
+    BatchSubmitOperationRecord,
+    BatchSubmitOperationStatus,
     DimensionsPayload,
     GraphSnapshotPayload,
     PredictionSpecRecord,
@@ -881,8 +883,10 @@ def test_update_operation_summary_counts_already_scheduled_items() -> None:
         for spec in specs
     )
 
+    connection = ConnectionWithRows(rows)
+
     result = submission.update_operation_summary(
-        cast(Connection, ConnectionWithRows(rows)),
+        cast(Connection, connection),
         operation_key="op-1",
         experiment_name="exp",
         queue_name="queue",
@@ -892,6 +896,31 @@ def test_update_operation_summary_counts_already_scheduled_items() -> None:
     assert result.enqueued_count == 0
     assert result.already_scheduled_count == 2
     assert result.failed_count == 0
+    assert len(connection.statements) == 2
+    update_sql = str(
+        connection.statements[1].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "status='completed'" in update_sql
+    assert "completed_at" in update_sql
+    assert (
+        BatchSubmitOperationRecord(
+            operation_key="op-1",
+            experiment_name="exp",
+            status=BatchSubmitOperationStatus.COMPLETED,
+            requested_count=result.requested_count,
+            inserted_count=result.inserted_count,
+            already_present_count=result.already_present_count,
+            enqueued_count=result.enqueued_count,
+            already_scheduled_count=result.already_scheduled_count,
+            failed_count=result.failed_count,
+            created_at=NOW,
+            completed_at=NOW,
+        ).status
+        is BatchSubmitOperationStatus.COMPLETED
+    )
 
 
 def test_prepare_submission_records_upserts_experiment(

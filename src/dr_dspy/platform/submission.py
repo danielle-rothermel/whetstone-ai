@@ -27,6 +27,7 @@ from dr_dspy.records import (
     ExperimentRecord,
     FailureMetadataPayload,
     PredictionSpecRecord,
+    operation_status_from_counts,
 )
 
 DEFAULT_SUBMIT_CHUNK_SIZE = 500
@@ -639,7 +640,19 @@ def update_operation_summary(
     )
     status = operation_status(
         requested_count=requested_count,
+        enqueued_count=enqueued_count,
+        already_scheduled_count=already_scheduled_count,
         failed_count=failed_count,
+    )
+    completed_at = (
+        datetime.now(UTC)
+        if status
+        in {
+            BatchSubmitOperationStatus.COMPLETED,
+            BatchSubmitOperationStatus.PARTIAL,
+            BatchSubmitOperationStatus.ERROR,
+        }
+        else None
     )
     connection.execute(
         update(schema.batch_submit_operations)
@@ -652,7 +665,7 @@ def update_operation_summary(
             enqueued_count=enqueued_count,
             already_scheduled_count=already_scheduled_count,
             failed_count=failed_count,
-            completed_at=datetime.now(UTC),
+            completed_at=completed_at,
         )
     )
     return SubmitPredictionSpecsResult(
@@ -741,13 +754,16 @@ def batch_submit_item_id(
 def operation_status(
     *,
     requested_count: int,
+    enqueued_count: int,
+    already_scheduled_count: int,
     failed_count: int,
 ) -> BatchSubmitOperationStatus:
-    if failed_count == 0:
-        return BatchSubmitOperationStatus.COMPLETED
-    if failed_count >= requested_count:
-        return BatchSubmitOperationStatus.ERROR
-    return BatchSubmitOperationStatus.PARTIAL
+    return operation_status_from_counts(
+        requested_count=requested_count,
+        enqueued_count=enqueued_count,
+        already_scheduled_count=already_scheduled_count,
+        failed_count=failed_count,
+    )
 
 
 def failure_payload_from_exception(

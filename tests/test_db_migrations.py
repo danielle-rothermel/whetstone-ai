@@ -37,7 +37,7 @@ def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "20260630_0001"
+    assert script.get_current_head() == "20260630_0002"
 
 
 def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
@@ -99,6 +99,31 @@ def test_alembic_append_only_outcome_revision_renders_triggers(
     assert schema.APPEND_ONLY_OUTCOME_REJECT_FUNCTION in rendered
 
 
+def test_alembic_terminal_enqueue_accounting_revision_renders_constraints(
+    monkeypatch: Any,
+) -> None:
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0002_batch_submit_terminal_enqueue_accounting"
+    )
+    statements: list[str] = []
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
+
+    migration.upgrade()
+    rendered = "\n".join(statements)
+
+    assert "already_scheduled_count" in rendered
+    assert "ck_dr_dspy_batch_ops_count_bounds" in rendered
+    assert "ck_dr_dspy_batch_ops_completed" in rendered
+
+
 def test_alembic_v1_schema_revision_applies_to_postgres(
     monkeypatch: Any,
 ) -> None:
@@ -138,6 +163,10 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
     append_only_migration = importlib.import_module(
         "dr_dspy.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers"
+    )
+    terminal_enqueue_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0002_batch_submit_terminal_enqueue_accounting"
     )
 
     try:
@@ -181,6 +210,16 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
                 Operations(context),
             )
             append_only_migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                terminal_enqueue_migration,
+                "op",
+                Operations(context),
+            )
+            terminal_enqueue_migration.upgrade()
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
@@ -232,6 +271,47 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_operations ("
+                    "operation_key, experiment_name, status, requested_count, "
+                    "inserted_count, already_present_count, enqueued_count, "
+                    "already_scheduled_count, failed_count, spec, metadata, "
+                    "created_at"
+                    ") VALUES ("
+                    "'op-1', 'exp', 'enqueuing', 2, 2, 0, 0, 0, 0, "
+                    "'{}'::jsonb, '{}'::jsonb, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE dr_dspy_batch_submit_operations SET "
+                    "status = 'completed', "
+                    "enqueued_count = 0, "
+                    "already_scheduled_count = 2, "
+                    "failed_count = 0, "
+                    "completed_at = TIMESTAMPTZ '2026-06-29 12:00:00+00' "
+                    "WHERE operation_key = 'op-1'"
+                )
+            )
+            conn.execute(
+                text(
+                    "DELETE FROM dr_dspy_batch_submit_operations "
+                    "WHERE operation_key = 'op-1'"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                terminal_enqueue_migration,
+                "op",
+                Operations(context),
+            )
+            terminal_enqueue_migration.downgrade()
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(
                 append_only_migration,

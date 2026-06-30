@@ -5,11 +5,26 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 from dr_dspy.db.schema import (
-    BATCH_SUBMIT_OPS_COMPLETED_CHECK,
-    BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
     NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
     PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
 )
+
+_INITIAL_BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK = """
+inserted_count <= requested_count
+AND already_present_count <= requested_count
+AND enqueued_count <= requested_count
+AND failed_count <= requested_count
+AND inserted_count + already_present_count <= requested_count
+AND enqueued_count + failed_count <= requested_count
+""".strip()
+
+_INITIAL_BATCH_SUBMIT_OPS_COMPLETED_CHECK = """
+status != 'completed'
+OR (
+  completed_at IS NOT NULL
+  AND enqueued_count + failed_count = requested_count
+)
+""".strip()
 
 revision = "20260629_0001"
 down_revision = None
@@ -324,11 +339,11 @@ def upgrade() -> None:
             name="ck_dr_dspy_batch_ops_counts",
         ),
         sa.CheckConstraint(
-            BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
+            _INITIAL_BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
             name="ck_dr_dspy_batch_ops_count_bounds",
         ),
         sa.CheckConstraint(
-            BATCH_SUBMIT_OPS_COMPLETED_CHECK,
+            _INITIAL_BATCH_SUBMIT_OPS_COMPLETED_CHECK,
             name="ck_dr_dspy_batch_ops_completed",
         ),
         sa.CheckConstraint(

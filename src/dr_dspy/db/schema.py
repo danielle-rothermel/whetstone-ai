@@ -111,7 +111,7 @@ AND already_present_count <= requested_count
 AND enqueued_count <= requested_count
 AND failed_count <= requested_count
 AND inserted_count + already_present_count <= requested_count
-AND enqueued_count + failed_count <= requested_count
+AND enqueued_count + already_scheduled_count + failed_count <= requested_count
 """.strip()
 
 
@@ -119,7 +119,7 @@ BATCH_SUBMIT_OPS_COMPLETED_CHECK = """
 status != 'completed'
 OR (
   completed_at IS NOT NULL
-  AND enqueued_count + failed_count = requested_count
+  AND enqueued_count + already_scheduled_count + failed_count = requested_count
 )
 """.strip()
 

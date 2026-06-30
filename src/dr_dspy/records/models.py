@@ -628,9 +628,15 @@ class BatchSubmitOperationRecord(BaseModel):
                 "inserted_count + already_present_count cannot exceed "
                 "requested_count"
             )
-        if self.enqueued_count + self.failed_count > self.requested_count:
+        terminal_enqueue = (
+            self.enqueued_count
+            + self.already_scheduled_count
+            + self.failed_count
+        )
+        if terminal_enqueue > self.requested_count:
             raise ValueError(
-                "enqueued_count + failed_count cannot exceed requested_count"
+                "enqueued_count + already_scheduled_count + failed_count "
+                "cannot exceed requested_count"
             )
         validate_payload_size(
             self.spec,
@@ -646,10 +652,11 @@ class BatchSubmitOperationRecord(BaseModel):
                 "terminal batch submit operations require completed_at"
             )
         if self.status is BatchSubmitOperationStatus.COMPLETED:
-            if self.enqueued_count + self.failed_count != self.requested_count:
+            if terminal_enqueue != self.requested_count:
                 raise ValueError(
                     "completed batch submit operations must account for every "
-                    "requested item in enqueued_count or failed_count"
+                    "requested item in enqueued_count, already_scheduled_count, "
+                    "or failed_count"
                 )
         if (
             self.completed_at is not None

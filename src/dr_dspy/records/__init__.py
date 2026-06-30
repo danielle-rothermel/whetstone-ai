@@ -6,6 +6,9 @@ from dr_dspy.records.batch_submit import (
     batch_submit_operation_counts_from_items,
     build_batch_submit_operation_record,
     insert_outcome_from_rowcount,
+    operation_status_from_counts,
+    terminal_enqueue_total,
+    terminal_enqueue_total_from_counts,
 )
 from dr_dspy.records.hashing import (
     DIMENSIONS_DIGEST_LENGTH,
@@ -114,6 +117,9 @@ __all__ = [
     "UsageCostPayload",
     "batch_submit_operation_counts_from_items",
     "build_batch_submit_operation_record",
+    "operation_status_from_counts",
+    "terminal_enqueue_total",
+    "terminal_enqueue_total_from_counts",
     "canonical_json",
     "dimensions_digest",
     "fair_order_key",
