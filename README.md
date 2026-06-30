@@ -22,25 +22,25 @@ remains under `migration/` for backfill — see
 - `platform/` — v1 DBOS graph workflow, plain-prompt node execution, append-only persistence, CLI entrypoints
 - `migration/` — v0 row → v1 record reshape (backfill only; delete after migration validated)
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
-- `serialization.py` — JSON-safe encoding for telemetry and DB payloads
+- `serialization.py` — JSON-safe encoding for telemetry and DB payloads (optional DSPy type handlers when `dspy` is installed)
 
 ## Design notes
 
-- [Graph-based eval platform design](docs/append-only-eval-records-design.md)
-  captures the planned migration toward graph-shaped generation specs,
-  append-only outcomes, explicit prompt/LM boundaries, rescoring, metrics, and
-  Unitbench-facing projections.
-- [Platform graph workflow implementation notes](docs/platform-graph-workflow-implementation.md)
-  describe the current v1 workflow entrypoint, DBOS timing boundaries,
-  node-attempt indexing semantics, provider-config scope, integration-test
-  status, and follow-up work.
+Canonical documentation in [`docs/`](docs/):
+
+- [Completed design and implementation choices](docs/completed-design-and-implementation-choices.md)
+  — settled architecture, platform workflow behavior, integration tiers, and
+  schema freeze policy.
+- [Remaining implementation intentions](docs/remaining-implementation-intentions.md)
+  — deferred work (Unitbench, v0 backfill, projections) and follow-ups.
+- [v1 schema migrations](docs/v1-schema-migrations.md) — frozen Alembic head
+  `20260630_0005`, reset procedure for draft databases.
 - [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
-  documents backfill retention and post-migration cleanup.
-- [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
-  model, shared fixtures, CI scripts, and conventions for adding coverage.
-- [Repo split and naming plan](docs/repo-split-and-naming-plan.md) describes
-  the standalone `whetstone-ai` repository and deferred `dr_dspy` → `whetstone`
-  rename.
+  — backfill retention and post-migration cleanup.
+- [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
+
+Repository extraction and `dr_dspy` → `whetstone` rename plans live in
+[Remaining implementation intentions](docs/remaining-implementation-intentions.md#repository-extraction-and-rename--not-started).
 
 ## Testing
 
@@ -63,9 +63,20 @@ uv run python -m dr_dspy.platform.worker run-one \
 ```
 
 This command assumes the `PredictionSpecRecord` already exists in the
-database. This phase does not include a spec-creation CLI; specs must be
-inserted by a test fixture, migration/backfill path, or ad-hoc setup before
-`run-one` can execute them.
+database.
+
+Build prediction specs from an experiment JSON config:
+
+```bash
+uv run python -m dr_dspy.platform.worker build-specs \
+  --config-file experiment.json \
+  --output specs.jsonl
+```
+
+Example configs live under
+[`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/).
+Generated JSONL is compatible with `submit-jsonl`. Optional `--insert` bulk-loads
+specs and the experiment row into Postgres.
 
 Start the platform DBOS generation worker:
 
@@ -103,7 +114,10 @@ state; later workflows with the same key durably sleep before calling the
 provider.
 
 Scoring workflows and batch rescoring are available via `score-one` and
-`rescore`. Unitbench-facing projections and the full v0 backfill job remain
+`rescore`. `PARTIAL` generation runs are scoreable when terminal output is
+present (same scoring path as `SUCCESS`); runs without terminal output are
+rejected. By default, `rescore` includes both successful and partial runs.
+Unitbench-facing projections and the full v0 backfill job remain
 deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ## Database migrations

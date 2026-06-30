@@ -1,0 +1,19 @@
+{
+  "experiment_name": "encdec-exp",
+  "graph_layout": "encdec",
+  "fair_order_seed": "seed-2",
+  "dataset": {
+    "name": "local/fixture",
+    "split": "test",
+    "sample_seed": 3,
+    "sample_count": 1
+  },
+  "repetition_seeds": [0],
+  "dimensions_axes": [
+    {"temperature": 0.2}
+  ],
+  "providers": [
+    {"model": "encoder-model", "config_id": "encoder"},
+    {"model": "decoder-model", "config_id": "decoder"}
+  ]
+}

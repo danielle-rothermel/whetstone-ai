@@ -329,27 +329,6 @@ def idempotent_insert_score_attempt(record: ScoreAttemptRecord) -> Any:
     )
 
 
-def _provider_axis_from_row(
-    *,
-    row: Mapping[str, Any],
-    provider_configs: tuple[ProviderConfigRef, ...],
-) -> ProviderConfigRef:
-    for provider_config in provider_configs:
-        if (
-            provider_config.provider_kind.value == row["provider_kind"]
-            and provider_config.endpoint_kind.value == row["endpoint_kind"]
-            and provider_config.model == row["model"]
-            and provider_config.throttle_key == row["throttle_key"]
-        ):
-            return provider_config
-    return ProviderConfigRef(
-        provider_kind=row["provider_kind"],
-        endpoint_kind=row["endpoint_kind"],
-        model=row["model"],
-        throttle_key=row["throttle_key"],
-    )
-
-
 def _terminal_error_payload(
     terminal_error: TerminalError | None,
 ) -> GenerationTerminalErrorPayload | None:

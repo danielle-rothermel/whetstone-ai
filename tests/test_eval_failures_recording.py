@@ -9,10 +9,12 @@ from dr_dspy.eval_failures import (
     RecordingFailureError,
     ensure_recordable,
     failure_metadata_dict_from_exception,
+    failure_metadata_from_exception,
     recordable_text,
     should_retry_step,
     summarize_exception,
 )
+from dr_dspy.eval_failures.exceptions import TransientFailureError
 from dr_dspy.serialization import (
     JsonEncodeError,
     MaxDepthExceededError,
@@ -83,6 +85,14 @@ def test_failure_metadata_from_wrapped_error() -> None:
     metadata = failure_metadata_dict_from_exception(error)
     assert metadata["path"] == ["x"]
     assert metadata["type_name"] == "object"
+
+
+def test_failure_metadata_from_exception_builds_payload() -> None:
+    error = TransientFailureError("provider timeout")
+    payload = failure_metadata_from_exception(error)
+    assert payload.failure_class is FailureClass.TRANSIENT
+    assert payload.error_type.endswith("TransientFailureError")
+    assert payload.message == "provider timeout"
 
 
 def test_ensure_recordable_wraps_payload_too_large_error() -> None:

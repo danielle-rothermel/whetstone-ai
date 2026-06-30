@@ -58,6 +58,7 @@ __all__ = [
     "error_text",
     "exception_type_name",
     "failure_metadata_dict_from_exception",
+    "failure_metadata_from_exception",
     "failure_summary_payload",
     "find_classified_exception",
     "recordable_jsonb",
@@ -105,6 +106,10 @@ _LAZY_EXPORTS = {
     "failure_metadata_dict_from_exception": (
         "dr_dspy.eval_failures.recording",
         "failure_metadata_dict_from_exception",
+    ),
+    "failure_metadata_from_exception": (
+        "dr_dspy.eval_failures.recording",
+        "failure_metadata_from_exception",
     ),
     "recordable_jsonb": (
         "dr_dspy.eval_failures.recording",

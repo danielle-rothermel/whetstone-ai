@@ -1,8 +1,9 @@
 # Remaining implementation intentions and open work
 
-**Derived from:** `append-only-eval-records-design.md`, `platform-graph-workflow-implementation.md`, `repo-split-and-naming-plan.md`  
+**Canonical docs:** [`completed-design-and-implementation-choices.md`](completed-design-and-implementation-choices.md) (settled decisions), this file (backlog and deferred work), [`v1-schema-migrations.md`](v1-schema-migrations.md) (frozen Alembic history), [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) (backfill cleanup).
+
 **Date:** 2026-06-30  
-**Purpose:** Consolidated backlog of unfinished implementation, deferred decisions, follow-ups, and future work called out across platform docs.
+**Purpose:** Consolidated backlog of unfinished implementation, deferred decisions, follow-ups, and future work.
 
 ---
 
@@ -71,13 +72,13 @@ From the platform design doc — still unresolved or only partially resolved in 
 
 ## Platform workflow follow-ups
 
-From `platform-graph-workflow-implementation.md`:
+From settled platform workflow decisions in
+[`completed-design-and-implementation-choices.md`](completed-design-and-implementation-choices.md):
 
 ### Graph and provider contracts
 
 - Replace prompt **metadata string keys** (`user_prompt_template`, `system_prompt`, `provider_config_id`) with **typed Pydantic fields** on graph/spec models (breaking contract change).
 - **Extend persisted provider config** so experiments can vary runtime details from specs: `base_url`, `api_key_env`, temperature/reasoning capability flags, etc.
-- Add a **supported spec-construction path** for v1 runs (CLI helper and/or standard integration-test fixture). Today specs must be created via tests, migration setup, ad-hoc insert, or `submit-jsonl`.
 
 ### Runtime and infrastructure
 
@@ -200,26 +201,25 @@ No implementation work for COPRO itself is documented in these three source file
 Work required for a robust v1 path on **new** experiments (code complete; nothing
 need be executed yet):
 
-1. **Spec construction path** — CLI or config → `PredictionSpecRecord` generator
-   (not only hand-built JSONL / test fixtures).
-2. **PARTIAL run scoring policy** — decide and implement whether enc-dec/graph
-   `PARTIAL` generation runs are scoreable; align `rescore` defaults and
-   `validate_generation_run_for_scoring`.
+1. ~~**Spec construction path**~~ — **Done** — `build-specs` CLI and
+   [`spec_builder.py`](../src/dr_dspy/platform/spec_builder.py).
+2. ~~**PARTIAL run scoring policy**~~ — **Done** — score when terminal output
+   exists; `rescore` defaults include `success` and `partial`.
 3. ~~**Freeze v1 Alembic history**~~ — **Done** — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
 4. ~~**Submit → worker E2E integration test**~~ — **Done** — Tier 4 in
    [`TESTING.md`](../TESTING.md) (`test_platform_pipeline_e2e.py`).
-5. **Small code cleanup** — remove dead `_provider_axis_from_row`; dedupe
-   `failure_payload_from_exception`.
-6. **`dspy` dependency review** — trim or dev-only now that v0 runtime is gone
-   (serialization still references DSPy types).
-7. **Stale docs** — align `completed-design-and-implementation-choices.md` and
-   related notes with post–v0-removal layout (`dbos_bootstrap.py`, etc.).
+5. ~~**Small code cleanup**~~ — **Done** — removed dead `_provider_axis_from_row`;
+   shared `failure_metadata_from_exception` in `eval_failures.recording`.
+6. ~~**`dspy` dependency review**~~ — **Done** — runtime dep removed; lazy
+   handlers in `serialization.py`; `dspy` in `[dependency-groups] dev`.
+7. ~~**Stale docs**~~ — **Done** — README/TESTING links and backlog docs
+   aligned with post–v0-removal layout.
 
 ---
 
 ## Summary priority sketch
 
-**Now (v1 core):** items 1–7 in [v1 platform completion](#v1-platform-completion-before-deferred-phases).
+**v1 core (items 1–7):** complete — see [v1 platform completion](#v1-platform-completion-before-deferred-phases).
 
 **Later (deferred with Unitbench):** v0 backfill + validation + reshape
 hardening; projection movement + storage shape; Unitbench/types/Neon; then delete

@@ -355,3 +355,36 @@ def test_rescore_rejects_invalid_generation_status() -> None:
 
     assert result.exit_code != 0
     assert "generation-status must be one of" in result.output
+
+
+def test_build_specs_writes_jsonl_from_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dr_dspy.platform import spec_builder
+    from tests.test_platform_spec_builder import FIXTURES_DIR, _fixture_rows
+
+    def fake_iter(config: Any, *, rows: Any = None) -> Any:
+        return spec_builder.iter_experiment_specs(
+            config,
+            rows=_fixture_rows(),
+        )
+
+    monkeypatch.setattr(worker, "iter_experiment_specs", fake_iter)
+
+    output = tmp_path / "specs.jsonl"
+    result = CliRunner().invoke(
+        worker.APP,
+        [
+            "build-specs",
+            "--config-file",
+            str(FIXTURES_DIR / "direct_minimal.json"),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    lines = output.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 8
+    assert "direct-exp" in lines[0]

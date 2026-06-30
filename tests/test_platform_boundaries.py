@@ -31,9 +31,11 @@ FORBIDDEN_PLATFORM_IMPORTS = (
 FORBIDDEN_DSPY_IMPORTS = ("dspy",)
 ALLOWED_EXISTING_IMPORTS = {
     # recordable_jsonb is the documented JSONB adapter exception at the
-    # persistence boundary. The rest of eval_failures should stay DB-free.
+    # persistence boundary. failure_metadata_from_exception lazily imports
+    # FailureMetadataPayload for platform batch/rescore failure rows.
     SRC_ROOT / "eval_failures" / "recording.py": {
         "psycopg.types.json",
+        "dr_dspy.records",
     },
 }
 

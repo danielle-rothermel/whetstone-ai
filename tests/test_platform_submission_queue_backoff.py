@@ -1911,7 +1911,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
     assert captured["kwargs"] == {
         "database_url": "postgresql://example/db",
         "experiment_name": "exp",
-        "generation_status": GenerationRunStatus.SUCCESS,
+        "generation_statuses": (GenerationRunStatus.SUCCESS,),
         "generation_attempt_index": 0,
         "scoring_profile_id": "humaneval",
         "scoring_profile_version": "v1",

@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection, Engine
 
 from dr_dspy.db import io, schema
-from dr_dspy.eval_failures import summarize_exception
+from dr_dspy.eval_failures import failure_metadata_from_exception
 from dr_dspy.hashing import sha256_json_digest
 from dr_dspy.platform.fairness import (
     fair_ordered_spec_ref_windows,
@@ -626,7 +626,7 @@ def enqueue_candidate(
             fair_order_key=candidate.fair_order_key,
             insert_status=candidate.insert_status,
             enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
-            failure=failure_payload_from_exception(error),
+            failure=failure_metadata_from_exception(error),
         )
 
 
@@ -932,19 +932,6 @@ def operation_status(
         already_scheduled_count=already_scheduled_count,
         failed_count=failed_count,
     )
-
-
-def failure_payload_from_exception(
-    error: BaseException,
-) -> FailureMetadataPayload:
-    summary = summarize_exception(error)
-    return FailureMetadataPayload(
-        failure_class=summary.failure_class,
-        error_type=summary.failure_exception_type,
-        message=summary.message,
-        metadata=summary.failure_metadata,
-    )
-
 
 def chunked(
     values: Sequence[PredictionSpecRecord],

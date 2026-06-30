@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -14,7 +15,7 @@ from pydantic import (
 from sqlalchemy.engine import Connection, Engine
 
 from dr_dspy.db import io
-from dr_dspy.eval_failures import summarize_exception
+from dr_dspy.eval_failures import failure_metadata_from_exception
 from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -38,6 +39,10 @@ from dr_dspy.records import (
 )
 
 DEFAULT_RESCORE_CHUNK_SIZE = 500
+DEFAULT_RESCORE_GENERATION_STATUSES = (
+    GenerationRunStatus.SUCCESS,
+    GenerationRunStatus.PARTIAL,
+)
 
 
 class BatchRescoreItemStatus(StrEnum):
@@ -76,7 +81,7 @@ class BatchRescoreResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     experiment_name: StrictStr
-    generation_status: GenerationRunStatus
+    generation_statuses: tuple[GenerationRunStatus, ...]
     generation_attempt_index: StrictInt | None
     scoring_profile_id: StrictStr
     scoring_profile_version: StrictStr
@@ -117,7 +122,9 @@ def rescore_generation_runs(
     *,
     database_url: str,
     experiment_name: str,
-    generation_status: GenerationRunStatus = GenerationRunStatus.SUCCESS,
+    generation_statuses: Sequence[GenerationRunStatus] = (
+        DEFAULT_RESCORE_GENERATION_STATUSES
+    ),
     generation_attempt_index: int | None = None,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -137,6 +144,7 @@ def rescore_generation_runs(
         limit=limit,
         generation_attempt_index=generation_attempt_index,
         score_attempt_index=score_attempt_index,
+        generation_statuses=generation_statuses,
     )
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
@@ -152,7 +160,7 @@ def rescore_generation_runs(
             candidates = load_rescore_generation_candidates(
                 connection,
                 experiment_name=experiment_name,
-                generation_status=generation_status,
+                generation_statuses=generation_statuses,
                 generation_attempt_index=generation_attempt_index,
                 scoring_profile_id=scoring_profile.profile_id,
                 scoring_profile_version=scoring_profile.version,
@@ -189,7 +197,7 @@ def rescore_generation_runs(
 
     return batch_rescore_result(
         experiment_name=experiment_name,
-        generation_status=generation_status,
+        generation_statuses=tuple(generation_statuses),
         generation_attempt_index=generation_attempt_index,
         scoring_profile_id=scoring_profile.profile_id,
         scoring_profile_version=scoring_profile.version,
@@ -207,7 +215,7 @@ def load_rescore_generation_candidates(
     connection: Connection,
     *,
     experiment_name: str,
-    generation_status: GenerationRunStatus,
+    generation_statuses: Sequence[GenerationRunStatus],
     generation_attempt_index: int | None,
     scoring_profile_id: str,
     scoring_profile_version: str,
@@ -222,7 +230,7 @@ def load_rescore_generation_candidates(
     rows = connection.execute(
         io.select_rescore_generation_candidates(
             experiment_name=experiment_name,
-            generation_status=generation_status,
+            generation_statuses=tuple(generation_statuses),
             generation_attempt_index=generation_attempt_index,
             scoring_profile_id=scoring_profile_id,
             scoring_profile_version=scoring_profile_version,
@@ -295,7 +303,7 @@ def plan_or_schedule_rescore_item(
             score_attempt_id=score_attempt_id,
             workflow_id=workflow_id,
             status=BatchRescoreItemStatus.FAILED,
-            failure=failure_payload_from_exception(error),
+            failure=failure_metadata_from_exception(error),
         )
     if scheduled.scheduled:
         status = (
@@ -359,7 +367,7 @@ def batch_rescore_item(
 def batch_rescore_result(
     *,
     experiment_name: str,
-    generation_status: GenerationRunStatus,
+    generation_statuses: tuple[GenerationRunStatus, ...],
     generation_attempt_index: int | None,
     scoring_profile_id: str,
     scoring_profile_version: str,
@@ -404,7 +412,7 @@ def batch_rescore_result(
     )
     return BatchRescoreResult(
         experiment_name=experiment_name,
-        generation_status=generation_status,
+        generation_statuses=generation_statuses,
         generation_attempt_index=generation_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
@@ -435,18 +443,21 @@ def rescore_generation_candidate_from_row(
         generation_run_id=row["generation_run_id"],
         existing_score_attempt_id=row["existing_score_attempt_id"],
     )
-
-
-def failure_payload_from_exception(
-    error: BaseException,
-) -> FailureMetadataPayload:
-    summary = summarize_exception(error)
-    return FailureMetadataPayload(
-        failure_class=summary.failure_class,
-        error_type=summary.failure_exception_type,
-        message=summary.message,
-        metadata=summary.failure_metadata,
-    )
+def parse_rescore_generation_statuses(
+    values: Sequence[str] | None,
+) -> tuple[GenerationRunStatus, ...]:
+    if not values:
+        return DEFAULT_RESCORE_GENERATION_STATUSES
+    resolved: list[GenerationRunStatus] = []
+    for value in values:
+        try:
+            resolved.append(GenerationRunStatus(value))
+        except ValueError as error:
+            allowed = ", ".join(status.value for status in GenerationRunStatus)
+            raise ValueError(
+                f"generation-status must be one of: {allowed}"
+            ) from error
+    return tuple(resolved)
 
 
 def validate_rescore_request(
@@ -455,7 +466,10 @@ def validate_rescore_request(
     limit: int | None,
     generation_attempt_index: int | None,
     score_attempt_index: int,
+    generation_statuses: Sequence[GenerationRunStatus],
 ) -> None:
+    if not generation_statuses:
+        raise ValueError("generation_statuses must not be empty")
     if chunk_size < 1:
         raise ValueError("chunk_size must be positive")
     if limit is not None and limit < 1:

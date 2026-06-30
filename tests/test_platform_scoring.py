@@ -1197,7 +1197,56 @@ def test_score_generation_run_persists_failed_generation_as_error() -> None:
     assert score.failure is not None
     assert (
         score.failure.message
-        == "generation run is not terminal success: error"
+        == "generation run is not scoreable: error"
+    )
+
+
+def test_score_generation_run_scores_partial_with_terminal_output() -> None:
+    spec = _spec()
+    run = _generation_run(
+        spec,
+        "def add_one(x):\n    return x + 1\n",
+    )
+    run = run.model_copy(update={"status": GenerationRunStatus.PARTIAL})
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.SUCCESS
+    assert score.score == 1.0
+
+
+def test_score_generation_rejects_partial_without_output() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "unused").model_copy(
+        update={
+            "status": GenerationRunStatus.PARTIAL,
+            "summary": _generation_run(spec, "unused").summary.model_copy(
+                update={"terminal_output": None}
+            ),
+        }
+    )
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.ERROR
+    assert score.failure is not None
+    assert (
+        score.failure.message
+        == "partial generation run missing terminal_output"
     )
 
 
@@ -1433,7 +1482,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
 def test_rescore_selector_filters_and_orders_candidates() -> None:
     statement = db_io.select_rescore_generation_candidates(
         experiment_name="exp",
-        generation_status=GenerationRunStatus.SUCCESS,
+        generation_statuses=(GenerationRunStatus.SUCCESS,),
         generation_attempt_index=0,
         scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
         scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -1455,7 +1504,7 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
 
     assert "LEFT OUTER JOIN dr_dspy_score_attempts" in compiled
     assert "dr_dspy_prediction_specs.experiment_name = 'exp'" in compiled
-    assert "dr_dspy_generation_runs.status = 'success'" in compiled
+    assert "dr_dspy_generation_runs.status IN ('success')" in compiled
     assert "dr_dspy_generation_runs.attempt_index = 0" in compiled
     assert (
         "dr_dspy_score_attempts.scoring_profile_id = 'humaneval'"
@@ -1478,10 +1527,36 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
     assert "LIMIT 10 OFFSET 2" in compiled
 
 
-def test_rescore_selector_ignores_scores_for_other_datasets() -> None:
+def test_rescore_selector_accepts_multiple_generation_statuses() -> None:
     statement = db_io.select_rescore_generation_candidates(
         experiment_name="exp",
-        generation_status=GenerationRunStatus.SUCCESS,
+        generation_statuses=(
+            GenerationRunStatus.SUCCESS,
+            GenerationRunStatus.PARTIAL,
+        ),
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        score_attempt_index=0,
+        dataset_name=DEFAULT_SCORE_DATASET_NAME,
+        dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        limit=10,
+    )
+
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "dr_dspy_generation_runs.status IN ('success', 'partial')" in (
+        compiled
+    )
+    statement = db_io.select_rescore_generation_candidates(
+        experiment_name="exp",
+        generation_statuses=(GenerationRunStatus.SUCCESS,),
         scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
         scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
         parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,

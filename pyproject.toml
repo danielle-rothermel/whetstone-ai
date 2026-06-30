@@ -10,7 +10,6 @@ dependencies = [
     "alembic>=1.16.2",
     "datasets>=3.6.0",
     "dbos>=2.25.0",
-    "dspy==3.3.0b1",
     "marimo[recommended]>=0.23.11",
     "pre-commit>=4.6.0",
     "psycopg>=3.3.4",
@@ -23,6 +22,11 @@ dependencies = [
     "ty>=0.0.54",
     "typer>=0.26.7",
     "zstandard>=0.25.0",
+]
+
+[dependency-groups]
+dev = [
+    "dspy==3.3.0b1",
 ]
 
 [build-system]

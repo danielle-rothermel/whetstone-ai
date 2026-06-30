@@ -17,6 +17,9 @@ and skip gracefully when PostgreSQL is unavailable.
 | `./scripts/ci/coverage.sh` | Unit + integration tests with combined coverage report |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
+Install dev dependencies (including `dspy` for serialization contract tests) with
+`uv sync --group dev`. CI scripts assume the dev group is synced.
+
 ## Test tiers
 
 | Tier | Purpose | Location |
@@ -29,8 +32,9 @@ and skip gracefully when PostgreSQL is unavailable.
 | **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through (only remaining v0-related tier until backfill completes) | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
 | **4 — Pipeline E2E** | JSONL submit → real DBOS enqueue → in-process queue consumer → generation → scoring (mock LM + HumanEval loader only) | [`tests/integration/test_platform_pipeline_e2e.py`](tests/integration/test_platform_pipeline_e2e.py) |
 
-Design context: [append-only eval platform design](docs/append-only-eval-records-design.md),
-[platform graph workflow notes](docs/platform-graph-workflow-implementation.md).
+Design context: [completed design choices](docs/completed-design-and-implementation-choices.md),
+[remaining implementation intentions](docs/remaining-implementation-intentions.md).
+Workflow CLI details are in [README.md](../README.md#v1-graph-workflow).
 
 ## Layout
 

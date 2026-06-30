@@ -269,10 +269,17 @@ def validate_generation_run_for_scoring(
             "HumanEval task_id does not match spec: "
             f"{task.task_id!r} != {spec.task_id!r}"
         )
-    if run.status is not GenerationRunStatus.SUCCESS:
-        raise ValueError(
-            f"generation run is not terminal success: {run.status.value}"
-        )
+    if run.status is GenerationRunStatus.SUCCESS:
+        return
+    if run.status is GenerationRunStatus.PARTIAL:
+        if run.summary.terminal_output is None:
+            raise ValueError(
+                "partial generation run missing terminal_output"
+            )
+        return
+    raise ValueError(
+        f"generation run is not scoreable: {run.status.value}"
+    )
 
 
 def score_metrics_payload(

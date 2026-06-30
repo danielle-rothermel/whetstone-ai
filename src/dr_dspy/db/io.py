@@ -622,7 +622,8 @@ def select_node_attempts_by_generation_run(
 def select_rescore_generation_candidates(
     *,
     experiment_name: str,
-    generation_status: GenerationRunStatus,
+    generation_statuses: tuple[GenerationRunStatus, ...]
+    | list[GenerationRunStatus],
     scoring_profile_id: str,
     scoring_profile_version: str,
     parser_profile_id: str,
@@ -663,7 +664,11 @@ def select_rescore_generation_candidates(
             ).outerjoin(schema.score_attempts, matching_score_attempt)
         )
         .where(schema.prediction_specs.c.experiment_name == experiment_name)
-        .where(schema.generation_runs.c.status == generation_status.value)
+        .where(
+            schema.generation_runs.c.status.in_(
+                [status.value for status in generation_statuses]
+            )
+        )
         .where(schema.score_attempts.c.score_attempt_id.is_(None))
         .order_by(
             schema.prediction_specs.c.fair_order_key,

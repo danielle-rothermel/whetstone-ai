@@ -1,6 +1,7 @@
 # Completed design and implementation choices
 
-**Derived from:** `append-only-eval-records-design.md`, `platform-graph-workflow-implementation.md`, `repo-split-and-naming-plan.md`  
+**Canonical companion:** [`remaining-implementation-intentions.md`](remaining-implementation-intentions.md) (backlog and deferred work).
+
 **Date:** 2026-06-30  
 **Purpose:** Consolidated record of settled architecture, product, and implementation decisions with no remaining ambiguity.
 
@@ -176,7 +177,9 @@ Job submission isolates pure pieces (spec generation, fair-order keys, chunking,
 
 ## v0 surfaces
 
-v0 CLI commands, manifests, repair flow, old reporting, and `dr_dspy/experiments/` scaffolding are **not carried forward**.
+v0 runtime code is **removed** from the repository (`experiments/`, `harness/`,
+`lm/runner.py`, v0 CLIs, and related DSPy `Predict` paths). Legacy Postgres
+tables may remain as read-only backup until backfill completes.
 
 v1 replacement is thinner:
 
@@ -399,8 +402,8 @@ GitHub remains actual home for now. Name reservations on Cursor Origin, Codeberg
 ```
 whetstone/
 ├── humaneval/     # approved scope
-├── graph/         # DSPy-based generation path
-├── platform/      # append-only facts, DBOS, projections
+├── graph/         # pure graph execution (plain-prompt platform path)
+├── platform/      # append-only facts, DBOS, CLI entrypoints
 └── ...            # future siblings reserved, not built
 ```
 

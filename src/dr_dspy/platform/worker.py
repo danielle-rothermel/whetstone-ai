@@ -33,20 +33,28 @@ from dr_dspy.platform.queue_worker import (
 )
 from dr_dspy.platform.rescoring import (
     DEFAULT_RESCORE_CHUNK_SIZE,
+    parse_rescore_generation_statuses,
     rescore_generation_runs,
 )
 from dr_dspy.platform.scoring_workflow import (
     platform_scoring_workflow_id,
     run_score_generation_workflow_once,
 )
+from dr_dspy.platform.spec_builder import (
+    iter_experiment_specs,
+    load_experiment_spec_config,
+    write_prediction_specs_jsonl,
+)
 from dr_dspy.platform.submission import (
     DEFAULT_SUBMIT_CHUNK_SIZE,
+    bulk_insert_prediction_specs,
+    idempotent_insert_experiment,
     submit_prediction_specs_jsonl,
 )
 from dr_dspy.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
-    GenerationRunStatus,
+    ExperimentRecord,
 )
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
@@ -236,9 +244,15 @@ def rescore(
         ),
     ],
     generation_status: Annotated[
-        str,
-        typer.Option("--generation-status"),
-    ] = GenerationRunStatus.SUCCESS.value,
+        list[str] | None,
+        typer.Option(
+            "--generation-status",
+            help=(
+                "Repeatable generation statuses to rescore. "
+                "Defaults to success and partial."
+            ),
+        ),
+    ] = None,
     generation_attempt_index: Annotated[
         int | None,
         typer.Option("--generation-attempt-index", min=0),
@@ -304,12 +318,11 @@ def rescore(
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
     try:
-        resolved_generation_status = GenerationRunStatus(generation_status)
+        resolved_generation_statuses = parse_rescore_generation_statuses(
+            generation_status
+        )
     except ValueError as error:
-        raise typer.BadParameter(
-            f"generation-status must be one of: "
-            f"{', '.join(status.value for status in GenerationRunStatus)}"
-        ) from error
+        raise typer.BadParameter(str(error)) from error
 
     launched_dbos = False
     if dry_run:
@@ -331,7 +344,7 @@ def rescore(
             engine,
             database_url=resolved_database_url,
             experiment_name=experiment_name,
-            generation_status=resolved_generation_status,
+            generation_statuses=resolved_generation_statuses,
             generation_attempt_index=generation_attempt_index,
             scoring_profile_id=scoring_profile_id,
             scoring_profile_version=scoring_profile_version,
@@ -393,6 +406,84 @@ def worker(
         CONSOLE.print("platform graph DBOS runtime stopping")
     finally:
         destroy_dbos_runtime()
+
+
+@APP.command("build-specs")
+def build_specs(
+    config_file: Annotated[
+        Path,
+        typer.Option(
+            "--config-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="Experiment JSON config for spec generation.",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            file_okay=True,
+            dir_okay=False,
+            writable=True,
+            help="Write JSONL here; defaults to stdout.",
+        ),
+    ] = None,
+    insert: Annotated[
+        bool,
+        typer.Option(
+            "--insert",
+            help=(
+                "Bulk-insert generated specs and experiment row "
+                "into Postgres."
+            ),
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Postgres URL; required with --insert.",
+        ),
+    ] = None,
+    env_file: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    load_env_file(env_file) if env_file is not None else load_env_file()
+    config = load_experiment_spec_config(config_file)
+    specs = tuple(iter_experiment_specs(config))
+    destination = write_prediction_specs_jsonl(specs, output)
+    inserted_count = 0
+    if insert:
+        resolved_database_url = resolve_database_url(
+            database_url=database_url,
+            error_suffix="for build-specs insert",
+        )
+        engine = create_engine(resolved_database_url)
+        try:
+            with engine.begin() as connection:
+                connection.execute(
+                    idempotent_insert_experiment(
+                        ExperimentRecord(
+                            experiment_name=config.experiment_name,
+                            config_metadata={"source": str(config_file)},
+                        )
+                    )
+                )
+                inserted_count = len(
+                    bulk_insert_prediction_specs(connection, specs)
+                )
+        finally:
+            engine.dispose()
+    CONSOLE.print(
+        {
+            "experiment_name": config.experiment_name,
+            "spec_count": len(specs),
+            "output": str(destination),
+            "inserted_count": inserted_count if insert else None,
+        }
+    )
 
 
 @APP.command("submit-jsonl")

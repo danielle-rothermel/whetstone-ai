@@ -1,5 +1,6 @@
-"""DSPy-aware serialization helpers for experiment telemetry.
+"""JSON-safe serialization helpers for experiment telemetry.
 
+Optional handlers recognize DSPy types when the ``dspy`` package is installed.
 Encoding errors raised here are bridged to eval worker failures at
 ``dr_dspy.eval_failures.recording.ensure_recordable``.
 """
@@ -12,8 +13,6 @@ from collections.abc import Callable
 from typing import Any
 
 import pydantic
-
-import dspy
 
 # PostgreSQL jsonb/text per-value maximum (~1 GiB; see PG MaxAllocSize).
 POSTGRES_JSONB_MAX_BYTES = 1 << 30  # 1_073_741_824
@@ -44,6 +43,12 @@ type JsonableHandle = tuple[bool, Any]
 
 _JSON_LEAF_TYPES = (type(None), bool, int, float, str)
 _JSON_CONTAINER_TYPES = (*_JSON_LEAF_TYPES, dict, list)
+
+
+def _dspy_module() -> Any:
+    import dspy
+
+    return dspy
 
 
 class SerializationError(Exception):
@@ -357,7 +362,7 @@ def _find_non_jsonable_path(
 
 
 def _signature_summary(
-    sig_cls: type[dspy.Signature],
+    sig_cls: type[Any],
     path: JsonPath,
 ) -> dict[str, Any]:
     """Summarize a Signature class for logging."""
@@ -432,6 +437,10 @@ def _jsonable_bytes(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
 def _jsonable_dspy_example(
     x: Any, depth: int, path: JsonPath
 ) -> JsonableHandle:
+    try:
+        dspy = _dspy_module()
+    except ImportError:
+        return False, None
     if isinstance(x, dspy.Example):
         try:
             return True, _to_jsonable_inner(x.toDict(), depth + 1, path)
@@ -452,8 +461,11 @@ def _jsonable_type(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
     if not isinstance(x, type):
         return False, None
     try:
+        dspy = _dspy_module()
         if issubclass(x, dspy.Signature):
             return True, _signature_summary(x, path)
+    except ImportError:
+        pass
     except TypeError:
         pass
     return True, f"<class {x.__module__}.{x.__name__}>"
@@ -461,6 +473,10 @@ def _jsonable_type(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
 
 def _jsonable_dspy_lm(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
     del depth, path
+    try:
+        dspy = _dspy_module()
+    except ImportError:
+        return False, None
     if isinstance(x, dspy.BaseLM):
         return True, {
             "_kind": "BaseLM",

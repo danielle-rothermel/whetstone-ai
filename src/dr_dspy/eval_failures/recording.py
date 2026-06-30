@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from psycopg.types.json import Jsonb
 
+    from dr_dspy.records import FailureMetadataPayload
+
 from dr_dspy.eval_failures.exceptions import (
     EvalFailureError,
     RecordingFailureError,
@@ -52,6 +54,22 @@ def recordable_jsonb(
     from psycopg.types.json import Jsonb
 
     return Jsonb(ensure_recordable(value, max_bytes=max_bytes))
+
+
+def failure_metadata_from_exception(
+    error: BaseException,
+) -> FailureMetadataPayload:
+    """Build a storable failure metadata record from any exception."""
+    from dr_dspy.eval_failures.policy import summarize_exception
+    from dr_dspy.records import FailureMetadataPayload as Payload
+
+    summary = summarize_exception(error)
+    return Payload(
+        failure_class=summary.failure_class,
+        error_type=summary.failure_exception_type,
+        message=summary.message,
+        metadata=summary.failure_metadata,
+    )
 
 
 def failure_metadata_dict_from_exception(

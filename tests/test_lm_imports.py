@@ -61,3 +61,27 @@ def test_parse_provider_response_does_not_load_recording_or_psycopg() -> None:
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_serialization_import_does_not_load_dspy_module() -> None:
+    script = textwrap.dedent(
+        """
+        import sys
+
+        from dr_dspy.eval_failures import ensure_recordable
+
+        ensure_recordable({"telemetry": {"ok": True}})
+
+        if "dspy" in sys.modules:
+            raise SystemExit("dspy")
+        """
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
