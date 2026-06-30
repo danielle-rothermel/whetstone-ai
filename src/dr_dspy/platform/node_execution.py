@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
-from enum import StrEnum
 from typing import Any
 
 from openai import OpenAI
@@ -32,6 +31,7 @@ from dr_dspy.lm.boundary import (
 from dr_dspy.platform.prompts import build_node_messages, node_prompt_spec
 from dr_dspy.records import (
     FailureMetadataPayload,
+    NodeAttemptStatus,
     NodeOutputPayload,
     PredictionSpecRecord,
     ProviderConfigRef,
@@ -52,16 +52,11 @@ type ProviderClientFactory = Callable[[ProviderConfig], Any]
 type ProviderCaller = Callable[[Any, ProviderRequest], Any]
 
 
-class NodeStepStatus(StrEnum):
-    SUCCESS = "success"
-    ERROR = "error"
-
-
 class NodeStepResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: StrictStr
-    status: NodeStepStatus
+    status: NodeAttemptStatus
     provider_config: ProviderConfigRef | None = None
     output: NodeOutputPayload | None = None
     usage_cost: UsageCostPayload = Field(default_factory=UsageCostPayload)
@@ -87,7 +82,7 @@ class NodeStepResult(BaseModel):
     ) -> NodeStepResult:
         return cls(
             node_id=node_id,
-            status=NodeStepStatus.SUCCESS,
+            status=NodeAttemptStatus.SUCCESS,
             provider_config=provider_config,
             output=NodeOutputPayload(
                 values=output.values,
@@ -116,7 +111,7 @@ class NodeStepResult(BaseModel):
     ) -> NodeStepResult:
         return cls(
             node_id=node_id,
-            status=NodeStepStatus.ERROR,
+            status=NodeAttemptStatus.ERROR,
             provider_config=provider_config,
             failure=failure_metadata_from_exception(error),
             started_at=started_at,
@@ -124,7 +119,7 @@ class NodeStepResult(BaseModel):
         )
 
     def graph_output(self) -> NodeOutput:
-        if self.status is NodeStepStatus.ERROR:
+        if self.status is NodeAttemptStatus.ERROR:
             raise NodeStepFailure.from_result(self)
         if self.output is None:
             raise PermanentFailureError(
@@ -295,7 +290,7 @@ def node_step_error_result_from_failure(
         provider_ref = None
     return NodeStepResult(
         node_id=node.id,
-        status=NodeStepStatus.ERROR,
+        status=NodeAttemptStatus.ERROR,
         provider_config=provider_ref,
         failure=failure,
         started_at=started_at,

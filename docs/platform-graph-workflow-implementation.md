@@ -61,14 +61,26 @@ the existing run.
 Sequential operator re-runs of `run-one` for the same `(prediction_id,
 attempt_index)` therefore return the existing completed result instead of
 surfacing a raw conflict error. Append-only persistence (`ON CONFLICT DO NOTHING`)
-keeps replay idempotent inside a single workflow outcome.
+keeps replay idempotent inside a single workflow outcome. Idempotency is
+first-write-wins: if a replayed step ever produced different values than the
+first run, the database would keep the first persisted rows and would not
+surface the divergence.
 
 ## Node attempt indexes
+
+Both `generation_runs` and `node_attempts` expose an `attempt_index` column, but
+they mean different things:
+
+- `generation_runs.attempt_index` indexes whole workflow reruns for one
+  prediction. It participates in `stable_generation_run_id(prediction_id,
+  attempt_index)`.
+- `node_attempts.attempt_index` indexes retries of an individual node inside one
+  generation run.
 
 Node-attempt persistence records one terminal outcome for each invoked node in a
 generation run. DBOS retries happen inside the node execution step and do not
 create separate node-attempt rows. Until explicit node reattempt workflows are
-added, each invoked node is persisted with `attempt_index=0`.
+added, each invoked node is persisted with `INITIAL_NODE_ATTEMPT_INDEX` (0).
 
 ## Provider config scope
 

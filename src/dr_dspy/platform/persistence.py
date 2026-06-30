@@ -14,22 +14,26 @@ from dr_dspy.graph import (
     NodeOutcomeStatus,
     TerminalError,
 )
-from dr_dspy.platform.node_execution import (
-    NodeStepResult,
-    NodeStepStatus,
-)
+from dr_dspy.platform.node_execution import NodeStepResult
 from dr_dspy.records import (
     GenerationRunRecord,
     GenerationRunStatus,
     GenerationRunSummaryPayload,
     GenerationTerminalErrorPayload,
     NodeAttemptRecord,
-    NodeAttemptStatus,
     PredictionSpecRecord,
     ProviderConfigRef,
     stable_node_attempt_id,
 )
 from dr_dspy.records.providers import find_provider_config_ref
+
+# Node-attempt rows reuse the column name ``attempt_index``, but the meaning
+# differs from ``generation_runs.attempt_index``: generation runs index whole
+# workflow reruns for a prediction, while node attempts index retries of an
+# individual node inside one generation run. DBOS step retries do not create
+# new node-attempt rows; until explicit node reattempt workflows exist, every
+# invoked node is stored at this initial index.
+INITIAL_NODE_ATTEMPT_INDEX = 0
 
 
 def load_prediction_spec(
@@ -111,20 +115,14 @@ def node_attempt_records_from_steps(
     generation_run_id: str,
     step_results: Iterable[NodeStepResult],
 ) -> tuple[NodeAttemptRecord, ...]:
-    """Build one terminal node-attempt row for each invoked graph node.
-
-    DBOS retries happen inside the node execution step and do not create
-    separate append-only node attempt rows. Until the platform adds explicit
-    node reattempt workflows, every invoked node in a generation run is stored
-    as attempt index 0.
-    """
+    """Build one terminal node-attempt row for each invoked graph node."""
 
     return tuple(
         node_attempt_record_from_step(
             spec=spec,
             generation_run_id=generation_run_id,
             step_result=step_result,
-            attempt_index=0,
+            attempt_index=INITIAL_NODE_ATTEMPT_INDEX,
         )
         for step_result in step_results
     )
@@ -147,11 +145,7 @@ def node_attempt_record_from_step(
         prediction_id=spec.prediction_id,
         node_id=step_result.node_id,
         attempt_index=attempt_index,
-        status=(
-            NodeAttemptStatus.SUCCESS
-            if step_result.status is NodeStepStatus.SUCCESS
-            else NodeAttemptStatus.ERROR
-        ),
+        status=step_result.status,
         provider_config=step_result.provider_config,
         output=step_result.output,
         usage_cost=step_result.usage_cost,
@@ -168,6 +162,13 @@ def persist_generation_result(
     generation_run: GenerationRunRecord,
     node_attempts: Iterable[NodeAttemptRecord],
 ) -> None:
+    """Append rows with first-write-wins idempotency.
+
+    DBOS workflow replay may re-enter the persist step after a successful
+    first write. Inserts use ``ON CONFLICT DO NOTHING``, so replay keeps the
+    first persisted outcome rather than upserting corrected values.
+    Replay/output divergence therefore stays silent by design.
+    """
     connection.execute(idempotent_insert_generation_run(generation_run))
     for node_attempt in node_attempts:
         connection.execute(idempotent_insert_node_attempt(node_attempt))
@@ -194,6 +195,7 @@ def _postgres_insert_values(
 
 
 def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
+    """Insert a generation run row, ignoring generation_run_id conflicts."""
     return (
         insert(schema.generation_runs)
         .values(io.generation_run_row(record))
@@ -202,6 +204,7 @@ def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
 
 
 def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
+    """Insert a node attempt row, ignoring conflicts on ``node_attempt_id``."""
     return (
         insert(schema.node_attempts)
         .values(

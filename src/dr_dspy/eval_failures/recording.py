@@ -45,7 +45,9 @@ def recordable_jsonb(
     return Jsonb(ensure_recordable(value, max_bytes=max_bytes))
 
 
-def failure_metadata_from_exception(error: BaseException) -> dict[str, Any]:
+def failure_metadata_dict_from_exception(
+    error: BaseException,
+) -> dict[str, Any]:
     """Extract SerializationError diagnostics or EvalFailureError metadata."""
     current: BaseException | None = error
     seen: set[int] = set()

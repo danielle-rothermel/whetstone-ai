@@ -16,10 +16,11 @@ from dr_dspy.graph import (
     graph_digest,
 )
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform.node_execution import NodeStepResult, NodeStepStatus
+from dr_dspy.platform.node_execution import NodeStepResult
 from dr_dspy.records import (
     DimensionsPayload,
     GraphSnapshotPayload,
+    NodeAttemptStatus,
     PredictionSpecRecord,
     ProviderConfigRef,
     TaskInputsPayload,
@@ -226,7 +227,7 @@ def step_error(
 
     return NodeStepResult(
         node_id=node.id,
-        status=NodeStepStatus.ERROR,
+        status=NodeAttemptStatus.ERROR,
         provider_config=provider or provider_ref(),
         failure=FailureMetadataPayload(
             failure_class=FailureClass.PERMANENT,

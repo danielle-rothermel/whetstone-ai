@@ -39,7 +39,6 @@ from dr_dspy.platform.graph_workflow import (
 )
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
-    NodeStepStatus,
     execute_lm_node,
     failure_metadata_from_exception,
     provider_config_ref_for_node,
@@ -55,6 +54,7 @@ from dr_dspy.records import (
     FailureMetadataPayload,
     GenerationRunStatus,
     GraphSnapshotPayload,
+    NodeAttemptStatus,
     PredictionSpecRecord,
     ProviderConfigRef,
     TaskInputsPayload,
@@ -203,7 +203,7 @@ def _step_success(
 def _step_error(node: NodeSpec, message: str) -> NodeStepResult:
     return NodeStepResult(
         node_id=node.id,
-        status=NodeStepStatus.ERROR,
+        status=NodeAttemptStatus.ERROR,
         provider_config=_provider(),
         failure=FailureMetadataPayload(
             failure_class=FailureClass.PERMANENT,
@@ -579,7 +579,7 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
         provider_caller=provider_caller,
     )
 
-    assert result.status is NodeStepStatus.SUCCESS
+    assert result.status is NodeAttemptStatus.SUCCESS
     request = captured["request"]
     assert request.kwargs == {
         "model": "gpt-test",
@@ -635,7 +635,7 @@ def test_lm_node_executor_rejects_unsupported_node_op() -> None:
         provider_caller=provider_caller,
     )
 
-    assert result.status is NodeStepStatus.ERROR
+    assert result.status is NodeAttemptStatus.ERROR
     assert result.failure is not None
     assert result.failure.failure_class is FailureClass.PERMANENT
     assert result.failure.message == (

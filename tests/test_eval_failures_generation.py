@@ -12,7 +12,7 @@ from dr_dspy.eval_failures import (
     EmptyGenerationError,
     FailureClass,
     PredictionParseError,
-    failure_metadata_from_exception,
+    failure_metadata_dict_from_exception,
     require_generation_text,
     should_retry_step,
     summarize_exception,
@@ -69,7 +69,7 @@ def test_failure_metadata_from_eval_failure_error() -> None:
         underlying=ValueError("bad"),
         metadata={"output_field": "description"},
     )
-    metadata = failure_metadata_from_exception(error)
+    metadata = failure_metadata_dict_from_exception(error)
     assert metadata == {"output_field": "description"}
 
 

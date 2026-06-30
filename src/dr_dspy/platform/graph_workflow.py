@@ -79,24 +79,14 @@ def execute_prediction_graph(
         spec=spec,
         run_node_step=run_node_step,
     )
-    generation_run = generation_run_record_from_result(
+    return _records_for_persistence(
         spec=spec,
         generation_run_id=generation_run_id,
         attempt_index=attempt_index,
-        result=graph_result,
-        started_at=started_at,
-        completed_at=completed_at,
-    )
-    node_attempts = node_attempt_records_from_steps(
-        spec=spec,
-        generation_run_id=generation_run_id,
-        step_results=node_step_results,
-    )
-    return PredictionGraphExecution(
-        generation_run=generation_run,
-        node_attempts=node_attempts,
         graph_result=graph_result,
         node_step_results=node_step_results,
+        started_at=started_at,
+        completed_at=completed_at,
     )
 
 
@@ -170,24 +160,15 @@ def run_prediction_graph_workflow(
     completed_at = datetime.fromisoformat(
         generation_completed_at_step(generation_run_id)
     )
-    execution = _records_for_persistence(
-        spec=spec,
-        attempt_index=attempt_index,
-        generation_run_id=generation_run_id,
-        graph_result=graph_result,
-        node_step_results=node_step_results,
-        started_at=started_at,
-        completed_at=completed_at,
-    )
     persist_generation_result_step(
         database_url,
         spec.model_dump(mode="json"),
         generation_run_id,
         attempt_index,
-        execution.graph_result.model_dump(mode="json"),
+        graph_result.model_dump(mode="json"),
         [
             step_result.model_dump(mode="json")
-            for step_result in execution.node_step_results
+            for step_result in node_step_results
         ],
         started_at.isoformat(),
         completed_at.isoformat(),

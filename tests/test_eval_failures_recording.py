@@ -8,7 +8,7 @@ from dr_dspy.eval_failures import (
     FailureClass,
     RecordingFailureError,
     ensure_recordable,
-    failure_metadata_from_exception,
+    failure_metadata_dict_from_exception,
     should_retry_step,
     summarize_exception,
 )
@@ -61,6 +61,6 @@ def test_failure_metadata_from_wrapped_error() -> None:
         value_preview="preview",
     )
     error = RecordingFailureError("wrapped", underlying=underlying)
-    metadata = failure_metadata_from_exception(error)
+    metadata = failure_metadata_dict_from_exception(error)
     assert metadata["path"] == ["x"]
     assert metadata["type_name"] == "object"
