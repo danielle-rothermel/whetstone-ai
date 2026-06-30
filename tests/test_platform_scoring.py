@@ -55,9 +55,11 @@ from dr_dspy.platform.scoring import (
 )
 from dr_dspy.records import (
     DimensionsPayload,
+    FailureMetadataPayload,
     GenerationRunRecord,
     GenerationRunStatus,
     GenerationRunSummaryPayload,
+    GenerationTerminalErrorPayload,
     GraphSnapshotPayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
@@ -217,6 +219,35 @@ def _generation_run(
             execution_order=tuple(node.id for node in spec.graph.graph.nodes),
             terminal_node_id=spec.graph.graph.terminal_node_id,
             terminal_output=raw_generation,
+        ),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+
+def _failed_generation_run(spec: PredictionSpecRecord) -> GenerationRunRecord:
+    terminal_node_id = spec.graph.graph.terminal_node_id
+    return GenerationRunRecord(
+        generation_run_id=stable_generation_run_id(
+            prediction_id=spec.prediction_id,
+            attempt_index=0,
+        ),
+        prediction_id=spec.prediction_id,
+        attempt_index=0,
+        status=GenerationRunStatus.ERROR,
+        terminal_node_id=terminal_node_id,
+        terminal_output_node_id=None,
+        summary=GenerationRunSummaryPayload(
+            execution_order=(terminal_node_id,),
+            terminal_node_id=terminal_node_id,
+            terminal_error=GenerationTerminalErrorPayload(
+                node_id=terminal_node_id,
+                status=GenerationRunStatus.ERROR,
+                failure=FailureMetadataPayload(
+                    error_type="RuntimeError",
+                    message="provider failed",
+                ),
+            ),
         ),
         started_at=NOW,
         completed_at=LATER,
@@ -521,12 +552,18 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
             _node_attempt(
                 spec,
                 node_id="encoder",
-                values={"description": "Plain description."},
+                values={
+                    "description": "Plain description.",
+                    "plan": {"steps": ["read", "write"], "ok": True},
+                },
             ),
             _node_attempt(
                 spec,
                 node_id="decoder",
-                values={"code": "def add_one(x):\n    return x + 1\n"},
+                values={
+                    "code": "def add_one(x):\n    return x + 1\n",
+                    "alternatives": ["return x + 1"],
+                },
             ),
         ),
         task=_task(),
@@ -541,8 +578,17 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
     assert score.metrics is not None
     assert {stage.stage_id for stage in score.metrics.stages} >= {
         "node:encoder:description",
+        "node:encoder:plan",
+        "node:decoder:alternatives",
         "node:decoder:code",
     }
+    stages = {stage.stage_id: stage for stage in score.metrics.stages}
+    assert stages["node:encoder:plan"].text.character_count == len(
+        '{"ok":true,"steps":["read","write"]}'
+    )
+    assert stages["node:decoder:alternatives"].text.character_count == len(
+        '["return x + 1"]'
+    )
 
 
 def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
@@ -602,6 +648,30 @@ def test_persist_score_attempt_reports_conflict_status() -> None:
     assert result.status is ScoreAttemptInsertStatus.ALREADY_PRESENT
 
 
+def test_score_generation_run_persists_failed_generation_as_error() -> None:
+    spec = _spec()
+    run = _failed_generation_run(spec)
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.ERROR
+    assert score.score is None
+    assert score.generated_code_outcome is None
+    assert score.metrics is None
+    assert score.failure is not None
+    assert (
+        score.failure.message
+        == "generation run is not terminal success: error"
+    )
+
+
 def test_load_humaneval_task_step_uses_cached_task_map(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -652,6 +722,46 @@ def test_load_humaneval_task_step_uses_cached_task_map(
         ("load", ("dataset", "split")),
         ("parse", rows),
     ]
+
+
+def test_load_humaneval_task_step_raises_for_missing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def load_rows(
+        *,
+        dataset_name: str,
+        dataset_split: str,
+    ) -> list[dict[str, str]]:
+        return [{"task_id": "HumanEval/fixture"}]
+
+    def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
+        return (_task(),)
+
+    monkeypatch.setattr(
+        scoring_workflow,
+        "load_human_eval_rows",
+        load_rows,
+    )
+    monkeypatch.setattr(
+        scoring_workflow,
+        "parse_human_eval_dataset",
+        parse_rows,
+    )
+    cached_loader = cast(Any, scoring_workflow.load_humaneval_task_map)
+    cached_loader.cache_clear()
+    try:
+        load_step = cast(Any, scoring_workflow.load_humaneval_task_step)
+        with pytest.raises(
+            ValueError,
+            match="HumanEval task not found: HumanEval/missing",
+        ):
+            load_step.__wrapped__(
+                "dataset",
+                "split",
+                "HumanEval/missing",
+            )
+    finally:
+        cached_loader.cache_clear()
 
 
 def test_scoring_workflow_uses_dbos_step_boundaries(

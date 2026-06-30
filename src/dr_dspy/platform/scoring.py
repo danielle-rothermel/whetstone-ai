@@ -8,6 +8,8 @@ from dr_dspy.eval_failures import (
     exception_type_name,
     failure_metadata_from_exception,
 )
+from dr_dspy.eval_failures.recording import ensure_recordable
+from dr_dspy.hashing import canonical_json
 from dr_dspy.humaneval.metrics import (
     NodeOutputMetricsSource,
     build_metrics_payload,
@@ -272,15 +274,20 @@ def node_output_metrics_sources(
         if attempt.output is None:
             continue
         for field_name, value in sorted(attempt.output.values.items()):
-            if isinstance(value, str):
-                sources.append(
-                    NodeOutputMetricsSource(
-                        node_id=attempt.node_id,
-                        field_name=field_name,
-                        text=value,
-                    )
+            sources.append(
+                NodeOutputMetricsSource(
+                    node_id=attempt.node_id,
+                    field_name=field_name,
+                    text=node_output_metrics_text(value),
                 )
+            )
     return tuple(sources)
+
+
+def node_output_metrics_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return canonical_json(ensure_recordable(value))
 
 
 def failure_payload(

@@ -76,7 +76,9 @@ use `status=error` for infrastructure or workflow failures such as missing
 generation rows or task loading failures. The scorer writes extracted-code
 metadata, per-test results when evaluation runs, aggregate evaluation counts in
 `metrics.custom["evaluation"]`, and versioned text, Python leakage, AST,
-compression, and per-stage metrics into JSONB payloads. It does not update
+compression, and per-stage metrics into JSONB payloads. Node-output metrics
+include every output field; non-string values are converted to canonical JSON
+text at the platform boundary before metric extraction. It does not update
 generation/node-attempt rows, v0 tables, or projections.
 
 The HumanEval task loader uses a process-local cached task map keyed by dataset

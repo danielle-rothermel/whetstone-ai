@@ -158,6 +158,25 @@ terminal outcomes only. See
 clock-step boundaries, node-attempt indexing semantics, provider-config scope,
 pre-existing spec requirement, integration-test status, and follow-up work.
 
+For the HumanEval scoring and metrics stage, the first append-only scoring path
+is available under `dr_dspy.platform.scoring_workflow`. The behavior-bearing
+`humaneval@v1` scoring profile owns its parser profile, metrics profile, and
+HumanEval timeout. `humaneval-best-effort@v1` handles JSON/code-object unwrap
+and recoverable code extraction; `humaneval-field-marker@v1` is a narrower
+field-marker adherence parser, not a full mirror of DSPy ChatAdapter recovery.
+Score attempts persist per-test rows, aggregate evaluation counts under
+`metrics.custom["evaluation"]`, and text/code/compression metrics for terminal
+generation text, extracted code, and every node output field. Non-string node
+outputs are converted through the recordability boundary and canonical JSON
+before metric extraction.
+
+The scoring workflow is currently a one-generation DBOS workflow plus a
+`score-one` CLI. Task loading uses a process-local cached HumanEval task map
+keyed by dataset name and split, which avoids reparsing the dataset for each
+score in the same worker process. Batch/rescore orchestration, first-class
+profile record tables, projection movement, and live Postgres/DBOS integration
+coverage remain later phases.
+
 Two platform workflow concerns remain deferred. First, prompt configuration is
 currently a documented metadata contract on graph nodes; a later graph contract
 change should replace those string metadata keys with typed Pydantic fields.
@@ -491,7 +510,7 @@ The immediate rescoring flow should:
 
 The parser/scoring profile we discussed should include:
 
-- strict ChatAdapter extraction, for instruction-adherence measurement
+- strict field-marker extraction, for instruction-adherence measurement
 - best-effort extraction, for recoverable-code measurement
 - JSON `{"code": ...}` unwrap before code cleaning
 - existing HumanEval code cleaning
