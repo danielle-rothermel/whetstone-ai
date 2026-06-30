@@ -26,7 +26,7 @@ def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "20260629_0001"
+    assert script.get_current_head() == "20260630_0001"
 
 
 def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
@@ -59,6 +59,31 @@ def test_alembic_v1_schema_revision_matches_live_named_contracts(
             assert index.name in rendered
 
 
+def test_alembic_append_only_outcome_revision_renders_triggers(
+    monkeypatch: Any,
+) -> None:
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0001_append_only_outcome_triggers"
+    )
+    statements: list[str] = []
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
+
+    migration.upgrade()
+    rendered = "\n".join(statements)
+
+    for table_name in schema.APPEND_ONLY_OUTCOME_TABLE_NAMES:
+        assert f"tr_{table_name}_append_only" in rendered
+    assert schema.APPEND_ONLY_OUTCOME_REJECT_FUNCTION in rendered
+
+
 def test_alembic_v1_schema_revision_applies_to_postgres(
     monkeypatch: Any,
 ) -> None:
@@ -84,6 +109,10 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
     migration = importlib.import_module(
         "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
     )
+    append_only_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0001_append_only_outcome_triggers"
+    )
 
     try:
         with engine.begin() as conn:
@@ -94,6 +123,16 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(migration, "op", Operations(context))
             migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                append_only_migration,
+                "op",
+                Operations(context),
+            )
+            append_only_migration.upgrade()
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
@@ -134,6 +173,24 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
 
         with engine.begin() as conn:
             conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            with pytest.raises(Exception, match="append-only table"):
+                conn.execute(
+                    text(
+                        "UPDATE dr_dspy_generation_runs "
+                        "SET status = 'error' "
+                        "WHERE generation_run_id = 'run-1'"
+                    )
+                )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(
+                append_only_migration,
+                "op",
+                Operations(context),
+            )
+            append_only_migration.downgrade()
             context = MigrationContext.configure(cast(Any, conn))
             monkeypatch.setattr(migration, "op", Operations(context))
             migration.downgrade()

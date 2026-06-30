@@ -23,6 +23,14 @@ def test_schema_contains_expected_v1_table_names() -> None:
     assert set(schema.metadata.tables) == set(schema.V1_TABLE_NAMES)
 
 
+def test_schema_declares_append_only_outcome_tables() -> None:
+    assert schema.APPEND_ONLY_OUTCOME_TABLE_NAMES == (
+        schema.GENERATION_RUNS_TABLE,
+        schema.NODE_ATTEMPTS_TABLE,
+        schema.SCORE_ATTEMPTS_TABLE,
+    )
+
+
 def test_schema_primary_keys_match_contract() -> None:
     expected = {
         schema.EXPERIMENTS_TABLE: ("experiment_name",),

@@ -47,6 +47,16 @@ V1_TABLE_NAMES = (
     BATCH_SUBMIT_ITEMS_TABLE,
 )
 
+# Outcome facts are append-only at the DB layer; projection remains mutable.
+APPEND_ONLY_OUTCOME_REJECT_FUNCTION = (
+    "dr_dspy_reject_append_only_outcome_mutation"
+)
+APPEND_ONLY_OUTCOME_TABLE_NAMES = (
+    GENERATION_RUNS_TABLE,
+    NODE_ATTEMPTS_TABLE,
+    SCORE_ATTEMPTS_TABLE,
+)
+
 metadata = MetaData()
 
 
@@ -510,6 +520,8 @@ v1_tables: tuple[Table, ...] = (
 )
 
 __all__ = [
+    "APPEND_ONLY_OUTCOME_REJECT_FUNCTION",
+    "APPEND_ONLY_OUTCOME_TABLE_NAMES",
     "BATCH_SUBMIT_ITEMS_TABLE",
     "BATCH_SUBMIT_OPERATIONS_TABLE",
     "EXPERIMENTS_TABLE",
