@@ -66,7 +66,7 @@ def experiment_row(record: ExperimentRecord) -> Row:
 
 def prediction_spec_row(record: PredictionSpecRecord) -> Row:
     provider_axis = record.provider_axis
-    return {
+    row = {
         "prediction_id": record.prediction_id,
         "experiment_name": record.experiment_name,
         "task_id": record.task_id,
@@ -86,6 +86,8 @@ def prediction_spec_row(record: PredictionSpecRecord) -> Row:
         "provider_configs": _dump_many(record.provider_configs),
         "created_at": record.created_at,
     }
+    _validate_prediction_spec_provider_row(row)
+    return row
 
 
 def generation_run_row(record: GenerationRunRecord) -> Row:
@@ -104,7 +106,7 @@ def generation_run_row(record: GenerationRunRecord) -> Row:
 
 def node_attempt_row(record: NodeAttemptRecord) -> Row:
     provider_config = record.provider_config
-    return {
+    row = {
         "node_attempt_id": record.node_attempt_id,
         "generation_run_id": record.generation_run_id,
         "prediction_id": record.prediction_id,
@@ -129,6 +131,8 @@ def node_attempt_row(record: NodeAttemptRecord) -> Row:
         "started_at": record.started_at,
         "completed_at": record.completed_at,
     }
+    _validate_node_attempt_provider_row(row)
+    return row
 
 
 def score_attempt_row(record: ScoreAttemptRecord) -> Row:
@@ -272,3 +276,49 @@ def _enum_value(value: StrEnum | None) -> str | None:
     if value is None:
         return None
     return value.value
+
+
+def _validate_prediction_spec_provider_row(row: Row) -> None:
+    axis = {
+        "provider_kind": row["provider_kind"],
+        "endpoint_kind": row["endpoint_kind"],
+        "model": row["model"],
+        "throttle_key": row["throttle_key"],
+    }
+    provider_configs = row["provider_configs"]
+    if not any(
+        _provider_snapshot_matches_axis(config, axis)
+        for config in provider_configs
+    ):
+        raise ValueError(
+            "denormalized provider columns must match "
+            "provider_configs snapshot"
+        )
+
+
+def _validate_node_attempt_provider_row(row: Row) -> None:
+    provider_config = row["provider_config"]
+    indexed = {
+        "provider_kind": row["provider_kind"],
+        "endpoint_kind": row["endpoint_kind"],
+        "model": row["model"],
+        "throttle_key": row["throttle_key"],
+    }
+    if provider_config is None:
+        if any(value is not None for value in indexed.values()):
+            raise ValueError(
+                "provider index columns must be null when "
+                "provider_config is null"
+            )
+        return
+    if not _provider_snapshot_matches_axis(provider_config, indexed):
+        raise ValueError(
+            "denormalized provider columns must match provider_config snapshot"
+        )
+
+
+def _provider_snapshot_matches_axis(
+    snapshot: dict[str, Any],
+    axis: dict[str, str | None],
+) -> bool:
+    return all(snapshot.get(key) == value for key, value in axis.items())

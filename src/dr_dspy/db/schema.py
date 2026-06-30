@@ -55,6 +55,35 @@ def enum_check(column_name: str, enum_type: type[StrEnum]) -> str:
     return f"{column_name} IN ({values})"
 
 
+PREDICTION_SPECS_PROVIDER_AXIS_CHECK = """
+provider_configs @> jsonb_build_array(
+  jsonb_build_object(
+    'provider_kind', provider_kind,
+    'endpoint_kind', endpoint_kind,
+    'model', model,
+    'throttle_key', throttle_key
+  )
+)
+""".strip()
+
+
+NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK = """
+(
+  provider_config IS NULL
+  AND provider_kind IS NULL
+  AND endpoint_kind IS NULL
+  AND model IS NULL
+  AND throttle_key IS NULL
+) OR (
+  provider_config IS NOT NULL
+  AND provider_kind = provider_config->>'provider_kind'
+  AND endpoint_kind = provider_config->>'endpoint_kind'
+  AND model = provider_config->>'model'
+  AND throttle_key = provider_config->>'throttle_key'
+)
+""".strip()
+
+
 experiments = Table(
     EXPERIMENTS_TABLE,
     metadata,
@@ -93,6 +122,10 @@ prediction_specs = Table(
     CheckConstraint(
         "repetition_seed >= 0",
         name="ck_dr_dspy_prediction_specs_repetition_seed",
+    ),
+    CheckConstraint(
+        PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
+        name="ck_dr_dspy_prediction_specs_provider_axis",
     ),
     UniqueConstraint(
         "experiment_name",
@@ -190,6 +223,10 @@ node_attempts = Table(
     CheckConstraint(
         "completed_at >= started_at",
         name="ck_dr_dspy_node_attempts_time_order",
+    ),
+    CheckConstraint(
+        NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
+        name="ck_dr_dspy_node_attempts_provider_config",
     ),
     UniqueConstraint(
         "generation_run_id",

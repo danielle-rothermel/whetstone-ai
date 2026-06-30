@@ -419,6 +419,50 @@ def test_generation_run_can_store_terminal_blocked_result() -> None:
     assert record.summary.terminal_error.blocked_by == ("encoder",)
 
 
+def test_partial_generation_run_rejects_terminal_error() -> None:
+    with pytest.raises(ValidationError, match="terminal_error"):
+        GenerationRunRecord(
+            generation_run_id="run-1",
+            prediction_id="prediction-1",
+            attempt_index=0,
+            status=GenerationRunStatus.PARTIAL,
+            terminal_node_id="direct",
+            summary=GenerationRunSummaryPayload(
+                execution_order=("direct", "bad"),
+                terminal_node_id="direct",
+                terminal_output="ok",
+                terminal_error=GenerationTerminalErrorPayload(
+                    node_id="bad",
+                    status=GenerationRunStatus.ERROR,
+                ),
+            ),
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+
+def test_partial_generation_run_accepts_terminal_output() -> None:
+    record = GenerationRunRecord(
+        generation_run_id="run-1",
+        prediction_id="prediction-1",
+        attempt_index=0,
+        status=GenerationRunStatus.PARTIAL,
+        terminal_node_id="direct",
+        terminal_output_node_id="direct",
+        summary=GenerationRunSummaryPayload(
+            execution_order=("direct", "bad"),
+            terminal_node_id="direct",
+            terminal_output="ok",
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert record.status is GenerationRunStatus.PARTIAL
+    assert record.summary.terminal_error is None
+    assert record.summary.terminal_output == "ok"
+
+
 def test_successful_node_attempt_requires_output() -> None:
     with pytest.raises(ValidationError, match="require output"):
         NodeAttemptRecord(
@@ -596,6 +640,54 @@ def test_score_attempt_error_allows_partial_diagnostics() -> None:
     )
     assert attempt.metrics is not None
     assert attempt.extracted_code is not None
+
+
+def test_score_attempt_rejects_mismatched_metrics_profile() -> None:
+    with pytest.raises(ValidationError, match="metrics profile_id"):
+        ScoreAttemptRecord(
+            score_attempt_id="score-1",
+            prediction_id="prediction-1",
+            generation_run_id="run-1",
+            attempt_index=0,
+            scoring_profile_id="humaneval",
+            scoring_profile_version="v1",
+            parser_profile_id="best-effort",
+            parser_version="v1",
+            status=ScoreAttemptStatus.SUCCESS,
+            score=1.0,
+            metrics=MetricsPayload(
+                profile_id="other",
+                profile_version="v1",
+            ),
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+
+def test_score_attempt_rejects_mismatched_parser_profile() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="extracted_code parser_profile_id",
+    ):
+        ScoreAttemptRecord(
+            score_attempt_id="score-1",
+            prediction_id="prediction-1",
+            generation_run_id="run-1",
+            attempt_index=0,
+            scoring_profile_id="humaneval",
+            scoring_profile_version="v1",
+            parser_profile_id="best-effort",
+            parser_version="v1",
+            status=ScoreAttemptStatus.ERROR,
+            extracted_code=ExtractedCodePayload(
+                raw_generation="def broken(",
+                parser_profile_id="other",
+                parser_version="v1",
+            ),
+            failure=_failure(),
+            started_at=NOW,
+            completed_at=NOW,
+        )
 
 
 def test_score_attempt_attempt_index_must_be_non_negative() -> None:

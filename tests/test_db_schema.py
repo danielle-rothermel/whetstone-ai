@@ -116,6 +116,14 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.node_attempts,
         CheckConstraint,
     )
+    assert "ck_dr_dspy_prediction_specs_provider_axis" in _constraint_names(
+        schema.prediction_specs,
+        CheckConstraint,
+    )
+    assert "ck_dr_dspy_node_attempts_provider_config" in _constraint_names(
+        schema.node_attempts,
+        CheckConstraint,
+    )
     assert "ck_dr_dspy_score_attempts_status_payload" in _constraint_names(
         schema.score_attempts,
         CheckConstraint,

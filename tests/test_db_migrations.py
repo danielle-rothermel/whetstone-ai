@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import importlib
+import os
+import uuid
 from typing import Any, cast
 
+import pytest
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from alembic.script import ScriptDirectory
-from sqlalchemy import Constraint, Table, create_mock_engine
+from sqlalchemy import (
+    Constraint,
+    Table,
+    create_engine,
+    create_mock_engine,
+    text,
+)
+from sqlalchemy.exc import IntegrityError
 
 from dr_dspy.db import schema
 
@@ -47,6 +57,168 @@ def test_alembic_v1_schema_revision_matches_live_named_contracts(
         for index in table.indexes:
             assert index.name is not None
             assert index.name in rendered
+
+
+def test_alembic_v1_schema_revision_applies_to_postgres(
+    monkeypatch: Any,
+) -> None:
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+psycopg:///dr_dspy",
+    )
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    schema_name = f"dr_dspy_migration_test_{uuid.uuid4().hex}"
+
+    try:
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL unavailable: {exc}")  # ty: ignore[too-many-positional-arguments]
+
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
+    )
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE SCHEMA {schema_name}"))
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(migration, "op", Operations(context))
+            migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = :schema_name"
+                    ),
+                    {"schema_name": schema_name},
+                )
+            }
+            assert schema.EXPERIMENTS_TABLE in tables
+            assert schema.NODE_ATTEMPTS_TABLE in tables
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _seed_generation_run_chain(conn)
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            with pytest.raises(IntegrityError):
+                conn.execute(
+                    text(
+                        "INSERT INTO dr_dspy_node_attempts ("
+                        "node_attempt_id, generation_run_id, prediction_id, "
+                        "node_id, attempt_index, status, usage_cost, "
+                        "response_metadata, started_at, completed_at"
+                        ") VALUES ("
+                        "'node-bad', 'run-1', 'prediction-2', 'direct', 0, "
+                        "'success', '{}'::jsonb, '{}'::jsonb, "
+                        "TIMESTAMPTZ '2026-06-29 12:00:00+00', "
+                        "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                        ")"
+                    )
+                )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            context = MigrationContext.configure(cast(Any, conn))
+            monkeypatch.setattr(migration, "op", Operations(context))
+            migration.downgrade()
+            remaining_tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT tablename FROM pg_tables "
+                        "WHERE schemaname = :schema_name"
+                    ),
+                    {"schema_name": schema_name},
+                )
+            }
+            assert schema.EXPERIMENTS_TABLE not in remaining_tables
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        engine.dispose()
+
+
+def _seed_generation_run_chain(conn: Any) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO dr_dspy_experiments ("
+            "experiment_name, config_metadata, created_at"
+            ") VALUES ("
+            "'exp', '{}'::jsonb, "
+            "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+            ")"
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO dr_dspy_prediction_specs ("
+            "prediction_id, experiment_name, task_id, repetition_seed, "
+            "graph_digest, dimensions_digest, graph_layout, provider_kind, "
+            "endpoint_kind, model, throttle_key, fair_order_seed, "
+            "fair_order_key, task_snapshot, graph_snapshot, dimensions, "
+            "provider_configs, created_at"
+            ") VALUES ("
+            "'prediction-1', 'exp', 'HumanEval/0', 0, 'graph', 'dims', "
+            "'direct', 'openai', 'responses', 'model', "
+            "'openai:responses:model', 'seed', 'fair', "
+            "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+            "'[{\"provider_kind\": \"openai\", \"endpoint_kind\": "
+            "\"responses\", \"model\": \"model\", \"throttle_key\": "
+            "\"openai:responses:model\"}]'::jsonb, "
+            "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+            ")"
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO dr_dspy_prediction_specs ("
+            "prediction_id, experiment_name, task_id, repetition_seed, "
+            "graph_digest, dimensions_digest, graph_layout, provider_kind, "
+            "endpoint_kind, model, throttle_key, fair_order_seed, "
+            "fair_order_key, task_snapshot, graph_snapshot, dimensions, "
+            "provider_configs, created_at"
+            ") VALUES ("
+            "'prediction-2', 'exp', 'HumanEval/1', 0, 'graph', 'dims', "
+            "'direct', 'openai', 'responses', 'model', "
+            "'openai:responses:model', 'seed', 'fair', "
+            "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+            "'[{\"provider_kind\": \"openai\", \"endpoint_kind\": "
+            "\"responses\", \"model\": \"model\", \"throttle_key\": "
+            "\"openai:responses:model\"}]'::jsonb, "
+            "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+            ")"
+        )
+    )
+    conn.execute(
+        text(
+            "INSERT INTO dr_dspy_generation_runs ("
+            "generation_run_id, prediction_id, attempt_index, status, "
+            "terminal_node_id, summary, started_at, completed_at"
+            ") VALUES ("
+            "'run-1', 'prediction-1', 0, 'success', 'direct', "
+            "'{\"execution_order\": [\"direct\"], "
+            "\"terminal_node_id\": \"direct\"}'::jsonb, "
+            "TIMESTAMPTZ '2026-06-29 12:00:00+00', "
+            "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+            ")"
+        )
+    )
 
 
 def _render_upgrade(monkeypatch: Any) -> tuple[Any, list[str]]:

@@ -4,6 +4,11 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from dr_dspy.db.schema import (
+    NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
+    PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
+)
+
 revision = "20260629_0001"
 down_revision = None
 branch_labels = None
@@ -45,6 +50,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "repetition_seed >= 0",
             name="ck_dr_dspy_prediction_specs_repetition_seed",
+        ),
+        sa.CheckConstraint(
+            PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
+            name="ck_dr_dspy_prediction_specs_provider_axis",
         ),
         sa.UniqueConstraint(
             "experiment_name",
@@ -146,6 +155,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "completed_at >= started_at",
             name="ck_dr_dspy_node_attempts_time_order",
+        ),
+        sa.CheckConstraint(
+            NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
+            name="ck_dr_dspy_node_attempts_provider_config",
         ),
         sa.UniqueConstraint(
             "generation_run_id",

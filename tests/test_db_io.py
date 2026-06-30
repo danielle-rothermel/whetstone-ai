@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from dr_dspy.db import io
 from dr_dspy.graph import (
     BindingRef,
@@ -178,6 +180,98 @@ def test_node_attempt_row_keeps_provider_snapshot_and_index_columns() -> None:
         "values": {"code": "def add(): pass"},
         "metadata": {},
     }
+
+
+def test_prediction_spec_row_rejects_provider_index_drift() -> None:
+    graph = _direct_graph()
+    graph_id = graph_digest(graph)
+    dimensions = DimensionsPayload(values={"budget_ratio": 0.5})
+    dimensions_id = dimensions_digest(dimensions)
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="decoder-model",
+        throttle_key="openai:responses:decoder-model",
+    )
+    prediction_id = stable_prediction_id(
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        graph_digest=graph_id,
+        dimensions_digest=dimensions_id,
+        repetition_seed=0,
+        provider_kind=provider.provider_kind.value,
+        endpoint_kind=provider.endpoint_kind.value,
+        model=provider.model,
+        throttle_key=provider.throttle_key,
+    )
+    record = PredictionSpecRecord(
+        prediction_id=prediction_id,
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        repetition_seed=0,
+        graph=GraphSnapshotPayload(
+            graph=graph,
+            graph_digest=graph_id,
+            layout="direct",
+        ),
+        dimensions=dimensions,
+        dimensions_digest=dimensions_id,
+        task=TaskSnapshotPayload(
+            task_id="HumanEval/0",
+            inputs=TaskInputsPayload(values={"prompt": "write add"}),
+        ),
+        provider_configs=(provider,),
+        provider_axis=provider,
+        fair_order_seed="seed",
+        fair_order_key=fair_order_key(
+            experiment_seed="seed",
+            prediction_id=prediction_id,
+            provider=provider.provider_kind.value,
+            endpoint_kind=provider.endpoint_kind.value,
+            model=provider.model,
+            throttle_key=provider.throttle_key,
+            graph_layout="direct",
+            task_id="HumanEval/0",
+            repetition_seed=0,
+            config_axis=dimensions_id,
+        ),
+        created_at=NOW,
+    )
+
+    row = io.prediction_spec_row(record)
+    row["provider_kind"] = "openrouter"
+
+    with pytest.raises(ValueError, match="provider_configs snapshot"):
+        io._validate_prediction_spec_provider_row(row)
+
+
+def test_node_attempt_row_rejects_provider_index_drift() -> None:
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="decoder-model",
+        throttle_key="openai:responses:decoder-model",
+    )
+    record = NodeAttemptRecord(
+        node_attempt_id="node-attempt-1",
+        generation_run_id="run-1",
+        prediction_id="prediction-1",
+        node_id="decoder",
+        attempt_index=0,
+        status=NodeAttemptStatus.SUCCESS,
+        provider_config=provider,
+        output=io.node_output_payload_from_graph_output(
+            NodeOutput(values={"code": "def add(): pass"})
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    row = io.node_attempt_row(record)
+    row["model"] = "other-model"
+
+    with pytest.raises(ValueError, match="provider_config snapshot"):
+        io._validate_node_attempt_provider_row(row)
 
 
 def test_failure_payload_from_node_error_is_persistable() -> None:
