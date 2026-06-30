@@ -4,8 +4,9 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Select, select
-from sqlalchemy.sql.dml import Insert
+from sqlalchemy import Select, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql.dml import Insert, Update
 
 from dr_dspy.db import schema
 from dr_dspy.eval_failures.recording import ensure_recordable
@@ -38,6 +39,10 @@ from dr_dspy.records import (
     ScoreAttemptStatus,
     TaskSnapshotPayload,
     UsageCostPayload,
+)
+from dr_dspy.records.providers import (
+    find_provider_config_ref,
+    provider_snapshot_matches_axis,
 )
 
 type Row = dict[str, Any]
@@ -125,6 +130,7 @@ def prediction_spec_row(record: PredictionSpecRecord) -> Row:
         "endpoint_kind": provider_axis.endpoint_kind.value,
         "model": provider_axis.model,
         "throttle_key": provider_axis.throttle_key,
+        "provider_axis_config_id": provider_axis.config_id,
         "fair_order_seed": record.fair_order_seed,
         "fair_order_key": record.fair_order_key,
         "task_snapshot": _dump(record.task),
@@ -173,6 +179,7 @@ def node_attempt_row(record: NodeAttemptRecord) -> Row:
         "throttle_key": provider_config.throttle_key
         if provider_config
         else None,
+        "config_id": provider_config.config_id if provider_config else None,
         "provider_config": _dump_optional(provider_config),
         "output": _dump_optional(record.output),
         "usage_cost": _dump(record.usage_cost),
@@ -278,7 +285,14 @@ def prediction_spec_record_from_row(row: Row) -> PredictionSpecRecord:
         dimensions_digest=row["dimensions_digest"],
         task=_load(TaskSnapshotPayload, row["task_snapshot"]),
         provider_configs=provider_configs,
-        provider_axis=_provider_axis_from_row(row, provider_configs),
+        provider_axis=find_provider_config_ref(
+            provider_configs,
+            provider_kind=row["provider_kind"],
+            endpoint_kind=row["endpoint_kind"],
+            model=row["model"],
+            throttle_key=row["throttle_key"],
+            config_id=row.get("provider_axis_config_id"),
+        ),
         fair_order_seed=row["fair_order_seed"],
         fair_order_key=row["fair_order_key"],
         created_at=row["created_at"],
@@ -413,6 +427,16 @@ def insert_prediction_spec(record: PredictionSpecRecord) -> Insert:
     )
 
 
+def insert_prediction_spec_on_conflict_do_nothing(
+    record: PredictionSpecRecord,
+) -> Insert:
+    return (
+        pg_insert(schema.prediction_specs)
+        .values(prediction_spec_row(record))
+        .on_conflict_do_nothing(index_elements=["prediction_id"])
+    )
+
+
 def insert_generation_run(record: GenerationRunRecord) -> Insert:
     return schema.generation_runs.insert().values(generation_run_row(record))
 
@@ -441,10 +465,60 @@ def insert_batch_submit_operation(
     )
 
 
+def insert_batch_submit_operation_on_conflict_do_nothing(
+    record: BatchSubmitOperationRecord,
+) -> Insert:
+    return (
+        pg_insert(schema.batch_submit_operations)
+        .values(batch_submit_operation_row(record))
+        .on_conflict_do_nothing(index_elements=["operation_key"])
+    )
+
+
+def update_batch_submit_operation(
+    record: BatchSubmitOperationRecord,
+) -> Update:
+    row = batch_submit_operation_row(record)
+    operation_key = row.pop("operation_key")
+    return (
+        update(schema.batch_submit_operations)
+        .where(schema.batch_submit_operations.c.operation_key == operation_key)
+        .values(row)
+    )
+
+
 def insert_batch_submit_item(record: BatchSubmitItemRecord) -> Insert:
     return schema.batch_submit_items.insert().values(
         batch_submit_item_row(record)
     )
+
+
+def insert_batch_submit_item_on_conflict_do_nothing(
+    record: BatchSubmitItemRecord,
+) -> Insert:
+    return (
+        pg_insert(schema.batch_submit_items)
+        .values(batch_submit_item_row(record))
+        .on_conflict_do_nothing(
+            constraint="uq_dr_dspy_batch_items_operation_prediction"
+        )
+    )
+
+
+def select_batch_submit_operation(
+    operation_key: str,
+) -> Select[tuple[Any, ...]]:
+    return select(schema.batch_submit_operations).where(
+        schema.batch_submit_operations.c.operation_key == operation_key
+    )
+
+
+def select_batch_submit_items(
+    operation_key: str,
+) -> Select[tuple[Any, ...]]:
+    return select(schema.batch_submit_items).where(
+        schema.batch_submit_items.c.operation_key == operation_key
+    ).order_by(schema.batch_submit_items.c.item_index)
 
 
 def select_prediction_spec(prediction_id: str) -> Select[tuple[Any, ...]]:
@@ -488,21 +562,52 @@ def _load_many[ModelT: BaseModel](
     return tuple(_load(model_type, value) for value in values)
 
 
-def _provider_axis_from_row(
-    row: Row,
-    provider_configs: tuple[ProviderConfigRef, ...],
-) -> ProviderConfigRef:
-    for config in provider_configs:
-        if (
-            config.provider_kind.value == row["provider_kind"]
-            and config.endpoint_kind.value == row["endpoint_kind"]
-            and config.model == row["model"]
-            and config.throttle_key == row["throttle_key"]
-        ):
-            return config
-    raise ValueError(
-        "denormalized provider columns must match provider_configs snapshot"
-    )
+def _validate_prediction_spec_provider_row(row: Row) -> None:
+    provider_configs = row["provider_configs"]
+    if not any(
+        provider_snapshot_matches_axis(
+            config,
+            provider_kind=row["provider_kind"],
+            endpoint_kind=row["endpoint_kind"],
+            model=row["model"],
+            throttle_key=row["throttle_key"],
+            config_id=row.get("provider_axis_config_id"),
+        )
+        for config in provider_configs
+    ):
+        raise ValueError(
+            "denormalized provider columns must match "
+            "provider_configs snapshot"
+        )
+
+
+def _validate_node_attempt_provider_row(row: Row) -> None:
+    provider_config = row["provider_config"]
+    indexed = {
+        "provider_kind": row["provider_kind"],
+        "endpoint_kind": row["endpoint_kind"],
+        "model": row["model"],
+        "throttle_key": row["throttle_key"],
+        "config_id": row.get("config_id"),
+    }
+    if provider_config is None:
+        if any(value is not None for value in indexed.values()):
+            raise ValueError(
+                "provider index columns must be null when "
+                "provider_config is null"
+            )
+        return
+    if not provider_snapshot_matches_axis(
+        provider_config,
+        provider_kind=indexed["provider_kind"],
+        endpoint_kind=indexed["endpoint_kind"],
+        model=indexed["model"],
+        throttle_key=indexed["throttle_key"],
+        config_id=indexed["config_id"],
+    ):
+        raise ValueError(
+            "denormalized provider columns must match provider_config snapshot"
+        )
 
 
 def _dump(value: BaseModel) -> dict[str, Any]:
@@ -523,49 +628,3 @@ def _enum_value(value: StrEnum | None) -> str | None:
     if value is None:
         return None
     return value.value
-
-
-def _validate_prediction_spec_provider_row(row: Row) -> None:
-    axis = {
-        "provider_kind": row["provider_kind"],
-        "endpoint_kind": row["endpoint_kind"],
-        "model": row["model"],
-        "throttle_key": row["throttle_key"],
-    }
-    provider_configs = row["provider_configs"]
-    if not any(
-        _provider_snapshot_matches_axis(config, axis)
-        for config in provider_configs
-    ):
-        raise ValueError(
-            "denormalized provider columns must match "
-            "provider_configs snapshot"
-        )
-
-
-def _validate_node_attempt_provider_row(row: Row) -> None:
-    provider_config = row["provider_config"]
-    indexed = {
-        "provider_kind": row["provider_kind"],
-        "endpoint_kind": row["endpoint_kind"],
-        "model": row["model"],
-        "throttle_key": row["throttle_key"],
-    }
-    if provider_config is None:
-        if any(value is not None for value in indexed.values()):
-            raise ValueError(
-                "provider index columns must be null when "
-                "provider_config is null"
-            )
-        return
-    if not _provider_snapshot_matches_axis(provider_config, indexed):
-        raise ValueError(
-            "denormalized provider columns must match provider_config snapshot"
-        )
-
-
-def _provider_snapshot_matches_axis(
-    snapshot: dict[str, Any],
-    axis: dict[str, str | None],
-) -> bool:
-    return all(snapshot.get(key) == value for key, value in axis.items())

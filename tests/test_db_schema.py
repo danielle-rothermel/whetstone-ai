@@ -144,6 +144,14 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.batch_submit_items,
         CheckConstraint,
     )
+    assert "ck_dr_dspy_batch_ops_count_bounds" in _constraint_names(
+        schema.batch_submit_operations,
+        CheckConstraint,
+    )
+    assert "ck_dr_dspy_batch_ops_completed" in _constraint_names(
+        schema.batch_submit_operations,
+        CheckConstraint,
+    )
     assert _unique_constraint_columns(
         schema.score_attempts,
         "uq_dr_dspy_score_attempts_profile",

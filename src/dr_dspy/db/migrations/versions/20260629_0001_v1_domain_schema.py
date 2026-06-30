@@ -5,6 +5,8 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 from dr_dspy.db.schema import (
+    BATCH_SUBMIT_OPS_COMPLETED_CHECK,
+    BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
     NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
     PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
 )
@@ -36,6 +38,7 @@ def upgrade() -> None:
         sa.Column("endpoint_kind", sa.Text(), nullable=False),
         sa.Column("model", sa.Text(), nullable=False),
         sa.Column("throttle_key", sa.Text(), nullable=False),
+        sa.Column("provider_axis_config_id", sa.Text()),
         sa.Column("fair_order_seed", sa.Text(), nullable=False),
         sa.Column("fair_order_key", sa.Text(), nullable=False),
         sa.Column("task_snapshot", postgresql.JSONB(), nullable=False),
@@ -118,6 +121,7 @@ def upgrade() -> None:
         sa.Column("endpoint_kind", sa.Text()),
         sa.Column("model", sa.Text()),
         sa.Column("throttle_key", sa.Text()),
+        sa.Column("config_id", sa.Text()),
         sa.Column("provider_config", postgresql.JSONB()),
         sa.Column("output", postgresql.JSONB()),
         sa.Column("usage_cost", postgresql.JSONB(), nullable=False),
@@ -318,6 +322,14 @@ def upgrade() -> None:
             "AND enqueued_count >= 0 "
             "AND failed_count >= 0",
             name="ck_dr_dspy_batch_ops_counts",
+        ),
+        sa.CheckConstraint(
+            BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
+            name="ck_dr_dspy_batch_ops_count_bounds",
+        ),
+        sa.CheckConstraint(
+            BATCH_SUBMIT_OPS_COMPLETED_CHECK,
+            name="ck_dr_dspy_batch_ops_completed",
         ),
         sa.CheckConstraint(
             "status IN ('prepared', 'completed', 'partial', 'error')",

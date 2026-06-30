@@ -67,11 +67,14 @@ def enum_check(column_name: str, enum_type: type[StrEnum]) -> str:
 
 PREDICTION_SPECS_PROVIDER_AXIS_CHECK = """
 provider_configs @> jsonb_build_array(
-  jsonb_build_object(
-    'provider_kind', provider_kind,
-    'endpoint_kind', endpoint_kind,
-    'model', model,
-    'throttle_key', throttle_key
+  jsonb_strip_nulls(
+    jsonb_build_object(
+      'provider_kind', provider_kind,
+      'endpoint_kind', endpoint_kind,
+      'model', model,
+      'throttle_key', throttle_key,
+      'config_id', provider_axis_config_id
+    )
   )
 )
 """.strip()
@@ -84,12 +87,36 @@ NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK = """
   AND endpoint_kind IS NULL
   AND model IS NULL
   AND throttle_key IS NULL
+  AND config_id IS NULL
 ) OR (
   provider_config IS NOT NULL
   AND provider_kind = provider_config->>'provider_kind'
   AND endpoint_kind = provider_config->>'endpoint_kind'
   AND model = provider_config->>'model'
   AND throttle_key = provider_config->>'throttle_key'
+  AND (
+    (config_id IS NULL AND provider_config->>'config_id' IS NULL)
+    OR config_id = provider_config->>'config_id'
+  )
+)
+""".strip()
+
+
+BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK = """
+inserted_count <= requested_count
+AND already_present_count <= requested_count
+AND enqueued_count <= requested_count
+AND failed_count <= requested_count
+AND inserted_count + already_present_count <= requested_count
+AND enqueued_count + failed_count <= requested_count
+""".strip()
+
+
+BATCH_SUBMIT_OPS_COMPLETED_CHECK = """
+status != 'completed'
+OR (
+  completed_at IS NOT NULL
+  AND enqueued_count + failed_count = requested_count
 )
 """.strip()
 
@@ -122,6 +149,7 @@ prediction_specs = Table(
     Column("endpoint_kind", Text, nullable=False),
     Column("model", Text, nullable=False),
     Column("throttle_key", Text, nullable=False),
+    Column("provider_axis_config_id", Text),
     Column("fair_order_seed", Text, nullable=False),
     Column("fair_order_key", Text, nullable=False),
     Column("task_snapshot", JSONB, nullable=False),
@@ -210,6 +238,7 @@ node_attempts = Table(
     Column("endpoint_kind", Text),
     Column("model", Text),
     Column("throttle_key", Text),
+    Column("config_id", Text),
     Column("provider_config", JSONB),
     Column("output", JSONB),
     Column("usage_cost", JSONB, nullable=False),
@@ -413,6 +442,14 @@ batch_submit_operations = Table(
         "AND already_present_count >= 0 AND enqueued_count >= 0 "
         "AND failed_count >= 0",
         name="ck_dr_dspy_batch_ops_counts",
+    ),
+    CheckConstraint(
+        BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
+        name="ck_dr_dspy_batch_ops_count_bounds",
+    ),
+    CheckConstraint(
+        BATCH_SUBMIT_OPS_COMPLETED_CHECK,
+        name="ck_dr_dspy_batch_ops_completed",
     ),
     CheckConstraint(
         "completed_at IS NULL OR completed_at >= created_at",

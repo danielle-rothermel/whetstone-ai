@@ -1,3 +1,12 @@
+from dr_dspy.records.batch_submit import (
+    SPEC_OUTCOME_METADATA_KEY,
+    BatchSubmitOperationCounts,
+    InsertOutcome,
+    SpecInsertOutcome,
+    batch_submit_operation_counts_from_items,
+    build_batch_submit_operation_record,
+    insert_outcome_from_rowcount,
+)
 from dr_dspy.records.hashing import (
     DIMENSIONS_DIGEST_LENGTH,
     FAIR_ORDER_DIGEST_LENGTH,
@@ -6,6 +15,15 @@ from dr_dspy.records.hashing import (
     dimensions_digest,
     fair_order_key,
     stable_prediction_id,
+)
+from dr_dspy.records.limits import (
+    BATCH_SUBMIT_SPEC_MAX_BYTES,
+    GRAPH_SNAPSHOT_MAX_BYTES,
+    NODE_OUTPUT_MAX_BYTES,
+    PER_TEST_RESULTS_MAX_BYTES,
+    PER_TEST_RESULTS_MAX_COUNT,
+    TASK_INPUTS_MAX_BYTES,
+    validate_payload_size,
 )
 from dr_dspy.records.models import (
     AstMetricsPayload,
@@ -41,12 +59,20 @@ from dr_dspy.records.models import (
 )
 
 __all__ = [
+    "BATCH_SUBMIT_SPEC_MAX_BYTES",
     "DIMENSIONS_DIGEST_LENGTH",
     "FAIR_ORDER_DIGEST_LENGTH",
+    "GRAPH_SNAPSHOT_MAX_BYTES",
+    "NODE_OUTPUT_MAX_BYTES",
+    "PER_TEST_RESULTS_MAX_BYTES",
+    "PER_TEST_RESULTS_MAX_COUNT",
     "PREDICTION_ID_DIGEST_LENGTH",
+    "SPEC_OUTCOME_METADATA_KEY",
+    "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
     "BatchSubmitItemRecord",
     "BatchSubmitItemStatus",
+    "BatchSubmitOperationCounts",
     "BatchSubmitOperationRecord",
     "BatchSubmitOperationStatus",
     "DimensionsPayload",
@@ -58,6 +84,7 @@ __all__ = [
     "GenerationRunSummaryPayload",
     "GenerationTerminalErrorPayload",
     "GraphSnapshotPayload",
+    "InsertOutcome",
     "MetricsPayload",
     "NodeAttemptRecord",
     "NodeAttemptStatus",
@@ -70,12 +97,17 @@ __all__ = [
     "ResponseMetadataPayload",
     "ScoreAttemptRecord",
     "ScoreAttemptStatus",
+    "SpecInsertOutcome",
     "TaskInputsPayload",
     "TaskSnapshotPayload",
     "TextMetricsPayload",
     "UsageCostPayload",
+    "batch_submit_operation_counts_from_items",
+    "build_batch_submit_operation_record",
     "canonical_json",
     "dimensions_digest",
     "fair_order_key",
+    "insert_outcome_from_rowcount",
     "stable_prediction_id",
+    "validate_payload_size",
 ]

@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from dr_dspy.db import io
-from dr_dspy.eval_failures.exceptions import RecordingFailureError
 from dr_dspy.graph import (
     BindingRef,
     FieldRole,
@@ -21,6 +21,8 @@ from dr_dspy.graph import (
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.records import (
+    NODE_OUTPUT_MAX_BYTES,
+    TASK_INPUTS_MAX_BYTES,
     BatchSubmitItemRecord,
     BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
@@ -34,6 +36,7 @@ from dr_dspy.records import (
     MetricsPayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
+    NodeOutputPayload,
     PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
@@ -46,7 +49,6 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.serialization import PAYLOAD_MAX_BYTES
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -152,6 +154,7 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
     assert row["endpoint_kind"] == "responses"
     assert row["model"] == "decoder-model"
     assert row["throttle_key"] == "openai:responses:decoder-model"
+    assert row["provider_axis_config_id"] is None
     assert row["fair_order_seed"] == "seed"
     assert row["fair_order_key"] == fair_key
     assert row["provider_configs"] == [
@@ -187,6 +190,7 @@ def test_node_attempt_row_keeps_provider_snapshot_and_index_columns() -> None:
     assert row["provider_kind"] == "openai"
     assert row["endpoint_kind"] == "responses"
     assert row["model"] == "decoder-model"
+    assert row["config_id"] is None
     assert row["provider_config"] == provider.model_dump(mode="json")
     assert row["output"] == {
         "values": {"code": "def add(): pass"},
@@ -547,6 +551,7 @@ def test_batch_and_projection_rows_round_trip() -> None:
         spec={"batch_size": 2},
         metadata={"source": "test"},
         created_at=NOW,
+        completed_at=NOW,
     )
     item = BatchSubmitItemRecord(
         batch_submit_item_id="item-1",
@@ -601,40 +606,61 @@ def test_prediction_spec_row_rejects_oversized_jsonb_payload() -> None:
         model=provider.model,
         throttle_key=provider.throttle_key,
     )
-    oversized_prompt = "x" * (PAYLOAD_MAX_BYTES + 1)
-    record = PredictionSpecRecord(
-        prediction_id=prediction_id,
-        experiment_name="exp",
-        task_id="HumanEval/0",
-        repetition_seed=0,
-        graph=GraphSnapshotPayload(
-            graph=graph,
-            graph_digest=graph_id,
-            layout="direct",
-        ),
-        dimensions=dimensions,
-        dimensions_digest=dimensions_id,
-        task=TaskSnapshotPayload(
-            task_id="HumanEval/0",
-            inputs=TaskInputsPayload(values={"prompt": oversized_prompt}),
-        ),
-        provider_configs=(provider,),
-        provider_axis=provider,
-        fair_order_seed="seed",
-        fair_order_key=fair_order_key(
-            experiment_seed="seed",
+    oversized_prompt = "x" * (TASK_INPUTS_MAX_BYTES + 1)
+    with pytest.raises(ValidationError, match="task inputs"):
+        PredictionSpecRecord(
             prediction_id=prediction_id,
-            provider=provider.provider_kind.value,
-            endpoint_kind=provider.endpoint_kind.value,
-            model=provider.model,
-            throttle_key=provider.throttle_key,
-            graph_layout="direct",
+            experiment_name="exp",
             task_id="HumanEval/0",
             repetition_seed=0,
-            config_axis=dimensions_id,
-        ),
-        created_at=NOW,
-    )
+            graph=GraphSnapshotPayload(
+                graph=graph,
+                graph_digest=graph_id,
+                layout="direct",
+            ),
+            dimensions=dimensions,
+            dimensions_digest=dimensions_id,
+            task=TaskSnapshotPayload(
+                task_id="HumanEval/0",
+                inputs=TaskInputsPayload(values={"prompt": oversized_prompt}),
+            ),
+            provider_configs=(provider,),
+            provider_axis=provider,
+            fair_order_seed="seed",
+            fair_order_key=fair_order_key(
+                experiment_seed="seed",
+                prediction_id=prediction_id,
+                provider=provider.provider_kind.value,
+                endpoint_kind=provider.endpoint_kind.value,
+                model=provider.model,
+                throttle_key=provider.throttle_key,
+                graph_layout="direct",
+                task_id="HumanEval/0",
+                repetition_seed=0,
+                config_axis=dimensions_id,
+            ),
+            created_at=NOW,
+        )
 
-    with pytest.raises(RecordingFailureError, match="exceeds limit"):
-        io.prediction_spec_row(record)
+
+def test_node_attempt_row_rejects_oversized_node_output_payload() -> None:
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="decoder-model",
+        throttle_key="openai:responses:decoder-model",
+    )
+    oversized_output = "x" * (NODE_OUTPUT_MAX_BYTES + 1)
+    with pytest.raises(ValidationError, match="node output"):
+        NodeAttemptRecord(
+            node_attempt_id="node-attempt-1",
+            generation_run_id="run-1",
+            prediction_id="prediction-1",
+            node_id="decoder",
+            attempt_index=0,
+            status=NodeAttemptStatus.SUCCESS,
+            provider_config=provider,
+            output=NodeOutputPayload(values={"output": oversized_output}),
+            started_at=NOW,
+            completed_at=NOW,
+        )

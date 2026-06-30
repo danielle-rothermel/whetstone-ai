@@ -293,7 +293,11 @@ work for one task, graph, and repetition. It should include:
 - experiment identity
 - task id and task inputs
 - graph spec, including node configs and instructions
-- dimensions digest / stable prediction id
+- dimensions digest
+- provider axis identity (`provider_kind`, `endpoint_kind`, `model`,
+  `throttle_key`, and optional `config_id` when graph specs reuse the same
+  endpoint/model pair for multiple node roles)
+- stable prediction id derived from the axes above plus repetition seed
 
 The prediction spec is not a mutable workflow-status row. It describes what was
 requested.
@@ -335,6 +339,13 @@ A submit operation should:
 
 Batch records answer "what work did we request and enqueue?" They do not answer
 "what workflow is currently running?" DBOS owns the latter.
+
+Batch operation summary counts are derived from terminal batch-item rows.
+`inserted_count` and `already_present_count` track spec dedupe outcomes;
+`enqueued_count` and `failed_count` track enqueue outcomes. Completed
+operations must account for every requested item in `enqueued_count` or
+`failed_count`. Enqueued items record whether the spec insert was new via
+`enqueue_metadata.spec_outcome`.
 
 ### Mix queued work deterministically
 

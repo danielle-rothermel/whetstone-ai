@@ -483,6 +483,7 @@ def test_successful_node_attempt_requires_output() -> None:
         node_id="direct",
         attempt_index=0,
         status=NodeAttemptStatus.SUCCESS,
+        provider_config=_provider(),
         output=NodeOutputPayload(values={"output": "def add(): pass"}),
         started_at=NOW,
         completed_at=NOW,
@@ -754,6 +755,7 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
         inserted_count=1,
         failed_count=1,
         created_at=NOW,
+        completed_at=NOW,
     )
     item = BatchSubmitItemRecord(
         batch_submit_item_id="item-1",

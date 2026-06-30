@@ -21,6 +21,15 @@ from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
 from dr_dspy.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
+from dr_dspy.records.limits import (
+    BATCH_SUBMIT_SPEC_MAX_BYTES,
+    GRAPH_SNAPSHOT_MAX_BYTES,
+    NODE_OUTPUT_MAX_BYTES,
+    PER_TEST_RESULTS_MAX_BYTES,
+    PER_TEST_RESULTS_MAX_COUNT,
+    TASK_INPUTS_MAX_BYTES,
+    validate_payload_size,
+)
 
 
 class NodeAttemptStatus(StrEnum):
@@ -59,6 +68,15 @@ class TaskInputsPayload(BaseModel):
 
     values: dict[StrictStr, Any]
 
+    @model_validator(mode="after")
+    def validate_values_size(self) -> TaskInputsPayload:
+        validate_payload_size(
+            self.values,
+            max_bytes=TASK_INPUTS_MAX_BYTES,
+            label="task inputs",
+        )
+        return self
+
 
 class TaskSnapshotPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -88,6 +106,11 @@ class GraphSnapshotPayload(BaseModel):
 
         if self.graph_digest != graph_digest(self.graph):
             raise ValueError("graph_digest must match graph")
+        validate_payload_size(
+            self.model_dump(mode="json"),
+            max_bytes=GRAPH_SNAPSHOT_MAX_BYTES,
+            label="graph snapshot",
+        )
         return self
 
 
@@ -146,6 +169,15 @@ class NodeOutputPayload(BaseModel):
 
     values: dict[StrictStr, Any]
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_output_size(self) -> NodeOutputPayload:
+        validate_payload_size(
+            {"values": self.values, "metadata": self.metadata},
+            max_bytes=NODE_OUTPUT_MAX_BYTES,
+            label="node output",
+        )
+        return self
 
 
 class GenerationTerminalErrorPayload(BaseModel):
@@ -293,6 +325,11 @@ class PredictionSpecRecord(BaseModel):
             raise ValueError("task snapshot task_id must match spec task_id")
         if self.provider_axis not in self.provider_configs:
             raise ValueError("provider_axis must be one of provider_configs")
+        from dr_dspy.records.providers import (
+            validate_provider_configs_identity,
+        )
+
+        validate_provider_configs_identity(self.provider_configs)
         from dr_dspy.records.hashing import (
             dimensions_digest,
             fair_order_key,
@@ -397,12 +434,22 @@ class NodeAttemptRecord(BaseModel):
             raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
+        if self.provider_config is not None:
+            from dr_dspy.records.providers import (
+                validate_provider_configs_identity,
+            )
+
+            validate_provider_configs_identity((self.provider_config,))
         if self.status is NodeAttemptStatus.SUCCESS:
             if self.output is None:
                 raise ValueError("successful node attempts require output")
             if self.failure is not None:
                 raise ValueError(
                     "successful node attempts cannot have failure"
+                )
+            if self.provider_config is None:
+                raise ValueError(
+                    "successful node attempts require provider_config"
                 )
         if self.status is NodeAttemptStatus.ERROR:
             if self.failure is None:
@@ -448,6 +495,20 @@ class ScoreAttemptRecord(BaseModel):
                 raise ValueError(
                     "successful score attempts cannot have failure"
                 )
+        if len(self.per_test_results) > PER_TEST_RESULTS_MAX_COUNT:
+            raise ValueError(
+                f"per_test_results cannot exceed {PER_TEST_RESULTS_MAX_COUNT} "
+                "entries"
+            )
+        if self.per_test_results:
+            per_test_payload = [
+                case.model_dump(mode="json") for case in self.per_test_results
+            ]
+            validate_payload_size(
+                per_test_payload,
+                max_bytes=PER_TEST_RESULTS_MAX_BYTES,
+                label="per_test_results",
+            )
         if self.status is ScoreAttemptStatus.ERROR:
             if self.failure is None:
                 raise ValueError("error score attempts require failure")
@@ -530,6 +591,44 @@ class BatchSubmitOperationRecord(BaseModel):
         )
         if any(count < 0 for count in counts):
             raise ValueError("batch submit counts must be non-negative")
+        if any(
+            count > self.requested_count
+            for count in counts[1:]
+        ):
+            raise ValueError(
+                "batch submit counts cannot exceed requested_count"
+            )
+        spec_insert_total = (
+            self.inserted_count + self.already_present_count
+        )
+        if spec_insert_total > self.requested_count:
+            raise ValueError(
+                "inserted_count + already_present_count cannot exceed "
+                "requested_count"
+            )
+        if self.enqueued_count + self.failed_count > self.requested_count:
+            raise ValueError(
+                "enqueued_count + failed_count cannot exceed requested_count"
+            )
+        validate_payload_size(
+            self.spec,
+            max_bytes=BATCH_SUBMIT_SPEC_MAX_BYTES,
+            label="batch submit spec",
+        )
+        if self.status in {
+            BatchSubmitOperationStatus.COMPLETED,
+            BatchSubmitOperationStatus.ERROR,
+            BatchSubmitOperationStatus.PARTIAL,
+        } and self.completed_at is None:
+            raise ValueError(
+                "terminal batch submit operations require completed_at"
+            )
+        if self.status is BatchSubmitOperationStatus.COMPLETED:
+            if self.enqueued_count + self.failed_count != self.requested_count:
+                raise ValueError(
+                    "completed batch submit operations must account for every "
+                    "requested item in enqueued_count or failed_count"
+                )
         if (
             self.completed_at is not None
             and self.completed_at < self.created_at
