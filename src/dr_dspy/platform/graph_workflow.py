@@ -22,7 +22,6 @@ from dr_dspy.platform.backoff import (
 )
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
-    NodeStepStatus,
     attach_node_step_timing_to_exception,
     execute_lm_node,
     failure_metadata_from_exception,
@@ -40,6 +39,7 @@ from dr_dspy.records import (
     FailureMetadataPayload,
     GenerationRunRecord,
     NodeAttemptRecord,
+    NodeAttemptStatus,
     PredictionSpecRecord,
     stable_generation_run_id,
 )
@@ -350,7 +350,7 @@ def execute_lm_node_step(
                 error=error,
             )
         raise
-    if result.status is NodeStepStatus.SUCCESS and provider_ref is not None:
+    if result.status is NodeAttemptStatus.SUCCESS and provider_ref is not None:
         clear_throttle_backoff_state(
             database_url=database_url,
             throttle_key=provider_ref.throttle_key,

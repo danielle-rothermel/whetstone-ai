@@ -891,7 +891,7 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
 
     assert (
         NodeStepResult.model_validate(result).status
-        is NodeStepStatus.SUCCESS
+        is NodeAttemptStatus.SUCCESS
     )
     cleared = state_by_key[throttle_key]
     assert cleared is not None
