@@ -299,6 +299,51 @@ def test_node_exception_captures_persistable_error() -> None:
     assert "exception" not in dumped["outcomes"]["direct"]
 
 
+def test_node_error_preserves_wrapped_step_failure_diagnostics() -> None:
+    class StepFailure(Exception):
+        def __init__(self) -> None:
+            super().__init__("provider failed")
+            self.error_type = "builtins.RuntimeError"
+            self.failure_class = "permanent"
+            self.metadata = {"provider": "test"}
+
+    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        raise StepFailure()
+
+    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+
+    outcome = result.outcomes["direct"]
+    assert outcome.error is not None
+    assert outcome.error.error_type == "builtins.RuntimeError"
+    assert outcome.error.failure_class == "permanent"
+    assert outcome.error.metadata == {"provider": "test"}
+    assert result.terminal_error is not None
+    assert result.terminal_error.error == outcome.error
+
+
+def test_node_error_preserves_underlying_exception_type() -> None:
+    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    error = PermanentFailureError(
+        "classified failure",
+        underlying=ValueError("bad payload"),
+        metadata={"stage": "parse"},
+    )
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        raise error
+
+    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+
+    outcome = result.outcomes["direct"]
+    assert outcome.error is not None
+    assert outcome.error.metadata == {
+        "stage": "parse",
+        "underlying_exception_type": "builtins.ValueError",
+    }
+
+
 def test_independent_nodes_continue_after_unrelated_failure() -> None:
     graph = GraphSpec(
         nodes=(_node("terminal"), _node("bad")),
@@ -345,6 +390,33 @@ def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
     assert result.terminal_error is not None
     assert result.terminal_error.status is NodeOutcomeStatus.BLOCKED
     assert result.terminal_error.blocked_by == ("encoder",)
+
+
+def test_blocked_nodes_do_not_invoke_run_node() -> None:
+    graph = GraphSpec(
+        nodes=(
+            _node("encoder", bindings={"prompt": "task.prompt"}),
+            _node("decoder", bindings={"description": "encoder"}),
+        ),
+        terminal_node_id="decoder",
+    )
+    invoked: list[str] = []
+
+    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
+        invoked.append(node.id)
+        if node.id == "encoder":
+            raise RuntimeError("encoder failed")
+        return _output("unreachable")
+
+    result = execute_graph(
+        graph=graph,
+        inputs={"prompt": "write f"},
+        run_node=run_node,
+    )
+
+    assert invoked == ["encoder"]
+    assert result.status is GraphRunStatus.BLOCKED
+    assert result.outcomes["decoder"].status is NodeOutcomeStatus.BLOCKED
 
 
 def test_blocked_node_lists_all_failed_dependencies() -> None:

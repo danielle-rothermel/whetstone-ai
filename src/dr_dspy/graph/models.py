@@ -231,9 +231,8 @@ class NodeError(BaseModel):
 
     @classmethod
     def from_exception(cls, error: BaseException) -> NodeError:
-        error_type = f"{type(error).__module__}.{type(error).__qualname__}"
         return cls(
-            error_type=error_type,
+            error_type=_exception_error_type(error),
             message=str(error),
             failure_class=_exception_failure_class(error),
             metadata=_exception_metadata(error),
@@ -448,6 +447,11 @@ def topological_order(nodes: tuple[NodeSpec, ...]) -> tuple[NodeSpec, ...]:
 
 
 def _exception_failure_class(error: BaseException) -> str | None:
+    failure_class = getattr(error, "failure_class", None)
+    if isinstance(failure_class, StrEnum):
+        return failure_class.value
+    if isinstance(failure_class, str):
+        return failure_class
     failure_class = getattr(type(error), "failure_class", None)
     if isinstance(failure_class, StrEnum):
         return failure_class.value
@@ -456,8 +460,23 @@ def _exception_failure_class(error: BaseException) -> str | None:
     return None
 
 
+def _exception_error_type(error: BaseException) -> str:
+    error_type = getattr(error, "error_type", None)
+    if isinstance(error_type, str):
+        return error_type
+    return f"{type(error).__module__}.{type(error).__qualname__}"
+
+
 def _exception_metadata(error: BaseException) -> dict[str, Any]:
     metadata = getattr(error, "metadata", None)
-    if isinstance(metadata, dict):
-        return dict(metadata)
-    return {}
+    result = dict(metadata) if isinstance(metadata, dict) else {}
+    if getattr(error, "underlying", None) is not None:
+        from dr_dspy.eval_failures.policy import (
+            underlying_exception_type_name,
+        )
+
+        result.setdefault(
+            "underlying_exception_type",
+            underlying_exception_type_name(error),
+        )
+    return result
