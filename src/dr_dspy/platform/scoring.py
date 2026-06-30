@@ -6,7 +6,6 @@ from typing import Any
 from dr_dspy.eval_failures import (
     classify_exception,
     exception_type_name,
-    failure_metadata_from_exception,
 )
 from dr_dspy.eval_failures.recording import ensure_recordable
 from dr_dspy.hashing import canonical_json
@@ -26,6 +25,7 @@ from dr_dspy.humaneval.scoring import (
     score_humaneval_generation,
 )
 from dr_dspy.humaneval.task import HumanEvalTask
+from dr_dspy.platform.node_execution import failure_metadata_from_exception
 from dr_dspy.records import (
     ExtractedCodePayload,
     FailureMetadataPayload,
@@ -297,11 +297,12 @@ def failure_payload(
     *,
     metadata: dict[str, Any],
 ) -> FailureMetadataPayload:
+    failure = failure_metadata_from_exception(error)
     return FailureMetadataPayload(
         failure_class=classify_exception(error),
         error_type=exception_type_name(error),
         message=str(error),
-        metadata={**metadata, **failure_metadata_from_exception(error)},
+        metadata={**metadata, **failure.metadata},
     )
 
 
