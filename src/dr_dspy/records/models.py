@@ -518,16 +518,6 @@ class ScoreAttemptRecord(BaseModel):
                 raise ValueError(
                     "error score attempts cannot have per_test_results"
                 )
-        if self.metrics is not None:
-            if self.metrics.profile_id != self.scoring_profile_id:
-                raise ValueError(
-                    "metrics profile_id must match scoring_profile_id"
-                )
-            if self.metrics.profile_version != self.scoring_profile_version:
-                raise ValueError(
-                    "metrics profile_version must match "
-                    "scoring_profile_version"
-                )
         if self.extracted_code is not None:
             if (
                 self.extracted_code.parser_profile_id

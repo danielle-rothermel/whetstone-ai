@@ -643,26 +643,28 @@ def test_score_attempt_error_allows_partial_diagnostics() -> None:
     assert attempt.extracted_code is not None
 
 
-def test_score_attempt_rejects_mismatched_metrics_profile() -> None:
-    with pytest.raises(ValidationError, match="metrics profile_id"):
-        ScoreAttemptRecord(
-            score_attempt_id="score-1",
-            prediction_id="prediction-1",
-            generation_run_id="run-1",
-            attempt_index=0,
-            scoring_profile_id="humaneval",
-            scoring_profile_version="v1",
-            parser_profile_id="best-effort",
-            parser_version="v1",
-            status=ScoreAttemptStatus.SUCCESS,
-            score=1.0,
-            metrics=MetricsPayload(
-                profile_id="other",
-                profile_version="v1",
-            ),
-            started_at=NOW,
-            completed_at=NOW,
-        )
+def test_score_attempt_allows_distinct_metrics_profile() -> None:
+    attempt = ScoreAttemptRecord(
+        score_attempt_id="score-1",
+        prediction_id="prediction-1",
+        generation_run_id="run-1",
+        attempt_index=0,
+        scoring_profile_id="humaneval",
+        scoring_profile_version="v1",
+        parser_profile_id="best-effort",
+        parser_version="v1",
+        status=ScoreAttemptStatus.SUCCESS,
+        score=1.0,
+        metrics=MetricsPayload(
+            profile_id="humaneval-metrics",
+            profile_version="v1",
+        ),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert attempt.metrics is not None
+    assert attempt.metrics.profile_id == "humaneval-metrics"
 
 
 def test_score_attempt_rejects_mismatched_parser_profile() -> None:
