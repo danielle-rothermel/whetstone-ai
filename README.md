@@ -127,6 +127,33 @@ rejected. By default, `rescore` includes both successful and partial runs.
 Unitbench-facing projections and the full v0 backfill job remain
 deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
+## HPM selection analysis
+
+Read-only scripts query v1 enc-dec rows in Postgres and write tabular artifacts,
+figures, and a styled HTML run log. Tabular outputs go to
+`artifacts/{script_name}/{timestamp}_{stem}.csv|md` (gitignored). Figures and
+run logs go to `figs/{script_name}/` (tracked in git).
+
+Replace the experiment name with your backfill or sweep experiment as data
+becomes available:
+
+```bash
+uv run python scripts/analysis/q1_model_candidates.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q2_compression_range.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q3_repeat_stability.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q4_task_variation.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+```
+
+Each run prints Rich tables to the terminal and saves `{timestamp}_run.html`
+alongside PNGs in the matching `figs/{script_name}/` folder.
+
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the

@@ -44,6 +44,10 @@ def test_figure_run_path_uses_script_folder_and_timestamp() -> None:
     assert artifact_path.parent.parent.name == "artifacts"
     assert artifact_path.name == "20260630_120000_model_candidates.csv"
 
+    log_path = output_run.run_log_path()
+    assert log_path.parent.name == "q1_model_candidates"
+    assert log_path.name == "20260630_120000_run.html"
+
 
 def test_normalize_compression_target_prefers_compression_target() -> None:
     assert normalize_compression_target({"compression_target": 0.25}) == 0.25

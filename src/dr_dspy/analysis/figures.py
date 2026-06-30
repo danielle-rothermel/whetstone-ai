@@ -50,6 +50,9 @@ class FigureRun:
     def path(self, figure_name: str, *, suffix: str = "png") -> Path:
         return self._build_path(self.figures_directory, figure_name, suffix)
 
+    def run_log_path(self) -> Path:
+        return self._build_path(self.figures_directory, "run", "html")
+
     def ensure_directories(self) -> None:
         self.artifacts_directory.mkdir(parents=True, exist_ok=True)
         self.figures_directory.mkdir(parents=True, exist_ok=True)

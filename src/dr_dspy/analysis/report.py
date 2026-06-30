@@ -16,7 +16,7 @@ from dr_dspy.analysis.figures import FigureRun
 
 class AnalysisReporter:
     def __init__(self, *, title: str, script_name: str) -> None:
-        self.console = Console()
+        self.console = Console(record=True, width=120)
         self.title = title
         self.script_name = script_name
 
@@ -74,7 +74,7 @@ class AnalysisReporter:
         csv_paths: Sequence[Path],
         md_paths: Sequence[Path],
         figure_paths: Sequence[Path],
-    ) -> None:
+    ) -> Path:
         artifacts_dir = output_run.artifacts_directory.resolve()
         figures_dir = output_run.figures_directory.resolve()
         tabular_lines = [
@@ -115,4 +115,16 @@ class AnalysisReporter:
                 padding=(0, 2),
             )
         )
+        log_path = output_run.run_log_path()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.console.print(
+            Panel(
+                str(log_path.resolve()),
+                title="Run log (HTML) — open in browser",
+                border_style="bold blue",
+                padding=(0, 2),
+            )
+        )
+        self.console.save_html(str(log_path))
         self.console.print()
+        return log_path
