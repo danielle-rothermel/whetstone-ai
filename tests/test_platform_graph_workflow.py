@@ -513,8 +513,6 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
     assert calls == [
         ("load", (database_url, spec.prediction_id)),
         ("started", generation_run_id),
-        ("throttle", (database_url, spec.prediction_id, "direct")),
-        ("sleep", 0.0),
         (
             "execute",
             (
@@ -753,6 +751,11 @@ def test_execute_lm_node_step_records_one_throttle_failure(
     monkeypatch.setattr(graph_workflow, "execute_lm_node", fail_lm_node)
     monkeypatch.setattr(
         graph_workflow,
+        "provider_throttle_delay_seconds",
+        lambda *args, **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
         "record_throttle_failure_state",
         lambda **kwargs: throttle_writes.append(kwargs),
     )
@@ -861,6 +864,11 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
         ),
     )
     monkeypatch.setattr(graph_workflow, "execute_lm_node", run_node)
+    monkeypatch.setattr(
+        graph_workflow,
+        "sleep_for_backoff_seconds",
+        lambda seconds: None,
+    )
 
     execute_step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
     preflight = cast(Any, graph_workflow.throttle_preflight_step).__wrapped__

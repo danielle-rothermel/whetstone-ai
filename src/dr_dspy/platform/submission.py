@@ -33,6 +33,7 @@ DEFAULT_SUBMIT_CHUNK_SIZE = 500
 BATCH_SUBMIT_ITEM_ID_LENGTH = 32
 WORKFLOW_ID_METADATA_KEY = "workflow_id"
 GENERATION_RUN_ID_METADATA_KEY = "generation_run_id"
+ENQUEUE_CLAIM_METADATA_KEY = "enqueue_claim_id"
 
 type EnqueueWorkflow = Callable[
     [str, str, int, str],
@@ -92,14 +93,14 @@ def submit_prediction_specs(
 ) -> SubmitPredictionSpecsResult:
     validate_chunk_size(chunk_size)
     resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
-    item_index_offset = 0
-    submitted_any_specs = False
+    ordered_windows = list(
+        fair_ordered_spec_windows(
+            specs,
+            window_size=chunk_size,
+        )
+    )
     seen_prediction_ids: set[str] = set()
-    for ordered_specs in fair_ordered_spec_windows(
-        specs,
-        window_size=chunk_size,
-    ):
-        submitted_any_specs = True
+    for ordered_specs in ordered_windows:
         validate_submit_specs(
             experiment_name=experiment_name,
             specs=ordered_specs,
@@ -109,6 +110,8 @@ def submit_prediction_specs(
             seen_prediction_ids=seen_prediction_ids,
         )
 
+    item_index_offset = 0
+    for ordered_specs in ordered_windows:
         with engine.begin() as connection:
             prepare_submission_records(
                 connection,
@@ -123,7 +126,7 @@ def submit_prediction_specs(
 
         item_index_offset += len(ordered_specs)
 
-    if not submitted_any_specs:
+    if not ordered_windows:
         with engine.begin() as connection:
             prepare_submission_records(
                 connection,
@@ -135,7 +138,7 @@ def submit_prediction_specs(
                 chunk_size=chunk_size,
             )
 
-    if submitted_any_specs:
+    if ordered_windows:
         with engine.begin() as connection:
             reset_failed_enqueue_items(
                 connection,
@@ -181,6 +184,10 @@ def prepare_submission_records(
             )
         )
     )
+    existing_operation = load_batch_submit_operation(
+        connection,
+        operation_key=operation_key,
+    )
     operation = BatchSubmitOperationRecord(
         operation_key=operation_key,
         experiment_name=experiment_name,
@@ -190,7 +197,15 @@ def prepare_submission_records(
         metadata=metadata or {},
         created_at=created_at,
     )
-    connection.execute(idempotent_insert_batch_operation(operation))
+    if existing_operation is not None:
+        ensure_batch_operation_matches_request(
+            existing_operation,
+            experiment_name=experiment_name,
+            submit_spec=submit_spec,
+            metadata=metadata,
+        )
+    else:
+        connection.execute(idempotent_insert_batch_operation(operation))
     mark_operation_enqueuing(
         connection,
         operation_key=operation_key,
@@ -251,6 +266,40 @@ def validate_unique_submit_prediction_ids(
                 f"{spec.prediction_id}"
             )
         seen_prediction_ids.add(spec.prediction_id)
+
+
+def load_batch_submit_operation(
+    connection: Connection,
+    *,
+    operation_key: str,
+) -> BatchSubmitOperationRecord | None:
+    row = connection.execute(
+        io.select_batch_submit_operation(operation_key)
+    ).mappings().one_or_none()
+    if row is None:
+        return None
+    return io.batch_submit_operation_record_from_row(dict(row))
+
+
+def ensure_batch_operation_matches_request(
+    existing: BatchSubmitOperationRecord,
+    *,
+    experiment_name: str,
+    submit_spec: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+) -> None:
+    if existing.experiment_name != experiment_name:
+        raise ValueError(
+            "batch submit operation experiment_name does not match request"
+        )
+    if existing.spec != (submit_spec or {}):
+        raise ValueError(
+            "batch submit operation submit_spec does not match request"
+        )
+    if existing.metadata != (metadata or {}):
+        raise ValueError(
+            "batch submit operation metadata does not match request"
+        )
 
 
 def bulk_insert_prediction_specs(
@@ -359,6 +408,14 @@ def enqueue_pending_batch_items(
         if not candidates:
             return
         for candidate in candidates:
+            with engine.begin() as connection:
+                claim_id = claim_pending_batch_item(
+                    connection,
+                    operation_key=operation_key,
+                    prediction_id=candidate.prediction_id,
+                )
+            if claim_id is None:
+                continue
             item = enqueue_candidate(
                 candidate,
                 database_url=database_url,
@@ -371,6 +428,7 @@ def enqueue_pending_batch_items(
                     connection,
                     operation_key=operation_key,
                     item=item,
+                    claim_id=claim_id,
                 )
 
 
@@ -456,11 +514,44 @@ def enqueue_candidate_from_row(row: Any) -> EnqueueCandidate:
     )
 
 
+def claim_pending_batch_item(
+    connection: Connection,
+    *,
+    operation_key: str,
+    prediction_id: str,
+) -> str | None:
+    claim_id = sha256_json_digest(
+        {
+            "operation_key": operation_key,
+            "prediction_id": prediction_id,
+            "claimed_at": datetime.now(UTC).isoformat(),
+        },
+        length=BATCH_SUBMIT_ITEM_ID_LENGTH,
+    )
+    result = connection.execute(
+        update(schema.batch_submit_items)
+        .where(schema.batch_submit_items.c.operation_key == operation_key)
+        .where(schema.batch_submit_items.c.prediction_id == prediction_id)
+        .where(
+            schema.batch_submit_items.c.enqueue_status
+            == BatchSubmitItemEnqueueStatus.PENDING.value
+        )
+        .where(schema.batch_submit_items.c.enqueue_metadata == {})
+        .values(
+            enqueue_metadata={ENQUEUE_CLAIM_METADATA_KEY: claim_id},
+        )
+    )
+    if result.rowcount != 1:
+        return None
+    return claim_id
+
+
 def update_batch_item_outcome(
     connection: Connection,
     *,
     operation_key: str,
     item: SubmittedPredictionItem,
+    claim_id: str | None = None,
 ) -> None:
     existing = connection.execute(
         select(schema.batch_submit_items)
@@ -474,11 +565,24 @@ def update_batch_item_outcome(
             )
         }
     )
-    connection.execute(
+    query = (
         update(schema.batch_submit_items)
         .where(schema.batch_submit_items.c.operation_key == operation_key)
         .where(schema.batch_submit_items.c.prediction_id == item.prediction_id)
-        .values(
+        .where(
+            schema.batch_submit_items.c.enqueue_status
+            == BatchSubmitItemEnqueueStatus.PENDING.value
+        )
+    )
+    if claim_id is not None:
+        query = query.where(
+            schema.batch_submit_items.c.enqueue_metadata[
+                ENQUEUE_CLAIM_METADATA_KEY
+            ].astext
+            == claim_id
+        )
+    connection.execute(
+        query.values(
             insert_status=updated_item.insert_status.value,
             enqueue_status=updated_item.enqueue_status.value,
             enqueue_metadata=enqueue_metadata_for_item(updated_item),

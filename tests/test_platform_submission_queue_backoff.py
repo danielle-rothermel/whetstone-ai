@@ -50,9 +50,22 @@ class DummyConnection:
     def __init__(self) -> None:
         self.statements: list[Any] = []
 
-    def execute(self, statement: Any) -> list[Any]:
+    def execute(self, statement: Any) -> Any:
         self.statements.append(statement)
-        return []
+        return ExecuteResult()
+
+
+class ExecuteResult:
+    rowcount = 1
+
+    def mappings(self) -> ExecuteResult:
+        return self
+
+    def one_or_none(self) -> None:
+        return None
+
+    def scalar_one(self) -> int:
+        return 1
 
 
 class DummyTransaction:
@@ -271,6 +284,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
         *,
         operation_key: str,
         item: submission.SubmittedPredictionItem,
+        claim_id: str | None = None,
     ) -> None:
         assert engine.in_transaction is True
         pending_ids.discard(item.prediction_id)
@@ -331,7 +345,7 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert {item.enqueue_status for item in item_updates} == {
         BatchSubmitItemEnqueueStatus.ENQUEUED
     }
-    assert engine.begin_count == 10
+    assert engine.begin_count == 13
 
 
 def test_submit_prediction_specs_enqueues_after_all_windows(
@@ -419,7 +433,7 @@ def test_submit_prediction_specs_enqueues_after_all_windows(
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
-        lambda connection, *, operation_key, item: pending_ids.discard(
+        lambda connection, *, operation_key, item, **kwargs: pending_ids.discard(
             item.prediction_id
         ),
     )
@@ -496,9 +510,7 @@ def test_submit_prediction_specs_rejects_duplicate_prediction_ids(
             chunk_size=chunk_size,
         )
 
-    expected_prepared_windows = (
-        [(spec.prediction_id,)] if chunk_size == 1 else []
-    )
+    expected_prepared_windows: list[tuple[str, ...]] = []
     assert prepared_windows == expected_prepared_windows
 
 
@@ -537,7 +549,7 @@ def test_submit_prediction_specs_records_item_enqueue_failure(
     monkeypatch.setattr(
         submission,
         "update_batch_item_outcome",
-        lambda connection, *, operation_key, item: (
+        lambda connection, *, operation_key, item, **kwargs: (
             pending_ids.discard(item.prediction_id),
             item_updates.append(item),
         ),
@@ -701,6 +713,7 @@ def test_submit_prediction_specs_resume_retries_only_failed_items(
         *,
         operation_key: str,
         item: submission.SubmittedPredictionItem,
+        claim_id: str | None = None,
     ) -> None:
         metadata = (
             {"workflow_id": item.workflow_id}
@@ -909,6 +922,11 @@ def test_prepare_submission_records_upserts_experiment(
         "insert_batch_item",
         lambda connection, *, record: None,
     )
+    monkeypatch.setattr(
+        submission,
+        "load_batch_submit_operation",
+        lambda connection, *, operation_key: None,
+    )
 
     submission.prepare_submission_records(
         cast(Connection, connection),
@@ -969,6 +987,11 @@ def test_prepare_submission_records_marks_operation_enqueuing(
         "insert_batch_item",
         lambda connection, *, record: item_indexes.append(record.item_index),
     )
+    monkeypatch.setattr(
+        submission,
+        "load_batch_submit_operation",
+        lambda connection, *, operation_key: None,
+    )
 
     submission.prepare_submission_records(
         cast(Connection, connection),
@@ -1024,6 +1047,11 @@ def test_prepare_submission_records_uses_requested_chunk_size(
         submission,
         "insert_batch_item",
         lambda connection, *, record: None,
+    )
+    monkeypatch.setattr(
+        submission,
+        "load_batch_submit_operation",
+        lambda connection, *, operation_key: None,
     )
 
     submission.prepare_submission_records(
@@ -1285,17 +1313,12 @@ def test_record_throttle_failure_ignores_permanent_failures(
 def test_record_throttle_failure_updates_retryable_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    states: list[backoff.ThrottleBackoffState] = []
-    monkeypatch.setattr(
-        backoff,
-        "load_throttle_backoff_state",
-        lambda connection, *, throttle_key: None,
-    )
-    monkeypatch.setattr(
-        backoff,
-        "upsert_throttle_backoff_state",
-        lambda state: states.append(state) or object(),
-    )
+    executed: list[Any] = []
+
+    class IncrementResult:
+        def scalar_one(self) -> int:
+            return 1
+
     failure = FailureSummary(
         failure_class=FailureClass.RATE_LIMITED,
         failure_exception_type="openai.RateLimitError",
@@ -1304,7 +1327,15 @@ def test_record_throttle_failure_updates_retryable_key(
     )
 
     result = backoff.record_throttle_failure(
-        cast(Connection, SimpleNamespace(execute=lambda statement: None)),
+        cast(
+            Connection,
+            SimpleNamespace(
+                execute=lambda statement: (
+                    executed.append(statement),
+                    IncrementResult(),
+                )[1]
+            ),
+        ),
         throttle_key="openai:model-a",
         failure=failure,
         now=NOW,
@@ -1315,4 +1346,4 @@ def test_record_throttle_failure_updates_retryable_key(
     assert result.consecutive_failures == 1
     assert result.blocked_until is not None
     assert result.blocked_until > NOW
-    assert states == [result]
+    assert len(executed) == 2

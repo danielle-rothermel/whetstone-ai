@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -147,12 +148,6 @@ def run_prediction_graph_workflow(
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
         try:
-            delay_seconds = throttle_preflight_step(
-                database_url,
-                step_spec.model_dump(mode="json"),
-                node.model_dump(mode="json"),
-            )
-            DBOS.sleep(delay_seconds)
             result = execute_lm_node_step(
                 database_url,
                 step_spec.model_dump(mode="json"),
@@ -287,8 +282,29 @@ def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def sleep_for_backoff_seconds(seconds: float) -> None:
+    if seconds <= 0:
+        return
+    try:
+        DBOS.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
 @DBOS.step(name=THROTTLE_PREFLIGHT_STEP_NAME)
 def throttle_preflight_step(
+    database_url: str,
+    spec_payload: dict[str, Any],
+    node_payload: dict[str, Any],
+) -> float:
+    return provider_throttle_delay_seconds(
+        database_url,
+        spec_payload,
+        node_payload,
+    )
+
+
+def provider_throttle_delay_seconds(
     database_url: str,
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
@@ -328,6 +344,14 @@ def execute_lm_node_step(
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
     except Exception:
         provider_ref = None
+    if provider_ref is not None:
+        delay_seconds = provider_throttle_delay_seconds(
+            database_url,
+            spec_payload,
+            node_payload,
+        )
+        if delay_seconds > 0:
+            sleep_for_backoff_seconds(delay_seconds)
     step_started_at = datetime.now(UTC)
     try:
         result = execute_lm_node(
@@ -351,10 +375,13 @@ def execute_lm_node_step(
             )
         raise
     if result.status is NodeAttemptStatus.SUCCESS and provider_ref is not None:
-        clear_throttle_backoff_state(
-            database_url=database_url,
-            throttle_key=provider_ref.throttle_key,
-        )
+        try:
+            clear_throttle_backoff_state(
+                database_url=database_url,
+                throttle_key=provider_ref.throttle_key,
+            )
+        except Exception:
+            pass
     return result.model_dump(mode="json")
 
 

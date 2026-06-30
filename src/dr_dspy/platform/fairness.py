@@ -20,14 +20,11 @@ def fair_ordered_spec_windows(
 ) -> Iterator[tuple[PredictionSpecRecord, ...]]:
     if window_size < 1:
         raise ValueError("window_size must be positive")
-    window: list[PredictionSpecRecord] = []
-    for spec in specs:
-        window.append(validate_fair_order_spec(spec))
-        if len(window) == window_size:
-            yield fair_order_specs(window)
-            window = []
-    if window:
-        yield fair_order_specs(window)
+    ordered = fair_order_specs(
+        tuple(validate_fair_order_spec(spec) for spec in specs)
+    )
+    for index in range(0, len(ordered), window_size):
+        yield ordered[index:index + window_size]
 
 
 def fair_order_specs(

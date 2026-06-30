@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
@@ -15,6 +16,7 @@ DEFAULT_INITIAL_BACKOFF_SECONDS = 5.0
 DEFAULT_MAX_BACKOFF_SECONDS = 300.0
 DEFAULT_JITTER_SECONDS = 3.0
 BACKOFF_JITTER_DIGEST_LENGTH = 8
+MAX_BACKOFF_EXPONENT = 1022
 RETRYABLE_BACKOFF_FAILURES = frozenset(
     {
         FailureClass.TRANSIENT,
@@ -63,7 +65,8 @@ def next_backoff_delay_seconds(
     if not should_backoff_failure(failure_class):
         return 0.0
     failure_count = max(1, consecutive_failures)
-    exponential = initial_seconds * (2 ** (failure_count - 1))
+    exponent = min(failure_count - 1, MAX_BACKOFF_EXPONENT)
+    exponential = initial_seconds * (2 ** exponent)
     base_delay = min(max_seconds, exponential)
     jitter = deterministic_jitter_seconds(
         throttle_key=throttle_key,
@@ -130,12 +133,10 @@ def record_throttle_failure(
     if not should_backoff_failure(failure.failure_class):
         return None
 
-    existing = load_throttle_backoff_state(
+    consecutive_failures = increment_throttle_consecutive_failures(
         connection,
         throttle_key=throttle_key,
-    )
-    consecutive_failures = (
-        existing.consecutive_failures + 1 if existing is not None else 1
+        now=now,
     )
     delay = next_backoff_delay_seconds(
         throttle_key=throttle_key,
@@ -152,8 +153,57 @@ def record_throttle_failure(
         metadata=failure.failure_metadata,
         updated_at=now,
     )
-    connection.execute(upsert_throttle_backoff_state(state))
+    connection.execute(
+        update(schema.throttle_backoff)
+        .where(schema.throttle_backoff.c.throttle_key == throttle_key)
+        .values(
+            blocked_until=state.blocked_until,
+            failure_class=(
+                state.failure_class.value
+                if state.failure_class is not None
+                else None
+            ),
+            last_error_type=state.last_error_type,
+            last_message=state.last_message,
+            metadata=state.metadata,
+            updated_at=state.updated_at,
+        )
+    )
     return state
+
+
+def increment_throttle_consecutive_failures(
+    connection: Connection,
+    *,
+    throttle_key: str,
+    now: datetime,
+) -> int:
+    inserted = connection.execute(
+        insert(schema.throttle_backoff)
+        .values(
+            {
+                "throttle_key": throttle_key,
+                "blocked_until": None,
+                "consecutive_failures": 1,
+                "failure_class": None,
+                "last_error_type": None,
+                "last_message": None,
+                "metadata": {},
+                "updated_at": now,
+            }
+        )
+        .on_conflict_do_update(
+            index_elements=["throttle_key"],
+            set_={
+                "consecutive_failures": (
+                    schema.throttle_backoff.c.consecutive_failures + 1
+                ),
+                "updated_at": now,
+            },
+        )
+        .returning(schema.throttle_backoff.c.consecutive_failures)
+    )
+    return int(inserted.scalar_one())
 
 
 def clear_throttle_backoff(

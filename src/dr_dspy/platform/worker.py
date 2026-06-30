@@ -53,16 +53,20 @@ def configure_platform_dbos_runtime(
         scoring_concurrency=DEFAULT_WORKER_CONCURRENCY,
         database_url_error_suffix="for platform graph workflow",
     )
-    DBOS(config=shared_dbos.build_dbos_config(config, app_name=DBOS_APP_NAME))
-    if consume_generation_queue:
-        listen_to_platform_generation_queue()
-    else:
-        DBOS.listen_queues([])
-    DBOS.launch()
-    if consume_generation_queue:
-        register_platform_generation_queue(
-            worker_concurrency=worker_concurrency,
-        )
+    try:
+        DBOS(config=shared_dbos.build_dbos_config(config, app_name=DBOS_APP_NAME))
+        if consume_generation_queue:
+            listen_to_platform_generation_queue()
+        else:
+            DBOS.listen_queues([])
+        DBOS.launch()
+        if consume_generation_queue:
+            register_platform_generation_queue(
+                worker_concurrency=worker_concurrency,
+            )
+    except Exception:
+        shared_dbos.destroy_dbos_runtime()
+        raise
     return config
 
 

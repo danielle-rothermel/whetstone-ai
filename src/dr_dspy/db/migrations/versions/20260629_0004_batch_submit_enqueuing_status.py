@@ -27,6 +27,11 @@ def downgrade() -> None:
         "dr_dspy_batch_submit_operations",
         type_="check",
     )
+    op.execute(
+        "UPDATE dr_dspy_batch_submit_operations "
+        "SET status = 'prepared' "
+        "WHERE status = 'enqueuing'"
+    )
     op.create_check_constraint(
         "ck_dr_dspy_batch_ops_status",
         "dr_dspy_batch_submit_operations",
