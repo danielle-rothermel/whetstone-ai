@@ -273,8 +273,9 @@ def rescore(
         typer.Option(
             "--recover-orphans/--no-recover-orphans",
             help=(
-                "When DBOS has a terminal scoring workflow without a persisted "
-                "score attempt, replay the workflow to finish persistence."
+                "When DBOS has a terminal scoring workflow without a "
+                "persisted score attempt, replay the workflow to finish "
+                "persistence."
             ),
         ),
     ] = True,

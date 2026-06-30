@@ -6,10 +6,7 @@ from typing import Any
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
-from dr_dspy.platform.dbos_compat import (
-    WORKFLOW_START_RACE_ERRORS,
-    workflow_start_raced,
-)
+from dr_dspy.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow,
@@ -131,15 +128,6 @@ def enqueue_prediction_graph_workflow(
                 workflow_id=workflow_id,
                 enqueued=False,
             )
-        except Exception as error:
-            if workflow_start_raced(workflow_id=workflow_id, error=error):
-                return _enqueued_workflow(
-                    prediction_id=prediction_id,
-                    generation_run_id=generation_run_id,
-                    workflow_id=workflow_id,
-                    enqueued=False,
-                )
-            raise
     return _enqueued_workflow(
         prediction_id=prediction_id,
         generation_run_id=generation_run_id,

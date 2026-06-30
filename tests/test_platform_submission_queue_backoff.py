@@ -1699,6 +1699,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
         "chunk_size": 7,
         "limit": 9,
         "dry_run": True,
+        "recover_orphans": True,
     }
     assert "{'dry_run': True}" in result.output
 

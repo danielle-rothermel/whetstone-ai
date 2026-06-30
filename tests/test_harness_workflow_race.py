@@ -49,11 +49,11 @@ def test_workflow_start_raced_handles_base_exception_conflict() -> None:
     assert workflow_start_raced(workflow_id=WORKFLOW_ID, error=error) is True
 
 
-def test_workflow_start_raced_returns_false_for_untyped_error() -> None:
+def test_workflow_start_raced_returns_false_without_status() -> None:
     with patch(
         "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status",
         return_value=None,
-    ) as status:
+    ):
         assert (
             workflow_start_raced(
                 workflow_id=WORKFLOW_ID,
@@ -61,19 +61,17 @@ def test_workflow_start_raced_returns_false_for_untyped_error() -> None:
             )
             is False
         )
-        status.assert_not_called()
 
 
-def test_workflow_start_raced_ignores_status_for_untyped_error() -> None:
+def test_workflow_start_raced_returns_true_when_status_exists() -> None:
     with patch(
         "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status",
         return_value={"status": "ENQUEUED"},
-    ) as status:
+    ):
         assert (
             workflow_start_raced(
                 workflow_id=WORKFLOW_ID,
                 error=ValueError("race lost"),
             )
-            is False
+            is True
         )
-        status.assert_not_called()

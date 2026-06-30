@@ -21,6 +21,8 @@ from dr_dspy.graph import (
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     NODE_OUTPUT_MAX_BYTES,
     PROVIDER_TELEMETRY_MAX_BYTES,
     TASK_INPUTS_MAX_BYTES,
@@ -45,8 +47,6 @@ from dr_dspy.records import (
     ResponseMetadataPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
-    DEFAULT_SCORE_DATASET_NAME,
-    DEFAULT_SCORE_DATASET_SPLIT,
     TaskInputsPayload,
     TaskSnapshotPayload,
     TextMetricsPayload,

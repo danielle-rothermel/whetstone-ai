@@ -157,7 +157,11 @@ class ScoreAttemptSnapshot:
     score: float | None
     insert_count: int
 
-    def __init__(self, row: Row[tuple[object, ...]], insert_count: int) -> None:
+    def __init__(
+        self,
+        row: Row[tuple[object, ...]],
+        insert_count: int,
+    ) -> None:
         self.status = str(row[0])
         self.score = float(row[1]) if row[1] is not None else None
         self.insert_count = insert_count

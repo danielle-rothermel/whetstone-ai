@@ -76,6 +76,8 @@ from dr_dspy.records.models import (
 
 __all__ = [
     "BATCH_SUBMIT_SPEC_MAX_BYTES",
+    "DEFAULT_SCORE_DATASET_NAME",
+    "DEFAULT_SCORE_DATASET_SPLIT",
     "DIMENSIONS_DIGEST_LENGTH",
     "ENQUEUE_CLAIMED_AT_METADATA_KEY",
     "ENQUEUE_CLAIM_ID_METADATA_KEY",
@@ -136,8 +138,6 @@ __all__ = [
     "stable_generation_run_id",
     "stable_node_attempt_id",
     "stable_prediction_id",
-    "DEFAULT_SCORE_DATASET_NAME",
-    "DEFAULT_SCORE_DATASET_SPLIT",
     "stable_score_attempt_id",
     "terminal_enqueue_total",
     "terminal_enqueue_total_from_counts",

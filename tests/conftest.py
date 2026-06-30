@@ -16,7 +16,7 @@ from dbos import DBOS
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-import dr_dspy.platform.graph_workflow  # noqa: F401
+import dr_dspy.platform.graph_workflow
 import dr_dspy.platform.scoring_workflow  # noqa: F401
 import tests.integration.dbos_test_workflows  # noqa: F401
 from dr_dspy.db.migrations.url import normalize_postgresql_driver_url

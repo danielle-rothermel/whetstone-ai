@@ -512,7 +512,7 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
         engine.dispose()
 
 
-def test_alembic_score_attempt_dataset_revision_allows_dual_dataset_profile_rows(
+def test_alembic_score_attempt_dataset_revision_allows_dual_rows(
     monkeypatch: Any,
 ) -> None:
     database_url = os.environ.get(

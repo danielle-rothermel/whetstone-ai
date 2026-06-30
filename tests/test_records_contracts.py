@@ -27,6 +27,8 @@ from dr_dspy.lm.boundary import (
     openai_responses_config,
 )
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     AstMetricsPayload,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
@@ -54,8 +56,6 @@ from dr_dspy.records import (
     PythonLeakageMetricsPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
-    DEFAULT_SCORE_DATASET_NAME,
-    DEFAULT_SCORE_DATASET_SPLIT,
     TaskInputsPayload,
     TaskSnapshotPayload,
     TextMetricsPayload,
@@ -796,7 +796,10 @@ def test_score_attempt_rejects_metrics_stage_count_over_limit() -> None:
         _minimal_metrics_stage(f"stage-{index}")
         for index in range(METRICS_STAGES_MAX_COUNT + 1)
     )
-    with pytest.raises(ValidationError, match="metrics.stages cannot exceed"):
+    with pytest.raises(
+        ValidationError,
+        match=r"metrics\.stages cannot exceed",
+    ):
         ScoreAttemptRecord(
             **_score_attempt_base_kwargs(),
             metrics=MetricsPayload(

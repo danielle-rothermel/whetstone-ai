@@ -52,7 +52,6 @@ from dr_dspy.humaneval.task import (
 )
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.platform import rescoring, scoring_workflow
-from dr_dspy.platform.scoring_workflow_state import ScoringWorkflowPresence
 from dr_dspy.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -63,8 +62,10 @@ from dr_dspy.platform.scoring import (
     score_generation_run,
     score_metrics_payload,
 )
-from dr_dspy.records.limits import METRICS_STAGES_MAX_COUNT
+from dr_dspy.platform.scoring_workflow_state import ScoringWorkflowPresence
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     DimensionsPayload,
     FailureMetadataPayload,
     GenerationRunRecord,
@@ -86,9 +87,8 @@ from dr_dspy.records import (
     stable_generation_run_id,
     stable_prediction_id,
     stable_score_attempt_id,
-    DEFAULT_SCORE_DATASET_NAME,
-    DEFAULT_SCORE_DATASET_SPLIT,
 )
+from dr_dspy.records.limits import METRICS_STAGES_MAX_COUNT
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
@@ -640,7 +640,10 @@ def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
         timeout_seconds=scoring_profile.timeout_seconds,
     )
 
-    with pytest.raises(ValueError, match="node output metrics sources cannot exceed"):
+    with pytest.raises(
+        ValueError,
+        match=r"node output metrics sources cannot exceed",
+    ):
         score_metrics_payload(
             task=_task(),
             node_attempts=node_attempts,
@@ -965,21 +968,30 @@ def test_score_generation_run_rejects_task_id_mismatch() -> None:
 def test_score_attempt_id_differs_by_dataset_selection() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
-    common = {
-        "generation_run_id": run.generation_run_id,
-        "scoring_profile_id": HUMANEVAL_SCORING_PROFILE_ID,
-        "scoring_profile_version": HUMANEVAL_SCORING_PROFILE_VERSION,
-        "parser_profile_id": BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-        "parser_version": PARSER_PROFILE_VERSION,
-        "attempt_index": 0,
-    }
-    default_id = stable_score_attempt_id(**common)
+    default_id = stable_score_attempt_id(
+        generation_run_id=run.generation_run_id,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        attempt_index=0,
+    )
     other_dataset_id = stable_score_attempt_id(
-        **common,
+        generation_run_id=run.generation_run_id,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        attempt_index=0,
         dataset_name="other/dataset",
     )
     other_split_id = stable_score_attempt_id(
-        **common,
+        generation_run_id=run.generation_run_id,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        attempt_index=0,
         dataset_split="train",
     )
 
@@ -1446,7 +1458,10 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
     assert result.selected_count == 1
     assert result.dataset_name == "other/dataset"
     assert result.dataset_split == "train"
-    assert result.items[0].status is rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE
+    assert (
+        result.items[0].status
+        is rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE
+    )
 
 
 def test_batch_rescore_dry_run_counts_needed_scores(

@@ -232,7 +232,10 @@ def schedule_score_generation_workflow(
                 scheduled=False,
             )
         except Exception as error:
-            if workflow_start_raced(workflow_id=workflow_id, error=error):
+            if _scoring_workflow_start_raced(
+                workflow_id=workflow_id,
+                error=error,
+            ):
                 return ScheduledScoreGenerationWorkflow(
                     score_attempt_id=score_attempt_id,
                     workflow_id=workflow_id,
@@ -299,11 +302,13 @@ def score_attempt_id_for_workflow(
     )
 
 
-def workflow_start_raced(*, workflow_id: str, error: BaseException) -> bool:
+def _scoring_workflow_start_raced(
+    *,
+    workflow_id: str,
+    error: BaseException,
+) -> bool:
     _ = workflow_id
-    if isinstance(error, WORKFLOW_START_RACE_ERRORS):
-        return True
-    return False
+    return isinstance(error, WORKFLOW_START_RACE_ERRORS)
 
 
 def _start_score_generation_workflow_handle(
