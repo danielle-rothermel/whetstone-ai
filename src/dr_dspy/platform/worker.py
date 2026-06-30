@@ -37,7 +37,7 @@ from dr_dspy.platform.submission import (
     DEFAULT_SUBMIT_CHUNK_SIZE,
     submit_prediction_specs_jsonl,
 )
-from dr_dspy.records import GenerationRunStatus, PredictionSpecRecord
+from dr_dspy.records import GenerationRunStatus
 from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
