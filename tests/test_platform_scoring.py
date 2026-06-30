@@ -43,7 +43,12 @@ from dr_dspy.humaneval.profiles import (
     HumanEvalScoringProfile,
 )
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import EvaluationTaskResult, HumanEvalTask
+from dr_dspy.humaneval.task import (
+    EvaluationCaseResult,
+    EvaluationCaseStatus,
+    EvaluationTaskResult,
+    HumanEvalTask,
+)
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.platform import rescoring, scoring_workflow
 from dr_dspy.platform.persistence import (
@@ -641,6 +646,64 @@ def test_score_generation_run_persists_tests_failed_as_success() -> None:
     assert score.metrics is not None
     assert score.metrics.custom["evaluation"]["failed_count"] == 2
     assert score.metrics.custom["evaluation"]["failure_count"] == 2
+
+
+def test_score_generation_run_persists_evaluation_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    task = _task()
+
+    def evaluate(
+        *,
+        task: HumanEvalTask,
+        candidate_code: str,
+        timeout_seconds: float,
+    ) -> EvaluationTaskResult:
+        assert candidate_code == "def add_one(x):\n    return x + 1"
+        return EvaluationTaskResult(
+            task_id=task.task_id,
+            entry_point=task.entry_point,
+            function_names=[task.entry_point],
+            total_cases=2,
+            results=[
+                EvaluationCaseResult(
+                    task_id=task.task_id,
+                    case_id="case_0",
+                    function_name=task.entry_point,
+                    status=EvaluationCaseStatus.PASSED,
+                    test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(
+        humaneval_scoring,
+        "evaluate_human_eval_code",
+        evaluate,
+    )
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=task,
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.SUCCESS
+    assert score.score == 0.0
+    assert score.generated_code_outcome is (
+        GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+    )
+    assert [result.test_id for result in score.per_test_results] == ["case_0"]
+    assert score.metrics is not None
+    evaluation_metrics = score.metrics.custom["evaluation"]
+    assert evaluation_metrics["result_count"] == 1
+    assert evaluation_metrics["total_cases"] == 2
+    assert evaluation_metrics["failure_count"] == 0
 
 
 def test_score_generation_run_persists_no_top_level_functions() -> None:

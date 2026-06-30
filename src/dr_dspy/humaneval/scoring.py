@@ -182,6 +182,8 @@ def evaluation_outcome(
         return GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
     if evaluation.passed:
         return GeneratedCodeOutcome.PASSED
+    if not evaluation.coverage_complete and not evaluation.failures:
+        return GeneratedCodeOutcome.EVALUATION_INCOMPLETE
     return GeneratedCodeOutcome.TESTS_FAILED
 
 
@@ -267,18 +269,16 @@ def score_generated_code_for_humaneval(
         candidate_code=selected_code,
         timeout_seconds=timeout,
     )
-    if not evaluation.function_names:
-        outcome = GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
-        error = "no top-level candidate functions"
-    elif evaluation.passed:
-        outcome = GeneratedCodeOutcome.PASSED
-        error = None
-    elif not evaluation.coverage_complete and not evaluation.failures:
-        outcome = GeneratedCodeOutcome.EVALUATION_INCOMPLETE
-        error = HUMANEVAL_EVALUATION_INCOMPLETE_ERROR
-    else:
-        outcome = GeneratedCodeOutcome.TESTS_FAILED
-        error = HUMANEVAL_TESTS_FAILED_ERROR
+    outcome = evaluation_outcome(evaluation)
+    error = (
+        None
+        if outcome is GeneratedCodeOutcome.PASSED
+        else HUMANEVAL_EVALUATION_INCOMPLETE_ERROR
+        if outcome is GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+        else "no top-level candidate functions"
+        if outcome is GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
+        else HUMANEVAL_TESTS_FAILED_ERROR
+    )
     return GeneratedCodeScore(
         outcome=outcome,
         score=1.0 if evaluation.passed else 0.0,

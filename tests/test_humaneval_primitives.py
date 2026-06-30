@@ -9,6 +9,7 @@ from dr_dspy.humaneval.code_extraction import (
     apply_cleaning,
     validate_python_source,
 )
+from dr_dspy.humaneval.code_parsing import BEST_EFFORT_HUMANEVAL_PARSER_PROFILE
 from dr_dspy.humaneval.compression import (
     CompressionMethod,
     compression_metrics,
@@ -18,11 +19,15 @@ from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.sampling import sample_human_eval_tasks_from_rows
 from dr_dspy.humaneval.scoring import (
     GeneratedCodeOutcome,
+    evaluation_outcome,
     score_generated_code_for_humaneval,
+    score_humaneval_generation,
     score_humaneval_prediction,
 )
 from dr_dspy.humaneval.task import (
+    EvaluationCaseResult,
     EvaluationCaseStatus,
+    EvaluationTaskResult,
     HumanEvalTask,
     evaluate_human_eval_code,
     parse_human_eval_tests,
@@ -485,6 +490,82 @@ def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
 _PARTIAL_RUNNER_PASSED_CASE_0 = (
     '[{"case_id": "case_0", "status": "passed", "message": ""}]'
 )
+
+
+def _partial_evaluation_result(task: HumanEvalTask) -> EvaluationTaskResult:
+    return EvaluationTaskResult(
+        task_id=task.task_id,
+        entry_point=task.entry_point,
+        function_names=[task.entry_point],
+        total_cases=2,
+        results=[
+            EvaluationCaseResult(
+                task_id=task.task_id,
+                case_id="case_0",
+                function_name=task.entry_point,
+                status=EvaluationCaseStatus.PASSED,
+                test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+            ),
+        ],
+    )
+
+
+def test_evaluation_outcome_reports_incomplete_for_partial_coverage() -> None:
+    evaluation = _partial_evaluation_result(_task())
+
+    assert evaluation.coverage_complete is False
+    assert evaluation.failures == []
+    assert evaluation_outcome(evaluation) is (
+        GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+    )
+
+
+def test_evaluation_outcome_reports_tests_failed_when_case_fails() -> None:
+    task = _task()
+    evaluation = EvaluationTaskResult(
+        task_id=task.task_id,
+        entry_point=task.entry_point,
+        function_names=[task.entry_point],
+        total_cases=2,
+        results=[
+            EvaluationCaseResult(
+                task_id=task.task_id,
+                case_id="case_0",
+                function_name=task.entry_point,
+                status=EvaluationCaseStatus.FAILED,
+                message="bad",
+                test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+            ),
+            EvaluationCaseResult(
+                task_id=task.task_id,
+                case_id="case_1",
+                function_name=task.entry_point,
+                status=EvaluationCaseStatus.PASSED,
+                test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+            ),
+        ],
+    )
+
+    assert evaluation_outcome(evaluation) is GeneratedCodeOutcome.TESTS_FAILED
+
+
+def test_score_humaneval_generation_reports_incomplete_runner_output() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        result = score_humaneval_generation(
+            raw_generation="def add_one(x):\n    return x + 1\n",
+            task=_task(),
+            parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+            timeout_seconds=2.0,
+        )
+
+    assert result.outcome is GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+    assert result.score == 0.0
+    assert result.evaluation is not None
+    assert result.evaluation.failures == []
+    assert result.evaluation.coverage_complete is False
 
 
 def test_evaluation_incomplete_when_runner_returns_partial_results() -> None:
