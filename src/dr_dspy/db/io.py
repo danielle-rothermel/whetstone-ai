@@ -246,7 +246,7 @@ def select_prediction_spec(prediction_id: str) -> Select[tuple[Any, ...]]:
     )
 
 
-def select_prediction_projection(
+def select_prediction_projections(
     prediction_id: str,
 ) -> Select[tuple[Any, ...]]:
     return select(schema.prediction_projection).where(

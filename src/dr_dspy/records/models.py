@@ -287,6 +287,8 @@ class PredictionSpecRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_spec_shape(self) -> PredictionSpecRecord:
+        if self.repetition_seed < 0:
+            raise ValueError("repetition_seed must be non-negative")
         if self.task.task_id != self.task_id:
             raise ValueError("task snapshot task_id must match spec task_id")
         if self.provider_axis not in self.provider_configs:
@@ -346,6 +348,19 @@ class GenerationRunRecord(BaseModel):
             raise ValueError("summary terminal_node_id must match run")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
+        if self.status is GenerationRunStatus.SUCCESS:
+            if self.summary.terminal_error is not None:
+                raise ValueError(
+                    "successful generation runs cannot have terminal_error"
+                )
+        if self.status in {
+            GenerationRunStatus.ERROR,
+            GenerationRunStatus.BLOCKED,
+        }:
+            if self.summary.terminal_error is None:
+                raise ValueError(
+                    "error and blocked generation runs require terminal_error"
+                )
         return self
 
 
@@ -416,6 +431,8 @@ class ScoreAttemptRecord(BaseModel):
             raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
+        if self.score is not None and not 0 <= self.score <= 1:
+            raise ValueError("score must be between 0 and 1 inclusive")
         if self.status is ScoreAttemptStatus.SUCCESS:
             if self.score is None:
                 raise ValueError("successful score attempts require score")

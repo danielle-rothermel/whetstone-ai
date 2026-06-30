@@ -43,16 +43,21 @@ def test_schema_foreign_keys_connect_record_families() -> None:
     }
     assert _foreign_key_targets(schema.node_attempts) == {
         "dr_dspy_generation_runs.generation_run_id",
+        "dr_dspy_generation_runs.prediction_id",
         "dr_dspy_prediction_specs.prediction_id",
     }
     assert _foreign_key_targets(schema.score_attempts) == {
         "dr_dspy_generation_runs.generation_run_id",
+        "dr_dspy_generation_runs.prediction_id",
         "dr_dspy_prediction_specs.prediction_id",
     }
     assert _foreign_key_targets(schema.prediction_projection) == {
         "dr_dspy_generation_runs.generation_run_id",
+        "dr_dspy_generation_runs.prediction_id",
         "dr_dspy_prediction_specs.prediction_id",
         "dr_dspy_score_attempts.score_attempt_id",
+        "dr_dspy_score_attempts.prediction_id",
+        "dr_dspy_score_attempts.generation_run_id",
     }
     assert _foreign_key_targets(schema.batch_submit_items) == {
         "dr_dspy_batch_submit_operations.operation_key",

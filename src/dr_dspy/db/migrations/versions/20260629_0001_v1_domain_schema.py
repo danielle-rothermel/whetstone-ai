@@ -108,12 +108,16 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(
-            ["generation_run_id"],
-            ["dr_dspy_generation_runs.generation_run_id"],
-        ),
-        sa.ForeignKeyConstraint(
             ["prediction_id"],
             ["dr_dspy_prediction_specs.prediction_id"],
+        ),
+        sa.ForeignKeyConstraint(
+            ["generation_run_id", "prediction_id"],
+            [
+                "dr_dspy_generation_runs.generation_run_id",
+                "dr_dspy_generation_runs.prediction_id",
+            ],
+            name="fk_dr_dspy_node_attempts_generation_run",
         ),
         sa.CheckConstraint(
             "attempt_index >= 0",
@@ -165,8 +169,12 @@ def upgrade() -> None:
             ["dr_dspy_prediction_specs.prediction_id"],
         ),
         sa.ForeignKeyConstraint(
-            ["generation_run_id"],
-            ["dr_dspy_generation_runs.generation_run_id"],
+            ["generation_run_id", "prediction_id"],
+            [
+                "dr_dspy_generation_runs.generation_run_id",
+                "dr_dspy_generation_runs.prediction_id",
+            ],
+            name="fk_dr_dspy_score_attempts_generation_run",
         ),
         sa.CheckConstraint(
             "generated_code_outcome IS NULL OR "
@@ -224,16 +232,32 @@ def upgrade() -> None:
         sa.Column("selected_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("selection_reason", sa.Text()),
         sa.ForeignKeyConstraint(
-            ["generation_run_id"],
-            ["dr_dspy_generation_runs.generation_run_id"],
-        ),
-        sa.ForeignKeyConstraint(
             ["prediction_id"],
             ["dr_dspy_prediction_specs.prediction_id"],
         ),
         sa.ForeignKeyConstraint(
-            ["score_attempt_id"],
-            ["dr_dspy_score_attempts.score_attempt_id"],
+            ["generation_run_id", "prediction_id"],
+            [
+                "dr_dspy_generation_runs.generation_run_id",
+                "dr_dspy_generation_runs.prediction_id",
+            ],
+            name="fk_dr_dspy_projection_generation_run",
+        ),
+        sa.ForeignKeyConstraint(
+            ["score_attempt_id", "prediction_id"],
+            [
+                "dr_dspy_score_attempts.score_attempt_id",
+                "dr_dspy_score_attempts.prediction_id",
+            ],
+            name="fk_dr_dspy_projection_score_attempt",
+        ),
+        sa.ForeignKeyConstraint(
+            ["score_attempt_id", "generation_run_id"],
+            [
+                "dr_dspy_score_attempts.score_attempt_id",
+                "dr_dspy_score_attempts.generation_run_id",
+            ],
+            name="fk_dr_dspy_projection_score_run",
         ),
         sa.CheckConstraint(
             "generation_run_id IS NOT NULL OR score_attempt_id IS NOT NULL",
@@ -270,6 +294,10 @@ def upgrade() -> None:
             "status IN ('prepared', 'completed', 'partial', 'error')",
             name="ck_dr_dspy_batch_ops_status",
         ),
+        sa.CheckConstraint(
+            "completed_at IS NULL OR completed_at >= created_at",
+            name="ck_dr_dspy_batch_ops_time_order",
+        ),
     )
     op.create_table(
         "dr_dspy_batch_submit_items",
@@ -299,7 +327,8 @@ def upgrade() -> None:
             name="ck_dr_dspy_batch_items_status",
         ),
         sa.CheckConstraint(
-            "status != 'failed' OR failure IS NOT NULL",
+            "(status = 'failed' OR failure IS NULL) "
+            "AND (status != 'failed' OR failure IS NOT NULL)",
             name="ck_dr_dspy_batch_items_status_payload",
         ),
         sa.UniqueConstraint(

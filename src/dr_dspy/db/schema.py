@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -143,12 +144,7 @@ node_attempts = Table(
     NODE_ATTEMPTS_TABLE,
     metadata,
     Column("node_attempt_id", Text, primary_key=True),
-    Column(
-        "generation_run_id",
-        Text,
-        ForeignKey(f"{GENERATION_RUNS_TABLE}.generation_run_id"),
-        nullable=False,
-    ),
+    Column("generation_run_id", Text, nullable=False),
     Column(
         "prediction_id",
         Text,
@@ -192,6 +188,14 @@ node_attempts = Table(
         "attempt_index",
         name="uq_dr_dspy_node_attempts_run_node_attempt",
     ),
+    ForeignKeyConstraint(
+        ["generation_run_id", "prediction_id"],
+        [
+            f"{GENERATION_RUNS_TABLE}.generation_run_id",
+            f"{GENERATION_RUNS_TABLE}.prediction_id",
+        ],
+        name="fk_dr_dspy_node_attempts_generation_run",
+    ),
 )
 
 score_attempts = Table(
@@ -204,12 +208,7 @@ score_attempts = Table(
         ForeignKey(f"{PREDICTION_SPECS_TABLE}.prediction_id"),
         nullable=False,
     ),
-    Column(
-        "generation_run_id",
-        Text,
-        ForeignKey(f"{GENERATION_RUNS_TABLE}.generation_run_id"),
-        nullable=False,
-    ),
+    Column("generation_run_id", Text, nullable=False),
     Column("scoring_profile_id", Text, nullable=False),
     Column("scoring_profile_version", Text, nullable=False),
     Column("parser_profile_id", Text, nullable=False),
@@ -267,6 +266,14 @@ score_attempts = Table(
         "attempt_index",
         name="uq_dr_dspy_score_attempts_profile",
     ),
+    ForeignKeyConstraint(
+        ["generation_run_id", "prediction_id"],
+        [
+            f"{GENERATION_RUNS_TABLE}.generation_run_id",
+            f"{GENERATION_RUNS_TABLE}.prediction_id",
+        ],
+        name="fk_dr_dspy_score_attempts_generation_run",
+    ),
 )
 
 prediction_projection = Table(
@@ -278,16 +285,8 @@ prediction_projection = Table(
         ForeignKey(f"{PREDICTION_SPECS_TABLE}.prediction_id"),
         primary_key=True,
     ),
-    Column(
-        "generation_run_id",
-        Text,
-        ForeignKey(f"{GENERATION_RUNS_TABLE}.generation_run_id"),
-    ),
-    Column(
-        "score_attempt_id",
-        Text,
-        ForeignKey(f"{SCORE_ATTEMPTS_TABLE}.score_attempt_id"),
-    ),
+    Column("generation_run_id", Text),
+    Column("score_attempt_id", Text),
     Column("projection_profile_id", Text, primary_key=True),
     Column("projection_version", Text, primary_key=True),
     Column("selected_at", DateTime(timezone=True), nullable=False),
@@ -295,6 +294,30 @@ prediction_projection = Table(
     CheckConstraint(
         "generation_run_id IS NOT NULL OR score_attempt_id IS NOT NULL",
         name="ck_dr_dspy_projection_has_selection",
+    ),
+    ForeignKeyConstraint(
+        ["generation_run_id", "prediction_id"],
+        [
+            f"{GENERATION_RUNS_TABLE}.generation_run_id",
+            f"{GENERATION_RUNS_TABLE}.prediction_id",
+        ],
+        name="fk_dr_dspy_projection_generation_run",
+    ),
+    ForeignKeyConstraint(
+        ["score_attempt_id", "prediction_id"],
+        [
+            f"{SCORE_ATTEMPTS_TABLE}.score_attempt_id",
+            f"{SCORE_ATTEMPTS_TABLE}.prediction_id",
+        ],
+        name="fk_dr_dspy_projection_score_attempt",
+    ),
+    ForeignKeyConstraint(
+        ["score_attempt_id", "generation_run_id"],
+        [
+            f"{SCORE_ATTEMPTS_TABLE}.score_attempt_id",
+            f"{SCORE_ATTEMPTS_TABLE}.generation_run_id",
+        ],
+        name="fk_dr_dspy_projection_score_run",
     ),
 )
 
@@ -327,6 +350,10 @@ batch_submit_operations = Table(
         "AND already_present_count >= 0 AND enqueued_count >= 0 "
         "AND failed_count >= 0",
         name="ck_dr_dspy_batch_ops_counts",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR completed_at >= created_at",
+        name="ck_dr_dspy_batch_ops_time_order",
     ),
 )
 
@@ -361,7 +388,8 @@ batch_submit_items = Table(
         name="ck_dr_dspy_batch_items_status",
     ),
     CheckConstraint(
-        "status != 'failed' OR failure IS NOT NULL",
+        "(status = 'failed' OR failure IS NULL) "
+        "AND (status != 'failed' OR failure IS NOT NULL)",
         name="ck_dr_dspy_batch_items_status_payload",
     ),
     UniqueConstraint(
