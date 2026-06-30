@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib
 import os
+import subprocess
+import sys
 import uuid
+from contextlib import contextmanager
 from typing import Any, cast
 
 import pytest
@@ -20,6 +23,30 @@ from sqlalchemy import (
 from sqlalchemy.exc import IntegrityError
 
 from dr_dspy.db import schema
+from dr_dspy.db.migrations.head import (
+    V1_MIGRATION_BASE,
+    V1_MIGRATION_HEAD,
+    V1_MIGRATION_REVISION_COUNT,
+)
+
+V1_MIGRATION_MODULES = (
+    "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
+    "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
+    "dr_dspy.db.migrations.versions."
+    "20260629_0003_batch_submit_already_scheduled_count",
+    "dr_dspy.db.migrations.versions."
+    "20260629_0004_batch_submit_enqueuing_status",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0001_append_only_outcome_triggers",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0002_batch_submit_terminal_enqueue_accounting",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0003_batch_submit_claiming_status",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0004_batch_submit_remove_prepared_status",
+    "dr_dspy.db.migrations.versions."
+    "20260630_0005_score_attempt_dataset_axes",
+)
 
 
 def test_alembic_env_normalizes_database_url_driver() -> None:
@@ -37,7 +64,22 @@ def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "20260630_0005"
+    assert script.get_current_head() == V1_MIGRATION_HEAD
+
+
+def test_alembic_v1_migration_chain_is_linear() -> None:
+    config = Config("alembic.ini")
+    script = ScriptDirectory.from_config(config)
+
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert heads[0] == V1_MIGRATION_HEAD
+
+    bases = script.get_bases()
+    assert len(bases) == 1
+    assert bases[0] == V1_MIGRATION_BASE
+
+    assert len(list(script.walk_revisions())) == V1_MIGRATION_REVISION_COUNT
 
 
 def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
@@ -753,3 +795,324 @@ def _named_constraint_names(table: Table) -> set[str]:
 
 def _has_name(constraint: Constraint) -> bool:
     return constraint.name is not None
+
+
+def _normalized_database_url() -> str:
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+psycopg:///dr_dspy",
+    )
+    if database_url.startswith("postgresql://"):
+        return database_url.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    return database_url
+
+
+def _require_postgres_engine() -> Any:
+    database_url = _normalized_database_url()
+    try:
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL unavailable: {exc}")
+    return engine
+
+
+@contextmanager
+def _isolated_schema(engine: Any):
+    schema_name = f"dr_dspy_migration_test_{uuid.uuid4().hex}"
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA {schema_name}"))
+    try:
+        yield schema_name
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        engine.dispose()
+
+
+def _apply_migration_modules(
+    conn: Any,
+    monkeypatch: Any,
+    module_paths: tuple[str, ...],
+) -> None:
+    for module_path in module_paths:
+        migration = importlib.import_module(module_path)
+        context = MigrationContext.configure(conn)
+        monkeypatch.setattr(migration, "op", Operations(context))
+        migration.upgrade()
+
+
+def _run_migration_downgrade(
+    conn: Any,
+    monkeypatch: Any,
+    module_path: str,
+) -> None:
+    migration = importlib.import_module(module_path)
+    context = MigrationContext.configure(conn)
+    monkeypatch.setattr(migration, "op", Operations(context))
+    migration.downgrade()
+
+
+def test_alembic_env_offline_mode_renders_upgrade_sql() -> None:
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=os.getcwd(),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "CREATE TABLE dr_dspy_experiments" in result.stdout
+    assert "20260630_0005" in result.stdout
+
+
+def test_alembic_claiming_status_downgrade_resets_claiming_rows(
+    monkeypatch: Any,
+) -> None:
+    engine = _require_postgres_engine()
+    claiming_migration = (
+        "dr_dspy.db.migrations.versions."
+        "20260630_0003_batch_submit_claiming_status"
+    )
+
+    with _isolated_schema(engine) as schema_name:
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _apply_migration_modules(
+                conn,
+                monkeypatch,
+                V1_MIGRATION_MODULES[:7],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_experiments ("
+                    "experiment_name, config_metadata, created_at"
+                    ") VALUES ('exp', '{}'::jsonb, NOW())"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_prediction_specs ("
+                    "prediction_id, experiment_name, task_id, "
+                    "repetition_seed, graph_digest, dimensions_digest, "
+                    "graph_layout, provider_kind, endpoint_kind, model, "
+                    "throttle_key, fair_order_seed, fair_order_key, "
+                    "task_snapshot, graph_snapshot, dimensions, "
+                    "provider_configs, provider_axis_config_id, created_at"
+                    ") VALUES ("
+                    "'prediction-1', 'exp', 'HumanEval/0', 0, "
+                    "'graph', 'dims', 'direct', 'openai', 'responses', "
+                    "'model', 'openai:responses:model', 'seed', 'fair', "
+                    "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, "
+                    "'[{\"provider_kind\": \"openai\", "
+                    "\"endpoint_kind\": \"responses\", \"model\": "
+                    "\"model\", \"throttle_key\": "
+                    "\"openai:responses:model\"}]'::jsonb, NULL, NOW()"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_operations ("
+                    "operation_key, experiment_name, status, requested_count, "
+                    "inserted_count, already_present_count, enqueued_count, "
+                    "already_scheduled_count, failed_count, spec, metadata, "
+                    "created_at"
+                    ") VALUES ("
+                    "'op-claim', 'exp', 'enqueuing', 1, 1, 0, 0, 0, 0, "
+                    "'{}'::jsonb, '{}'::jsonb, NOW()"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_items ("
+                    "batch_submit_item_id, operation_key, item_index, "
+                    "prediction_id, fair_order_key, insert_status, "
+                    "enqueue_status, enqueue_metadata, failure, created_at"
+                    ") VALUES ("
+                    "'item-claim', 'op-claim', 0, 'prediction-1', 'fair', "
+                    "'inserted', 'claiming', "
+                    "'{\"enqueue_claim_id\": \"c1\", "
+                    "\"claimed_at\": \"2026-06-29T12:00:00+00:00\"}'::jsonb, "
+                    "NULL, NOW()"
+                    ")"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _run_migration_downgrade(conn, monkeypatch, claiming_migration)
+
+        with engine.connect() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            row = conn.execute(
+                text(
+                    "SELECT enqueue_status, enqueue_metadata "
+                    "FROM dr_dspy_batch_submit_items "
+                    "WHERE batch_submit_item_id = 'item-claim'"
+                )
+            ).one()
+        assert row[0] == "pending"
+        assert row[1] == {}
+
+
+def test_alembic_remove_prepared_status_upgrade_backfills_rows(
+    monkeypatch: Any,
+) -> None:
+    engine = _require_postgres_engine()
+    prepared_migration = (
+        "dr_dspy.db.migrations.versions."
+        "20260630_0004_batch_submit_remove_prepared_status"
+    )
+
+    with _isolated_schema(engine) as schema_name:
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _apply_migration_modules(
+                conn,
+                monkeypatch,
+                V1_MIGRATION_MODULES[:7],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_experiments ("
+                    "experiment_name, config_metadata, created_at"
+                    ") VALUES ('exp', '{}'::jsonb, NOW())"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_operations ("
+                    "operation_key, experiment_name, status, requested_count, "
+                    "inserted_count, already_present_count, enqueued_count, "
+                    "already_scheduled_count, failed_count, spec, metadata, "
+                    "created_at"
+                    ") VALUES ("
+                    "'op-prepared', 'exp', 'prepared', 1, 1, 0, 0, 0, 0, "
+                    "'{}'::jsonb, '{}'::jsonb, NOW()"
+                    ")"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            migration = importlib.import_module(prepared_migration)
+            context = MigrationContext.configure(conn)
+            monkeypatch.setattr(migration, "op", Operations(context))
+            migration.upgrade()
+
+        with engine.connect() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            status = conn.execute(
+                text(
+                    "SELECT status FROM dr_dspy_batch_submit_operations "
+                    "WHERE operation_key = 'op-prepared'"
+                )
+            ).scalar_one()
+        assert status == "enqueuing"
+
+
+def test_alembic_enqueuing_status_downgrade_maps_to_prepared(
+    monkeypatch: Any,
+) -> None:
+    engine = _require_postgres_engine()
+    enqueuing_migration = (
+        "dr_dspy.db.migrations.versions."
+        "20260629_0004_batch_submit_enqueuing_status"
+    )
+
+    with _isolated_schema(engine) as schema_name:
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _apply_migration_modules(
+                conn,
+                monkeypatch,
+                V1_MIGRATION_MODULES[:4],
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_experiments ("
+                    "experiment_name, config_metadata, created_at"
+                    ") VALUES ('exp', '{}'::jsonb, NOW())"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_batch_submit_operations ("
+                    "operation_key, experiment_name, status, requested_count, "
+                    "inserted_count, already_present_count, enqueued_count, "
+                    "already_scheduled_count, failed_count, spec, metadata, "
+                    "created_at"
+                    ") VALUES ("
+                    "'op-enq', 'exp', 'enqueuing', 1, 1, 0, 0, 0, 0, "
+                    "'{}'::jsonb, '{}'::jsonb, NOW()"
+                    ")"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _run_migration_downgrade(conn, monkeypatch, enqueuing_migration)
+
+        with engine.connect() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            status = conn.execute(
+                text(
+                    "SELECT status FROM dr_dspy_batch_submit_operations "
+                    "WHERE operation_key = 'op-enq'"
+                )
+            ).scalar_one()
+        assert status == "prepared"
+
+
+def test_alembic_score_dataset_downgrade_rejects_dual_profile_rows(
+    monkeypatch: Any,
+) -> None:
+    engine = _require_postgres_engine()
+    dataset_migration = (
+        "dr_dspy.db.migrations.versions."
+        "20260630_0005_score_attempt_dataset_axes"
+    )
+
+    with _isolated_schema(engine) as schema_name:
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _apply_migration_modules(conn, monkeypatch, V1_MIGRATION_MODULES)
+            _seed_generation_run_chain(conn)
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_score_attempts ("
+                    "score_attempt_id, prediction_id, generation_run_id, "
+                    "scoring_profile_id, scoring_profile_version, "
+                    "parser_profile_id, parser_version, attempt_index, "
+                    "dataset_name, dataset_split, status, score, "
+                    "per_test_results, started_at, completed_at"
+                    ") VALUES ("
+                    "'score-default', 'prediction-1', 'run-1', "
+                    "'humaneval', 'v1', 'humaneval-best-effort', 'v1', 0, "
+                    "'evalplus/humanevalplus', 'test', 'success', 1.0, "
+                    "'[]'::jsonb, NOW(), NOW()"
+                    "), ("
+                    "'score-other', 'prediction-1', 'run-1', "
+                    "'humaneval', 'v1', 'humaneval-best-effort', 'v1', 0, "
+                    "'other-dataset', 'dev', 'success', 1.0, "
+                    "'[]'::jsonb, NOW(), NOW()"
+                    ")"
+                )
+            )
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            with pytest.raises(IntegrityError):
+                _run_migration_downgrade(
+                    conn,
+                    monkeypatch,
+                    dataset_migration,
+                )

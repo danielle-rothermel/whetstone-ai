@@ -18,7 +18,7 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 | 4 | Pure graph execution core | **Done** (reusable runner, no DB/DBOS knowledge) |
 | 5 | Archive v0 surfaces (old CLIs, manifests, repair, reporting, `experiments/`) | **Done** — runtime removed; see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) |
 | 6 | Domain contracts (graph specs, provider configs, outcomes, metrics, stable ids) | **Partial** — records exist; several contracts still string/metadata-based |
-| 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — pre-deployment; draft migration history not frozen |
+| 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — migration history frozen at `20260630_0005`; see [`v1-schema-migrations.md`](v1-schema-migrations.md) |
 | 8 | Platform graph workflow (DBOS + append-only persistence) | **Done** (first path under `dr_dspy.platform`) |
 | 9 | Batch submission, fairness, backoff | **Done** (chunked submit, fair-order enqueue, throttle table) |
 | 10 | HumanEval scoring and metrics | **Partial** — scoring workflow + `humaneval@v1` landed; profile record tables deferred |
@@ -61,7 +61,7 @@ before.
 
 From the platform design doc — still unresolved or only partially resolved in code:
 
-1. **Exact table names and primary keys** — largely implemented under `dr_dspy_*` names, but migration history is not yet declared frozen/deployed.
+1. **Exact table names and primary keys** — implemented under `dr_dspy_*` names; migration history is frozen/deployed — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
 2. **Legacy import scope** — deferred with v0 backfill (see above).
 3. **Projection storage shape** — deferred with analysis layer (see above).
 
@@ -147,10 +147,9 @@ may remain as backup until that work starts.
 
 ## Schema and deployment
 
-- **Declare v1 migration history frozen/deployed** and document upgrade path from any draft schemas applied locally or on Neon.
-- **Reset guidance** for databases that applied earlier draft `20260629_0001` (batch item status shape change: single `status` → `insert_status` + `enqueue_status`).
 - Unitbench/types/Neon/Drizzle items are **deferred** — see
   [Deferred platform phases](#deferred-platform-phases-postv1-core).
+- v1 migration history is **frozen** — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
 
 ---
 
@@ -218,8 +217,7 @@ need be executed yet):
 2. **PARTIAL run scoring policy** — decide and implement whether enc-dec/graph
    `PARTIAL` generation runs are scoreable; align `rescore` defaults and
    `validate_generation_run_for_scoring`.
-3. **Freeze v1 Alembic history** — declare revisions deployed/frozen; document
-   reset path for draft schemas.
+3. ~~**Freeze v1 Alembic history**~~ — **Done** — see [`v1-schema-migrations.md`](v1-schema-migrations.md).
 4. **Submit → worker E2E integration test** — enqueue through DBOS worker
    consumption.
 5. **Small code cleanup** — remove dead `_provider_axis_from_row`; dedupe

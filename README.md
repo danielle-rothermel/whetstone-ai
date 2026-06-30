@@ -109,7 +109,11 @@ deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the
-repository root.
+repository root. Migration history is **frozen** at head revision
+`20260630_0005` (nine revisions from `20260629_0001`). See
+[`docs/v1-schema-migrations.md`](docs/v1-schema-migrations.md) for the
+revision changelog, post-freeze policy, and **reset-not-upgrade** procedure
+for databases that applied draft schemas during hardening.
 
 Connection config uses the `DATABASE_URL` env var. When unset, Alembic falls
 back to peer-auth `postgresql+psycopg:///dr_dspy` (your OS Postgres role,

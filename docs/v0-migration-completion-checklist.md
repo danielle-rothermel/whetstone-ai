@@ -81,7 +81,7 @@ After steps 1–5 above pass review, open a **second cleanup PR** and delete:
 ### Optional data housekeeping (not code)
 
 - [ ] Drop or rename legacy v0 Postgres tables after backup export
-- [ ] Document final v1 migration revision as frozen/deployed
+- [x] Document final v1 migration revision as frozen/deployed — see [`v1-schema-migrations.md`](v1-schema-migrations.md) (separate from post-backfill package deletion)
 
 ---
 

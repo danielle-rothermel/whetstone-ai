@@ -411,4 +411,4 @@ Rename `dr_dspy` → `whetstone` is a **separate commit after extraction settles
 
 ## Migration status (schema)
 
-v1 platform schema is **pre-deployment**. Revision `20260629_0001` may still be edited while hardening. Databases that applied earlier draft v1 migrations should reset v1 platform tables and rerun Alembic from current revision set. No upgrade path from draft schemas until migration history is declared frozen.
+v1 platform schema migration history is **frozen** at revision `20260630_0005` (nine linear revisions from `20260629_0001`). Existing revision files must not be rewritten; future schema changes add forward revisions only. Databases that applied unlisted draft v1 schemas during hardening must **reset v1 platform tables and replay** Alembic from base — there is no supported upgrade path from draft shapes. See [`v1-schema-migrations.md`](v1-schema-migrations.md).
