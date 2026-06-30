@@ -97,6 +97,8 @@ def run_score_generation_workflow(
         parser_profile_id=scoring_profile.parser_profile.profile_id,
         parser_version=scoring_profile.parser_profile.version,
         attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
     )
     started_at = datetime.fromisoformat(
         scoring_started_at_step(score_attempt_id)
@@ -108,6 +110,8 @@ def run_score_generation_workflow(
         task.model_dump(mode="json"),
         scoring_profile.model_dump(mode="json"),
         score_attempt_index,
+        dataset_name,
+        dataset_split,
         started_at.isoformat(),
     )
     insert_result = ScoreAttemptInsertResult.model_validate(
@@ -154,6 +158,8 @@ def schedule_score_generation_workflow(
         score_attempt_index=score_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
     )
     workflow_id = platform_scoring_workflow_id(score_attempt_id)
     if DBOS.get_workflow_status(workflow_id) is not None:
@@ -229,6 +235,8 @@ def score_attempt_id_for_workflow(
     score_attempt_index: int,
     scoring_profile_id: str,
     scoring_profile_version: str,
+    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
+    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
 ) -> str:
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
@@ -241,6 +249,8 @@ def score_attempt_id_for_workflow(
         parser_profile_id=scoring_profile.parser_profile.profile_id,
         parser_version=scoring_profile.parser_profile.version,
         attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
     )
 
 
@@ -266,6 +276,8 @@ def _start_score_generation_workflow_handle(
         score_attempt_index=score_attempt_index,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
     )
     with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
         handle = DBOS.start_workflow(
@@ -359,6 +371,8 @@ def score_generation_step(
     task_payload: dict[str, Any],
     scoring_profile_payload: dict[str, Any],
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     started_at: str,
 ) -> dict[str, Any]:
     scoring_profile = HumanEvalScoringProfile.model_validate(
@@ -376,6 +390,8 @@ def score_generation_step(
         task=humaneval_task_from_payload(task_payload),
         scoring_profile=scoring_profile,
         score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
         started_at=datetime.fromisoformat(started_at),
     )
     return record.model_dump(mode="json")

@@ -27,6 +27,8 @@ from dr_dspy.humaneval.scoring import (
 from dr_dspy.humaneval.task import HumanEvalTask
 from dr_dspy.platform.node_execution import failure_metadata_from_exception
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     ExtractedCodePayload,
     FailureMetadataPayload,
     GenerationRunRecord,
@@ -51,6 +53,8 @@ def score_generation_run(
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     score_attempt_index: int = 0,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
     started_at: datetime,
     completed_at: datetime | None = None,
 ) -> ScoreAttemptRecord:
@@ -59,7 +63,11 @@ def score_generation_run(
         scoring_profile_version=scoring_profile_version,
     )
     try:
-        validate_generation_run_for_scoring(spec=spec, run=generation_run)
+        validate_generation_run_for_scoring(
+            spec=spec,
+            run=generation_run,
+            task=task,
+        )
         raw_generation = generation_run.summary.terminal_output
         domain_score = score_humaneval_generation(
             raw_generation=raw_generation,
@@ -74,6 +82,8 @@ def score_generation_run(
             task=task,
             scoring_profile=scoring_profile,
             score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
             domain_score=domain_score,
             started_at=started_at,
             completed_at=completed_at,
@@ -84,6 +94,8 @@ def score_generation_run(
             generation_run=generation_run,
             scoring_profile=scoring_profile,
             score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
             error=error,
             started_at=started_at,
             completed_at=resolve_completed_at(completed_at),
@@ -98,6 +110,8 @@ def score_attempt_from_domain_score(
     task: HumanEvalTask,
     scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     domain_score: HumanEvalGenerationScore,
     started_at: datetime,
     completed_at: datetime | None,
@@ -109,6 +123,8 @@ def score_attempt_from_domain_score(
         task=task,
         scoring_profile=scoring_profile,
         score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
         domain_score=domain_score,
         started_at=started_at,
         completed_at=resolve_completed_at(completed_at),
@@ -123,6 +139,8 @@ def successful_score_attempt(
     task: HumanEvalTask,
     scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     domain_score: HumanEvalGenerationScore,
     started_at: datetime,
     completed_at: datetime,
@@ -130,7 +148,7 @@ def successful_score_attempt(
     extraction = domain_score.extraction
     parser_profile = scoring_profile.parser_profile
     extracted_payload = ExtractedCodePayload(
-        raw_generation=extraction.raw_generation,
+        raw_generation=domain_score.raw_generation,
         extracted_code=extraction.extracted_code,
         extraction_method=(
             extraction.extraction_method.value
@@ -160,6 +178,8 @@ def successful_score_attempt(
             parser_profile_id=parser_profile.profile_id,
             parser_version=parser_profile.version,
             attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
         ),
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
@@ -191,6 +211,8 @@ def error_score_attempt(
     generation_run: GenerationRunRecord,
     scoring_profile: HumanEvalScoringProfile,
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     error: BaseException,
     started_at: datetime,
     completed_at: datetime,
@@ -203,6 +225,8 @@ def error_score_attempt(
             parser_profile_id=scoring_profile.parser_profile.profile_id,
             parser_version=scoring_profile.parser_profile.version,
             attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
         ),
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
@@ -233,9 +257,15 @@ def validate_generation_run_for_scoring(
     *,
     spec: PredictionSpecRecord,
     run: GenerationRunRecord,
+    task: HumanEvalTask,
 ) -> None:
     if run.prediction_id != spec.prediction_id:
         raise ValueError("generation run prediction_id does not match spec")
+    if task.task_id != spec.task_id:
+        raise ValueError(
+            "HumanEval task_id does not match spec: "
+            f"{task.task_id!r} != {spec.task_id!r}"
+        )
     if run.status is not GenerationRunStatus.SUCCESS:
         raise ValueError(
             f"generation run is not terminal success: {run.status.value}"

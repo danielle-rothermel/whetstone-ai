@@ -9,6 +9,8 @@ from dr_dspy.records.batch_submit import (
     terminal_enqueue_total_from_counts,
 )
 from dr_dspy.records.hashing import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     DIMENSIONS_DIGEST_LENGTH,
     FAIR_ORDER_DIGEST_LENGTH,
     GENERATION_RUN_ID_DIGEST_LENGTH,
@@ -134,6 +136,8 @@ __all__ = [
     "stable_generation_run_id",
     "stable_node_attempt_id",
     "stable_prediction_id",
+    "DEFAULT_SCORE_DATASET_NAME",
+    "DEFAULT_SCORE_DATASET_SPLIT",
     "stable_score_attempt_id",
     "terminal_enqueue_total",
     "terminal_enqueue_total_from_counts",

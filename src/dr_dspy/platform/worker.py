@@ -58,13 +58,14 @@ def configure_platform_dbos_runtime(
     dbos_system_database_url: str | None,
     worker_concurrency: int = DEFAULT_WORKER_CONCURRENCY,
     consume_generation_queue: bool = False,
+    database_url_error_suffix: str = "for platform graph workflow",
 ) -> shared_dbos.EvalDbosConfig:
     config = shared_dbos.build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         generation_concurrency=worker_concurrency,
         scoring_concurrency=DEFAULT_WORKER_CONCURRENCY,
-        database_url_error_suffix="for platform graph workflow",
+        database_url_error_suffix=database_url_error_suffix,
     )
     try:
         DBOS(
@@ -190,6 +191,7 @@ def score_one(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
         consume_generation_queue=False,
+        database_url_error_suffix="for platform scoring workflow",
     )
     try:
         score_result = run_score_generation_workflow_once(

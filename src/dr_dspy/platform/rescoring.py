@@ -242,6 +242,8 @@ def plan_or_schedule_rescore_item(
         parser_profile_id=parser_profile_id,
         parser_version=parser_version,
         attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
     )
     workflow_id = platform_scoring_workflow_id(score_attempt_id)
     if candidate.existing_score_attempt_id is not None:

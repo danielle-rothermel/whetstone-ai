@@ -138,7 +138,7 @@ def build_metrics_stage(
         text=text_metrics(text),
         python_leakage=python_leakage_metrics(
             text,
-            task_names=(task.entry_point, task.task_id.rsplit("/", 1)[-1]),
+            task_names=(task.entry_point, task.task_id),
         ),
         ast=ast_metrics(text) if include_ast else None,
         compression=(

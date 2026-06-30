@@ -10,6 +10,8 @@ FAIR_ORDER_DIGEST_LENGTH = 32
 GENERATION_RUN_ID_DIGEST_LENGTH = 24
 NODE_ATTEMPT_ID_DIGEST_LENGTH = 32
 SCORE_ATTEMPT_ID_DIGEST_LENGTH = 32
+DEFAULT_SCORE_DATASET_NAME = "evalplus/humanevalplus"
+DEFAULT_SCORE_DATASET_SPLIT = "test"
 
 
 def dimensions_digest(
@@ -130,6 +132,8 @@ def stable_score_attempt_id(
     parser_profile_id: str,
     parser_version: str,
     attempt_index: int,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
     length: int = SCORE_ATTEMPT_ID_DIGEST_LENGTH,
 ) -> str:
     return _sha256_digest(
@@ -140,6 +144,8 @@ def stable_score_attempt_id(
             "parser_profile_id": parser_profile_id,
             "parser_version": parser_version,
             "attempt_index": attempt_index,
+            "dataset_name": dataset_name,
+            "dataset_split": dataset_split,
         },
         length=length,
     )

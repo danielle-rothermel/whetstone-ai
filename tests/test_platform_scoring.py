@@ -813,6 +813,9 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
     assert score.score == 1.0
     assert score.extracted_code is not None
     assert score.extracted_code.extraction_method == "json_code_field"
+    assert score.extracted_code.raw_generation == (
+        '{"code":"def add_one(x):\\n    return x + 1\\n"}'
+    )
     assert score.metrics is not None
     assert {stage.stage_id for stage in score.metrics.stages} >= {
         "node:encoder:description",
@@ -830,6 +833,67 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
     assert stages["node:decoder:alternatives"].text.character_count == len(
         '["return x + 1"]'
     )
+
+
+def test_score_generation_run_rejects_task_id_mismatch() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    mismatched_task = _task()
+    mismatched_task = mismatched_task.model_copy(
+        update={"task_id": "HumanEval/other"}
+    )
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=mismatched_task,
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.ERROR
+    assert score.failure is not None
+    assert (
+        score.failure.message
+        == "HumanEval task_id does not match spec: 'HumanEval/other' != "
+        "'HumanEval/fixture'"
+    )
+
+
+def test_score_attempt_id_differs_by_dataset_selection() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    common = {
+        "generation_run_id": run.generation_run_id,
+        "scoring_profile_id": HUMANEVAL_SCORING_PROFILE_ID,
+        "scoring_profile_version": HUMANEVAL_SCORING_PROFILE_VERSION,
+        "parser_profile_id": BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        "parser_version": PARSER_PROFILE_VERSION,
+        "attempt_index": 0,
+    }
+    default_id = stable_score_attempt_id(**common)
+    other_dataset_id = stable_score_attempt_id(
+        **common,
+        dataset_name="other/dataset",
+    )
+    other_split_id = stable_score_attempt_id(
+        **common,
+        dataset_split="train",
+    )
+
+    assert default_id != other_dataset_id
+    assert default_id != other_split_id
+    assert other_dataset_id != other_split_id
+
+
+def test_task_name_leakage_ignores_numeric_task_suffix() -> None:
+    leakage = python_leakage_metrics(
+        "return 0 if x == 0 else x + 1",
+        task_names=("add_one", "HumanEval/0"),
+    )
+
+    assert leakage.task_name_hit_count == 0
 
 
 def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
@@ -1048,6 +1112,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                     scoring_profile.timeout_seconds,
                     args[5],
                     args[6],
+                    args[7],
+                    args[8],
                 ),
             )
         )
@@ -1057,6 +1123,9 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             node_attempts=(),
             task=_task(),
             scoring_profile=scoring_profile,
+            score_attempt_index=args[5],
+            dataset_name=args[6],
+            dataset_split=args[7],
             started_at=NOW,
             completed_at=LATER,
         ).model_dump(mode="json")
@@ -1128,6 +1197,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 PARSER_PROFILE_VERSION,
                 2.0,
                 0,
+                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_NAME,
+                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_SPLIT,
                 NOW.isoformat(),
             ),
         ),
