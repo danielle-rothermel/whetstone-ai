@@ -51,17 +51,37 @@ class GenerationRunStatus(StrEnum):
 
 
 class BatchSubmitOperationStatus(StrEnum):
-    PREPARED = "prepared"
+    ENQUEUING = "enqueuing"
     COMPLETED = "completed"
     PARTIAL = "partial"
     ERROR = "error"
 
 
-class BatchSubmitItemStatus(StrEnum):
+class BatchSubmitItemInsertStatus(StrEnum):
     INSERTED = "inserted"
     ALREADY_PRESENT = "already_present"
+
+
+class BatchSubmitItemEnqueueStatus(StrEnum):
+    PENDING = "pending"
+    CLAIMING = "claiming"
     ENQUEUED = "enqueued"
+    WORKFLOW_ALREADY_PRESENT = "workflow_already_present"
     FAILED = "failed"
+
+
+ENQUEUE_CLAIM_ID_METADATA_KEY = "enqueue_claim_id"
+ENQUEUE_CLAIMED_AT_METADATA_KEY = "claimed_at"
+
+
+def is_terminal_enqueue_status(
+    status: BatchSubmitItemEnqueueStatus,
+) -> bool:
+    return status in {
+        BatchSubmitItemEnqueueStatus.ENQUEUED,
+        BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT,
+        BatchSubmitItemEnqueueStatus.FAILED,
+    }
 
 
 class TaskInputsPayload(BaseModel):
@@ -588,6 +608,7 @@ class BatchSubmitOperationRecord(BaseModel):
     inserted_count: StrictInt = 0
     already_present_count: StrictInt = 0
     enqueued_count: StrictInt = 0
+    already_scheduled_count: StrictInt = 0
     failed_count: StrictInt = 0
     spec: dict[StrictStr, Any] = Field(default_factory=dict)
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
@@ -601,6 +622,7 @@ class BatchSubmitOperationRecord(BaseModel):
             self.inserted_count,
             self.already_present_count,
             self.enqueued_count,
+            self.already_scheduled_count,
             self.failed_count,
         )
         if any(count < 0 for count in counts):
@@ -620,9 +642,15 @@ class BatchSubmitOperationRecord(BaseModel):
                 "inserted_count + already_present_count cannot exceed "
                 "requested_count"
             )
-        if self.enqueued_count + self.failed_count > self.requested_count:
+        terminal_enqueue = (
+            self.enqueued_count
+            + self.already_scheduled_count
+            + self.failed_count
+        )
+        if terminal_enqueue > self.requested_count:
             raise ValueError(
-                "enqueued_count + failed_count cannot exceed requested_count"
+                "enqueued_count + already_scheduled_count + failed_count "
+                "cannot exceed requested_count"
             )
         validate_payload_size(
             self.spec,
@@ -638,10 +666,11 @@ class BatchSubmitOperationRecord(BaseModel):
                 "terminal batch submit operations require completed_at"
             )
         if self.status is BatchSubmitOperationStatus.COMPLETED:
-            if self.enqueued_count + self.failed_count != self.requested_count:
+            if terminal_enqueue != self.requested_count:
                 raise ValueError(
-                    "completed batch submit operations must account for every "
-                    "requested item in enqueued_count or failed_count"
+                    "completed batch submit operations must account for "
+                    "every requested item in enqueued_count, "
+                    "already_scheduled_count, or failed_count"
                 )
         if (
             self.completed_at is not None
@@ -659,7 +688,8 @@ class BatchSubmitItemRecord(BaseModel):
     item_index: StrictInt
     prediction_id: StrictStr
     fair_order_key: StrictStr
-    status: BatchSubmitItemStatus
+    insert_status: BatchSubmitItemInsertStatus
+    enqueue_status: BatchSubmitItemEnqueueStatus
     enqueue_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
     failure: FailureMetadataPayload | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -669,8 +699,28 @@ class BatchSubmitItemRecord(BaseModel):
         if self.item_index < 0:
             raise ValueError("item_index must be non-negative")
         if (
-            self.status is BatchSubmitItemStatus.FAILED
+            self.enqueue_status is BatchSubmitItemEnqueueStatus.FAILED
             and self.failure is None
         ):
             raise ValueError("failed batch submit items require failure")
+        if self.enqueue_status is BatchSubmitItemEnqueueStatus.PENDING:
+            if self.enqueue_metadata:
+                raise ValueError(
+                    "pending batch submit items require empty enqueue_metadata"
+                )
+        if self.enqueue_status is BatchSubmitItemEnqueueStatus.CLAIMING:
+            claim_id = self.enqueue_metadata.get(
+                ENQUEUE_CLAIM_ID_METADATA_KEY
+            )
+            claimed_at = self.enqueue_metadata.get(
+                ENQUEUE_CLAIMED_AT_METADATA_KEY
+            )
+            if not isinstance(claim_id, str) or not claim_id:
+                raise ValueError(
+                    "claiming batch submit items require enqueue_claim_id"
+                )
+            if not isinstance(claimed_at, str) or not claimed_at:
+                raise ValueError(
+                    "claiming batch submit items require claimed_at"
+                )
         return self

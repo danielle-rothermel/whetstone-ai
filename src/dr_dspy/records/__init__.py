@@ -1,11 +1,12 @@
 from dr_dspy.records.batch_submit import (
-    SPEC_OUTCOME_METADATA_KEY,
     BatchSubmitOperationCounts,
     InsertOutcome,
-    SpecInsertOutcome,
     batch_submit_operation_counts_from_items,
     build_batch_submit_operation_record,
     insert_outcome_from_rowcount,
+    operation_status_from_counts,
+    terminal_enqueue_total,
+    terminal_enqueue_total_from_counts,
 )
 from dr_dspy.records.hashing import (
     DIMENSIONS_DIGEST_LENGTH,
@@ -31,9 +32,12 @@ from dr_dspy.records.limits import (
     validate_payload_size,
 )
 from dr_dspy.records.models import (
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
     AstMetricsPayload,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
-    BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -61,11 +65,14 @@ from dr_dspy.records.models import (
     TaskSnapshotPayload,
     TextMetricsPayload,
     UsageCostPayload,
+    is_terminal_enqueue_status,
 )
 
 __all__ = [
     "BATCH_SUBMIT_SPEC_MAX_BYTES",
     "DIMENSIONS_DIGEST_LENGTH",
+    "ENQUEUE_CLAIMED_AT_METADATA_KEY",
+    "ENQUEUE_CLAIM_ID_METADATA_KEY",
     "FAIR_ORDER_DIGEST_LENGTH",
     "GENERATION_RUN_ID_DIGEST_LENGTH",
     "GRAPH_SNAPSHOT_MAX_BYTES",
@@ -75,11 +82,11 @@ __all__ = [
     "PER_TEST_RESULTS_MAX_COUNT",
     "PREDICTION_ID_DIGEST_LENGTH",
     "PROVIDER_TELEMETRY_MAX_BYTES",
-    "SPEC_OUTCOME_METADATA_KEY",
     "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
+    "BatchSubmitItemEnqueueStatus",
+    "BatchSubmitItemInsertStatus",
     "BatchSubmitItemRecord",
-    "BatchSubmitItemStatus",
     "BatchSubmitOperationCounts",
     "BatchSubmitOperationRecord",
     "BatchSubmitOperationStatus",
@@ -105,7 +112,6 @@ __all__ = [
     "ResponseMetadataPayload",
     "ScoreAttemptRecord",
     "ScoreAttemptStatus",
-    "SpecInsertOutcome",
     "TaskInputsPayload",
     "TaskSnapshotPayload",
     "TextMetricsPayload",
@@ -116,8 +122,12 @@ __all__ = [
     "dimensions_digest",
     "fair_order_key",
     "insert_outcome_from_rowcount",
+    "is_terminal_enqueue_status",
+    "operation_status_from_counts",
     "stable_generation_run_id",
     "stable_node_attempt_id",
     "stable_prediction_id",
+    "terminal_enqueue_total",
+    "terminal_enqueue_total_from_counts",
     "validate_payload_size",
 ]

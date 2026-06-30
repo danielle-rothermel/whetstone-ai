@@ -36,7 +36,8 @@ def test_workflow_start_raced_returns_true_for_typed_dbos_errors(
     error: BaseException,
 ) -> None:
     assert isinstance(error, WORKFLOW_START_RACE_ERRORS)
-    with patch("dr_dspy.harness.dbos.DBOS.get_workflow_status") as status:
+    patch_target = "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status"
+    with patch(patch_target) as status:
         raced = workflow_start_raced(workflow_id=WORKFLOW_ID, error=error)
         assert raced is True
         status.assert_not_called()
@@ -50,7 +51,7 @@ def test_workflow_start_raced_handles_base_exception_conflict() -> None:
 
 def test_workflow_start_raced_returns_false_without_status() -> None:
     with patch(
-        "dr_dspy.harness.dbos.DBOS.get_workflow_status",
+        "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status",
         return_value=None,
     ):
         assert (
@@ -64,7 +65,7 @@ def test_workflow_start_raced_returns_false_without_status() -> None:
 
 def test_workflow_start_raced_returns_true_when_status_exists() -> None:
     with patch(
-        "dr_dspy.harness.dbos.DBOS.get_workflow_status",
+        "dr_dspy.platform.dbos_compat.DBOS.get_workflow_status",
         return_value={"status": "ENQUEUED"},
     ):
         assert (

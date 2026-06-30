@@ -9,6 +9,7 @@ from dr_dspy.db.schema import (
     PREDICTION_PROJECTION_TABLE,
     PREDICTION_SPECS_TABLE,
     SCORE_ATTEMPTS_TABLE,
+    THROTTLE_BACKOFF_TABLE,
     V1_TABLE_NAMES,
     batch_submit_items,
     batch_submit_operations,
@@ -19,6 +20,7 @@ from dr_dspy.db.schema import (
     prediction_projection,
     prediction_specs,
     score_attempts,
+    throttle_backoff,
     v1_tables,
 )
 
@@ -31,6 +33,7 @@ __all__ = [
     "PREDICTION_PROJECTION_TABLE",
     "PREDICTION_SPECS_TABLE",
     "SCORE_ATTEMPTS_TABLE",
+    "THROTTLE_BACKOFF_TABLE",
     "V1_TABLE_NAMES",
     "batch_submit_items",
     "batch_submit_operations",
@@ -41,5 +44,6 @@ __all__ = [
     "prediction_projection",
     "prediction_specs",
     "score_attempts",
+    "throttle_backoff",
     "v1_tables",
 ]

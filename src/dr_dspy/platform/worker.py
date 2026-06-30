@@ -7,11 +7,21 @@ from typing import Annotated
 import typer
 from dbos import DBOS
 from rich.console import Console
+from sqlalchemy import create_engine
 
 from dr_dspy.harness import dbos as shared_dbos
 from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow_once,
+)
+from dr_dspy.platform.queue_worker import (
+    PLATFORM_GENERATION_QUEUE_NAME,
+    listen_to_platform_generation_queue,
+    register_platform_generation_queue,
+)
+from dr_dspy.platform.submission import (
+    DEFAULT_SUBMIT_CHUNK_SIZE,
+    submit_prediction_specs_jsonl,
 )
 from dr_dspy.runtime import load_env_file, run_typer_app
 
@@ -31,17 +41,34 @@ def configure_platform_dbos_runtime(
     *,
     database_url: str | None,
     dbos_system_database_url: str | None,
+    worker_concurrency: int = DEFAULT_WORKER_CONCURRENCY,
+    consume_generation_queue: bool = False,
 ) -> shared_dbos.EvalDbosConfig:
     config = shared_dbos.build_eval_dbos_config(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
-        generation_concurrency=DEFAULT_WORKER_CONCURRENCY,
+        generation_concurrency=worker_concurrency,
         scoring_concurrency=DEFAULT_WORKER_CONCURRENCY,
         database_url_error_suffix="for platform graph workflow",
     )
-    DBOS(config=shared_dbos.build_dbos_config(config, app_name=DBOS_APP_NAME))
-    DBOS.listen_queues([])
-    DBOS.launch()
+    try:
+        DBOS(
+            config=shared_dbos.build_dbos_config(
+                config, app_name=DBOS_APP_NAME
+            )
+        )
+        if consume_generation_queue:
+            listen_to_platform_generation_queue()
+        else:
+            DBOS.listen_queues([])
+        DBOS.launch()
+        if consume_generation_queue:
+            register_platform_generation_queue(
+                worker_concurrency=worker_concurrency,
+            )
+    except Exception:
+        shared_dbos.destroy_dbos_runtime()
+        raise
     return config
 
 
@@ -78,6 +105,7 @@ def run_one(
     config = configure_platform_dbos_runtime(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
+        consume_generation_queue=False,
     )
     try:
         generation_run_id = run_prediction_graph_workflow_once(
@@ -97,13 +125,12 @@ def run_one(
         shared_dbos.destroy_dbos_runtime()
 
 
-@APP.command(
-    help=(
-        "Launch the platform DBOS runtime without queue listeners. "
-        "Queue-consuming workers are deferred until batch submission lands."
-    )
-)
+@APP.command(help="Launch a queue-consuming v1 generation worker.")
 def worker(
+    worker_concurrency: Annotated[
+        int,
+        typer.Option("--worker-concurrency", min=1),
+    ] = DEFAULT_WORKER_CONCURRENCY,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -124,10 +151,15 @@ def worker(
     configure_platform_dbos_runtime(
         database_url=database_url,
         dbos_system_database_url=dbos_system_database_url,
+        worker_concurrency=worker_concurrency,
+        consume_generation_queue=True,
     )
     CONSOLE.print(
-        "platform graph DBOS runtime running without queue listeners; "
-        "press Ctrl-C to stop"
+        {
+            "queue_name": PLATFORM_GENERATION_QUEUE_NAME,
+            "worker_concurrency": worker_concurrency,
+            "status": "running",
+        }
     )
     try:
         while True:
@@ -135,6 +167,93 @@ def worker(
     except KeyboardInterrupt:
         CONSOLE.print("platform graph DBOS runtime stopping")
     finally:
+        shared_dbos.destroy_dbos_runtime()
+
+
+@APP.command("submit-jsonl")
+def submit_jsonl(
+    specs_file: Annotated[
+        Path,
+        typer.Option(
+            "--specs-file",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="JSONL file of PredictionSpecRecord payloads.",
+        ),
+    ],
+    operation_key: Annotated[
+        str,
+        typer.Option("--operation-key", help="Stable logical submit key."),
+    ],
+    experiment_name: Annotated[
+        str,
+        typer.Option(
+            "--experiment-name",
+            help="Experiment name all submitted specs must match.",
+        ),
+    ],
+    chunk_size: Annotated[
+        int,
+        typer.Option("--chunk-size", min=1),
+    ] = DEFAULT_SUBMIT_CHUNK_SIZE,
+    attempt_index: Annotated[
+        int,
+        typer.Option("--attempt-index", min=0),
+    ] = 0,
+    queue_registration_concurrency: Annotated[
+        int,
+        typer.Option(
+            "--queue-registration-concurrency",
+            min=1,
+            help=(
+                "Worker concurrency to register in DBOS queue metadata. "
+                "submit-jsonl does not start a queue worker."
+            ),
+        ),
+    ] = DEFAULT_WORKER_CONCURRENCY,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Postgres URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    dbos_system_database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--dbos-system-database-url",
+            help="DBOS system database URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    env_file: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    load_env_file(env_file) if env_file is not None else load_env_file()
+    config = configure_platform_dbos_runtime(
+        database_url=database_url,
+        dbos_system_database_url=dbos_system_database_url,
+        worker_concurrency=queue_registration_concurrency,
+        consume_generation_queue=False,
+    )
+    register_platform_generation_queue(
+        worker_concurrency=queue_registration_concurrency,
+    )
+    engine = create_engine(config.database_url)
+    try:
+        result = submit_prediction_specs_jsonl(
+            engine,
+            database_url=config.database_url,
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            specs_file=specs_file,
+            submit_spec={"source": str(specs_file)},
+            chunk_size=chunk_size,
+            attempt_index=attempt_index,
+        )
+        CONSOLE.print(result.model_dump(mode="json"))
+    finally:
+        engine.dispose()
         shared_dbos.destroy_dbos_runtime()
 
 

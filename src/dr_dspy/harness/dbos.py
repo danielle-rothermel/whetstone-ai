@@ -12,13 +12,13 @@ from typing import Any, Protocol, cast
 
 import psycopg
 from dbos import DBOS, DBOSConfig, SetWorkflowID
-from dbos._error import (
-    DBOSConflictingWorkflowError,
-    DBOSQueueDeduplicatedError,
-    DBOSWorkflowConflictIDError,
-)
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
+
+from dr_dspy.platform.dbos_compat import (
+    WORKFLOW_START_RACE_ERRORS,
+    workflow_start_raced,
+)
 
 DATABASE_URL_ENV = "DATABASE_URL"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
@@ -518,24 +518,6 @@ def score_workflow_id(
     if retry_token is None:
         return f"score:{prediction_id}"
     return f"score-retry:{retry_token}:{prediction_id}"
-
-
-WORKFLOW_START_RACE_ERRORS: tuple[type[BaseException], ...] = (
-    DBOSWorkflowConflictIDError,
-    DBOSQueueDeduplicatedError,
-    DBOSConflictingWorkflowError,
-)
-
-
-def workflow_start_raced(*, workflow_id: str, error: BaseException) -> bool:
-    """Return True when a concurrent start/enqueue won (idempotent caller)."""
-    if isinstance(error, WORKFLOW_START_RACE_ERRORS):
-        return True
-    if isinstance(error, Exception) and (
-        DBOS.get_workflow_status(workflow_id) is not None
-    ):
-        return True
-    return False
 
 
 def enqueue_generation_workflows(

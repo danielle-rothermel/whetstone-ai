@@ -5,11 +5,26 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 from dr_dspy.db.schema import (
-    BATCH_SUBMIT_OPS_COMPLETED_CHECK,
-    BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
     NODE_ATTEMPTS_PROVIDER_CONFIG_CHECK,
     PREDICTION_SPECS_PROVIDER_AXIS_CHECK,
 )
+
+_INITIAL_BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK = """
+inserted_count <= requested_count
+AND already_present_count <= requested_count
+AND enqueued_count <= requested_count
+AND failed_count <= requested_count
+AND inserted_count + already_present_count <= requested_count
+AND enqueued_count + failed_count <= requested_count
+""".strip()
+
+_INITIAL_BATCH_SUBMIT_OPS_COMPLETED_CHECK = """
+status != 'completed'
+OR (
+  completed_at IS NOT NULL
+  AND enqueued_count + failed_count = requested_count
+)
+""".strip()
 
 revision = "20260629_0001"
 down_revision = None
@@ -324,11 +339,11 @@ def upgrade() -> None:
             name="ck_dr_dspy_batch_ops_counts",
         ),
         sa.CheckConstraint(
-            BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
+            _INITIAL_BATCH_SUBMIT_OPS_COUNT_BOUNDS_CHECK,
             name="ck_dr_dspy_batch_ops_count_bounds",
         ),
         sa.CheckConstraint(
-            BATCH_SUBMIT_OPS_COMPLETED_CHECK,
+            _INITIAL_BATCH_SUBMIT_OPS_COMPLETED_CHECK,
             name="ck_dr_dspy_batch_ops_completed",
         ),
         sa.CheckConstraint(
@@ -347,7 +362,8 @@ def upgrade() -> None:
         sa.Column("item_index", sa.Integer(), nullable=False),
         sa.Column("prediction_id", sa.Text(), nullable=False),
         sa.Column("fair_order_key", sa.Text(), nullable=False),
-        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("insert_status", sa.Text(), nullable=False),
+        sa.Column("enqueue_status", sa.Text(), nullable=False),
         sa.Column("enqueue_metadata", postgresql.JSONB(), nullable=False),
         sa.Column("failure", postgresql.JSONB()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -364,13 +380,18 @@ def upgrade() -> None:
             name="ck_dr_dspy_batch_items_item_index",
         ),
         sa.CheckConstraint(
-            "status IN ('inserted', 'already_present', 'enqueued', 'failed')",
-            name="ck_dr_dspy_batch_items_status",
+            "insert_status IN ('inserted', 'already_present')",
+            name="ck_dr_dspy_batch_items_insert_status",
         ),
         sa.CheckConstraint(
-            "(status = 'failed' OR failure IS NULL) "
-            "AND (status != 'failed' OR failure IS NOT NULL)",
-            name="ck_dr_dspy_batch_items_status_payload",
+            "enqueue_status IN "
+            "('pending', 'enqueued', 'workflow_already_present', 'failed')",
+            name="ck_dr_dspy_batch_items_enqueue_status",
+        ),
+        sa.CheckConstraint(
+            "(enqueue_status = 'failed' OR failure IS NULL) "
+            "AND (enqueue_status != 'failed' OR failure IS NOT NULL)",
+            name="ck_dr_dspy_batch_items_enqueue_status_payload",
         ),
         sa.UniqueConstraint(
             "operation_key",

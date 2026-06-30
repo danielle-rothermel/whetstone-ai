@@ -13,6 +13,7 @@ from dr_dspy.db import io as db_io
 from dr_dspy.eval_failures import (
     FailureClass,
     PermanentFailureError,
+    RateLimitedFailureError,
     TransientFailureError,
 )
 from dr_dspy.graph import (
@@ -31,7 +32,7 @@ from dr_dspy.lm.boundary import (
     ProviderConfig,
     ProviderKind,
 )
-from dr_dspy.platform import graph_workflow
+from dr_dspy.platform import backoff, graph_workflow
 from dr_dspy.platform.graph_workflow import (
     _start_prediction_graph_workflow_handle,
     execute_prediction_graph,
@@ -398,6 +399,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         return NOW.isoformat()
 
     def execute_step(
+        step_database_url: str,
         spec_payload: dict[str, Any],
         node_payload: dict[str, Any],
         node_inputs: dict[str, Any],
@@ -407,13 +409,33 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         calls.append(
             (
                 "execute",
-                (step_spec.prediction_id, node.id, node_inputs),
+                (
+                    step_database_url,
+                    step_spec.prediction_id,
+                    node.id,
+                    node_inputs,
+                ),
             )
         )
         return _step_success(
             node,
             f"workflow {node_inputs['prompt']}",
         ).model_dump(mode="json")
+
+    def throttle_preflight_step(
+        step_database_url: str,
+        spec_payload: dict[str, Any],
+        node_payload: dict[str, Any],
+    ) -> float:
+        step_spec = PredictionSpecRecord.model_validate(spec_payload)
+        node = NodeSpec.model_validate(node_payload)
+        calls.append(
+            (
+                "throttle",
+                (step_database_url, step_spec.prediction_id, node.id),
+            )
+        )
+        return 0.0
 
     def completed_step(step_generation_run_id: str) -> str:
         calls.append(("completed", step_generation_run_id))
@@ -459,6 +481,16 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         "generation_started_at_step",
         started_step,
     )
+    monkeypatch.setattr(
+        graph_workflow,
+        "throttle_preflight_step",
+        throttle_preflight_step,
+    )
+    monkeypatch.setattr(
+        graph_workflow.DBOS,
+        "sleep",
+        lambda seconds: calls.append(("sleep", seconds)),
+    )
     monkeypatch.setattr(graph_workflow, "execute_lm_node_step", execute_step)
     monkeypatch.setattr(
         graph_workflow,
@@ -482,8 +514,13 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         ("load", (database_url, spec.prediction_id)),
         ("started", generation_run_id),
         (
+            "throttle",
+            (database_url, spec.prediction_id, "direct"),
+        ),
+        (
             "execute",
             (
+                database_url,
                 spec.prediction_id,
                 "direct",
                 {"prompt": "write add"},
@@ -614,6 +651,28 @@ def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
         )
 
 
+def test_lm_node_dbos_step_retries_retryable_failures() -> None:
+    retry_config = {
+        name: cell.cell_contents
+        for name, cell in zip(
+            graph_workflow.execute_lm_node_step.__code__.co_freevars,
+            graph_workflow.execute_lm_node_step.__closure__ or (),
+            strict=True,
+        )
+    }
+
+    assert retry_config["retries_allowed"] is True
+    assert (
+        retry_config["max_attempts"]
+        == graph_workflow.NODE_STEP_MAX_ATTEMPTS
+    )
+    assert (
+        retry_config["interval_seconds"]
+        == graph_workflow.NODE_STEP_RETRY_INTERVAL_SECONDS
+    )
+    assert retry_config["should_retry"] is graph_workflow.should_retry_step
+
+
 def test_lm_node_executor_rejects_unsupported_node_op() -> None:
     node = _node("direct", bindings={"prompt": "task.prompt"})
     unsupported_node = NodeSpec.model_construct(
@@ -660,6 +719,220 @@ def test_multiple_provider_configs_require_node_provider_config_id() -> None:
 
     with pytest.raises(PermanentFailureError, match="provider_config_id"):
         provider_config_ref_for_node(spec=spec, node=node)
+
+
+def test_throttle_preflight_propagates_provider_resolution_errors() -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(
+        graph,
+        providers=(
+            _provider(config_id="encoder", model="encoder-model"),
+            _provider(config_id="decoder", model="decoder-model"),
+        ),
+    )
+    preflight = cast(Any, graph_workflow.throttle_preflight_step).__wrapped__
+
+    with pytest.raises(PermanentFailureError, match="provider_config_id"):
+        preflight(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+        )
+
+
+def test_execute_lm_node_step_records_one_throttle_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+    throttle_writes: list[dict[str, Any]] = []
+
+    def fail_lm_node(**kwargs: Any) -> NodeStepResult:
+        raise TransientFailureError("temporary provider failure")
+
+    monkeypatch.setattr(graph_workflow, "execute_lm_node", fail_lm_node)
+    monkeypatch.setattr(
+        graph_workflow,
+        "provider_throttle_delay_seconds",
+        lambda *args, **kwargs: 0.0,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "record_throttle_failure_state",
+        lambda **kwargs: throttle_writes.append(kwargs),
+    )
+    step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
+
+    with pytest.raises(TransientFailureError):
+        step(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+            {"prompt": "write add"},
+        )
+
+    assert len(throttle_writes) == 1
+    assert throttle_writes[0]["throttle_key"] == "openai:responses:gpt-test"
+
+
+def test_throttle_backoff_lifecycle_records_delays_and_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTransaction:
+        def __enter__(self) -> object:
+            return object()
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: Any,
+        ) -> None:
+            pass
+
+    class FakeEngine:
+        def begin(self) -> FakeTransaction:
+            return FakeTransaction()
+
+        def dispose(self) -> None:
+            pass
+
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
+    spec = _spec(graph)
+    throttle_key = "openai:responses:gpt-test"
+    state_by_key: dict[str, backoff.ThrottleBackoffState | None] = {}
+    execute_calls = 0
+
+    def record_failure(
+        connection: object,
+        *,
+        throttle_key: str,
+        failure: Any,
+        now: datetime,
+    ) -> backoff.ThrottleBackoffState:
+        state = backoff.ThrottleBackoffState(
+            throttle_key=throttle_key,
+            blocked_until=now + timedelta(seconds=12),
+            consecutive_failures=1,
+            failure_class=failure.failure_class,
+            last_error_type=failure.failure_exception_type,
+            last_message=failure.message,
+            metadata=failure.failure_metadata,
+            updated_at=now,
+        )
+        state_by_key[throttle_key] = state
+        return state
+
+    def run_node(**kwargs: Any) -> NodeStepResult:
+        nonlocal execute_calls
+        execute_calls += 1
+        if execute_calls == 1:
+            raise RateLimitedFailureError("rate limited")
+        return _step_success(node, "generated code")
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "create_engine",
+        lambda url: FakeEngine(),
+    )
+    monkeypatch.setattr(graph_workflow, "utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        graph_workflow,
+        "record_throttle_failure",
+        record_failure,
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "throttle_delay_seconds",
+        lambda connection, *, throttle_key, now: (
+            backoff.delay_until_unblocked_seconds(
+                state_by_key.get(throttle_key),
+                now=now,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        graph_workflow,
+        "clear_throttle_backoff",
+        lambda connection, *, throttle_key, now: state_by_key.__setitem__(
+            throttle_key,
+            backoff.ThrottleBackoffState(
+                throttle_key=throttle_key,
+                consecutive_failures=0,
+                metadata={},
+                updated_at=now,
+            ),
+        ),
+    )
+    monkeypatch.setattr(graph_workflow, "execute_lm_node", run_node)
+    monkeypatch.setattr(
+        graph_workflow,
+        "sleep_for_backoff_seconds",
+        lambda seconds: None,
+    )
+
+    execute_step = cast(Any, graph_workflow.execute_lm_node_step).__wrapped__
+    preflight = cast(Any, graph_workflow.throttle_preflight_step).__wrapped__
+
+    with pytest.raises(RateLimitedFailureError):
+        execute_step(
+            "postgresql://example/db",
+            spec.model_dump(mode="json"),
+            node.model_dump(mode="json"),
+            {"prompt": "write add"},
+        )
+
+    recorded = state_by_key[throttle_key]
+    assert recorded is not None
+    assert recorded.failure_class is FailureClass.RATE_LIMITED
+    assert preflight(
+        "postgresql://example/db",
+        spec.model_dump(mode="json"),
+        node.model_dump(mode="json"),
+    ) == 12.0
+
+    result = execute_step(
+        "postgresql://example/db",
+        spec.model_dump(mode="json"),
+        node.model_dump(mode="json"),
+        {"prompt": "write add"},
+    )
+
+    assert (
+        NodeStepResult.model_validate(result).status
+        is NodeAttemptStatus.SUCCESS
+    )
+    cleared = state_by_key[throttle_key]
+    assert cleared is not None
+    assert cleared.blocked_until is None
+    assert cleared.consecutive_failures == 0
+
+
+def test_throttle_state_write_errors_are_not_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenEngine:
+        def begin(self) -> object:
+            raise RuntimeError("database unavailable")
+
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "create_engine",
+        lambda database_url: BrokenEngine(),
+    )
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        graph_workflow.record_throttle_failure_state(
+            database_url="postgresql://example/db",
+            throttle_key="openai:responses:gpt-test",
+            error=TransientFailureError("temporary provider failure"),
+        )
 
 
 def test_deterministic_generation_and_node_attempt_ids() -> None:
@@ -875,11 +1148,16 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
         *,
         database_url: str | None,
         dbos_system_database_url: str | None,
+        consume_generation_queue: bool,
     ) -> RuntimeConfig:
         calls.append(
             (
                 "configure",
-                (database_url, dbos_system_database_url),
+                (
+                    database_url,
+                    dbos_system_database_url,
+                    consume_generation_queue,
+                ),
             )
         )
         return RuntimeConfig()
@@ -924,7 +1202,7 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
 
     assert calls == [
         ("load_env", None),
-        ("configure", ("postgresql://app/db", "postgresql://dbos/db")),
+        ("configure", ("postgresql://app/db", "postgresql://dbos/db", False)),
         ("run_once", ("postgresql://example/db", "prediction-1", 3)),
         ("destroy", None),
     ]

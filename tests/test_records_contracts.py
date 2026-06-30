@@ -26,8 +26,9 @@ from dr_dspy.lm.boundary import (
     openai_responses_config,
 )
 from dr_dspy.records import (
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
-    BatchSubmitItemStatus,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
@@ -780,7 +781,8 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
         item_index=1,
         prediction_id="prediction-1",
         fair_order_key="abc",
-        status=BatchSubmitItemStatus.FAILED,
+        insert_status=BatchSubmitItemInsertStatus.INSERTED,
+        enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
         failure=_failure(),
         created_at=NOW,
     )
@@ -790,6 +792,36 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
     )
     assert operation.model_dump(mode="json")["status"] == "partial"
     assert item.model_dump(mode="json")["failure"]["message"] == "boom"
+
+
+def test_batch_submit_item_claiming_requires_claim_metadata() -> None:
+    with pytest.raises(ValidationError, match="enqueue_claim_id"):
+        BatchSubmitItemRecord(
+            batch_submit_item_id="item-1",
+            operation_key="op-1",
+            item_index=0,
+            prediction_id="prediction-1",
+            fair_order_key="abc",
+            insert_status=BatchSubmitItemInsertStatus.INSERTED,
+            enqueue_status=BatchSubmitItemEnqueueStatus.CLAIMING,
+            enqueue_metadata={},
+            created_at=NOW,
+        )
+
+
+def test_batch_submit_item_pending_rejects_claim_metadata() -> None:
+    with pytest.raises(ValidationError, match="empty enqueue_metadata"):
+        BatchSubmitItemRecord(
+            batch_submit_item_id="item-1",
+            operation_key="op-1",
+            item_index=0,
+            prediction_id="prediction-1",
+            fair_order_key="abc",
+            insert_status=BatchSubmitItemInsertStatus.INSERTED,
+            enqueue_status=BatchSubmitItemEnqueueStatus.PENDING,
+            enqueue_metadata={"enqueue_claim_id": "claim-1"},
+            created_at=NOW,
+        )
 
 
 def test_projection_requires_selected_generation_or_score() -> None:

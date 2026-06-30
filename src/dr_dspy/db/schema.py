@@ -20,7 +20,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.records import (
-    BatchSubmitItemStatus,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
     BatchSubmitOperationStatus,
     GenerationRunStatus,
     NodeAttemptStatus,
@@ -35,6 +36,7 @@ SCORE_ATTEMPTS_TABLE = "dr_dspy_score_attempts"
 PREDICTION_PROJECTION_TABLE = "dr_dspy_prediction_projection"
 BATCH_SUBMIT_OPERATIONS_TABLE = "dr_dspy_batch_submit_operations"
 BATCH_SUBMIT_ITEMS_TABLE = "dr_dspy_batch_submit_items"
+THROTTLE_BACKOFF_TABLE = "dr_dspy_throttle_backoff"
 
 V1_TABLE_NAMES = (
     EXPERIMENTS_TABLE,
@@ -45,6 +47,7 @@ V1_TABLE_NAMES = (
     PREDICTION_PROJECTION_TABLE,
     BATCH_SUBMIT_OPERATIONS_TABLE,
     BATCH_SUBMIT_ITEMS_TABLE,
+    THROTTLE_BACKOFF_TABLE,
 )
 
 # Outcome facts are append-only at the DB layer; projection remains mutable.
@@ -108,7 +111,7 @@ AND already_present_count <= requested_count
 AND enqueued_count <= requested_count
 AND failed_count <= requested_count
 AND inserted_count + already_present_count <= requested_count
-AND enqueued_count + failed_count <= requested_count
+AND enqueued_count + already_scheduled_count + failed_count <= requested_count
 """.strip()
 
 
@@ -116,7 +119,7 @@ BATCH_SUBMIT_OPS_COMPLETED_CHECK = """
 status != 'completed'
 OR (
   completed_at IS NOT NULL
-  AND enqueued_count + failed_count = requested_count
+  AND enqueued_count + already_scheduled_count + failed_count = requested_count
 )
 """.strip()
 
@@ -428,6 +431,7 @@ batch_submit_operations = Table(
     Column("inserted_count", Integer, nullable=False),
     Column("already_present_count", Integer, nullable=False),
     Column("enqueued_count", Integer, nullable=False),
+    Column("already_scheduled_count", Integer, nullable=False),
     Column("failed_count", Integer, nullable=False),
     Column("spec", JSONB, nullable=False),
     Column("metadata", JSONB, nullable=False),
@@ -440,7 +444,7 @@ batch_submit_operations = Table(
     CheckConstraint(
         "requested_count >= 0 AND inserted_count >= 0 "
         "AND already_present_count >= 0 AND enqueued_count >= 0 "
-        "AND failed_count >= 0",
+        "AND already_scheduled_count >= 0 AND failed_count >= 0",
         name="ck_dr_dspy_batch_ops_counts",
     ),
     CheckConstraint(
@@ -475,7 +479,8 @@ batch_submit_items = Table(
         nullable=False,
     ),
     Column("fair_order_key", Text, nullable=False),
-    Column("status", Text, nullable=False),
+    Column("insert_status", Text, nullable=False),
+    Column("enqueue_status", Text, nullable=False),
     Column("enqueue_metadata", JSONB, nullable=False),
     Column("failure", JSONB),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -484,13 +489,17 @@ batch_submit_items = Table(
         name="ck_dr_dspy_batch_items_item_index",
     ),
     CheckConstraint(
-        enum_check("status", BatchSubmitItemStatus),
-        name="ck_dr_dspy_batch_items_status",
+        enum_check("insert_status", BatchSubmitItemInsertStatus),
+        name="ck_dr_dspy_batch_items_insert_status",
     ),
     CheckConstraint(
-        "(status = 'failed' OR failure IS NULL) "
-        "AND (status != 'failed' OR failure IS NOT NULL)",
-        name="ck_dr_dspy_batch_items_status_payload",
+        enum_check("enqueue_status", BatchSubmitItemEnqueueStatus),
+        name="ck_dr_dspy_batch_items_enqueue_status",
+    ),
+    CheckConstraint(
+        "(enqueue_status = 'failed' OR failure IS NULL) "
+        "AND (enqueue_status != 'failed' OR failure IS NOT NULL)",
+        name="ck_dr_dspy_batch_items_enqueue_status_payload",
     ),
     UniqueConstraint(
         "operation_key",
@@ -501,6 +510,23 @@ batch_submit_items = Table(
         "operation_key",
         "prediction_id",
         name="uq_dr_dspy_batch_items_operation_prediction",
+    ),
+)
+
+throttle_backoff = Table(
+    THROTTLE_BACKOFF_TABLE,
+    metadata,
+    Column("throttle_key", Text, primary_key=True),
+    Column("blocked_until", DateTime(timezone=True)),
+    Column("consecutive_failures", Integer, nullable=False),
+    Column("failure_class", Text),
+    Column("last_error_type", Text),
+    Column("last_message", Text),
+    Column("metadata", JSONB, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "consecutive_failures >= 0",
+        name="ck_dr_dspy_throttle_backoff_failures",
     ),
 )
 
@@ -544,6 +570,8 @@ Index("ix_dr_dspy_batch_ops_status", batch_submit_operations.c.status)
 Index("ix_dr_dspy_batch_items_operation", batch_submit_items.c.operation_key)
 Index("ix_dr_dspy_batch_items_prediction", batch_submit_items.c.prediction_id)
 Index("ix_dr_dspy_batch_items_fair_order", batch_submit_items.c.fair_order_key)
+Index("ix_dr_dspy_throttle_backoff_blocked_until",
+      throttle_backoff.c.blocked_until)
 
 v1_tables: tuple[Table, ...] = (
     experiments,
@@ -554,6 +582,7 @@ v1_tables: tuple[Table, ...] = (
     prediction_projection,
     batch_submit_operations,
     batch_submit_items,
+    throttle_backoff,
 )
 
 __all__ = [
@@ -567,6 +596,7 @@ __all__ = [
     "PREDICTION_PROJECTION_TABLE",
     "PREDICTION_SPECS_TABLE",
     "SCORE_ATTEMPTS_TABLE",
+    "THROTTLE_BACKOFF_TABLE",
     "V1_TABLE_NAMES",
     "batch_submit_items",
     "batch_submit_operations",
@@ -577,5 +607,6 @@ __all__ = [
     "prediction_projection",
     "prediction_specs",
     "score_attempts",
+    "throttle_backoff",
     "v1_tables",
 ]

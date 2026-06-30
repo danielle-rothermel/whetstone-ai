@@ -60,19 +60,27 @@ def _apply_v1_migrations(
     connection: Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    domain_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
-    )
-    append_only_migration = importlib.import_module(
+    migration_modules = (
+        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
+        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
         "dr_dspy.db.migrations.versions."
-        "20260630_0001_append_only_outcome_triggers"
+        "20260629_0003_batch_submit_already_scheduled_count",
+        "dr_dspy.db.migrations.versions."
+        "20260629_0004_batch_submit_enqueuing_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0001_append_only_outcome_triggers",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0002_batch_submit_terminal_enqueue_accounting",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0003_batch_submit_claiming_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0004_batch_submit_remove_prepared_status",
     )
-    context = MigrationContext.configure(cast(Any, connection))
-    monkeypatch.setattr(domain_migration, "op", Operations(context))
-    domain_migration.upgrade()
-    context = MigrationContext.configure(cast(Any, connection))
-    monkeypatch.setattr(append_only_migration, "op", Operations(context))
-    append_only_migration.upgrade()
+    for module_name in migration_modules:
+        migration = importlib.import_module(module_name)
+        context = MigrationContext.configure(cast(Any, connection))
+        monkeypatch.setattr(migration, "op", Operations(context))
+        migration.upgrade()
 
 
 @dataclass(frozen=True)

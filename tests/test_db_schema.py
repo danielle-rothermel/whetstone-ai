@@ -45,6 +45,7 @@ def test_schema_primary_keys_match_contract() -> None:
         ),
         schema.BATCH_SUBMIT_OPERATIONS_TABLE: ("operation_key",),
         schema.BATCH_SUBMIT_ITEMS_TABLE: ("batch_submit_item_id",),
+        schema.THROTTLE_BACKOFF_TABLE: ("throttle_key",),
     }
 
     for table_name, primary_key in expected.items():
@@ -140,16 +141,55 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.prediction_projection,
         CheckConstraint,
     )
-    assert "ck_dr_dspy_batch_items_status_payload" in _constraint_names(
+    assert "ck_dr_dspy_batch_items_insert_status" in _constraint_names(
         schema.batch_submit_items,
         CheckConstraint,
     )
+    assert "ck_dr_dspy_batch_items_enqueue_status" in _constraint_names(
+        schema.batch_submit_items,
+        CheckConstraint,
+    )
+    assert (
+        "ck_dr_dspy_batch_items_enqueue_status_payload"
+        in _constraint_names(schema.batch_submit_items, CheckConstraint)
+    )
+    batch_items_enqueue_status = next(
+        constraint
+        for constraint in schema.batch_submit_items.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_items_enqueue_status"
+        )
+    )
+    assert "claiming" in str(batch_items_enqueue_status.sqltext)
     assert "ck_dr_dspy_batch_ops_count_bounds" in _constraint_names(
         schema.batch_submit_operations,
         CheckConstraint,
     )
     assert "ck_dr_dspy_batch_ops_completed" in _constraint_names(
         schema.batch_submit_operations,
+        CheckConstraint,
+    )
+    batch_ops_count_bounds = next(
+        constraint
+        for constraint in schema.batch_submit_operations.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_ops_count_bounds"
+        )
+    )
+    batch_ops_completed = next(
+        constraint
+        for constraint in schema.batch_submit_operations.constraints
+        if (
+            isinstance(constraint, CheckConstraint)
+            and constraint.name == "ck_dr_dspy_batch_ops_completed"
+        )
+    )
+    assert "already_scheduled_count" in str(batch_ops_count_bounds.sqltext)
+    assert "already_scheduled_count" in str(batch_ops_completed.sqltext)
+    assert "ck_dr_dspy_throttle_backoff_failures" in _constraint_names(
+        schema.throttle_backoff,
         CheckConstraint,
     )
     assert _unique_constraint_columns(
@@ -198,6 +238,7 @@ def test_schema_has_indexes_for_common_reads() -> None:
         "ix_dr_dspy_score_attempts_generated_code_outcome",
         "ix_dr_dspy_projection_score",
         "ix_dr_dspy_batch_items_fair_order",
+        "ix_dr_dspy_throttle_backoff_blocked_until",
     } <= index_names
 
 

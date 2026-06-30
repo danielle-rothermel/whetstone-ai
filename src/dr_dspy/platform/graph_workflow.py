@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -10,7 +11,13 @@ from sqlalchemy import create_engine
 
 from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
-from dr_dspy.harness.dbos import (
+from dr_dspy.platform.backoff import (
+    clear_throttle_backoff,
+    record_throttle_failure,
+    throttle_delay_seconds,
+    utc_now,
+)
+from dr_dspy.platform.dbos_compat import (
     WORKFLOW_START_RACE_ERRORS,
     workflow_start_raced,
 )
@@ -21,6 +28,7 @@ from dr_dspy.platform.node_execution import (
     failure_metadata_from_exception,
     node_step_error_result_from_failure,
     node_step_timing_from_exception,
+    provider_config_ref_for_node,
 )
 from dr_dspy.platform.persistence import (
     generation_run_record_from_result,
@@ -32,6 +40,7 @@ from dr_dspy.records import (
     FailureMetadataPayload,
     GenerationRunRecord,
     NodeAttemptRecord,
+    NodeAttemptStatus,
     PredictionSpecRecord,
     stable_generation_run_id,
 )
@@ -46,8 +55,11 @@ GENERATION_COMPLETED_AT_STEP_NAME = (
 )
 NODE_STEP_ERROR_RESULT_STEP_NAME = "dr_dspy_platform_node_step_error_result_v1"
 EXECUTE_NODE_STEP_NAME = "dr_dspy_platform_execute_lm_node_v1"
+THROTTLE_PREFLIGHT_STEP_NAME = "dr_dspy_platform_throttle_preflight_v1"
 PERSIST_RESULT_STEP_NAME = "dr_dspy_platform_persist_generation_result_v1"
 WORKFLOW_ID_PREFIX = "platform-generate-v1"
+NODE_STEP_MAX_ATTEMPTS = 3
+NODE_STEP_RETRY_INTERVAL_SECONDS = 2.0
 
 type RunNodeStep = Callable[
     [PredictionSpecRecord, NodeSpec, Mapping[str, Any]],
@@ -135,18 +147,28 @@ def run_prediction_graph_workflow(
         node: NodeSpec,
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
+        spec_payload = step_spec.model_dump(mode="json")
+        node_payload = node.model_dump(mode="json")
+        node_inputs_payload = dict(node_inputs)
         try:
+            delay_seconds = throttle_preflight_step(
+                database_url,
+                spec_payload,
+                node_payload,
+            )
+            sleep_for_backoff_seconds(delay_seconds)
             result = execute_lm_node_step(
-                step_spec.model_dump(mode="json"),
-                node.model_dump(mode="json"),
-                dict(node_inputs),
+                database_url,
+                spec_payload,
+                node_payload,
+                node_inputs_payload,
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
             timing = node_step_timing_from_exception(error)
             result = node_step_error_result_step(
-                step_spec.model_dump(mode="json"),
-                node.model_dump(mode="json"),
+                spec_payload,
+                node_payload,
                 failure_metadata_from_exception(error).model_dump(mode="json"),
                 timing[0].isoformat() if timing is not None else None,
                 timing[1].isoformat() if timing is not None else None,
@@ -269,27 +291,76 @@ def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def sleep_for_backoff_seconds(seconds: float) -> None:
+    if seconds <= 0:
+        return
+    try:
+        DBOS.sleep(seconds)
+    except Exception:
+        time.sleep(seconds)
+
+
+@DBOS.step(name=THROTTLE_PREFLIGHT_STEP_NAME)
+def throttle_preflight_step(
+    database_url: str,
+    spec_payload: dict[str, Any],
+    node_payload: dict[str, Any],
+) -> float:
+    return provider_throttle_delay_seconds(
+        database_url,
+        spec_payload,
+        node_payload,
+    )
+
+
+def provider_throttle_delay_seconds(
+    database_url: str,
+    spec_payload: dict[str, Any],
+    node_payload: dict[str, Any],
+) -> float:
+    provider_ref = provider_config_ref_for_node(
+        spec=PredictionSpecRecord.model_validate(spec_payload),
+        node=NodeSpec.model_validate(node_payload),
+    )
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            return throttle_delay_seconds(
+                connection,
+                throttle_key=provider_ref.throttle_key,
+                now=utc_now(),
+            )
+    finally:
+        engine.dispose()
+
+
 @DBOS.step(
     name=EXECUTE_NODE_STEP_NAME,
     retries_allowed=True,
-    max_attempts=3,
-    interval_seconds=2.0,
+    max_attempts=NODE_STEP_MAX_ATTEMPTS,
+    interval_seconds=NODE_STEP_RETRY_INTERVAL_SECONDS,
     should_retry=should_retry_step,
 )
 def execute_lm_node_step(
+    database_url: str,
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
     node_inputs: dict[str, Any],
 ) -> dict[str, Any]:
+    spec = PredictionSpecRecord.model_validate(spec_payload)
+    node = NodeSpec.model_validate(node_payload)
+    try:
+        provider_ref = provider_config_ref_for_node(spec=spec, node=node)
+    except Exception:
+        provider_ref = None
     step_started_at = datetime.now(UTC)
     try:
         result = execute_lm_node(
-            spec=PredictionSpecRecord.model_validate(spec_payload),
-            node=NodeSpec.model_validate(node_payload),
+            spec=spec,
+            node=node,
             node_inputs=node_inputs,
             raise_retryable=True,
         )
-        return result.model_dump(mode="json")
     except Exception as error:
         if node_step_timing_from_exception(error) is None:
             attach_node_step_timing_to_exception(
@@ -297,7 +368,60 @@ def execute_lm_node_step(
                 started_at=step_started_at,
                 completed_at=datetime.now(UTC),
             )
+        if provider_ref is not None:
+            record_throttle_failure_state(
+                database_url=database_url,
+                throttle_key=provider_ref.throttle_key,
+                error=error,
+            )
         raise
+    if result.status is NodeAttemptStatus.SUCCESS and provider_ref is not None:
+        try:
+            clear_throttle_backoff_state(
+                database_url=database_url,
+                throttle_key=provider_ref.throttle_key,
+            )
+        except Exception:
+            pass
+    return result.model_dump(mode="json")
+
+
+def record_throttle_failure_state(
+    *,
+    database_url: str,
+    throttle_key: str,
+    error: BaseException,
+) -> None:
+    from dr_dspy.eval_failures import summarize_exception
+
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            record_throttle_failure(
+                connection,
+                throttle_key=throttle_key,
+                failure=summarize_exception(error),
+                now=utc_now(),
+            )
+    finally:
+        engine.dispose()
+
+
+def clear_throttle_backoff_state(
+    *,
+    database_url: str,
+    throttle_key: str,
+) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            clear_throttle_backoff(
+                connection,
+                throttle_key=throttle_key,
+                now=utc_now(),
+            )
+    finally:
+        engine.dispose()
 
 
 @DBOS.step(name=NODE_STEP_ERROR_RESULT_STEP_NAME)
