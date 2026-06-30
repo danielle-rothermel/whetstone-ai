@@ -52,10 +52,23 @@ def _output(value: Any, *, field: str = "output") -> NodeOutput:
     return NodeOutput(values={field: value})
 
 
+def _graph(
+    *nodes: NodeSpec,
+    terminal_node_id: str,
+    task_fields: tuple[str, ...] = (),
+) -> GraphSpec:
+    return GraphSpec(
+        nodes=nodes,
+        terminal_node_id=terminal_node_id,
+        task_fields=task_fields,
+    )
+
+
 def test_direct_one_node_graph_success() -> None:
-    graph = GraphSpec(
-        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
+        task_fields=("prompt",),
     )
 
     result = execute_graph(
@@ -81,7 +94,12 @@ def test_two_node_graph_binds_upstream_output_into_downstream_input() -> None:
         bindings={"description": "encoder.description"},
         output_field="code",
     )
-    graph = GraphSpec(nodes=(decoder, encoder), terminal_node_id="decoder")
+    graph = _graph(
+        decoder,
+        encoder,
+        terminal_node_id="decoder",
+        task_fields=("prompt",),
+    )
     seen_inputs: dict[str, Mapping[str, Any]] = {}
 
     def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
@@ -106,8 +124,10 @@ def test_two_node_graph_binds_upstream_output_into_downstream_input() -> None:
 
 
 def test_topological_order_is_deterministic_for_independent_nodes() -> None:
-    graph = GraphSpec(
-        nodes=(_node("zeta"), _node("alpha"), _node("middle")),
+    graph = _graph(
+        _node("zeta"),
+        _node("alpha"),
+        _node("middle"),
         terminal_node_id="middle",
     )
 
@@ -205,10 +225,28 @@ def test_node_config_rejects_binding_to_undeclared_input_field() -> None:
         )
 
 
+def test_unknown_task_binding_field_validation() -> None:
+    with pytest.raises(ValueError, match="task binding field\\(s\\) 'promt'"):
+        _graph(
+            _node("direct", bindings={"prompt": "task.promt"}),
+            terminal_node_id="direct",
+            task_fields=("prompt",),
+        )
+
+
+def test_task_bindings_require_task_fields() -> None:
+    with pytest.raises(ValueError, match="declares no task_fields"):
+        _graph(
+            _node("direct", bindings={"prompt": "task.prompt"}),
+            terminal_node_id="direct",
+        )
+
+
 def test_missing_task_input_becomes_error_outcome() -> None:
-    graph = GraphSpec(
-        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
+        task_fields=("prompt",),
     )
 
     result = execute_graph(
@@ -230,8 +268,8 @@ def test_missing_task_input_becomes_error_outcome() -> None:
 
 
 def test_missing_returned_output_field_becomes_node_execution_error() -> None:
-    graph = GraphSpec(
-        nodes=(_node("direct", output_field="code"),),
+    graph = _graph(
+        _node("direct", output_field="code"),
         terminal_node_id="direct",
     )
 
@@ -268,17 +306,17 @@ def test_binding_ref_rejects_empty_node_field() -> None:
 
 
 def test_graph_digest_rejects_invalid_length() -> None:
-    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
-    with pytest.raises(ValueError, match="graph digest length must be"):
+    graph = _graph(_node("direct"), terminal_node_id="direct")
+    with pytest.raises(ValueError, match="digest length must be"):
         graph_digest(graph, length=0)
-    with pytest.raises(ValueError, match="graph digest length must be"):
+    with pytest.raises(ValueError, match="digest length must be"):
         graph_digest(graph, length=-1)
-    with pytest.raises(ValueError, match="graph digest length must be"):
+    with pytest.raises(ValueError, match="digest length must be"):
         graph_digest(graph, length=65)
 
 
 def test_node_exception_captures_persistable_error() -> None:
-    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    graph = _graph(_node("direct"), terminal_node_id="direct")
     error = PermanentFailureError(
         "provider rejected request",
         metadata={"provider": "test"},
@@ -307,7 +345,7 @@ def test_node_error_preserves_wrapped_step_failure_diagnostics() -> None:
             self.failure_class = "permanent"
             self.metadata = {"provider": "test"}
 
-    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    graph = _graph(_node("direct"), terminal_node_id="direct")
 
     def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
         raise StepFailure()
@@ -324,7 +362,7 @@ def test_node_error_preserves_wrapped_step_failure_diagnostics() -> None:
 
 
 def test_node_error_preserves_underlying_exception_type() -> None:
-    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    graph = _graph(_node("direct"), terminal_node_id="direct")
     error = PermanentFailureError(
         "classified failure",
         underlying=ValueError("bad payload"),
@@ -345,8 +383,9 @@ def test_node_error_preserves_underlying_exception_type() -> None:
 
 
 def test_independent_nodes_continue_after_unrelated_failure() -> None:
-    graph = GraphSpec(
-        nodes=(_node("terminal"), _node("bad")),
+    graph = _graph(
+        _node("terminal"),
+        _node("bad"),
         terminal_node_id="terminal",
     )
 
@@ -364,12 +403,11 @@ def test_independent_nodes_continue_after_unrelated_failure() -> None:
 
 
 def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
-    graph = GraphSpec(
-        nodes=(
-            _node("encoder", bindings={"prompt": "task.prompt"}),
-            _node("decoder", bindings={"description": "encoder"}),
-        ),
+    graph = _graph(
+        _node("encoder", bindings={"prompt": "task.prompt"}),
+        _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
+        task_fields=("prompt",),
     )
 
     def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
@@ -393,12 +431,11 @@ def test_downstream_nodes_are_blocked_when_dependency_errors() -> None:
 
 
 def test_blocked_nodes_do_not_invoke_run_node() -> None:
-    graph = GraphSpec(
-        nodes=(
-            _node("encoder", bindings={"prompt": "task.prompt"}),
-            _node("decoder", bindings={"description": "encoder"}),
-        ),
+    graph = _graph(
+        _node("encoder", bindings={"prompt": "task.prompt"}),
+        _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
+        task_fields=("prompt",),
     )
     invoked: list[str] = []
 
@@ -420,12 +457,10 @@ def test_blocked_nodes_do_not_invoke_run_node() -> None:
 
 
 def test_blocked_node_lists_all_failed_dependencies() -> None:
-    graph = GraphSpec(
-        nodes=(
-            _node("terminal", bindings={"left": "a", "right": "b"}),
-            _node("b"),
-            _node("a"),
-        ),
+    graph = _graph(
+        _node("terminal", bindings={"left": "a", "right": "b"}),
+        _node("b"),
+        _node("a"),
         terminal_node_id="terminal",
     )
 
@@ -442,11 +477,9 @@ def test_blocked_node_lists_all_failed_dependencies() -> None:
 
 
 def test_default_node_ref_uses_upstream_configured_output_field() -> None:
-    graph = GraphSpec(
-        nodes=(
-            _node("encoder", output_field="description"),
-            _node("decoder", bindings={"description": "encoder"}),
-        ),
+    graph = _graph(
+        _node("encoder", output_field="description"),
+        _node("decoder", bindings={"description": "encoder"}),
         terminal_node_id="decoder",
     )
 
@@ -461,7 +494,7 @@ def test_default_node_ref_uses_upstream_configured_output_field() -> None:
 
 
 def test_result_json_dump_is_persistable_shape() -> None:
-    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    graph = _graph(_node("direct"), terminal_node_id="direct")
 
     result = execute_graph(
         graph=graph,
@@ -488,9 +521,10 @@ def test_result_json_dump_is_persistable_shape() -> None:
 
 
 def test_graph_digest_is_stable_for_equivalent_graph_specs() -> None:
-    graph = GraphSpec(
-        nodes=(_node("direct", bindings={"prompt": "task.prompt"}),),
+    graph = _graph(
+        _node("direct", bindings={"prompt": "task.prompt"}),
         terminal_node_id="direct",
+        task_fields=("prompt",),
     )
     same_graph = GraphSpec.model_validate(graph.model_dump(mode="json"))
 
@@ -498,16 +532,226 @@ def test_graph_digest_is_stable_for_equivalent_graph_specs() -> None:
 
 
 def test_graph_digest_changes_with_node_declaration_order() -> None:
-    first = GraphSpec(
-        nodes=(_node("a"), _node("b")),
-        terminal_node_id="a",
-    )
-    second = GraphSpec(
-        nodes=(_node("b"), _node("a")),
-        terminal_node_id="a",
-    )
+    first = _graph(_node("a"), _node("b"), terminal_node_id="a")
+    second = _graph(_node("b"), _node("a"), terminal_node_id="a")
 
     assert first.topological_order() == tuple(
         sorted(first.nodes, key=lambda n: n.id)
     )
     assert graph_digest(first) != graph_digest(second)
+
+
+def test_run_node_dict_return_is_coerced_to_node_output() -> None:
+    graph = _graph(_node("direct"), terminal_node_id="direct")
+
+    result = execute_graph(
+        graph=graph,
+        inputs={},
+        run_node=lambda node, inputs: {
+            "values": {"output": "ok"},
+            "metadata": {},
+        },
+    )
+
+    assert result.status is GraphRunStatus.SUCCESS
+    assert result.terminal_output == "ok"
+
+
+def test_invalid_run_node_return_shape_becomes_error_outcome() -> None:
+    graph = _graph(_node("direct"), terminal_node_id="direct")
+
+    result = execute_graph(
+        graph=graph,
+        inputs={},
+        run_node=lambda node, inputs: {"values": "not a dict"},
+    )
+
+    outcome = result.outcomes["direct"]
+    assert result.status is GraphRunStatus.ERROR
+    assert outcome.status is NodeOutcomeStatus.ERROR
+    assert outcome.error is not None
+    assert "ValidationError" in outcome.error.error_type
+
+
+def test_error_outcome_json_dump_is_persistable_shape() -> None:
+    graph = _graph(_node("direct"), terminal_node_id="direct")
+
+    result = execute_graph(
+        graph=graph,
+        inputs={},
+        run_node=lambda node, inputs: (_ for _ in ()).throw(
+            RuntimeError("boom")
+        ),
+    )
+
+    outcome = result.outcomes["direct"]
+    assert outcome.error is not None
+    assert result.model_dump(mode="json") == {
+        "status": "error",
+        "outcomes": {
+            "direct": {
+                "node_id": "direct",
+                "status": "error",
+                "output": None,
+                "error": {
+                    "error_type": (
+                        f"{RuntimeError.__module__}."
+                        f"{RuntimeError.__qualname__}"
+                    ),
+                    "message": "boom",
+                    "failure_class": None,
+                    "metadata": {},
+                },
+                "blocked_by": [],
+            }
+        },
+        "execution_order": ["direct"],
+        "terminal_node_id": "direct",
+        "terminal_output": None,
+        "terminal_error": {
+            "node_id": "direct",
+            "status": "error",
+            "error": {
+                "error_type": (
+                    f"{RuntimeError.__module__}."
+                    f"{RuntimeError.__qualname__}"
+                ),
+                "message": "boom",
+                "failure_class": None,
+                "metadata": {},
+            },
+            "blocked_by": [],
+        },
+    }
+
+
+def test_blocked_outcome_json_dump_is_persistable_shape() -> None:
+    graph = _graph(
+        _node("encoder", bindings={"prompt": "task.prompt"}),
+        _node("decoder", bindings={"description": "encoder"}),
+        terminal_node_id="decoder",
+        task_fields=("prompt",),
+    )
+
+    result = execute_graph(
+        graph=graph,
+        inputs={"prompt": "write f"},
+        run_node=lambda node, inputs: (_ for _ in ()).throw(
+            RuntimeError("encoder failed")
+        ),
+    )
+
+    assert result.model_dump(mode="json") == {
+        "status": "blocked",
+        "outcomes": {
+            "encoder": {
+                "node_id": "encoder",
+                "status": "error",
+                "output": None,
+                "error": {
+                    "error_type": (
+                        f"{RuntimeError.__module__}."
+                        f"{RuntimeError.__qualname__}"
+                    ),
+                    "message": "encoder failed",
+                    "failure_class": None,
+                    "metadata": {},
+                },
+                "blocked_by": [],
+            },
+            "decoder": {
+                "node_id": "decoder",
+                "status": "blocked",
+                "output": None,
+                "error": None,
+                "blocked_by": ["encoder"],
+            },
+        },
+        "execution_order": ["encoder", "decoder"],
+        "terminal_node_id": "decoder",
+        "terminal_output": None,
+        "terminal_error": {
+            "node_id": "decoder",
+            "status": "blocked",
+            "error": None,
+            "blocked_by": ["encoder"],
+        },
+    }
+
+
+def test_partial_outcome_json_dump_is_persistable_shape() -> None:
+    graph = _graph(
+        _node("terminal"),
+        _node("bad"),
+        terminal_node_id="terminal",
+    )
+
+    result = execute_graph(
+        graph=graph,
+        inputs={},
+        run_node=lambda node, inputs: (
+            _output("ok")
+            if node.id == "terminal"
+            else (_ for _ in ()).throw(RuntimeError("boom"))
+        ),
+    )
+
+    assert result.model_dump(mode="json") == {
+        "status": "partial",
+        "outcomes": {
+            "bad": {
+                "node_id": "bad",
+                "status": "error",
+                "output": None,
+                "error": {
+                    "error_type": (
+                        f"{RuntimeError.__module__}."
+                        f"{RuntimeError.__qualname__}"
+                    ),
+                    "message": "boom",
+                    "failure_class": None,
+                    "metadata": {},
+                },
+                "blocked_by": [],
+            },
+            "terminal": {
+                "node_id": "terminal",
+                "status": "success",
+                "output": {"values": {"output": "ok"}, "metadata": {}},
+                "error": None,
+                "blocked_by": [],
+            },
+        },
+        "execution_order": ["bad", "terminal"],
+        "terminal_node_id": "terminal",
+        "terminal_output": "ok",
+        "terminal_error": None,
+    }
+
+
+def test_binding_ref_round_trips_through_graph_spec_json_dump() -> None:
+    graph = _graph(
+        _node(
+            "encoder",
+            bindings={"prompt": "task.prompt"},
+            output_field="description",
+        ),
+        _node(
+            "decoder",
+            bindings={"description": "encoder.description"},
+            output_field="code",
+        ),
+        terminal_node_id="decoder",
+        task_fields=("prompt",),
+    )
+
+    payload = graph.model_dump(mode="json")
+    assert payload["nodes"][0]["config"]["input_bindings"]["prompt"] == (
+        "task.prompt"
+    )
+    assert payload["nodes"][1]["config"]["input_bindings"]["description"] == (
+        "encoder.description"
+    )
+
+    round_tripped = GraphSpec.model_validate(payload)
+    assert round_tripped == graph

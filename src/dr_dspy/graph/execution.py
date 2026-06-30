@@ -17,7 +17,10 @@ from dr_dspy.graph.models import (
     TerminalError,
 )
 
-type RunNode = Callable[[NodeSpec, Mapping[str, Any]], NodeOutput]
+type RunNode = Callable[
+    [NodeSpec, Mapping[str, Any]],
+    NodeOutput | Mapping[str, Any],
+]
 
 
 def execute_graph(

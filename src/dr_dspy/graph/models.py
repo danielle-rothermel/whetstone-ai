@@ -136,6 +136,8 @@ class NodeConfig(BaseModel):
     fields: tuple[FieldSpec, ...] = ()
     input_bindings: dict[str, BindingRef] = Field(default_factory=dict)
     output_field: StrictStr
+    # Included in graph_digest via GraphSpec.model_dump; keep payloads small
+    # until schema freeze adds explicit size/type constraints.
     parameters: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -195,6 +197,7 @@ class GraphSpec(BaseModel):
 
     nodes: tuple[NodeSpec, ...]
     terminal_node_id: StrictStr
+    task_fields: tuple[StrictStr, ...] = ()
 
     def node_ids(self) -> list[str]:
         return [node.id for node in self.nodes]
@@ -395,7 +398,31 @@ def validate_graph_spec(graph: GraphSpec) -> None:
     for node in graph.nodes:
         for ref in node.config.input_bindings.values():
             validate_binding_ref(ref, nodes_by_id)
+    validate_task_binding_fields(graph)
     validate_acyclic_graph(graph.nodes)
+
+
+def validate_task_binding_fields(graph: GraphSpec) -> None:
+    task_binding_fields = {
+        ref.field
+        for node in graph.nodes
+        for ref in node.config.input_bindings.values()
+        if ref.source is BindingSource.TASK and ref.field is not None
+    }
+    if not task_binding_fields:
+        return
+    if not graph.task_fields:
+        raise GraphValidationError(
+            "graph uses task bindings but declares no task_fields; "
+            "set task_fields to the allowed task input names"
+        )
+    allowed = set(graph.task_fields)
+    unknown = sorted(task_binding_fields - allowed)
+    if unknown:
+        unknown_list = ", ".join(repr(field) for field in unknown)
+        raise GraphValidationError(
+            f"task binding field(s) {unknown_list} not in task_fields"
+        )
 
 
 def validate_binding_ref(
