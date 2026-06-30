@@ -14,7 +14,6 @@ and skip gracefully when PostgreSQL is unavailable.
 | `./scripts/ci/unit.sh` | Unit tests (excludes integration marker) |
 | `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (generation + scoring) |
 | `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
-| `./scripts/ci/coverage.sh` | Unit + integration tests with combined coverage report |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
 Install dev dependencies (including `dspy` for serialization contract tests) with
@@ -61,7 +60,6 @@ tests/
 scripts/ci/                   # portable CI entrypoints (package-root cwd)
   unit.sh
   integration.sh
-  coverage.sh
   lint.sh
 src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
@@ -136,24 +134,6 @@ Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
 workflows are under test. Tier 4 pipeline tests use `reset_dbos_generation_consumer`
 instead.
 
-## Coverage
-
-Combined coverage runs unit tests first, then appends integration test
-coverage. The threshold is enforced on the merged report because migration
-backfill/downgrade proofs and submit idempotency live in the integration tier.
-
-| Command | Notes |
-|---------|-------|
-| `./scripts/ci/coverage.sh` | Requires Postgres (`DATABASE_URL`) for integration append |
-| `uv sync --group dev` | Installs `coverage` and `pytest-cov` dev dependencies |
-
-Current `fail_under` threshold: **88%** in [`pyproject.toml`](pyproject.toml)
-(`[tool.coverage.report]`). Combined unit + integration coverage is typically
-**~94%**; unit-only coverage alone is not sufficient for DB/migration gaps.
-
-CI runs a dedicated **Coverage** job (see below) that executes
-`./scripts/ci/coverage.sh` with a Postgres 16 service.
-
 ## CI
 
 GitHub Actions workflow: [`.github/workflows/whetstone_tests.yml`](.github/workflows/whetstone_tests.yml).
@@ -164,14 +144,12 @@ Jobs run from the standalone repository root.
 | lint | `./scripts/ci/lint.sh` | ruff + ty |
 | unit | `./scripts/ci/unit.sh` | unit tests |
 | integration | `./scripts/ci/integration.sh` | Postgres 16 service; integration tests |
-| coverage | `./scripts/ci/coverage.sh` | Postgres 16 service; combined coverage gate |
 
 Local equivalents (from the package root):
 
 ```bash
 ./scripts/ci/lint.sh
 ./scripts/ci/unit.sh
-./scripts/ci/coverage.sh
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
@@ -187,6 +165,11 @@ DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 wiring after the org repo is created.
 
 ## Changelog
+
+### 2026-06-30 — Remove coverage gate
+
+- Removed `./scripts/ci/coverage.sh` and the **Coverage** CI job.
+- CI now runs lint, unit, and integration jobs only.
 
 ### 2026-06-30 — Remove unused `lm.utils` symbols
 
