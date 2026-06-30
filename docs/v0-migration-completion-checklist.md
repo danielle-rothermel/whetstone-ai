@@ -1,5 +1,11 @@
 # v0 migration completion checklist
 
+**Current status:** Active only for the backfill, validation, and rescoring
+steps needed by the June 30 eval push. Keep legacy v0 Postgres tables as
+read-only backup for now. The post-backfill deletion checklist is future work
+unless the user explicitly asks for cleanup. See [`../AGENTS.md`](../AGENTS.md)
+for active priorities.
+
 **Purpose:** Define what was removed when v0 runtime code was archived, what remains for backfill, and the exact cleanup required after live migration is validated.
 
 **Related:** [`remaining-implementation-intentions.md`](remaining-implementation-intentions.md), [`TESTING.md`](../TESTING.md) Tier 3.5

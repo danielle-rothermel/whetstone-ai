@@ -1,5 +1,11 @@
 # v1 schema migrations (frozen)
 
+**Current status:** Frozen schema reference. During the June 30 eval push, do
+not change migration history or pursue schema cleanup unless it directly blocks
+backfill, rescoring, model selection, the enc-dec budget sweep, or the minimal
+COPRO-style experiment loop. Use [`../AGENTS.md`](../AGENTS.md) for active
+priorities.
+
 **Purpose:** Single source of truth for the v1 Alembic revision chain, fresh-database setup, and reset procedure for databases that applied draft schemas during hardening.
 
 **Code anchor:** [`src/dr_dspy/db/migrations/head.py`](../src/dr_dspy/db/migrations/head.py) — `V1_MIGRATION_HEAD`, `V1_MIGRATION_BASE`, `V1_MIGRATION_REVISION_COUNT`.

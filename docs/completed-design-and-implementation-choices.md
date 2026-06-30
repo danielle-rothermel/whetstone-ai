@@ -1,5 +1,11 @@
 # Completed design and implementation choices
 
+**Current status:** Architecture reference only. During the June 30 eval push,
+use [`../AGENTS.md`](../AGENTS.md) for active priorities and do not turn this
+reference into new platform-polish work unless it directly blocks backfill,
+rescoring, model selection, the enc-dec budget sweep, or the minimal
+COPRO-style experiment loop.
+
 **Canonical companion:** [`remaining-implementation-intentions.md`](remaining-implementation-intentions.md) (backlog and deferred work).
 
 **Date:** 2026-06-30  

@@ -1,9 +1,16 @@
-# Remaining implementation intentions and open work
+# Future work and deprioritized implementation intentions
+
+**Current status:** This document is the future-work and deprioritized-backlog
+parking lot during the June 30 eval push. Do not treat it as the active task
+list. The active priority is in [`../AGENTS.md`](../AGENTS.md): backfill and
+rescore, choose today's models, run the enc-dec budget sweep baseline, and get
+a minimal COPRO-style loop producing numbers.
 
 **Canonical docs:** [`completed-design-and-implementation-choices.md`](completed-design-and-implementation-choices.md) (settled decisions), this file (backlog and deferred work), [`v1-schema-migrations.md`](v1-schema-migrations.md) (frozen Alembic history), [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) (backfill cleanup).
 
 **Date:** 2026-06-30  
-**Purpose:** Consolidated backlog of unfinished implementation, deferred decisions, follow-ups, and future work.
+**Purpose:** Consolidated backlog of unfinished implementation, deferred
+decisions, follow-ups, and future work to revisit after the current eval push.
 
 ---
 
