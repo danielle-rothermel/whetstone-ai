@@ -350,6 +350,9 @@ def test_score_humaneval_prediction_flattens_score_and_compression() -> None:
     assert result.evaluation_total_cases == 2
     assert result.evaluation_failure_count == 0
     assert result.evaluation_status_counts == {"passed": 2}
+    assert result.evaluation_summary is not None
+    assert result.evaluation_summary.passed is True
+    assert len(result.evaluation_summary.results) == 2
     assert set(result.compression_metrics) == set(CompressionMethod)
     assert result.raw_compression_ratio is not None
     assert result.best_compression_ratio is not None
@@ -464,6 +467,70 @@ def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
     assert by_case_id["case_0"].status is EvaluationCaseStatus.PASSED
     assert by_case_id["case_1"].status is EvaluationCaseStatus.ERROR
     assert "Invalid runner output" in by_case_id["case_1"].message
+
+
+_PARTIAL_RUNNER_PASSED_CASE_0 = (
+    '[{"case_id": "case_0", "status": "passed", "message": ""}]'
+)
+
+
+def test_evaluation_incomplete_when_runner_returns_partial_results() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        result = evaluate_human_eval_code(
+            task=_task(),
+            candidate_code="def add_one(x):\n    return x + 1\n",
+            timeout_seconds=2.0,
+        )
+
+    assert result.passed is False
+    assert result.coverage_complete is False
+    assert result.failures == []
+    assert result.status_counts == {"passed": 1}
+
+
+def test_score_generated_code_reports_incomplete_runner_output() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        result = score_generated_code_for_humaneval(
+            raw_generation="def add_one(x):\n    return x + 1\n",
+            task=_task(),
+            timeout=2.0,
+        )
+
+    assert result.outcome is GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+    assert result.score == 0.0
+    assert result.error == "HumanEval evaluation incomplete"
+    assert result.evaluation is not None
+    assert result.evaluation.failures == []
+    assert result.evaluation.coverage_complete is False
+
+
+def test_score_generated_code_reports_test_failure_when_case_fails() -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
+        return _CompletedProcessStub(
+            stdout=(
+                '[{"case_id": "case_0", "status": "failed", '
+                '"message": "bad"}, '
+                '{"case_id": "case_1", "status": "passed", "message": ""}]'
+            ),
+        )
+
+    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+        result = score_generated_code_for_humaneval(
+            raw_generation="def add_one(x):\n    return x + 1\n",
+            task=_task(),
+            timeout=2.0,
+        )
+
+    assert result.outcome is GeneratedCodeOutcome.TESTS_FAILED
+    assert result.error == "HumanEval tests failed"
+    assert result.evaluation is not None
+    assert result.evaluation.failures[0].status is EvaluationCaseStatus.FAILED
 
 
 def test_compression_metrics_are_stable_for_methods_and_ratios() -> None:

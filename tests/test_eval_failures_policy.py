@@ -224,6 +224,44 @@ def test_lazy_dbos_retry_wrapper_unwraps_last_error(
     assert policy.should_retry_step(wrapper) is True
 
 
+def test_real_dbos_max_step_retries_exceeded_unwraps_last_error() -> None:
+    from dbos._error import DBOSMaxStepRetriesExceeded
+
+    wrapper = DBOSMaxStepRetriesExceeded(
+        "score_prediction_step",
+        3,
+        [PermanentFailureError("first"), TransientFailureError("last")],
+    )
+
+    assert policy.unwrap_exception(wrapper).args == ("last",)
+    assert policy.classify_exception(wrapper) is FailureClass.TRANSIENT
+    assert policy.should_retry_step(wrapper) is True
+
+
+def test_real_psycopg_operational_error_is_transient() -> None:
+    from psycopg import OperationalError
+
+    error = OperationalError("connection lost")
+
+    assert policy.classify_exception(error) is FailureClass.TRANSIENT
+    assert policy.should_retry_step(error) is True
+
+
+def test_optional_exception_type_skips_unloaded_modules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeRateLimitError(Exception):
+        pass
+
+    module_name = "tests.not_loaded_optional_module"
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
+    error = FakeRateLimitError("slow down")
+
+    assert policy.classify_exception(error) is FailureClass.UNKNOWN
+    assert module_name not in sys.modules
+
+
 def test_policy_import_does_not_load_runtime_exception_modules() -> None:
     completed = subprocess.run(
         [

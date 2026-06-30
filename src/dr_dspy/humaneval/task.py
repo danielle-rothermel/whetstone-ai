@@ -201,6 +201,18 @@ class EvaluationTaskResult(BaseModel):
 
     @computed_field
     @property
+    def coverage_complete(self) -> bool:
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return False
+        function_results = _results_for_function(
+            self.results,
+            best_function_name,
+        )
+        return len(function_results) == self.total_cases
+
+    @computed_field
+    @property
     def passed(self) -> bool:
         best_function_name = self.best_function_name
         if best_function_name is None:
@@ -209,7 +221,7 @@ class EvaluationTaskResult(BaseModel):
             self.results,
             best_function_name,
         )
-        if len(function_results) != self.total_cases:
+        if not self.coverage_complete:
             return False
         return all(
             result.status is EvaluationCaseStatus.PASSED

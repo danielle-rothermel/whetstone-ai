@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import errno
-from importlib import import_module
+import sys
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
@@ -56,9 +56,8 @@ def _is_optional_exception_type(
     module_name: str,
     type_names: tuple[str, ...],
 ) -> bool:
-    try:
-        module = import_module(module_name)
-    except ImportError:
+    module = sys.modules.get(module_name)
+    if module is None:
         return False
     types = tuple(
         getattr(module, type_name)
