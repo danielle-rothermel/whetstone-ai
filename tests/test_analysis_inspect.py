@@ -13,7 +13,7 @@ from dr_dspy.analysis.inspect import (
     resolve_sample_index,
     summarize_test_results,
 )
-from dr_dspy.analysis.sample_html import render_sample_html
+from dr_dspy.analysis.sample_html import _code_block, render_sample_html
 from dr_dspy.graph import graph_digest
 from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
@@ -66,6 +66,7 @@ def _provider(
 def _encdec_spec(
     *,
     task_inputs: dict[str, Any] | None = None,
+    task_metadata: dict[str, Any] | None = None,
 ) -> PredictionSpecRecord:
     graph = humaneval_encdec_graph()
     graph_id = graph_digest(graph)
@@ -113,6 +114,7 @@ def _encdec_spec(
                     "instructions_end": "",
                 }
             ),
+            metadata=task_metadata or {},
         ),
         provider_configs=(encoder, decoder),
         provider_axis=decoder,
@@ -284,6 +286,13 @@ def test_build_debug_metadata_includes_stable_keys_and_test_summary() -> None:
     assert "reconstructed_prompts" in metadata
 
 
+def test_code_block_wraps_python_in_highlight_pre() -> None:
+    block = _code_block("def foo():\n    pass\n", language="python")
+    assert '<div class="highlight">' in block
+    assert "<pre>" in block
+    assert 'class="k"' in block
+
+
 def test_render_sample_html_contains_cards_and_metadata() -> None:
     bundle = _encdec_bundle()
     prompts, errors = reconstruct_prompts(bundle)
@@ -305,6 +314,46 @@ def test_render_sample_html_contains_cards_and_metadata() -> None:
     assert 'id="debug-metadata"' in html
     assert bundle.spec.prediction_id in html
     assert bundle.generation_run.generation_run_id in html
+    assert "ui-monospace" in html
+    assert '<div class="highlight"><pre>' in html
+
+
+def test_ground_truth_falls_back_to_metadata() -> None:
+    gt = "def migrated_gt():\n    return 42\n"
+    spec = _encdec_spec(
+        task_inputs={
+            "gt_code": "",
+            "budget": 120,
+            "instructions_start": "Describe briefly.",
+            "instructions_end": "",
+            "prompt": "stub prompt",
+        },
+        task_metadata={"ground_truth_code": gt},
+    )
+    bundle = _encdec_bundle()
+    bundle = RunBundle(
+        spec=spec,
+        generation_run=bundle.generation_run,
+        node_attempts=bundle.node_attempts,
+        score_attempt=bundle.score_attempt,
+        sample_index=bundle.sample_index,
+        sample_count=bundle.sample_count,
+    )
+    prompts, errors = reconstruct_prompts(bundle)
+    metadata = build_debug_metadata(
+        bundle,
+        reconstructed_prompts=prompts,
+        reconstruction_errors=errors,
+    )
+    html = render_sample_html(
+        bundle,
+        metadata,
+        prompts,
+        errors,
+        json_path=__import__("pathlib").Path("/tmp/sample.json"),
+    )
+    assert "migrated_gt" in html
+    assert "return 42" in html
 
 
 def test_resolve_sample_index_out_of_range_lists_available_count() -> None:

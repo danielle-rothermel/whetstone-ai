@@ -36,7 +36,7 @@ FAILING_STATUSES = frozenset(
 
 def _highlight(text: str, *, language: str = "text") -> str:
     lexer = PythonLexer() if language == "python" else TextLexer()
-    formatter = HtmlFormatter(nowrap=True, cssclass="highlight")
+    formatter = HtmlFormatter(nowrap=False, cssclass="highlight")
     return highlight(text or "", lexer, formatter)
 
 
@@ -110,7 +110,11 @@ def _summary_card(bundle: RunBundle) -> str:
 
 def _ground_truth_card(bundle: RunBundle) -> str:
     inputs = bundle.spec.task.inputs.values
-    gt_code = str(inputs.get("gt_code") or "")
+    gt_code = str(
+        inputs.get("gt_code")
+        or bundle.spec.task.metadata.get("ground_truth_code")
+        or ""
+    )
     prompt = inputs.get("prompt")
     parts = [_code_block(gt_code, language="python")]
     if prompt:
@@ -349,12 +353,28 @@ def render_sample_html(
       overflow-x: auto;
       border: 1px solid #ddd;
       border-radius: 4px;
-      padding: 0.25rem;
       background: #fafafa;
     }}
-    pre.plain {{
+    .code-block pre,
+    .code-block .highlight pre,
+    pre.plain,
+    .metadata pre {{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+        Consolas, "Liberation Mono", monospace;
+      font-size: 0.82rem;
+      line-height: 1.4;
       white-space: pre-wrap;
       word-break: break-word;
+      margin: 0;
+    }}
+    .code-block .highlight {{
+      background: #f8f8f8;
+      border-radius: 4px;
+    }}
+    .code-block .highlight pre {{
+      padding: 0.5rem;
+    }}
+    pre.plain {{
       background: #fafafa;
       border: 1px solid #ddd;
       padding: 0.5rem;
