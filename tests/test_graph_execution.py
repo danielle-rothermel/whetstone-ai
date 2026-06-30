@@ -251,30 +251,30 @@ def test_missing_returned_output_field_becomes_node_execution_error() -> None:
     )
 
 
-def test_missing_named_upstream_output_field_becomes_input_error() -> None:
-    graph = GraphSpec(
-        nodes=(
-            _node("encoder", output_field="description"),
-            _node("decoder", bindings={"description": "encoder.other"}),
-        ),
-        terminal_node_id="decoder",
-    )
+def test_missing_named_upstream_output_field_validation() -> None:
+    with pytest.raises(ValueError, match="points at unknown field 'other'"):
+        GraphSpec(
+            nodes=(
+                _node("encoder", output_field="description"),
+                _node("decoder", bindings={"description": "encoder.other"}),
+            ),
+            terminal_node_id="decoder",
+        )
 
-    def run_node(node: NodeSpec, inputs: Mapping[str, Any]) -> NodeOutput:
-        if node.id == "encoder":
-            return _output("summary", field="description")
-        return _output("unreachable")
 
-    result = execute_graph(graph=graph, inputs={}, run_node=run_node)
+def test_binding_ref_rejects_empty_node_field() -> None:
+    with pytest.raises(ValueError, match="non-empty field"):
+        BindingRef.model_validate("encoder.")
 
-    outcome = result.outcomes["decoder"]
-    assert result.status is GraphRunStatus.ERROR
-    assert outcome.status is NodeOutcomeStatus.ERROR
-    assert outcome.error is not None
-    assert outcome.error.error_type == (
-        f"{InputResolutionError.__module__}."
-        f"{InputResolutionError.__qualname__}"
-    )
+
+def test_graph_digest_rejects_invalid_length() -> None:
+    graph = GraphSpec(nodes=(_node("direct"),), terminal_node_id="direct")
+    with pytest.raises(ValueError, match="graph digest length must be"):
+        graph_digest(graph, length=0)
+    with pytest.raises(ValueError, match="graph digest length must be"):
+        graph_digest(graph, length=-1)
+    with pytest.raises(ValueError, match="graph digest length must be"):
+        graph_digest(graph, length=65)
 
 
 def test_node_exception_captures_persistable_error() -> None:

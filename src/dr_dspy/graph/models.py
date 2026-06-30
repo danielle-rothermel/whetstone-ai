@@ -98,6 +98,8 @@ class BindingRef(BaseModel):
             return self
         if not self.node_id:
             raise ValueError("node binding refs require node_id")
+        if self.field is not None and not self.field:
+            raise ValueError("node binding refs require a non-empty field")
         return self
 
     @model_serializer(mode="plain")
@@ -283,15 +285,34 @@ class NodeOutcome(BaseModel):
 
     @model_validator(mode="after")
     def validate_outcome(self) -> NodeOutcome:
-        if self.status is NodeOutcomeStatus.SUCCESS and self.output is None:
-            raise ValueError("successful node outcomes require output")
-        if self.status is NodeOutcomeStatus.ERROR and self.error is None:
-            raise ValueError("error node outcomes require error")
-        if (
-            self.status is NodeOutcomeStatus.BLOCKED
-            and not self.blocked_by
-        ):
+        if self.status is NodeOutcomeStatus.SUCCESS:
+            if self.output is None:
+                raise ValueError("successful node outcomes require output")
+            if self.error is not None:
+                raise ValueError(
+                    "successful node outcomes cannot include error"
+                )
+            if self.blocked_by:
+                raise ValueError(
+                    "successful node outcomes cannot include blocked_by"
+                )
+            return self
+        if self.status is NodeOutcomeStatus.ERROR:
+            if self.error is None:
+                raise ValueError("error node outcomes require error")
+            if self.output is not None:
+                raise ValueError("error node outcomes cannot include output")
+            if self.blocked_by:
+                raise ValueError(
+                    "error node outcomes cannot include blocked_by"
+                )
+            return self
+        if not self.blocked_by:
             raise ValueError("blocked node outcomes require blocked_by")
+        if self.output is not None:
+            raise ValueError("blocked node outcomes cannot include output")
+        if self.error is not None:
+            raise ValueError("blocked node outcomes cannot include error")
         return self
 
 
@@ -302,6 +323,36 @@ class TerminalError(BaseModel):
     status: NodeOutcomeStatus
     error: NodeError | None = None
     blocked_by: tuple[StrictStr, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_terminal_error(self) -> TerminalError:
+        if self.status is NodeOutcomeStatus.ERROR:
+            if self.error is None:
+                raise ValueError("error terminal outcomes require error")
+            if self.blocked_by:
+                raise ValueError(
+                    "error terminal outcomes cannot include blocked_by"
+                )
+            return self
+        if self.status is NodeOutcomeStatus.BLOCKED:
+            if not self.blocked_by:
+                raise ValueError(
+                    "blocked terminal outcomes require blocked_by"
+                )
+            if self.error is not None:
+                raise ValueError(
+                    "blocked terminal outcomes cannot include error"
+                )
+            return self
+        if self.error is not None:
+            raise ValueError(
+                "successful terminal outcomes cannot include error"
+            )
+        if self.blocked_by:
+            raise ValueError(
+                "successful terminal outcomes cannot include blocked_by"
+            )
+        return self
 
 
 class GraphRunResult(BaseModel):
@@ -337,23 +388,37 @@ def validate_graph_spec(graph: GraphSpec) -> None:
     node_ids = graph.node_ids()
     if len(node_ids) != len(set(node_ids)):
         raise GraphValidationError("duplicate node ids")
-    id_set = set(node_ids)
-    if graph.terminal_node_id not in id_set:
+    nodes_by_id = {node.id: node for node in graph.nodes}
+    if graph.terminal_node_id not in nodes_by_id:
         raise GraphValidationError(
             f"terminal_node_id {graph.terminal_node_id!r} not in graph"
         )
     for node in graph.nodes:
         for ref in node.config.input_bindings.values():
-            validate_binding_ref(ref, id_set)
+            validate_binding_ref(ref, nodes_by_id)
     validate_acyclic_graph(graph.nodes)
 
 
-def validate_binding_ref(ref: BindingRef, node_ids: set[str]) -> None:
+def validate_binding_ref(
+    ref: BindingRef,
+    nodes_by_id: dict[str, NodeSpec],
+) -> None:
     if ref.source is BindingSource.TASK:
         return
-    if ref.node_id not in node_ids:
+    if ref.node_id not in nodes_by_id:
         raise GraphValidationError(
             f"ref {ref.ref!r} points at unknown node {ref.node_id!r}"
+        )
+    if ref.field is None:
+        return
+    source_node = nodes_by_id[ref.node_id]
+    output_names = {
+        field.name for field in source_node.config.output_fields()
+    }
+    if ref.field not in output_names:
+        raise GraphValidationError(
+            f"ref {ref.ref!r} points at unknown field {ref.field!r} "
+            f"on node {ref.node_id!r}"
         )
 
 

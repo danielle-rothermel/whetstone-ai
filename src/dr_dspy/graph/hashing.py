@@ -7,6 +7,7 @@ from typing import Any
 from dr_dspy.graph.models import GraphSpec
 
 GRAPH_DIGEST_LENGTH = 16
+SHA256_HEX_DIGEST_LENGTH = 64
 TEXT_ENCODING = "utf-8"
 
 
@@ -24,5 +25,10 @@ def graph_digest(
         sort_keys=True,
         separators=(",", ":"),
     )
+    if length < 1 or length > SHA256_HEX_DIGEST_LENGTH:
+        raise ValueError(
+            f"graph digest length must be between 1 and "
+            f"{SHA256_HEX_DIGEST_LENGTH}, got {length}"
+        )
     digest = hashlib.sha256(raw.encode(TEXT_ENCODING)).hexdigest()
     return digest[:length]
