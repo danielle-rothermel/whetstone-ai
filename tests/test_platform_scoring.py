@@ -451,6 +451,41 @@ def test_task_test_metrics_summarize_oracle_tests() -> None:
     assert metrics.support_code_character_count > 0
 
 
+def test_task_test_metrics_reports_missing_parsed_tests() -> None:
+    task = _task().model_copy(update={"parsed_tests": None})
+
+    metrics = task_test_metrics(task)
+
+    assert metrics.parse_ok is False
+    assert metrics.parse_error == "HumanEvalTask.parsed_tests is missing"
+    assert metrics.task_id == "HumanEval/fixture"
+    assert metrics.entry_point == "add_one"
+    assert metrics.test_type is None
+    assert metrics.case_count == 0
+
+
+def test_task_test_metrics_summarize_input_expression_tests() -> None:
+    task = _task(
+        test=(
+            "def check(candidate):\n"
+            "    inputs = [(1,), (2,)]\n"
+            "    results = [2, 3]\n"
+            "    for i, (inp, expected) in enumerate(zip(inputs, results)):\n"
+            "        assert candidate(*inp) == expected\n"
+        ),
+    )
+
+    metrics = task_test_metrics(task)
+
+    assert metrics.parse_ok is True
+    assert metrics.test_type is HumanEvalTestCaseKind.INPUT_EXPRESSION
+    assert metrics.case_count == 2
+    assert metrics.input_expression_case_count == 2
+    assert metrics.input_result_case_count == 0
+    assert metrics.oracle_case_count == 0
+    assert metrics.expected_output_expr_count == 0
+
+
 def test_ast_metrics_include_rich_function_and_code_shape() -> None:
     source = (
         "import math\n"

@@ -17,6 +17,7 @@ from dr_dspy.graph import (
     graph_digest,
 )
 from dr_dspy.harness.flow import stable_prediction_id_from_dimensions
+from dr_dspy.humaneval import metrics as humaneval_metrics
 from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
@@ -26,6 +27,7 @@ from dr_dspy.lm.boundary import (
     openai_responses_config,
 )
 from dr_dspy.records import (
+    AstMetricsPayload,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
@@ -39,7 +41,9 @@ from dr_dspy.records import (
     GenerationRunSummaryPayload,
     GenerationTerminalErrorPayload,
     GraphSnapshotPayload,
+    HumanEvalTaskTestMetricsPayload,
     MetricsPayload,
+    MetricsStagePayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
     NodeOutputPayload,
@@ -65,6 +69,19 @@ def test_generation_run_status_matches_graph_run_status_values() -> None:
     assert {status.value for status in GenerationRunStatus} == {
         status.value for status in GraphRunStatus
     }
+
+
+def test_record_metrics_models_share_humaneval_metric_contracts() -> None:
+    assert TextMetricsPayload is humaneval_metrics.TextMetricsPayload
+    assert PythonLeakageMetricsPayload is (
+        humaneval_metrics.PythonLeakageMetricsPayload
+    )
+    assert AstMetricsPayload is humaneval_metrics.AstMetricsPayload
+    assert HumanEvalTaskTestMetricsPayload is (
+        humaneval_metrics.HumanEvalTaskTestMetricsPayload
+    )
+    assert MetricsStagePayload is humaneval_metrics.MetricsStagePayload
+    assert MetricsPayload is humaneval_metrics.MetricsPayload
 
 
 def _node(
