@@ -16,7 +16,7 @@ from pydantic import (
 )
 
 from dr_dspy.eval_failures.types import FailureClass
-from dr_dspy.graph import GraphSpec
+from dr_dspy.graph import GraphSpec, validate_task_bindings
 from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
@@ -323,6 +323,10 @@ class PredictionSpecRecord(BaseModel):
             raise ValueError("repetition_seed must be non-negative")
         if self.task.task_id != self.task_id:
             raise ValueError("task snapshot task_id must match spec task_id")
+        validate_task_bindings(
+            self.graph.graph,
+            allowed_task_fields=self.task.inputs.values.keys(),
+        )
         if self.provider_axis not in self.provider_configs:
             raise ValueError("provider_axis must be one of provider_configs")
         from dr_dspy.records.providers import (
