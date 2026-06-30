@@ -249,8 +249,55 @@ def test_parse_responses_response_extracts_output_text() -> None:
     )
 
     assert result.text == "ok"
-    assert result.finish_reason == "completed"
+    assert result.finish_reason == "stop"
     assert result.usage_metadata == {"input_tokens": 1, "output_tokens": 2}
+
+
+def test_parse_responses_incomplete_max_output_tokens_maps_to_length() -> None:
+    result = parse_provider_response(
+        {
+            "id": "resp-2",
+            "model": "gpt-test",
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": "partial",
+        },
+        config=openai_responses_config(model="gpt-test"),
+    )
+
+    assert result.text == "partial"
+    assert result.finish_reason == "length"
+
+
+def test_parse_responses_response_extracts_nested_output_text() -> None:
+    result = parse_provider_response(
+        {
+            "id": "resp-3",
+            "model": "gpt-test",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "hello "},
+                        {"type": "output_text", "text": "world"},
+                    ],
+                }
+            ],
+        },
+        config=openai_responses_config(model="gpt-test"),
+    )
+
+    assert result.text == "hello world"
+    assert result.finish_reason == "stop"
+
+
+def test_parse_empty_choices_raises_parse_failure() -> None:
+    with pytest.raises(ProviderResponseParseError):
+        parse_provider_response(
+            {"choices": []},
+            config=openrouter_chat_config(model="model/test"),
+        )
 
 
 class _FakeCompletions:
@@ -378,6 +425,8 @@ def test_provider_error_translation_preserves_permanent_auth_cause() -> None:
     assert isinstance(exc_info.value.underlying, openai.AuthenticationError)
     summary = summarize_exception(exc_info.value)
     assert summary.failure_class is FailureClass.PERMANENT
+    assert summary.message == "bad key"
+    assert summary.underlying_exception_type.endswith("AuthenticationError")
 
 
 def test_provider_error_translation_preserves_transient_cause() -> None:

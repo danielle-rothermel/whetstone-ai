@@ -9,7 +9,6 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 from dr_dspy.eval_failures.exceptions import (
-    EmptyGenerationError,
     EvalFailureError,
     ProviderResponseParseError,
     failure_exception_type_for_class,
@@ -340,9 +339,10 @@ def parse_chat_completion_response(
             response=response,
         )
     if not choices:
-        raise EmptyGenerationError(
-            f"empty generation for output field {output_field!r}",
-            metadata={"output_field": output_field},
+        raise _parse_error(
+            "provider response has empty choices",
+            config=config,
+            response=response,
         )
     choice = choices[0]
     message = _get_value(choice, "message")
@@ -381,7 +381,7 @@ def parse_responses_response(
         provider_cost=provider_cost_from_response(metadata),
         response_id=_optional_str(_get_value(response, "id")),
         model=_optional_str(_get_value(response, "model")) or config.model,
-        finish_reason=_optional_str(_get_value(response, "status")),
+        finish_reason=_finish_reason_from_responses_response(response),
     )
 
 
@@ -411,7 +411,7 @@ def translate_provider_error(
     failure_class = classify_exception(error)
     exception_type = failure_exception_type_for_class(failure_class)
     return exception_type(
-        "provider call failed",
+        str(error),
         underlying=error,
         metadata={
             "provider_kind": request.provider_kind.value,
@@ -485,6 +485,28 @@ def _get_value(value: Any, key: str) -> Any:
 
 def _optional_str(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+RESPONSES_INCOMPLETE_REASON_LENGTH = "max_output_tokens"
+RESPONSES_INCOMPLETE_REASON_CONTENT_FILTER = "content_filter"
+RESPONSES_STATUS_COMPLETED = "completed"
+CHAT_FINISH_REASON_LENGTH = "length"
+CHAT_FINISH_REASON_CONTENT_FILTER = "content_filter"
+CHAT_FINISH_REASON_STOP = "stop"
+
+
+def _finish_reason_from_responses_response(response: Any) -> str | None:
+    incomplete_details = _get_value(response, "incomplete_details")
+    if isinstance(incomplete_details, Mapping):
+        reason = _optional_str(_get_value(incomplete_details, "reason"))
+        if reason == RESPONSES_INCOMPLETE_REASON_LENGTH:
+            return CHAT_FINISH_REASON_LENGTH
+        if reason == RESPONSES_INCOMPLETE_REASON_CONTENT_FILTER:
+            return CHAT_FINISH_REASON_CONTENT_FILTER
+    status = _optional_str(_get_value(response, "status"))
+    if status == RESPONSES_STATUS_COMPLETED:
+        return CHAT_FINISH_REASON_STOP
+    return None
 
 
 def _text_from_responses_output(output: Any) -> str | None:
