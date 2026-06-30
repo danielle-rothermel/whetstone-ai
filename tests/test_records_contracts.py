@@ -223,6 +223,21 @@ def test_prediction_spec_validates_fair_order_key() -> None:
         PredictionSpecRecord.model_validate(dumped)
 
 
+def test_prediction_spec_validates_task_bindings() -> None:
+    dumped = _prediction_spec().model_dump(mode="json")
+    dumped["graph"]["graph"]["nodes"][0]["config"]["input_bindings"][
+        "prompt"
+    ] = "task.promt"
+    graph = GraphSpec.model_validate(dumped["graph"]["graph"])
+    dumped["graph"]["graph_digest"] = graph_digest(graph)
+
+    with pytest.raises(
+        ValidationError,
+        match="task binding field\\(s\\) 'promt' not in allowed task fields",
+    ):
+        PredictionSpecRecord.model_validate(dumped)
+
+
 def test_provider_config_ref_converts_from_runtime_provider_config() -> None:
     runtime_config = openai_responses_config(model="gpt-test")
 

@@ -7,6 +7,8 @@ from dr_dspy.records.models import DimensionsPayload
 PREDICTION_ID_DIGEST_LENGTH = 24
 DIMENSIONS_DIGEST_LENGTH = 16
 FAIR_ORDER_DIGEST_LENGTH = 32
+GENERATION_RUN_ID_DIGEST_LENGTH = 24
+NODE_ATTEMPT_ID_DIGEST_LENGTH = 32
 
 
 def dimensions_digest(
@@ -82,6 +84,38 @@ def fair_order_key(
             "task_id": task_id,
             "repetition_seed": repetition_seed,
             "config_axis": config_axis,
+        },
+        length=length,
+    )
+
+
+def stable_generation_run_id(
+    *,
+    prediction_id: str,
+    attempt_index: int,
+    length: int = GENERATION_RUN_ID_DIGEST_LENGTH,
+) -> str:
+    return _sha256_digest(
+        {
+            "prediction_id": prediction_id,
+            "attempt_index": attempt_index,
+        },
+        length=length,
+    )
+
+
+def stable_node_attempt_id(
+    *,
+    generation_run_id: str,
+    node_id: str,
+    attempt_index: int,
+    length: int = NODE_ATTEMPT_ID_DIGEST_LENGTH,
+) -> str:
+    return _sha256_digest(
+        {
+            "generation_run_id": generation_run_id,
+            "node_id": node_id,
+            "attempt_index": attempt_index,
         },
         length=length,
     )

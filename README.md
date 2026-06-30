@@ -18,6 +18,7 @@ complete.
 - `db/schema.py` — SQLAlchemy Core table definitions for v1 eval records
 - `db/io.py` — typed row builders, row parsers, and insert/select helpers
 - `db/migrations/` — Alembic migrations for the v1 schema
+- `platform/` — v1 DBOS graph workflow, plain-prompt node execution, and append-only generation/node persistence
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
 - `harness/` — legacy v0 DBOS workflows, batch operations, repair, worker monitoring
@@ -29,6 +30,51 @@ complete.
   captures the planned migration toward graph-shaped generation specs,
   append-only outcomes, explicit prompt/LM boundaries, rescoring, metrics, and
   Unitbench-facing projections.
+- [Platform graph workflow implementation notes](docs/platform-graph-workflow-implementation.md)
+  describe the current v1 workflow entrypoint, DBOS timing boundaries,
+  node-attempt indexing semantics, provider-config scope, integration-test
+  status, and follow-up work.
+- [TESTING.md](TESTING.md) documents unit vs integration tests, the tier
+  model, shared fixtures, CI scripts, and conventions for adding coverage.
+- [Repo split and naming plan](docs/repo-split-and-naming-plan.md) describes
+  the planned move to a standalone `<personal-org>/whetstone-ai` repository.
+  The `dr_dspy` → `whetstone` rename is deferred until after extraction.
+
+## Testing
+
+See [TESTING.md](TESTING.md) for how to run unit vs integration tests, the tier
+model, shared fixtures, and conventions for adding new coverage.
+
+## V1 graph workflow
+
+The first v1 execution path runs an already-created `PredictionSpecRecord`
+through the pure graph runner, calls the LM provider boundary through DBOS
+steps, and persists append-only generation/node outcomes.
+
+Run one existing prediction spec:
+
+```bash
+uv run python -m dr_dspy.platform.worker run-one \
+  --database-url "$DATABASE_URL" \
+  --prediction-id "<prediction-id>"
+```
+
+This command assumes the `PredictionSpecRecord` already exists in the
+database. This phase does not include a spec-creation CLI; specs must be
+inserted by a test fixture, migration/backfill path, or ad-hoc setup before
+`run-one` can execute them.
+
+Start the minimal platform DBOS runtime shell:
+
+```bash
+uv run python -m dr_dspy.platform.worker worker \
+  --database-url "$DATABASE_URL"
+```
+
+The current `worker` command launches DBOS with no listened queues. It is a
+runtime shell for the direct `run-one` stage, not a production queue-consuming
+worker path. Batch submission, fairness, queue consumption, throttle-aware
+backoff, scoring, projections, and v0 migration remain deferred.
 
 The legacy v0 direct and enc-dec workflows write mutable prediction rows that
 mix requested specs, workflow status, generation artifacts, scores, and repair

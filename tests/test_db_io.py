@@ -22,6 +22,7 @@ from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.records import (
     NODE_OUTPUT_MAX_BYTES,
+    PROVIDER_TELEMETRY_MAX_BYTES,
     TASK_INPUTS_MAX_BYTES,
     BatchSubmitItemRecord,
     BatchSubmitItemStatus,
@@ -40,11 +41,13 @@ from dr_dspy.records import (
     PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
+    ResponseMetadataPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
     TaskInputsPayload,
     TaskSnapshotPayload,
     TextMetricsPayload,
+    UsageCostPayload,
     dimensions_digest,
     fair_order_key,
     stable_prediction_id,
@@ -303,9 +306,27 @@ def test_failure_payload_from_node_error_is_persistable() -> None:
     assert payload.model_dump(mode="json") == {
         "failure_class": "permanent",
         "error_type": "builtins.RuntimeError",
+        "underlying_exception_type": None,
         "message": "boom",
         "metadata": {"node": "decoder"},
     }
+
+
+def test_failure_payload_promotes_underlying_exception_type() -> None:
+    error = NodeError(
+        error_type="dr_dspy.eval_failures.TransientFailureError",
+        message="provider failed",
+        failure_class="transient",
+        metadata={
+            "underlying_exception_type": "openai.AuthenticationError",
+            "status_code": 401,
+        },
+    )
+
+    payload = io.failure_payload_from_node_error(error)
+
+    assert payload.underlying_exception_type == "openai.AuthenticationError"
+    assert payload.metadata == {"status_code": 401}
 
 
 def test_score_attempt_row_includes_generated_code_outcome() -> None:
@@ -640,6 +661,56 @@ def test_prediction_spec_row_rejects_oversized_jsonb_payload() -> None:
                 config_axis=dimensions_id,
             ),
             created_at=NOW,
+        )
+
+
+def test_node_attempt_row_rejects_oversized_usage_metadata_payload() -> None:
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="decoder-model",
+        throttle_key="openai:responses:decoder-model",
+    )
+    oversized_metadata = {"blob": "x" * (PROVIDER_TELEMETRY_MAX_BYTES + 1)}
+    with pytest.raises(ValidationError, match="usage metadata"):
+        NodeAttemptRecord(
+            node_attempt_id="node-attempt-1",
+            generation_run_id="run-1",
+            prediction_id="prediction-1",
+            node_id="decoder",
+            attempt_index=0,
+            status=NodeAttemptStatus.SUCCESS,
+            provider_config=provider,
+            output=NodeOutputPayload(values={"output": "ok"}),
+            usage_cost=UsageCostPayload(usage_metadata=oversized_metadata),
+            started_at=NOW,
+            completed_at=NOW,
+        )
+
+
+def test_node_attempt_row_rejects_oversized_response_metadata() -> None:
+    provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENAI,
+        endpoint_kind=EndpointKind.RESPONSES,
+        model="decoder-model",
+        throttle_key="openai:responses:decoder-model",
+    )
+    oversized_metadata = {"blob": "x" * (PROVIDER_TELEMETRY_MAX_BYTES + 1)}
+    with pytest.raises(ValidationError, match="response metadata"):
+        NodeAttemptRecord(
+            node_attempt_id="node-attempt-1",
+            generation_run_id="run-1",
+            prediction_id="prediction-1",
+            node_id="decoder",
+            attempt_index=0,
+            status=NodeAttemptStatus.SUCCESS,
+            provider_config=provider,
+            output=NodeOutputPayload(values={"output": "ok"}),
+            response_metadata=ResponseMetadataPayload(
+                response_metadata=oversized_metadata,
+            ),
+            started_at=NOW,
+            completed_at=NOW,
         )
 
 

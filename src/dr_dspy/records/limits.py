@@ -7,6 +7,7 @@ from dr_dspy.serialization import SerializationError, to_jsonable
 # Domain-tier payload caps (much smaller than Postgres JSONB limits).
 TASK_INPUTS_MAX_BYTES = 256 * 1024
 NODE_OUTPUT_MAX_BYTES = 1024 * 1024
+PROVIDER_TELEMETRY_MAX_BYTES = 1024 * 1024
 GRAPH_SNAPSHOT_MAX_BYTES = 256 * 1024
 BATCH_SUBMIT_SPEC_MAX_BYTES = 128 * 1024
 PER_TEST_RESULTS_MAX_COUNT = 512

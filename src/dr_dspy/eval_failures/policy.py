@@ -240,7 +240,9 @@ def underlying_exception_type_name(error: BaseException) -> str:
 
 
 def summarize_exception(error: BaseException) -> FailureSummary:
-    from dr_dspy.eval_failures.recording import failure_metadata_from_exception
+    from dr_dspy.eval_failures.recording import (
+        failure_metadata_dict_from_exception,
+    )
 
     failure_class = classify_exception(error)
     failure_type = failure_exception_type_name(error, failure_class)
@@ -249,7 +251,7 @@ def summarize_exception(error: BaseException) -> FailureSummary:
         failure_exception_type=failure_type,
         underlying_exception_type=underlying_exception_type_name(error),
         message=str(error),
-        failure_metadata=failure_metadata_from_exception(error),
+        failure_metadata=failure_metadata_dict_from_exception(error),
     )
 
 

@@ -86,11 +86,16 @@ def failure_payload_from_node_error(
         if error.failure_class is not None
         else None
     )
+    metadata = dict(error.metadata)
+    underlying = metadata.pop("underlying_exception_type", None)
     return FailureMetadataPayload(
         failure_class=failure_class,
         error_type=error.error_type,
+        underlying_exception_type=(
+            underlying if isinstance(underlying, str) else None
+        ),
         message=error.message,
-        metadata=error.metadata,
+        metadata=metadata,
     )
 
 
