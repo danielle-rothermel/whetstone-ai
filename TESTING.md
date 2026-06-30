@@ -12,7 +12,7 @@ and skip gracefully when PostgreSQL is unavailable.
 | Command | What runs |
 |---------|-----------|
 | `./scripts/ci/unit.sh` | Unit tests (294 tests; excludes integration marker) |
-| `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (27 tests) |
+| `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (generation + scoring) |
 | `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
 | `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
@@ -22,9 +22,9 @@ and skip gracefully when PostgreSQL is unavailable.
 |------|---------|----------|
 | **Unit** | Pure graph orchestration, record contracts, SQL compilation, reshape logic | `tests/test_*.py` (except `tests/integration/`) |
 | **0 — Fixtures** | Shared Postgres schema + DBOS reset helpers | [`tests/conftest.py`](tests/conftest.py) |
-| **1 — DB steps** | `load_prediction_spec_step` / `persist_generation_result_step` Postgres round-trip | [`tests/integration/test_platform_db_steps.py`](tests/integration/test_platform_db_steps.py) |
-| **2 — Workflow** | `run_prediction_graph_workflow_once` happy path with mocked LM | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py) |
-| **3 — Recovery** | Retry-exhaustion step/timestamp assertions, upstream `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, persist idempotency, persist failure surfacing | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py) |
+| **1 — DB steps** | Generation: `load_prediction_spec_step` / `persist_generation_result_step` Postgres round-trip. Scoring: `load_scoring_target_step` / `persist_score_attempt_step` idempotency and profile uniqueness | [`tests/integration/test_platform_db_steps.py`](tests/integration/test_platform_db_steps.py), [`tests/integration/test_platform_scoring_db_steps.py`](tests/integration/test_platform_scoring_db_steps.py) |
+| **2 — Workflow** | Generation: `run_prediction_graph_workflow_once` happy path with mocked LM. Scoring: `run_score_generation_workflow_once` with mocked HumanEval task load | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
+| **3 — Recovery** | Generation: retry-exhaustion step/timestamp assertions, upstream `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, persist idempotency, persist failure surfacing. Scoring: workflow replay idempotency, task-loader memoization, orphan workflow recovery | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
 | **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
 
 Design context: [append-only eval platform design](docs/append-only-eval-records-design.md),
@@ -38,6 +38,7 @@ tests/
   serialization_support.py    # helpers for serialization contract tests
   support/                    # shared spec/node helpers for unit + integration
     platform_integration_helpers.py
+    platform_scoring_fixtures.py
     platform_workflow_fixtures.py
     postgres_fixtures.py
   fixtures/v0_samples/        # committed JSON rows from legacy v0 tables
@@ -45,6 +46,8 @@ tests/
     dbos_test_workflows.py    # minimal workflows for step-level DBOS proofs
     test_platform_db_steps.py
     test_platform_dbos_workflow.py
+    test_platform_scoring_db_steps.py
+    test_platform_scoring_dbos_workflow.py
     test_v0_reshape_outcomes.py
     test_v0_reshape_specs.py
 scripts/ci/                   # portable CI entrypoints (package-root cwd)

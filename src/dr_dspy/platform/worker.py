@@ -28,8 +28,6 @@ from dr_dspy.platform.rescoring import (
     rescore_generation_runs,
 )
 from dr_dspy.platform.scoring_workflow import (
-    DEFAULT_HUMANEVAL_DATASET_NAME,
-    DEFAULT_HUMANEVAL_DATASET_SPLIT,
     platform_scoring_workflow_id,
     run_score_generation_workflow_once,
 )
@@ -37,7 +35,11 @@ from dr_dspy.platform.submission import (
     DEFAULT_SUBMIT_CHUNK_SIZE,
     submit_prediction_specs_jsonl,
 )
-from dr_dspy.records import GenerationRunStatus
+from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
+    GenerationRunStatus,
+)
 from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
@@ -165,11 +167,11 @@ def score_one(
     dataset_name: Annotated[
         str,
         typer.Option("--dataset-name"),
-    ] = DEFAULT_HUMANEVAL_DATASET_NAME,
+    ] = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: Annotated[
         str,
         typer.Option("--dataset-split"),
-    ] = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    ] = DEFAULT_SCORE_DATASET_SPLIT,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -249,11 +251,11 @@ def rescore(
     dataset_name: Annotated[
         str,
         typer.Option("--dataset-name"),
-    ] = DEFAULT_HUMANEVAL_DATASET_NAME,
+    ] = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: Annotated[
         str,
         typer.Option("--dataset-split"),
-    ] = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    ] = DEFAULT_SCORE_DATASET_SPLIT,
     chunk_size: Annotated[
         int,
         typer.Option("--chunk-size", min=1),
@@ -266,6 +268,16 @@ def rescore(
         bool,
         typer.Option("--dry-run"),
     ] = False,
+    recover_orphans: Annotated[
+        bool,
+        typer.Option(
+            "--recover-orphans/--no-recover-orphans",
+            help=(
+                "When DBOS has a terminal scoring workflow without a persisted "
+                "score attempt, replay the workflow to finish persistence."
+            ),
+        ),
+    ] = True,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -321,6 +333,7 @@ def rescore(
             chunk_size=chunk_size,
             limit=limit,
             dry_run=dry_run,
+            recover_orphans=recover_orphans,
         )
         CONSOLE.print(result.model_dump(mode="json"))
     finally:

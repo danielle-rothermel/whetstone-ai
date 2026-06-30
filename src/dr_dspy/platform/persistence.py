@@ -254,6 +254,9 @@ def persist_generation_result(
 _NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
     {"provider_config", "output", "failure"}
 )
+_SCORE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
+    {"extracted_code", "metrics", "failure"}
+)
 
 
 def _postgres_insert_values(
@@ -277,9 +280,10 @@ def persist_score_attempt(
     score_attempt: ScoreAttemptRecord,
 ) -> ScoreAttemptInsertResult:
     result = connection.execute(idempotent_insert_score_attempt(score_attempt))
+    inserted_row = result.first()
     status = (
         ScoreAttemptInsertStatus.INSERTED
-        if result.rowcount == 1
+        if inserted_row is not None
         else ScoreAttemptInsertStatus.ALREADY_PRESENT
     )
     return ScoreAttemptInsertResult(
@@ -314,8 +318,14 @@ def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
 def idempotent_insert_score_attempt(record: ScoreAttemptRecord) -> Any:
     return (
         insert(schema.score_attempts)
-        .values(io.score_attempt_row(record))
+        .values(
+            _postgres_insert_values(
+                io.score_attempt_row(record),
+                nullable_jsonb_columns=_SCORE_ATTEMPT_NULLABLE_JSONB_COLUMNS,
+            )
+        )
         .on_conflict_do_nothing(index_elements=["score_attempt_id"])
+        .returning(schema.score_attempts.c.score_attempt_id)
     )
 
 

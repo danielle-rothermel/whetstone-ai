@@ -21,13 +21,17 @@ from dr_dspy.humaneval.profiles import (
     resolve_humaneval_scoring_profile,
 )
 from dr_dspy.platform.scoring_workflow import (
-    DEFAULT_HUMANEVAL_DATASET_NAME,
-    DEFAULT_HUMANEVAL_DATASET_SPLIT,
     ScheduledScoreGenerationWorkflow,
     platform_scoring_workflow_id,
     schedule_score_generation_workflow,
 )
+from dr_dspy.platform.scoring_workflow_state import (
+    ScoringWorkflowPresence,
+    classify_scoring_workflow_presence,
+)
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     FailureMetadataPayload,
     GenerationRunStatus,
     stable_score_attempt_id,
@@ -40,7 +44,9 @@ class BatchRescoreItemStatus(StrEnum):
     ALREADY_SCORED = "already_scored"
     WOULD_SCHEDULE = "would_schedule"
     SCHEDULED = "scheduled"
-    WORKFLOW_ALREADY_PRESENT = "workflow_already_present"
+    RECOVERED = "recovered"
+    WORKFLOW_IN_FLIGHT = "workflow_in_flight"
+    WORKFLOW_ORPHAN = "workflow_orphan"
     FAILED = "failed"
 
 
@@ -84,7 +90,9 @@ class BatchRescoreResult(BaseModel):
     already_scored_count: StrictInt
     needs_score_count: StrictInt
     scheduled_count: StrictInt
-    already_scheduled_count: StrictInt
+    recovered_count: StrictInt
+    in_flight_count: StrictInt
+    orphan_count: StrictInt
     failed_count: StrictInt
     items: tuple[BatchRescoreItem, ...] = Field(default_factory=tuple)
 
@@ -100,6 +108,7 @@ class ScheduleScoreWorkflow(Protocol):
         scoring_profile_version: str,
         dataset_name: str,
         dataset_split: str,
+        recover_orphans: bool = True,
     ) -> ScheduledScoreGenerationWorkflow: ...
 
 
@@ -113,11 +122,12 @@ def rescore_generation_runs(
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     score_attempt_index: int = 0,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
     chunk_size: int = DEFAULT_RESCORE_CHUNK_SIZE,
     limit: int | None = None,
     dry_run: bool = False,
+    recover_orphans: bool = True,
     schedule_workflow: ScheduleScoreWorkflow = (
         schedule_score_generation_workflow
     ),
@@ -149,6 +159,8 @@ def rescore_generation_runs(
                 parser_profile_id=scoring_profile.parser_profile.profile_id,
                 parser_version=scoring_profile.parser_profile.version,
                 score_attempt_index=score_attempt_index,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
                 limit=page_limit,
                 offset=offset,
             )
@@ -167,6 +179,7 @@ def rescore_generation_runs(
                     dataset_name=dataset_name,
                     dataset_split=dataset_split,
                     dry_run=dry_run,
+                    recover_orphans=recover_orphans,
                     schedule_workflow=schedule_workflow,
                 )
             )
@@ -201,6 +214,8 @@ def load_rescore_generation_candidates(
     parser_profile_id: str,
     parser_version: str,
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     limit: int,
     offset: int,
 ) -> tuple[RescoreGenerationCandidate, ...]:
@@ -214,6 +229,8 @@ def load_rescore_generation_candidates(
             parser_profile_id=parser_profile_id,
             parser_version=parser_version,
             score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
             limit=limit,
             offset=offset,
         )
@@ -233,6 +250,7 @@ def plan_or_schedule_rescore_item(
     dataset_name: str,
     dataset_split: str,
     dry_run: bool,
+    recover_orphans: bool,
     schedule_workflow: ScheduleScoreWorkflow,
 ) -> BatchRescoreItem:
     score_attempt_id = stable_score_attempt_id(
@@ -269,6 +287,7 @@ def plan_or_schedule_rescore_item(
             scoring_profile_version=scoring_profile_version,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
+            recover_orphans=recover_orphans,
         )
     except Exception as error:
         return batch_rescore_item(
@@ -278,15 +297,42 @@ def plan_or_schedule_rescore_item(
             status=BatchRescoreItemStatus.FAILED,
             failure=failure_payload_from_exception(error),
         )
+    if scheduled.scheduled:
+        status = (
+            BatchRescoreItemStatus.RECOVERED
+            if scheduled.recovered
+            else BatchRescoreItemStatus.SCHEDULED
+        )
+        return batch_rescore_item(
+            candidate,
+            score_attempt_id=scheduled.score_attempt_id,
+            workflow_id=scheduled.workflow_id,
+            status=status,
+        )
+    presence = classify_scoring_workflow_presence(
+        database_url=database_url,
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+    )
+    if presence is ScoringWorkflowPresence.COMPLETE:
+        return batch_rescore_item(
+            candidate,
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            status=BatchRescoreItemStatus.ALREADY_SCORED,
+        )
+    if presence is ScoringWorkflowPresence.ORPHAN:
+        return batch_rescore_item(
+            candidate,
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            status=BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+        )
     return batch_rescore_item(
         candidate,
         score_attempt_id=scheduled.score_attempt_id,
         workflow_id=scheduled.workflow_id,
-        status=(
-            BatchRescoreItemStatus.SCHEDULED
-            if scheduled.scheduled
-            else BatchRescoreItemStatus.WORKFLOW_ALREADY_PRESENT
-        ),
+        status=BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
     )
 
 
@@ -332,12 +378,29 @@ def batch_rescore_result(
     scheduled_count = sum(
         item.status is BatchRescoreItemStatus.SCHEDULED for item in items
     )
-    already_scheduled_count = sum(
-        item.status is BatchRescoreItemStatus.WORKFLOW_ALREADY_PRESENT
+    recovered_count = sum(
+        item.status is BatchRescoreItemStatus.RECOVERED for item in items
+    )
+    in_flight_count = sum(
+        item.status is BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT
         for item in items
+    )
+    orphan_count = sum(
+        item.status is BatchRescoreItemStatus.WORKFLOW_ORPHAN for item in items
     )
     failed_count = sum(
         item.status is BatchRescoreItemStatus.FAILED for item in items
+    )
+    needs_score_count = sum(
+        item.status
+        in {
+            BatchRescoreItemStatus.WOULD_SCHEDULE,
+            BatchRescoreItemStatus.SCHEDULED,
+            BatchRescoreItemStatus.RECOVERED,
+            BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+            BatchRescoreItemStatus.FAILED,
+        }
+        for item in items
     )
     return BatchRescoreResult(
         experiment_name=experiment_name,
@@ -353,9 +416,11 @@ def batch_rescore_result(
         dry_run=dry_run,
         selected_count=len(items),
         already_scored_count=already_scored_count,
-        needs_score_count=len(items) - already_scored_count,
+        needs_score_count=needs_score_count,
         scheduled_count=scheduled_count,
-        already_scheduled_count=already_scheduled_count,
+        recovered_count=recovered_count,
+        in_flight_count=in_flight_count,
+        orphan_count=orphan_count,
         failed_count=failed_count,
         items=items,
     )

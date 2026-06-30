@@ -172,12 +172,15 @@ boundary; extraction metrics use the parser result. Non-string payloads are
 converted through the recordability boundary and canonical JSON before metric
 extraction.
 
-The scoring workflow is currently a one-generation DBOS workflow plus a
-`score-one` CLI. Task loading uses a process-local cached HumanEval task map
-keyed by dataset name and split, which avoids reparsing the dataset for each
-score in the same worker process. Batch/rescore orchestration, first-class
-profile record tables, projection movement, and live Postgres/DBOS integration
-coverage remain later phases.
+The scoring workflow is a one-generation DBOS workflow plus `score-one` and
+batch `rescore` commands. Task loading uses a process-local cached HumanEval
+task map keyed by dataset name and split, which avoids reparsing the dataset for
+each score in the same worker process. Score-attempt `metrics` payloads enforce
+domain-tier stage-count and byte caps at record validation time. Batch/rescore
+orchestration includes orphan workflow detection and replay recovery. First-class
+profile record tables and projection movement remain later phases. Live
+Postgres/DBOS integration coverage for scoring lives under
+`tests/integration/test_platform_scoring_*.py`.
 
 Two platform workflow concerns remain deferred. First, prompt configuration is
 currently a documented metadata contract on graph nodes; a later graph contract

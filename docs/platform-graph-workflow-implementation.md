@@ -77,7 +77,9 @@ dataset `evalplus/humanevalplus` split `test`. It also accepts
 `--dataset-split`, `--chunk-size`, and `--limit`.
 
 The default scoring surface persists one append-only
-`ScoreAttemptRecord` using scoring profile `humaneval@v1`. That profile owns
+`ScoreAttemptRecord` using scoring profile `humaneval@v1`. Score attempts are
+unique per generation run, scoring profile, parser profile, score attempt index,
+and HumanEval dataset name/split. That profile owns
 the parser profile `humaneval-best-effort@v1`, metrics profile
 `humaneval-metrics@v1`, and HumanEval timeout. The CLI exposes scoring profile
 id/version options so parser, metric, timeout, or scoring changes create new
@@ -122,22 +124,31 @@ The batch rescoring selector reads v1 `dr_dspy_generation_runs` joined to
 optional generation attempt index, then orders candidates by
 `(fair_order_key, prediction_id, generation_run_id)`. For each candidate, it
 anti-joins any existing score attempt with the requested generation run,
-scoring profile id/version, parser profile id/version, and score attempt index.
-Rows without a matching score attempt are processed in `--chunk-size` pages.
+scoring profile id/version, parser profile id/version, score attempt index, and
+dataset name/split. Rows without a matching score attempt are processed in `--chunk-size` pages.
 `--limit` caps the ordered unscored candidate rows, so large resume runs do not
 page through completed scores before finding work.
 
 For rows that need scoring, `rescore` computes the same stable score-attempt id
 used by `score-one` and schedules the existing scoring workflow with workflow id
-`platform-score-v1:<score_attempt_id>`. If DBOS already has that deterministic
-workflow id but no terminal score attempt exists yet, the summary reports the
-item as `workflow_already_present`. Scheduling failures are reported per item
-and do not stop later items in the batch. The command prints a JSON-like summary
-with selected, already-scored, needs-score, scheduled,
-workflow-already-present, and failed counts plus item ids for debugging small
-runs. Because the SQL selector filters out completed scores, already-scored
-normally stays at zero and only protects callers that inject stale candidates
-directly.
+`platform-score-v1:<score_attempt_id>`. Scheduling consults both Postgres and DBOS
+state:
+
+- `workflow_in_flight`: DBOS has an active workflow and no terminal score attempt yet.
+- `workflow_orphan`: DBOS has a terminal workflow record but no score attempt row.
+- `recovered`: orphan replay via `DBOS.retrieve_workflow(...).get_result()` persisted the missing score attempt.
+
+By default, `rescore` enables `--recover-orphans` so terminal orphans self-heal
+during batch rescoring. Scheduling failures are reported per item and do not stop
+later items in the batch. The command prints a JSON-like summary with selected,
+already-scored, needs-score, scheduled, recovered, in-flight, orphan, and failed
+counts plus item ids for debugging small runs. Because the SQL selector filters
+out completed scores, already-scored normally stays at zero and only protects
+callers that inject stale candidates directly.
+
+Terminal DBOS scoring failures that cannot replay into a persisted
+`ScoreAttemptRecord` may still require manual DBOS admin; v1 does not port the v0
+repair machinery for that case.
 
 Batch rescoring does not write generation rows, node-attempt rows, v0 tables,
 projection rows, or app-owned pending/running scoring lifecycle state. DBOS
@@ -295,7 +306,12 @@ unless noted above:
 - **Append-only vs mutable batch audit:** generation/node/score outcomes are
   append-only; batch submit rows are mutable operational audit.
 - **Profile/version ambiguity:** deferred to step 10 (HumanEval scoring).
-- **Pure/domain boundary:** no refactor needed.
+- **Pure/domain boundary:** resolved via shared `recordable_text` at the
+  recordability boundary and platform reusing `domain_score.raw_generation` for
+  terminal metrics instead of re-canonicalizing terminal output.
+- **Dataset defaults:** `DEFAULT_SCORE_DATASET_NAME` and
+  `DEFAULT_SCORE_DATASET_SPLIT` in `records/hashing.py` are the single source
+  of truth for CLI, workflow, and score-attempt identity defaults.
 - **Legacy v0 / PlainPromptAdapter:** no new ChatAdapter coupling on the platform
   path.
 - **Raw vs parsed artifacts:** out of scope for this phase.
@@ -335,13 +351,17 @@ fixtures, and the tier model:
   `update_operation_summary` terminal completion for all
   `workflow_already_present` items, `prepare_enqueue_retries` claiming reset,
   and `submit_prediction_specs` with real summary accounting (mocked enqueue
-  only).
+  only). Scoring Tier 1 adds `load_scoring_target_step` and
+  `persist_score_attempt_step` idempotency plus profile unique-constraint
+  behavior in [`tests/integration/test_platform_scoring_db_steps.py`](../tests/integration/test_platform_scoring_db_steps.py).
 - **Tier 2–3:** End-to-end `run_prediction_graph_workflow_once` under DBOS with
   mocked LM (happy path, retry-exhaustion error fallback with
   `node_step_error_result_step` and preserved node-attempt timestamps, upstream
   `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery,
   persist idempotency, and throttle preflight reading Postgres before the LM
-  step).
+  step). Scoring Tier 2–3 adds `run_score_generation_workflow_once` replay,
+  HumanEval task-step memoization, and orphan recovery in
+  [`tests/integration/test_platform_scoring_dbos_workflow.py`](../tests/integration/test_platform_scoring_dbos_workflow.py).
 - **Tier 3.5:** Frozen v0 sample rows reshaped through
   `src/dr_dspy/migration/v0_reshape.py` (outcome import and spec pass-through).
 

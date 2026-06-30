@@ -61,6 +61,7 @@ __all__ = [
     "failure_summary_payload",
     "find_classified_exception",
     "recordable_jsonb",
+    "recordable_text",
     "require_generation_text",
     "should_retry_step",
     "summarize_exception",
@@ -108,6 +109,10 @@ _LAZY_EXPORTS = {
     "recordable_jsonb": (
         "dr_dspy.eval_failures.recording",
         "recordable_jsonb",
+    ),
+    "recordable_text": (
+        "dr_dspy.eval_failures.recording",
+        "recordable_text",
     ),
 }
 

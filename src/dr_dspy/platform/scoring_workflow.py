@@ -26,7 +26,14 @@ from dr_dspy.platform.persistence import (
     persist_score_attempt,
 )
 from dr_dspy.platform.scoring import score_generation_run
+from dr_dspy.platform.scoring_workflow_state import (
+    ScoringWorkflowPresence,
+    classify_scoring_workflow_presence,
+    recover_orphan_scoring_workflow,
+)
 from dr_dspy.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     GenerationRunRecord,
     NodeAttemptRecord,
     PredictionSpecRecord,
@@ -41,8 +48,6 @@ SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
 SCORE_GENERATION_STEP_NAME = "dr_dspy_platform_score_generation_v1"
 PERSIST_SCORE_ATTEMPT_STEP_NAME = "dr_dspy_platform_persist_score_attempt_v1"
 WORKFLOW_ID_PREFIX = "platform-score-v1"
-DEFAULT_HUMANEVAL_DATASET_NAME = "evalplus/humanevalplus"
-DEFAULT_HUMANEVAL_DATASET_SPLIT = "test"
 
 
 class ScoreGenerationWorkflowResult(BaseModel):
@@ -58,6 +63,7 @@ class ScheduledScoreGenerationWorkflow(BaseModel):
     score_attempt_id: str
     workflow_id: str
     scheduled: bool
+    recovered: bool = False
 
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
@@ -67,8 +73,8 @@ def run_score_generation_workflow(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
 ) -> dict[str, Any]:
     target = load_scoring_target_step(database_url, generation_run_id)
     spec = PredictionSpecRecord.model_validate(target["spec"])
@@ -129,8 +135,8 @@ def start_score_generation_workflow(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
 ) -> str:
     score_attempt_id, _handle = _start_score_generation_workflow_handle(
         database_url=database_url,
@@ -150,8 +156,9 @@ def schedule_score_generation_workflow(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    recover_orphans: bool = True,
 ) -> ScheduledScoreGenerationWorkflow:
     score_attempt_id = score_attempt_id_for_workflow(
         generation_run_id=generation_run_id,
@@ -162,7 +169,45 @@ def schedule_score_generation_workflow(
         dataset_split=dataset_split,
     )
     workflow_id = platform_scoring_workflow_id(score_attempt_id)
-    if DBOS.get_workflow_status(workflow_id) is not None:
+    presence = classify_scoring_workflow_presence(
+        database_url=database_url,
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+    )
+    if presence is ScoringWorkflowPresence.COMPLETE:
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    if presence is ScoringWorkflowPresence.IN_FLIGHT:
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    if presence is ScoringWorkflowPresence.ORPHAN:
+        if recover_orphans and recover_orphan_scoring_workflow(
+            database_url=database_url,
+            workflow_id=workflow_id,
+            score_attempt_id=score_attempt_id,
+            replay_workflow=run_score_generation_workflow,
+            replay_args=(
+                database_url,
+                generation_run_id,
+                score_attempt_index,
+                scoring_profile_id,
+                scoring_profile_version,
+                dataset_name,
+                dataset_split,
+            ),
+        ):
+            return ScheduledScoreGenerationWorkflow(
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                scheduled=True,
+                recovered=True,
+            )
         return ScheduledScoreGenerationWorkflow(
             score_attempt_id=score_attempt_id,
             workflow_id=workflow_id,
@@ -207,8 +252,8 @@ def run_score_generation_workflow_once(
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
 ) -> ScoreGenerationWorkflowResult:
     _score_attempt_id, handle = _start_score_generation_workflow_handle(
         database_url=database_url,
@@ -235,8 +280,8 @@ def score_attempt_id_for_workflow(
     score_attempt_index: int,
     scoring_profile_id: str,
     scoring_profile_version: str,
-    dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
-    dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
 ) -> str:
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,

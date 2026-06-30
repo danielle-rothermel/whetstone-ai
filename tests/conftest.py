@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
 import dr_dspy.platform.graph_workflow  # noqa: F401
+import dr_dspy.platform.scoring_workflow  # noqa: F401
 import tests.integration.dbos_test_workflows  # noqa: F401
 from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
 from dr_dspy.harness import dbos as shared_dbos
@@ -75,6 +76,8 @@ def _apply_v1_migrations(
         "20260630_0003_batch_submit_claiming_status",
         "dr_dspy.db.migrations.versions."
         "20260630_0004_batch_submit_remove_prepared_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0005_score_attempt_dataset_axes",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)

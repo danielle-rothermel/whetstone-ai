@@ -203,6 +203,8 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         "parser_profile_id",
         "parser_version",
         "attempt_index",
+        "dataset_name",
+        "dataset_split",
     )
     node_status_check = next(
         constraint

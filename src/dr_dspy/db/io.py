@@ -209,6 +209,8 @@ def score_attempt_row(record: ScoreAttemptRecord) -> Row:
         "scoring_profile_version": record.scoring_profile_version,
         "parser_profile_id": record.parser_profile_id,
         "parser_version": record.parser_version,
+        "dataset_name": record.dataset_name,
+        "dataset_split": record.dataset_split,
         "status": record.status.value,
         "generated_code_outcome": _enum_value(record.generated_code_outcome),
         "score": record.score,
@@ -363,6 +365,8 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
         scoring_profile_version=row["scoring_profile_version"],
         parser_profile_id=row["parser_profile_id"],
         parser_version=row["parser_version"],
+        dataset_name=row["dataset_name"],
+        dataset_split=row["dataset_split"],
         status=ScoreAttemptStatus(row["status"]),
         generated_code_outcome=(
             GeneratedCodeOutcome(generated_code_outcome)
@@ -657,6 +661,8 @@ def select_rescore_generation_candidates(
     parser_profile_id: str,
     parser_version: str,
     score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
     generation_attempt_index: int | None = None,
     limit: int | None = None,
     offset: int = 0,
@@ -670,6 +676,8 @@ def select_rescore_generation_candidates(
         schema.score_attempts.c.parser_profile_id == parser_profile_id,
         schema.score_attempts.c.parser_version == parser_version,
         schema.score_attempts.c.attempt_index == score_attempt_index,
+        schema.score_attempts.c.dataset_name == dataset_name,
+        schema.score_attempts.c.dataset_split == dataset_split,
     )
     statement = (
         select(

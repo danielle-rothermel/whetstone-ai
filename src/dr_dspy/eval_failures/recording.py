@@ -35,6 +35,15 @@ def ensure_recordable(
         raise RecordingFailureError(str(exc), underlying=exc) from exc
 
 
+def recordable_text(value: Any) -> str:
+    """Convert a terminal or node-output payload to canonical text for metrics."""
+    if isinstance(value, str):
+        return value
+    from dr_dspy.hashing import canonical_json
+
+    return canonical_json(ensure_recordable(value))
+
+
 def recordable_jsonb(
     value: Any,
     *,

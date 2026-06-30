@@ -21,8 +21,7 @@ from pydantic import (
     StrictStr,
 )
 
-from dr_dspy.eval_failures.recording import ensure_recordable
-from dr_dspy.hashing import canonical_json
+from dr_dspy.eval_failures.recording import recordable_text
 from dr_dspy.humaneval.code_extraction import validate_python_source
 from dr_dspy.humaneval.code_parsing import (
     CodeExtractionResult,
@@ -124,12 +123,6 @@ class EvaluationAggregateMetrics(BaseModel):
     status_counts: dict[StrictStr, StrictInt]
 
 
-def canonical_terminal_payload(raw_generation: Any) -> str:
-    if isinstance(raw_generation, str):
-        return raw_generation
-    return canonical_json(ensure_recordable(raw_generation))
-
-
 def score_humaneval_generation(
     *,
     raw_generation: Any,
@@ -137,7 +130,7 @@ def score_humaneval_generation(
     parser_profile: CodeParserProfile,
     timeout_seconds: float,
 ) -> HumanEvalGenerationScore:
-    canonical_terminal = canonical_terminal_payload(raw_generation)
+    canonical_terminal = recordable_text(raw_generation)
     extraction = extract_code_with_profile(
         raw_generation,
         profile=parser_profile,

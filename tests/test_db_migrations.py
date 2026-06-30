@@ -37,7 +37,7 @@ def test_alembic_discovers_v1_schema_revision() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "20260630_0004"
+    assert script.get_current_head() == "20260630_0005"
 
 
 def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
@@ -57,11 +57,51 @@ def test_alembic_v1_schema_revision_renders_upgrade_and_downgrade(
     assert "DROP TABLE dr_dspy_throttle_backoff" in rendered
 
 
+def test_alembic_score_attempt_dataset_revision_renders_constraint(
+    monkeypatch: Any,
+) -> None:
+    migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0005_score_attempt_dataset_axes"
+    )
+    statements: list[str] = []
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(migration, "op", Operations(context))
+
+    migration.upgrade()
+    rendered = "\n".join(statements)
+
+    assert "dataset_name" in rendered
+    assert "dataset_split" in rendered
+    assert "uq_dr_dspy_score_attempts_profile" in rendered
+    assert "UPDATE dr_dspy_score_attempts" in rendered
+
+
 def test_alembic_v1_schema_revision_matches_live_named_contracts(
     monkeypatch: Any,
 ) -> None:
     _, statements = _render_upgrade(monkeypatch)
-    rendered = "\n".join(statements)
+    dataset_statements: list[str] = []
+    dataset_migration = importlib.import_module(
+        "dr_dspy.db.migrations.versions."
+        "20260630_0005_score_attempt_dataset_axes"
+    )
+    engine = create_mock_engine(
+        "postgresql+psycopg://",
+        lambda sql, *args, **kwargs: dataset_statements.append(
+            str(sql.compile(dialect=engine.dialect))
+        ),
+    )
+    context = MigrationContext.configure(cast(Any, engine.connect()))
+    monkeypatch.setattr(dataset_migration, "op", Operations(context))
+    dataset_migration.upgrade()
+    rendered = "\n".join([*statements, *dataset_statements])
 
     for table in schema.v1_tables:
         assert f"CREATE TABLE {table.name}" in rendered
@@ -466,6 +506,130 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
                 )
             }
             assert schema.EXPERIMENTS_TABLE not in remaining_tables
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))
+        engine.dispose()
+
+
+def test_alembic_score_attempt_dataset_revision_allows_dual_dataset_profile_rows(
+    monkeypatch: Any,
+) -> None:
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+psycopg:///dr_dspy",
+    )
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    schema_name = f"dr_dspy_score_dataset_test_{uuid.uuid4().hex}"
+
+    try:
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL unavailable: {exc}")
+
+    migration_modules = (
+        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
+        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
+        "dr_dspy.db.migrations.versions."
+        "20260629_0003_batch_submit_already_scheduled_count",
+        "dr_dspy.db.migrations.versions."
+        "20260629_0004_batch_submit_enqueuing_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0001_append_only_outcome_triggers",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0002_batch_submit_terminal_enqueue_accounting",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0003_batch_submit_claiming_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0004_batch_submit_remove_prepared_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0005_score_attempt_dataset_axes",
+    )
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"CREATE SCHEMA {schema_name}"))
+
+        for module_path in migration_modules:
+            migration = importlib.import_module(module_path)
+            with engine.begin() as conn:
+                conn.execute(text(f"SET search_path TO {schema_name}, public"))
+                context = MigrationContext.configure(cast(Any, conn))
+                monkeypatch.setattr(migration, "op", Operations(context))
+                migration.upgrade()
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            _seed_generation_run_chain(conn)
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_score_attempts ("
+                    "score_attempt_id, prediction_id, generation_run_id, "
+                    "scoring_profile_id, scoring_profile_version, "
+                    "parser_profile_id, parser_version, attempt_index, "
+                    "dataset_name, dataset_split, status, score, "
+                    "per_test_results, started_at, completed_at"
+                    ") VALUES ("
+                    "'score-default', 'prediction-1', 'run-1', "
+                    "'humaneval', 'v1', 'humaneval-best-effort', 'v1', 0, "
+                    "'evalplus/humanevalplus', 'test', 'success', 1.0, "
+                    "'[]'::jsonb, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00', "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO dr_dspy_score_attempts ("
+                    "score_attempt_id, prediction_id, generation_run_id, "
+                    "scoring_profile_id, scoring_profile_version, "
+                    "parser_profile_id, parser_version, attempt_index, "
+                    "dataset_name, dataset_split, status, score, "
+                    "per_test_results, started_at, completed_at"
+                    ") VALUES ("
+                    "'score-other', 'prediction-1', 'run-1', "
+                    "'humaneval', 'v1', 'humaneval-best-effort', 'v1', 0, "
+                    "'other/dataset', 'test', 'success', 1.0, "
+                    "'[]'::jsonb, "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00', "
+                    "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                    ")"
+                )
+            )
+            count = conn.execute(
+                text("SELECT COUNT(*) FROM dr_dspy_score_attempts")
+            ).scalar_one()
+            assert count == 2
+
+        with engine.begin() as conn:
+            conn.execute(text(f"SET search_path TO {schema_name}, public"))
+            with pytest.raises(IntegrityError):
+                conn.execute(
+                    text(
+                        "INSERT INTO dr_dspy_score_attempts ("
+                        "score_attempt_id, prediction_id, generation_run_id, "
+                        "scoring_profile_id, scoring_profile_version, "
+                        "parser_profile_id, parser_version, attempt_index, "
+                        "dataset_name, dataset_split, status, score, "
+                        "per_test_results, started_at, completed_at"
+                        ") VALUES ("
+                        "'score-dup', 'prediction-1', 'run-1', "
+                        "'humaneval', 'v1', 'humaneval-best-effort', 'v1', 0, "
+                        "'evalplus/humanevalplus', 'test', 'success', 1.0, "
+                        "'[]'::jsonb, "
+                        "TIMESTAMPTZ '2026-06-29 12:00:00+00', "
+                        "TIMESTAMPTZ '2026-06-29 12:00:00+00'"
+                        ")"
+                    )
+                )
     finally:
         with engine.begin() as conn:
             conn.execute(text(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE"))

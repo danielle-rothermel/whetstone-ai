@@ -41,6 +41,7 @@ from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
+    resolve_humaneval_scoring_profile,
 )
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
 from dr_dspy.humaneval.task import (
@@ -51,6 +52,7 @@ from dr_dspy.humaneval.task import (
 )
 from dr_dspy.lm.boundary import EndpointKind, ProviderKind
 from dr_dspy.platform import rescoring, scoring_workflow
+from dr_dspy.platform.scoring_workflow_state import ScoringWorkflowPresence
 from dr_dspy.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -59,7 +61,9 @@ from dr_dspy.platform.persistence import (
 )
 from dr_dspy.platform.scoring import (
     score_generation_run,
+    score_metrics_payload,
 )
+from dr_dspy.records.limits import METRICS_STAGES_MAX_COUNT
 from dr_dspy.records import (
     DimensionsPayload,
     FailureMetadataPayload,
@@ -82,6 +86,8 @@ from dr_dspy.records import (
     stable_generation_run_id,
     stable_prediction_id,
     stable_score_attempt_id,
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -611,6 +617,38 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
     }
 
 
+def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
+    spec = _spec()
+    max_node_sources = METRICS_STAGES_MAX_COUNT - 1
+    node_attempts = tuple(
+        _node_attempt(
+            spec,
+            node_id=f"node-{index}",
+            values={"output": f"value-{index}"},
+        )
+        for index in range(max_node_sources + 1)
+    )
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    scoring_profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+    )
+    domain_score = humaneval_scoring.score_humaneval_generation(
+        raw_generation=run.summary.terminal_output,
+        task=_task(),
+        parser_profile=scoring_profile.parser_profile,
+        timeout_seconds=scoring_profile.timeout_seconds,
+    )
+
+    with pytest.raises(ValueError, match="node output metrics sources cannot exceed"):
+        score_metrics_payload(
+            task=_task(),
+            node_attempts=node_attempts,
+            scoring_profile=scoring_profile,
+            domain_score=domain_score,
+        )
+
+
 def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
@@ -949,6 +987,31 @@ def test_score_attempt_id_differs_by_dataset_selection() -> None:
     assert default_id != other_split_id
     assert other_dataset_id != other_split_id
 
+    default_score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+    other_dataset_score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        dataset_name="other/dataset",
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    default_row = db_io.score_attempt_row(default_score)
+    other_row = db_io.score_attempt_row(other_dataset_score)
+    assert default_row["dataset_name"] == DEFAULT_SCORE_DATASET_NAME
+    assert default_row["dataset_split"] == DEFAULT_SCORE_DATASET_SPLIT
+    assert other_row["dataset_name"] == "other/dataset"
+    assert other_row["dataset_split"] == DEFAULT_SCORE_DATASET_SPLIT
+
 
 def test_task_name_leakage_ignores_numeric_task_suffix() -> None:
     leakage = python_leakage_metrics(
@@ -1001,7 +1064,8 @@ def test_persist_score_attempt_reports_conflict_status() -> None:
     )
 
     class Result:
-        rowcount = 0
+        def first(self) -> None:
+            return None
 
     class Connection:
         def execute(self, statement: Any) -> Result:
@@ -1245,8 +1309,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         (
             "task",
             (
-                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_NAME,
-                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_SPLIT,
+                DEFAULT_SCORE_DATASET_NAME,
+                DEFAULT_SCORE_DATASET_SPLIT,
                 spec.task_id,
             ),
         ),
@@ -1260,8 +1324,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 PARSER_PROFILE_VERSION,
                 2.0,
                 0,
-                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_NAME,
-                scoring_workflow.DEFAULT_HUMANEVAL_DATASET_SPLIT,
+                DEFAULT_SCORE_DATASET_NAME,
+                DEFAULT_SCORE_DATASET_SPLIT,
                 NOW.isoformat(),
             ),
         ),
@@ -1279,6 +1343,8 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
         parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
         parser_version=PARSER_PROFILE_VERSION,
         score_attempt_index=0,
+        dataset_name=DEFAULT_SCORE_DATASET_NAME,
+        dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         limit=10,
         offset=2,
     )
@@ -1301,6 +1367,11 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
         "dr_dspy_score_attempts.parser_profile_id = "
         "'humaneval-best-effort'"
     ) in compiled
+    assert (
+        "dr_dspy_score_attempts.dataset_name = "
+        "'evalplus/humanevalplus'"
+    ) in compiled
+    assert "dr_dspy_score_attempts.dataset_split = 'test'" in compiled
     assert "dr_dspy_score_attempts.score_attempt_id IS NULL" in compiled
     assert (
         "ORDER BY dr_dspy_prediction_specs.fair_order_key, "
@@ -1308,6 +1379,74 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
         "dr_dspy_generation_runs.generation_run_id"
     ) in compiled
     assert "LIMIT 10 OFFSET 2" in compiled
+
+
+def test_rescore_selector_ignores_scores_for_other_datasets() -> None:
+    statement = db_io.select_rescore_generation_candidates(
+        experiment_name="exp",
+        generation_status=GenerationRunStatus.SUCCESS,
+        scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
+        scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
+        parser_profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+        parser_version=PARSER_PROFILE_VERSION,
+        score_attempt_index=0,
+        dataset_name="other/dataset",
+        dataset_split="train",
+        limit=10,
+    )
+
+    compiled = str(
+        statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+
+    assert "dr_dspy_score_attempts.dataset_name = 'other/dataset'" in compiled
+    assert "dr_dspy_score_attempts.dataset_split = 'train'" in compiled
+
+
+def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = (
+        _rescore_candidate(1),
+    )
+    scheduler_calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        lambda connection, **kwargs: candidates,
+    )
+
+    def schedule(
+        **kwargs: Any,
+    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+        scheduler_calls.append(
+            (kwargs["dataset_name"], kwargs["dataset_split"])
+        )
+        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            score_attempt_id="unused",
+            workflow_id="unused",
+            scheduled=True,
+        )
+
+    result = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        dataset_name="other/dataset",
+        dataset_split="train",
+        dry_run=True,
+        schedule_workflow=schedule,
+    )
+
+    assert scheduler_calls == []
+    assert result.selected_count == 1
+    assert result.dataset_name == "other/dataset"
+    assert result.dataset_split == "train"
+    assert result.items[0].status is rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE
 
 
 def test_batch_rescore_dry_run_counts_needed_scores(
@@ -1346,6 +1485,8 @@ def test_batch_rescore_dry_run_counts_needed_scores(
     assert result.selected_count == 1
     assert result.already_scored_count == 0
     assert result.needs_score_count == 1
+    assert result.in_flight_count == 0
+    assert result.orphan_count == 0
     assert result.scheduled_count == 0
     assert [item.status for item in result.items] == [
         rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE,
@@ -1374,6 +1515,11 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
         rescoring,
         "load_rescore_generation_candidates",
         load_candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "classify_scoring_workflow_presence",
+        lambda **kwargs: ScoringWorkflowPresence.IN_FLIGHT,
     )
 
     def schedule(
@@ -1419,11 +1565,12 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
     ]
     assert result.selected_count == 3
     assert result.scheduled_count == 1
-    assert result.already_scheduled_count == 1
+    assert result.in_flight_count == 1
+    assert result.orphan_count == 0
     assert result.failed_count == 1
     assert [item.status for item in result.items] == [
         rescoring.BatchRescoreItemStatus.SCHEDULED,
-        rescoring.BatchRescoreItemStatus.WORKFLOW_ALREADY_PRESENT,
+        rescoring.BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
         rescoring.BatchRescoreItemStatus.FAILED,
     ]
     assert result.items[2].failure is not None
@@ -1484,11 +1631,13 @@ def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
     )
     starts: list[Any] = []
 
-    class FakeDbos:
-        def get_workflow_status(self, workflow_id: str) -> dict[str, str]:
-            assert workflow_id == expected_workflow_id
-            return {"status": "PENDING"}
+    monkeypatch.setattr(
+        scoring_workflow,
+        "classify_scoring_workflow_presence",
+        lambda **kwargs: ScoringWorkflowPresence.IN_FLIGHT,
+    )
 
+    class FakeDbos:
         def start_workflow(self, *args: Any) -> None:
             starts.append(args)
 
@@ -1512,13 +1661,13 @@ def test_schedule_score_generation_workflow_surfaces_unrelated_start_failure(
 ) -> None:
     starts: list[Any] = []
 
-    class FakeDbos:
-        def get_workflow_status(
-            self,
-            workflow_id: str,
-        ) -> dict[str, str] | None:
-            return None if not starts else {"status": "PENDING"}
+    monkeypatch.setattr(
+        scoring_workflow,
+        "classify_scoring_workflow_presence",
+        lambda **kwargs: ScoringWorkflowPresence.ABSENT,
+    )
 
+    class FakeDbos:
         def start_workflow(self, *args: Any) -> None:
             starts.append(args)
             raise RuntimeError("dbos unavailable")
@@ -1543,6 +1692,139 @@ def _rescore_candidate(
         generation_run_id=f"generation-run-{index}",
         existing_score_attempt_id=existing_score_attempt_id,
     )
+
+
+def test_classify_scoring_workflow_presence_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_dspy.platform import scoring_workflow_state
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "score_attempt_exists",
+        lambda database_url, score_attempt_id: score_attempt_id == "complete",
+    )
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {
+                "get_workflow_status": staticmethod(
+                    lambda workflow_id: {"status": "PENDING"}
+                )
+            },
+        )(),
+    )
+    assert (
+        scoring_workflow_state.classify_scoring_workflow_presence(
+            database_url="postgresql://example/db",
+            score_attempt_id="complete",
+            workflow_id="platform-score-v1:complete",
+        )
+        is ScoringWorkflowPresence.COMPLETE
+    )
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "score_attempt_exists",
+        lambda database_url, score_attempt_id: False,
+    )
+    assert (
+        scoring_workflow_state.classify_scoring_workflow_presence(
+            database_url="postgresql://example/db",
+            score_attempt_id="missing",
+            workflow_id="platform-score-v1:missing",
+        )
+        is ScoringWorkflowPresence.IN_FLIGHT
+    )
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {
+                "get_workflow_status": staticmethod(
+                    lambda workflow_id: {"status": "SUCCESS"}
+                )
+            },
+        )(),
+    )
+    assert (
+        scoring_workflow_state.classify_scoring_workflow_presence(
+            database_url="postgresql://example/db",
+            score_attempt_id="orphan",
+            workflow_id="platform-score-v1:orphan",
+        )
+        is ScoringWorkflowPresence.ORPHAN
+    )
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {"get_workflow_status": staticmethod(lambda workflow_id: None)},
+        )(),
+    )
+    assert (
+        scoring_workflow_state.classify_scoring_workflow_presence(
+            database_url="postgresql://example/db",
+            score_attempt_id="absent",
+            workflow_id="platform-score-v1:absent",
+        )
+        is ScoringWorkflowPresence.ABSENT
+    )
+
+
+def test_recover_orphan_scoring_workflow_replays_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dr_dspy.platform import scoring_workflow_state
+
+    replay_calls: list[tuple[Any, ...]] = []
+    persist_state = {"exists": False}
+
+    def replay(*args: Any) -> None:
+        replay_calls.append(args)
+        persist_state["exists"] = True
+
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "score_attempt_exists",
+        lambda database_url, score_attempt_id: persist_state["exists"],
+    )
+    monkeypatch.setattr(
+        scoring_workflow_state,
+        "DBOS",
+        type(
+            "FakeDbos",
+            (),
+            {
+                "retrieve_workflow": staticmethod(
+                    lambda workflow_id: type(
+                        "Handle",
+                        (),
+                        {"get_result": staticmethod(lambda: None)},
+                    )()
+                )
+            },
+        )(),
+    )
+
+    recovered = scoring_workflow_state.recover_orphan_scoring_workflow(
+        database_url="postgresql://example/db",
+        workflow_id="platform-score-v1:orphan",
+        score_attempt_id="pending",
+        replay_workflow=replay,
+        replay_args=("db", "run-1"),
+    )
+    assert recovered is True
+    assert replay_calls == [("db", "run-1")]
 
 
 def test_scoring_profile_controls_parser_timeout_and_metrics(

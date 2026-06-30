@@ -302,6 +302,8 @@ score_attempts = Table(
     Column("parser_profile_id", Text, nullable=False),
     Column("parser_version", Text, nullable=False),
     Column("attempt_index", Integer, nullable=False),
+    Column("dataset_name", Text, nullable=False),
+    Column("dataset_split", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("generated_code_outcome", Text),
     Column("score", Float),
@@ -349,6 +351,8 @@ score_attempts = Table(
         "parser_profile_id",
         "parser_version",
         "attempt_index",
+        "dataset_name",
+        "dataset_split",
         name="uq_dr_dspy_score_attempts_profile",
     ),
     UniqueConstraint(

@@ -54,12 +54,18 @@ from dr_dspy.records import (
     PythonLeakageMetricsPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
     TaskInputsPayload,
     TaskSnapshotPayload,
     TextMetricsPayload,
     dimensions_digest,
     fair_order_key,
     stable_prediction_id,
+)
+from dr_dspy.records.limits import (
+    METRICS_MAX_BYTES,
+    METRICS_STAGES_MAX_COUNT,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -562,6 +568,8 @@ def test_score_attempt_success_and_error_shapes() -> None:
         scoring_profile_version="v1",
         parser_profile_id="best-effort",
         parser_version="v1",
+        dataset_name=DEFAULT_SCORE_DATASET_NAME,
+        dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
         generated_code_outcome=GeneratedCodeOutcome.PASSED,
         score=1.0,
@@ -601,6 +609,8 @@ def test_score_attempt_success_and_error_shapes() -> None:
             scoring_profile_version="v1",
             parser_profile_id="best-effort",
             parser_version="v1",
+            dataset_name=DEFAULT_SCORE_DATASET_NAME,
+            dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
             status=ScoreAttemptStatus.ERROR,
             started_at=NOW,
             completed_at=NOW,
@@ -643,6 +653,8 @@ def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
         "scoring_profile_version": "v1",
         "parser_profile_id": "best-effort",
         "parser_version": "v1",
+        "dataset_name": DEFAULT_SCORE_DATASET_NAME,
+        "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
         "status": "success",
         "score": 1.0,
         "failure": _failure().model_dump(mode="json"),
@@ -671,6 +683,8 @@ def test_score_attempt_error_allows_partial_diagnostics() -> None:
         scoring_profile_version="v1",
         parser_profile_id="best-effort",
         parser_version="v1",
+        dataset_name=DEFAULT_SCORE_DATASET_NAME,
+        dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.ERROR,
         generated_code_outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
         extracted_code=ExtractedCodePayload(
@@ -712,6 +726,8 @@ def test_score_attempt_allows_distinct_metrics_profile() -> None:
         scoring_profile_version="v1",
         parser_profile_id="best-effort",
         parser_version="v1",
+        dataset_name=DEFAULT_SCORE_DATASET_NAME,
+        dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
         score=1.0,
         metrics=MetricsPayload(
@@ -724,6 +740,84 @@ def test_score_attempt_allows_distinct_metrics_profile() -> None:
 
     assert attempt.metrics is not None
     assert attempt.metrics.profile_id == "humaneval-metrics"
+
+
+def _minimal_text_metrics() -> TextMetricsPayload:
+    return TextMetricsPayload(
+        character_count=1,
+        byte_count=1,
+        line_count=1,
+        nonempty_line_count=1,
+        word_count=1,
+        average_word_length=1.0,
+    )
+
+
+def _minimal_leakage_metrics() -> PythonLeakageMetricsPayload:
+    return PythonLeakageMetricsPayload(
+        keyword_count=0,
+        code_marker_count=0,
+        fenced_code_block_count=0,
+        code_like_line_count=0,
+        operator_count=0,
+    )
+
+
+def _minimal_metrics_stage(stage_id: str) -> MetricsStagePayload:
+    return MetricsStagePayload(
+        stage_id=stage_id,
+        source_kind="test",
+        text=_minimal_text_metrics(),
+        python_leakage=_minimal_leakage_metrics(),
+    )
+
+
+def _score_attempt_base_kwargs() -> dict[str, Any]:
+    return {
+        "score_attempt_id": "score-1",
+        "prediction_id": "prediction-1",
+        "generation_run_id": "run-1",
+        "attempt_index": 0,
+        "scoring_profile_id": "humaneval",
+        "scoring_profile_version": "v1",
+        "parser_profile_id": "best-effort",
+        "parser_version": "v1",
+        "dataset_name": DEFAULT_SCORE_DATASET_NAME,
+        "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
+        "status": ScoreAttemptStatus.SUCCESS,
+        "score": 1.0,
+        "started_at": NOW,
+        "completed_at": NOW,
+    }
+
+
+def test_score_attempt_rejects_metrics_stage_count_over_limit() -> None:
+    stages = tuple(
+        _minimal_metrics_stage(f"stage-{index}")
+        for index in range(METRICS_STAGES_MAX_COUNT + 1)
+    )
+    with pytest.raises(ValidationError, match="metrics.stages cannot exceed"):
+        ScoreAttemptRecord(
+            **_score_attempt_base_kwargs(),
+            metrics=MetricsPayload(
+                profile_id="humaneval-metrics",
+                profile_version="v1",
+                stages=stages,
+            ),
+        )
+
+
+def test_score_attempt_rejects_oversized_metrics_payload() -> None:
+    oversized = "x" * (METRICS_MAX_BYTES + 1)
+    with pytest.raises(ValidationError, match="metrics:"):
+        ScoreAttemptRecord(
+            **_score_attempt_base_kwargs(),
+            metrics=MetricsPayload(
+                profile_id="humaneval-metrics",
+                profile_version="v1",
+                custom={"padding": oversized},
+            ),
+        )
 
 
 def test_score_attempt_rejects_mismatched_parser_profile() -> None:
@@ -740,6 +834,8 @@ def test_score_attempt_rejects_mismatched_parser_profile() -> None:
             scoring_profile_version="v1",
             parser_profile_id="best-effort",
             parser_version="v1",
+            dataset_name=DEFAULT_SCORE_DATASET_NAME,
+            dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
             status=ScoreAttemptStatus.ERROR,
             extracted_code=ExtractedCodePayload(
                 raw_generation="def broken(",
@@ -763,6 +859,8 @@ def test_score_attempt_attempt_index_must_be_non_negative() -> None:
             scoring_profile_version="v1",
             parser_profile_id="best-effort",
             parser_version="v1",
+            dataset_name=DEFAULT_SCORE_DATASET_NAME,
+            dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
             status=ScoreAttemptStatus.SUCCESS,
             score=1.0,
             started_at=NOW,

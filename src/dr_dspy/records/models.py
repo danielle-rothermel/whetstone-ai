@@ -24,6 +24,8 @@ from dr_dspy.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
 from dr_dspy.records.limits import (
     BATCH_SUBMIT_SPEC_MAX_BYTES,
     GRAPH_SNAPSHOT_MAX_BYTES,
+    METRICS_MAX_BYTES,
+    METRICS_STAGES_MAX_COUNT,
     NODE_OUTPUT_MAX_BYTES,
     PER_TEST_RESULTS_MAX_BYTES,
     PER_TEST_RESULTS_MAX_COUNT,
@@ -471,6 +473,8 @@ class ScoreAttemptRecord(BaseModel):
     scoring_profile_version: StrictStr
     parser_profile_id: StrictStr
     parser_version: StrictStr
+    dataset_name: StrictStr
+    dataset_split: StrictStr
     status: ScoreAttemptStatus
     generated_code_outcome: GeneratedCodeOutcome | None = None
     score: StrictFloat | None = None
@@ -509,6 +513,17 @@ class ScoreAttemptRecord(BaseModel):
                 per_test_payload,
                 max_bytes=PER_TEST_RESULTS_MAX_BYTES,
                 label="per_test_results",
+            )
+        if self.metrics is not None:
+            if len(self.metrics.stages) > METRICS_STAGES_MAX_COUNT:
+                raise ValueError(
+                    f"metrics.stages cannot exceed {METRICS_STAGES_MAX_COUNT} "
+                    "entries"
+                )
+            validate_payload_size(
+                self.metrics.model_dump(mode="json"),
+                max_bytes=METRICS_MAX_BYTES,
+                label="metrics",
             )
         if self.status is ScoreAttemptStatus.ERROR:
             if self.failure is None:

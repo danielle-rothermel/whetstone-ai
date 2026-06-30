@@ -7,8 +7,7 @@ from dr_dspy.eval_failures import (
     classify_exception,
     exception_type_name,
 )
-from dr_dspy.eval_failures.recording import ensure_recordable
-from dr_dspy.hashing import canonical_json
+from dr_dspy.eval_failures.recording import recordable_text
 from dr_dspy.humaneval.metrics import (
     NodeOutputMetricsSource,
     build_metrics_payload,
@@ -41,6 +40,7 @@ from dr_dspy.records import (
     ScoreAttemptStatus,
     stable_score_attempt_id,
 )
+from dr_dspy.records.limits import METRICS_STAGES_MAX_COUNT
 
 
 def score_generation_run(
@@ -188,12 +188,13 @@ def successful_score_attempt(
         scoring_profile_version=scoring_profile.version,
         parser_profile_id=parser_profile.profile_id,
         parser_version=parser_profile.version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
         status=ScoreAttemptStatus.SUCCESS,
         generated_code_outcome=domain_score.outcome,
         score=domain_score.score,
         extracted_code=extracted_payload,
         metrics=score_metrics_payload(
-            terminal_output=generation_run.summary.terminal_output,
             task=task,
             node_attempts=node_attempts,
             scoring_profile=scoring_profile,
@@ -235,6 +236,8 @@ def error_score_attempt(
         scoring_profile_version=scoring_profile.version,
         parser_profile_id=scoring_profile.parser_profile.profile_id,
         parser_version=scoring_profile.parser_profile.version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
         status=ScoreAttemptStatus.ERROR,
         failure=failure_payload(
             error,
@@ -274,17 +277,23 @@ def validate_generation_run_for_scoring(
 
 def score_metrics_payload(
     *,
-    terminal_output: Any,
     task: HumanEvalTask,
     node_attempts: tuple[NodeAttemptRecord, ...],
     scoring_profile: HumanEvalScoringProfile,
     domain_score: HumanEvalGenerationScore,
 ) -> MetricsPayload:
+    node_output_sources = node_output_metrics_sources(node_attempts)
+    max_node_sources = METRICS_STAGES_MAX_COUNT - 1
+    if len(node_output_sources) > max_node_sources:
+        raise ValueError(
+            f"node output metrics sources cannot exceed {max_node_sources} "
+            f"entries (metrics.stages cap is {METRICS_STAGES_MAX_COUNT})"
+        )
     metrics_payload = build_metrics_payload(
-        raw_generation=record_metrics_text(terminal_output),
+        raw_generation=domain_score.raw_generation,
         extracted_code=domain_score.extraction.extracted_code,
         task=task,
-        node_output_sources=node_output_metrics_sources(node_attempts),
+        node_output_sources=node_output_sources,
         profile_id=scoring_profile.metrics_profile_id,
         profile_version=scoring_profile.metrics_profile_version,
     ).model_dump(mode="json")
@@ -310,16 +319,10 @@ def node_output_metrics_sources(
                 NodeOutputMetricsSource(
                     node_id=attempt.node_id,
                     field_name=field_name,
-                    text=record_metrics_text(value),
+                    text=recordable_text(value),
                 )
             )
     return tuple(sources)
-
-
-def record_metrics_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    return canonical_json(ensure_recordable(value))
 
 
 def failure_payload(

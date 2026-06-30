@@ -5,9 +5,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Row
+from sqlalchemy.engine import Connection, Row
 
-from dr_dspy.records import PredictionSpecRecord
+from dr_dspy.records import (
+    GenerationRunRecord,
+    NodeAttemptRecord,
+    PredictionSpecRecord,
+)
 from tests.support.postgres_fixtures import seed_prediction_spec
 
 
@@ -111,3 +115,97 @@ def fetch_node_attempts(
     finally:
         engine.dispose()
     return [(str(node_id), str(status)) for node_id, status in rows]
+
+
+def seed_generation_run_with_nodes(
+    connection: Connection,
+    *,
+    generation_run: GenerationRunRecord,
+    node_attempts: tuple[NodeAttemptRecord, ...] = (),
+) -> None:
+    from dr_dspy.platform.persistence import persist_generation_result
+
+    persist_generation_result(
+        connection,
+        generation_run=generation_run,
+        node_attempts=node_attempts,
+    )
+
+
+def seed_scoring_target(
+    database_url: str,
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    node_attempts: tuple[NodeAttemptRecord, ...] = (),
+) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            seed_prediction_spec(connection, spec)
+            seed_generation_run_with_nodes(
+                connection,
+                generation_run=generation_run,
+                node_attempts=node_attempts,
+            )
+    finally:
+        engine.dispose()
+
+
+class ScoreAttemptSnapshot:
+    status: str
+    score: float | None
+    insert_count: int
+
+    def __init__(self, row: Row[tuple[object, ...]], insert_count: int) -> None:
+        self.status = str(row[0])
+        self.score = float(row[1]) if row[1] is not None else None
+        self.insert_count = insert_count
+
+
+def count_score_attempts(
+    database_url: str,
+    score_attempt_id: str,
+) -> int:
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            return int(
+                connection.execute(
+                    text(
+                        "SELECT COUNT(*) FROM dr_dspy_score_attempts "
+                        "WHERE score_attempt_id = :score_attempt_id"
+                    ),
+                    {"score_attempt_id": score_attempt_id},
+                ).scalar_one()
+            )
+    finally:
+        engine.dispose()
+
+
+def fetch_score_attempt_snapshot(
+    database_url: str,
+    score_attempt_id: str,
+) -> ScoreAttemptSnapshot | None:
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT status, score FROM dr_dspy_score_attempts "
+                    "WHERE score_attempt_id = :score_attempt_id"
+                ),
+                {"score_attempt_id": score_attempt_id},
+            ).one_or_none()
+            if row is None:
+                return None
+            insert_count = connection.execute(
+                text(
+                    "SELECT COUNT(*) FROM dr_dspy_score_attempts "
+                    "WHERE score_attempt_id = :score_attempt_id"
+                ),
+                {"score_attempt_id": score_attempt_id},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    return ScoreAttemptSnapshot(row, int(insert_count))

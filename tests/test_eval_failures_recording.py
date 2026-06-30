@@ -9,10 +9,24 @@ from dr_dspy.eval_failures import (
     RecordingFailureError,
     ensure_recordable,
     failure_metadata_dict_from_exception,
+    recordable_text,
     should_retry_step,
     summarize_exception,
 )
 from dr_dspy.serialization import JsonEncodeError, MaxDepthExceededError
+
+
+def test_recordable_text_passthrough_str() -> None:
+    assert recordable_text("hello") == "hello"
+
+
+def test_recordable_text_canonicalizes_dict() -> None:
+    assert recordable_text({"code": "x"}) == '{"code":"x"}'
+
+
+def test_recordable_text_wraps_encode_error() -> None:
+    with pytest.raises(RecordingFailureError):
+        recordable_text({"bad": object()})
 
 
 def test_ensure_recordable_wraps_encode_error() -> None:
