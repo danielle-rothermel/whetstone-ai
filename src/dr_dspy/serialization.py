@@ -550,6 +550,23 @@ def _to_jsonable_inner(
     return x
 
 
+def to_metadata_dict(value: Any) -> dict[str, Any]:
+    """Best-effort provider response metadata for parse-time field extraction.
+
+    Skips persistence size limits. Call ``ensure_recordable`` before JSONB
+    storage.
+    """
+    try:
+        converted = _to_jsonable_inner(value)
+    except SerializationError:
+        if isinstance(value, dict):
+            return dict(value)
+        return {}
+    if isinstance(converted, dict):
+        return converted
+    return {"response": converted}
+
+
 def to_jsonable(x: Any, *, max_bytes: int = PAYLOAD_MAX_BYTES) -> Any:
     value = _to_jsonable_inner(x)
     try:

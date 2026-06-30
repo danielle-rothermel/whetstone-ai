@@ -22,6 +22,7 @@ from dr_dspy.lm.utils import (
 
 DEFAULT_MAX_TRACE_SIZE = 10_000
 LM_RESPONSE_PREVIEW_LIMIT = 512
+STRUCTURED_TEXT_ATTRIBUTES = ("code", "text", "content")
 
 
 class PredictorRunResult(BaseModel):
@@ -61,7 +62,20 @@ def prediction_field_text(prediction: Any, field_name: str) -> str | None:
         return None
     if isinstance(value, str):
         return value
-    return str(value)
+    for attribute in STRUCTURED_TEXT_ATTRIBUTES:
+        field_value = getattr(value, attribute, None)
+        if isinstance(field_value, str):
+            return field_value
+    raise PredictionParseError(
+        f"prediction field {field_name!r} has unsupported value type "
+        f"{type(value).__module__}.{type(value).__qualname__}",
+        metadata={
+            "output_field": field_name,
+            "value_type": (
+                f"{type(value).__module__}.{type(value).__qualname__}"
+            ),
+        },
+    )
 
 
 def _predictor_failure_metadata(

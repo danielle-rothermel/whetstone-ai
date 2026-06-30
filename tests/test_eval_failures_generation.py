@@ -17,7 +17,7 @@ from dr_dspy.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from dr_dspy.lm.runner import run_predictor
+from dr_dspy.lm.runner import prediction_field_text, run_predictor
 from dr_dspy.lm.utils import LmEventBuffer
 
 
@@ -74,9 +74,19 @@ def test_failure_metadata_from_eval_failure_error() -> None:
 
 
 class _StubPrediction:
-    def __init__(self, **fields: str) -> None:
+    def __init__(self, **fields: Any) -> None:
         for name, value in fields.items():
             setattr(self, name, value)
+
+
+class _CodeValue:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+
+class _StringifyingValue:
+    def __str__(self) -> str:
+        return "this should not be accepted"
 
 
 @contextmanager
@@ -133,3 +143,29 @@ def test_run_predictor_raises_empty_generation_error() -> None:
                 lm=MagicMock(spec=dspy.BaseLM),
                 event_buffer=event_buffer,
             )
+
+
+def test_prediction_field_text_unwraps_structured_code_field() -> None:
+    prediction = _StubPrediction(code=_CodeValue("def f(): pass"))
+
+    assert prediction_field_text(prediction, "code") == "def f(): pass"
+
+
+def test_prediction_field_text_rejects_dict_value() -> None:
+    prediction = _StubPrediction(code={"code": "def f(): pass"})
+
+    with pytest.raises(PredictionParseError) as exc_info:
+        prediction_field_text(prediction, "code")
+
+    assert exc_info.value.metadata["output_field"] == "code"
+    assert "dict" in exc_info.value.metadata["value_type"]
+
+
+def test_prediction_field_text_rejects_arbitrary_stringification() -> None:
+    prediction = _StubPrediction(code=_StringifyingValue())
+
+    with pytest.raises(PredictionParseError) as exc_info:
+        prediction_field_text(prediction, "code")
+
+    assert exc_info.value.metadata["output_field"] == "code"
+    assert "StringifyingValue" in exc_info.value.metadata["value_type"]

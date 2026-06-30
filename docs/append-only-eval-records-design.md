@@ -126,6 +126,28 @@ the existing behavior that partial runner output is preserved instead of being
 treated as a whole-batch runner error. Stricter cardinality requirements should
 be decided with the per-test persistence and score-attempt semantics.
 
+For the LM and prompt boundary stage, the plain no-hidden-formatting prompt path
+is available and tested at the LM library boundary only. The current v0 direct
+and enc-dec workflows still call `dspy.Predict` and therefore still use DSPy
+prompt formatting. The later graph-runner stage should adopt caller-built
+messages through the plain prompt path rather than rewriting the v0 experiments
+in this PR.
+
+Direct OpenAI support is represented in this stage by typed provider configs,
+request builders, response parsers, and fake-client call dispatch for both chat
+completions and Responses-style endpoints. A symmetric DSPy-compatible
+`LoggingOpenAILM` wrapper is intentionally deferred until a current caller needs
+direct OpenAI outside the graph-runner path.
+
+Two LM cleanup concerns remain deferred. First, strict provider response parsing
+and `lm.utils.response_text()` both know how to extract text from chat-style
+content; keep them separate for now because one raises typed provider failures
+and the other is a telemetry preview helper, but consolidate the shared text
+walk if the shapes drift. Second, `lm.logging` still invokes recordability at
+log time, which intentionally pulls the serialization stack only when telemetry
+is emitted; import isolation is required for the pure boundary modules, not for
+logging payload persistence.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain
