@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from functools import cache
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
@@ -231,16 +232,28 @@ def load_humaneval_task_step(
     dataset_split: str,
     task_id: str,
 ) -> dict[str, Any]:
+    task = load_humaneval_task_map(
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    ).get(task_id)
+    if task is None:
+        raise ValueError(f"HumanEval task not found: {task_id}")
+    return humaneval_task_payload(task)
+
+
+@cache
+def load_humaneval_task_map(
+    *,
+    dataset_name: str,
+    dataset_split: str,
+) -> dict[str, HumanEvalTask]:
     tasks = parse_human_eval_dataset(
         load_human_eval_rows(
             dataset_name=dataset_name,
             dataset_split=dataset_split,
         )
     )
-    for task in tasks:
-        if task.task_id == task_id:
-            return humaneval_task_payload(task)
-    raise ValueError(f"HumanEval task not found: {task_id}")
+    return {task.task_id: task for task in tasks}
 
 
 @DBOS.step(name=SCORING_STARTED_AT_STEP_NAME)

@@ -20,6 +20,7 @@ from dr_dspy.humaneval.profiles import (
 )
 from dr_dspy.humaneval.scoring import (
     HumanEvalGenerationScore,
+    evaluation_aggregate_metrics,
     score_humaneval_generation,
 )
 from dr_dspy.humaneval.task import HumanEvalTask
@@ -57,7 +58,7 @@ def score_generation_run(
     )
     try:
         validate_generation_run_for_scoring(spec=spec, run=generation_run)
-        raw_generation = terminal_generation_text(generation_run)
+        raw_generation = generation_run.summary.terminal_output
         domain_score = score_humaneval_generation(
             raw_generation=raw_generation,
             task=task,
@@ -169,17 +170,11 @@ def successful_score_attempt(
         generated_code_outcome=domain_score.outcome,
         score=domain_score.score,
         extracted_code=extracted_payload,
-        metrics=MetricsPayload.model_validate(
-            build_metrics_payload(
-                raw_generation=domain_score.raw_generation,
-                extracted_code=extraction.extracted_code,
-                task=task,
-                node_output_sources=node_output_metrics_sources(
-                    node_attempts
-                ),
-                profile_id=scoring_profile.metrics_profile_id,
-                profile_version=scoring_profile.metrics_profile_version,
-            ).model_dump(mode="json")
+        metrics=score_metrics_payload(
+            task=task,
+            node_attempts=node_attempts,
+            scoring_profile=scoring_profile,
+            domain_score=domain_score,
         ),
         per_test_results=per_test_results,
         started_at=started_at,
@@ -244,15 +239,29 @@ def validate_generation_run_for_scoring(
         )
 
 
-def terminal_generation_text(run: GenerationRunRecord) -> Any:
-    output = run.summary.terminal_output
-    if isinstance(output, str):
-        return output
-    if isinstance(output, dict) or getattr(output, "code", None) is not None:
-        return output  # type: ignore[return-value]
-    raise TypeError(
-        "generation run terminal output is not string or code-bearing payload"
-    )
+def score_metrics_payload(
+    *,
+    task: HumanEvalTask,
+    node_attempts: tuple[NodeAttemptRecord, ...],
+    scoring_profile: HumanEvalScoringProfile,
+    domain_score: HumanEvalGenerationScore,
+) -> MetricsPayload:
+    metrics_payload = build_metrics_payload(
+        raw_generation=domain_score.raw_generation,
+        extracted_code=domain_score.extraction.extracted_code,
+        task=task,
+        node_output_sources=node_output_metrics_sources(node_attempts),
+        profile_id=scoring_profile.metrics_profile_id,
+        profile_version=scoring_profile.metrics_profile_version,
+    ).model_dump(mode="json")
+    if domain_score.evaluation is not None:
+        metrics_payload["custom"] = {
+            **metrics_payload["custom"],
+            "evaluation": evaluation_aggregate_metrics(
+                domain_score.evaluation
+            ).model_dump(mode="json"),
+        }
+    return MetricsPayload.model_validate(metrics_payload)
 
 
 def node_output_metrics_sources(

@@ -12,7 +12,14 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+)
 
 from dr_dspy.humaneval.code_extraction import validate_python_source
 from dr_dspy.humaneval.code_parsing import (
@@ -27,6 +34,7 @@ from dr_dspy.humaneval.compression import (
     compression_metrics,
 )
 from dr_dspy.humaneval.task import (
+    EvaluationCaseStatus,
     EvaluationTaskResult,
     EvaluationTaskSummary,
     HumanEvalTask,
@@ -99,6 +107,21 @@ class HumanEvalGenerationScore(BaseModel):
     evaluation: EvaluationTaskResult | None = None
 
 
+class EvaluationAggregateMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    function_names: tuple[StrictStr, ...]
+    total_cases: StrictInt
+    result_count: StrictInt
+    passed_count: StrictInt
+    failed_count: StrictInt
+    error_count: StrictInt
+    timeout_count: StrictInt
+    failure_count: StrictInt
+    passed: StrictBool
+    status_counts: dict[StrictStr, StrictInt]
+
+
 def score_humaneval_generation(
     *,
     raw_generation: Any,
@@ -152,6 +175,24 @@ def evaluation_outcome(
     if evaluation.passed:
         return GeneratedCodeOutcome.PASSED
     return GeneratedCodeOutcome.TESTS_FAILED
+
+
+def evaluation_aggregate_metrics(
+    evaluation: EvaluationTaskResult,
+) -> EvaluationAggregateMetrics:
+    status_counts = evaluation.status_counts
+    return EvaluationAggregateMetrics(
+        function_names=tuple(evaluation.function_names),
+        total_cases=evaluation.total_cases,
+        result_count=len(evaluation.results),
+        passed_count=status_counts.get(EvaluationCaseStatus.PASSED.value, 0),
+        failed_count=status_counts.get(EvaluationCaseStatus.FAILED.value, 0),
+        error_count=status_counts.get(EvaluationCaseStatus.ERROR.value, 0),
+        timeout_count=status_counts.get(EvaluationCaseStatus.TIMEOUT.value, 0),
+        failure_count=len(evaluation.failures),
+        passed=evaluation.passed,
+        status_counts=status_counts,
+    )
 
 
 def best_compression_metric(

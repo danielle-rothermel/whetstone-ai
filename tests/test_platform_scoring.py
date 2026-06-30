@@ -366,6 +366,19 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
         "passed",
         "passed",
     ]
+    assert score.metrics is not None
+    assert score.metrics.custom["evaluation"] == {
+        "function_names": ["add_one"],
+        "total_cases": 2,
+        "result_count": 2,
+        "passed_count": 2,
+        "failed_count": 0,
+        "error_count": 0,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "passed": True,
+        "status_counts": {"passed": 2},
+    }
 
 
 def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
@@ -400,6 +413,43 @@ def test_score_generation_run_persists_tests_failed_as_success() -> None:
     assert score.score == 0.0
     assert score.generated_code_outcome is GeneratedCodeOutcome.TESTS_FAILED
     assert score.per_test_results
+    assert score.metrics is not None
+    assert score.metrics.custom["evaluation"]["failed_count"] == 2
+    assert score.metrics.custom["evaluation"]["failure_count"] == 2
+
+
+def test_score_generation_run_persists_no_top_level_functions() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "ANSWER = 2\n")
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    assert score.status is ScoreAttemptStatus.SUCCESS
+    assert score.score == 0.0
+    assert score.generated_code_outcome is (
+        GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
+    )
+    assert score.per_test_results == ()
+    assert score.metrics is not None
+    assert score.metrics.custom["evaluation"] == {
+        "function_names": [],
+        "total_cases": 2,
+        "result_count": 0,
+        "passed_count": 0,
+        "failed_count": 0,
+        "error_count": 0,
+        "timeout_count": 0,
+        "failure_count": 0,
+        "passed": False,
+        "status_counts": {},
+    }
 
 
 @pytest.mark.parametrize(
@@ -410,10 +460,11 @@ def test_score_generation_run_persists_tests_failed_as_success() -> None:
             "def add_one(x)\n    return x",
             GeneratedCodeOutcome.EXTRACTION_FAILED,
         ),
+        (["not", "scoreable"], GeneratedCodeOutcome.EXTRACTION_FAILED),
     ],
 )
 def test_score_generation_run_persists_extraction_failures_as_success(
-    raw_generation: str,
+    raw_generation: Any,
     outcome: GeneratedCodeOutcome,
 ) -> None:
     spec = _spec()
@@ -432,11 +483,13 @@ def test_score_generation_run_persists_extraction_failures_as_success(
     assert score.score == 0.0
     assert score.generated_code_outcome is outcome
     assert score.per_test_results == ()
+    assert score.metrics is not None
 
 
 def test_score_generation_run_persists_infrastructure_error() -> None:
     spec = _spec()
-    run = _generation_run(spec, ["not", "scoreable"])
+    other_spec = _spec(layout="encdec")
+    run = _generation_run(other_spec, "def add_one(x):\n    return x + 1\n")
 
     score = score_generation_run(
         spec=spec,
@@ -449,6 +502,7 @@ def test_score_generation_run_persists_infrastructure_error() -> None:
 
     assert score.status is ScoreAttemptStatus.ERROR
     assert score.score is None
+    assert score.metrics is None
     assert score.failure is not None
     assert score.failure.metadata["generation_run_id"] == run.generation_run_id
 
@@ -546,6 +600,58 @@ def test_persist_score_attempt_reports_conflict_status() -> None:
 
     assert result.score_attempt_id == score.score_attempt_id
     assert result.status is ScoreAttemptInsertStatus.ALREADY_PRESENT
+
+
+def test_load_humaneval_task_step_uses_cached_task_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    rows = [{"task_id": "HumanEval/fixture"}]
+
+    def load_rows(
+        *,
+        dataset_name: str,
+        dataset_split: str,
+    ) -> list[dict[str, str]]:
+        calls.append(("load", (dataset_name, dataset_split)))
+        return rows
+
+    def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
+        calls.append(("parse", payload))
+        return (_task(),)
+
+    monkeypatch.setattr(
+        scoring_workflow,
+        "load_human_eval_rows",
+        load_rows,
+    )
+    monkeypatch.setattr(
+        scoring_workflow,
+        "parse_human_eval_dataset",
+        parse_rows,
+    )
+    cached_loader = cast(Any, scoring_workflow.load_humaneval_task_map)
+    cached_loader.cache_clear()
+    try:
+        load_step = cast(Any, scoring_workflow.load_humaneval_task_step)
+        first = load_step.__wrapped__(
+            "dataset",
+            "split",
+            "HumanEval/fixture",
+        )
+        second = load_step.__wrapped__(
+            "dataset",
+            "split",
+            "HumanEval/fixture",
+        )
+    finally:
+        cached_loader.cache_clear()
+
+    assert first == second
+    assert calls == [
+        ("load", ("dataset", "split")),
+        ("parse", rows),
+    ]
 
 
 def test_scoring_workflow_uses_dbos_step_boundaries(
