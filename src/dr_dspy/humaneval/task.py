@@ -1,3 +1,12 @@
+"""HumanEval task, parsing, and subprocess execution primitives.
+
+The subprocess runner validates each returned case result, but it currently
+preserves partial runner output rather than requiring one returned row per
+parsed test case. Tightening that cardinality check would be a benchmark
+behavior change and is deferred until per-test score persistence semantics are
+defined.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -7,22 +16,27 @@ import sys
 import textwrap
 from collections import Counter
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal, Self
+from enum import StrEnum
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    TypeAdapter,
+    ValidationError,
     computed_field,
     model_validator,
 )
 
 from dr_dspy.humaneval.parsed_code import FunctionSignature, ParsedCode
 from dr_dspy.humaneval.parsed_tests import (
+    HumanEvalTestCaseKind,
     InputExpressionTestCase,
     InputOracleTestCase,
     InputResultTestCase,
     ParsedTests,
+    SingleCaseCheck,
     TestCase,
     UnsupportedTestFormatError,
     assertion_tolerance,
@@ -34,6 +48,13 @@ from dr_dspy.humaneval.parsed_tests import (
     for_loop_names,
     literal_assignment,
 )
+
+
+class EvaluationCaseStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    ERROR = "error"
+    TIMEOUT = "timeout"
 
 
 class HumanEvalTask(BaseModel):
@@ -78,12 +99,73 @@ class EvaluationCaseResult(BaseModel):
     task_id: str
     case_id: str
     function_name: str
-    status: Literal["passed", "failed", "error", "timeout"]
+    status: EvaluationCaseStatus
     message: str = ""
-    test_type: str
+    test_type: HumanEvalTestCaseKind
     input_repr: str = ""
     expected_output_repr: str = ""
     actual_output_repr: str = ""
+
+    def to_summary(self) -> EvaluationCaseSummary:
+        return EvaluationCaseSummary(
+            task_id=self.task_id,
+            case_id=self.case_id,
+            function_name=self.function_name,
+            status=self.status,
+            message=self.message,
+            test_type=self.test_type,
+            input_repr=self.input_repr,
+            expected_output_repr=self.expected_output_repr,
+            actual_output_repr=self.actual_output_repr,
+        )
+
+
+class EvaluationCaseSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    case_id: str
+    function_name: str
+    status: EvaluationCaseStatus
+    message: str = ""
+    test_type: HumanEvalTestCaseKind
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_repr: str = ""
+
+
+def _results_for_function(
+    results: list[EvaluationCaseResult],
+    function_name: str,
+) -> list[EvaluationCaseResult]:
+    return [
+        result
+        for result in results
+        if result.function_name == function_name
+    ]
+
+
+def select_best_function_name(
+    *,
+    function_names: list[str],
+    entry_point: str,
+    results: list[EvaluationCaseResult],
+) -> str | None:
+    if not function_names:
+        return None
+    return max(
+        function_names,
+        key=lambda function_name: (
+            sum(
+                1
+                for result in results
+                if result.function_name == function_name
+                and result.status is EvaluationCaseStatus.PASSED
+            ),
+            function_name == entry_point,
+            -function_names.index(function_name),
+        ),
+    )
 
 
 class EvaluationTaskResult(BaseModel):
@@ -97,27 +179,117 @@ class EvaluationTaskResult(BaseModel):
 
     @computed_field
     @property
+    def best_function_name(self) -> str | None:
+        return select_best_function_name(
+            function_names=self.function_names,
+            entry_point=self.entry_point,
+            results=self.results,
+        )
+
+    @computed_field
+    @property
     def failures(self) -> list[EvaluationCaseResult]:
-        return [result for result in self.results if result.status != "passed"]
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return []
+        return [
+            result
+            for result in self.results
+            if result.function_name == best_function_name
+            and result.status is not EvaluationCaseStatus.PASSED
+        ]
+
+    @computed_field
+    @property
+    def coverage_complete(self) -> bool:
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return False
+        function_results = _results_for_function(
+            self.results,
+            best_function_name,
+        )
+        return len(function_results) == self.total_cases
 
     @computed_field
     @property
     def passed(self) -> bool:
-        if not self.function_names:
+        best_function_name = self.best_function_name
+        if best_function_name is None:
             return False
-        return any(
-            all(
-                result.status == "passed"
-                for result in self.results
-                if result.function_name == function_name
-            )
-            for function_name in self.function_names
+        function_results = _results_for_function(
+            self.results,
+            best_function_name,
+        )
+        if not self.coverage_complete:
+            return False
+        return all(
+            result.status is EvaluationCaseStatus.PASSED
+            for result in function_results
         )
 
     @computed_field
     @property
     def status_counts(self) -> dict[str, int]:
-        return dict(Counter(result.status for result in self.results))
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return {}
+        return dict(
+            Counter(
+                result.status.value
+                for result in self.results
+                if result.function_name == best_function_name
+            )
+        )
+
+    def to_summary(self) -> EvaluationTaskSummary:
+        return EvaluationTaskSummary(
+            task_id=self.task_id,
+            entry_point=self.entry_point,
+            function_names=self.function_names,
+            best_function_name=self.best_function_name,
+            total_cases=self.total_cases,
+            results=[result.to_summary() for result in self.results],
+            passed=self.passed,
+            failure_count=len(self.failures),
+            status_counts=self.status_counts,
+        )
+
+
+class EvaluationTaskSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    entry_point: str
+    function_names: list[str]
+    best_function_name: str | None = None
+    total_cases: int
+    results: list[EvaluationCaseSummary] = Field(default_factory=list)
+    passed: bool
+    failure_count: int
+    status_counts: dict[str, int] = Field(default_factory=dict)
+
+
+class HumanEvalRunnerPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    candidate_code: str
+    support_code: str
+    function_name: str
+    test_type: HumanEvalTestCaseKind
+    checks: list[SingleCaseCheck]
+
+
+class HumanEvalRunnerCaseOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str
+    status: EvaluationCaseStatus
+    message: str = ""
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_repr: str = ""
 
 
 class HumanEvalOverride(BaseModel):
@@ -242,7 +414,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = "input_expression"
+            test_type = HumanEvalTestCaseKind.INPUT_EXPRESSION
         else:
             cases = [
                 InputResultTestCase(
@@ -255,7 +427,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
                     zip(inputs, results, strict=True)
                 )
             ]
-            test_type = "input_result"
+            test_type = HumanEvalTestCaseKind.INPUT_RESULT
     else:
         _ = find_for_loop(check_node)
         if assertion_call is None:
@@ -276,7 +448,7 @@ def parse_human_eval_tests(test_str: str) -> ParsedTests:
             )
             for index, args in enumerate(inputs)
         ]
-        test_type = "input_oracle"
+        test_type = HumanEvalTestCaseKind.INPUT_ORACLE
 
     return ParsedTests(
         test_type=test_type,
@@ -388,21 +560,18 @@ def run_subprocess_batch(
     timeout_seconds: float,
 ) -> list[EvaluationCaseResult]:
     parsed_tests = require_parsed_tests(task)
-    payload = {
-        "task_id": task.task_id,
-        "candidate_code": candidate_code,
-        "support_code": parsed_tests.support_code,
-        "function_name": function_name,
-        "test_type": parsed_tests.test_type,
-        "checks": [
-            check.model_dump()
-            for check in parsed_tests.iter_checks(candidate_name="candidate")
-        ],
-    }
+    payload = HumanEvalRunnerPayload(
+        task_id=task.task_id,
+        candidate_code=candidate_code,
+        support_code=parsed_tests.support_code,
+        function_name=function_name,
+        test_type=parsed_tests.test_type,
+        checks=list(parsed_tests.iter_checks(candidate_name="candidate")),
+    )
     try:
         completed = subprocess.run(
             [sys.executable, "-c", runner_script()],
-            input=json.dumps(payload),
+            input=payload.model_dump_json(),
             capture_output=True,
             check=False,
             encoding="utf-8",
@@ -425,20 +594,57 @@ def run_subprocess_batch(
             function_name=function_name,
             message=f"Could not decode runner output: {exc}",
         )
-    return [
-        EvaluationCaseResult(
-            task_id=task.task_id,
-            case_id=result["case_id"],
+    if not isinstance(raw_results, list):
+        return error_results(
+            task=task,
             function_name=function_name,
-            status=result["status"],
-            message=result.get("message", ""),
-            test_type=parsed_tests.test_type,
-            input_repr=result.get("input_repr", ""),
-            expected_output_repr=result.get("expected_output_repr", ""),
-            actual_output_repr=result.get("actual_output_repr", ""),
+            message=(
+                "Invalid runner output: expected a JSON list of case results"
+            ),
         )
-        for result in raw_results
-    ]
+
+    adapter = TypeAdapter(HumanEvalRunnerCaseOutput)
+    results: list[EvaluationCaseResult] = []
+    for item in raw_results:
+        try:
+            runner_result = adapter.validate_python(item)
+        except ValidationError as exc:
+            case_id = (
+                str(item["case_id"])
+                if isinstance(item, dict) and "case_id" in item
+                else f"case_{len(results)}"
+            )
+            metadata: dict[str, str] = {}
+            for case in parsed_tests.cases:
+                if case.case_id == case_id:
+                    metadata = case_metadata(parsed_tests, case)
+                    break
+            results.append(
+                EvaluationCaseResult(
+                    task_id=task.task_id,
+                    case_id=case_id,
+                    function_name=function_name,
+                    status=EvaluationCaseStatus.ERROR,
+                    message=f"Invalid runner output: {exc}",
+                    test_type=parsed_tests.test_type,
+                    **metadata,
+                )
+            )
+            continue
+        results.append(
+            EvaluationCaseResult(
+                task_id=task.task_id,
+                case_id=runner_result.case_id,
+                function_name=function_name,
+                status=runner_result.status,
+                message=runner_result.message,
+                test_type=parsed_tests.test_type,
+                input_repr=runner_result.input_repr,
+                expected_output_repr=runner_result.expected_output_repr,
+                actual_output_repr=runner_result.actual_output_repr,
+            )
+        )
+    return results
 
 
 def timeout_results(
@@ -452,7 +658,7 @@ def timeout_results(
             task_id=task.task_id,
             case_id=case.case_id,
             function_name=function_name,
-            status="timeout",
+            status=EvaluationCaseStatus.TIMEOUT,
             message="Batch timed out",
             test_type=parsed_tests.test_type,
             **case_metadata(parsed_tests, case),
@@ -473,7 +679,7 @@ def error_results(
             task_id=task.task_id,
             case_id=case.case_id,
             function_name=function_name,
-            status="error",
+            status=EvaluationCaseStatus.ERROR,
             message=message,
             test_type=parsed_tests.test_type,
             **case_metadata(parsed_tests, case),

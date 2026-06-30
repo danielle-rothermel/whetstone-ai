@@ -1,4 +1,15 @@
+"""Pure HumanEval scoring primitives.
+
+`GeneratedCodeOutcome` is part of the primitive score contract so later
+append-only score attempts can persist why a generation scored zero without
+parsing error text. The current v0 experiment writers still persist their
+legacy scoring columns only; wiring this outcome into durable score-attempt
+records belongs to the schema/scoring-profile stage.
+"""
+
 from __future__ import annotations
+
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,14 +24,28 @@ from dr_dspy.humaneval.compression import (
 )
 from dr_dspy.humaneval.task import (
     EvaluationTaskResult,
+    EvaluationTaskSummary,
     HumanEvalTask,
     evaluate_human_eval_code,
 )
+
+HUMANEVAL_EVALUATION_INCOMPLETE_ERROR = "HumanEval evaluation incomplete"
+HUMANEVAL_TESTS_FAILED_ERROR = "HumanEval tests failed"
+
+
+class GeneratedCodeOutcome(StrEnum):
+    PASSED = "passed"
+    TESTS_FAILED = "tests_failed"
+    EVALUATION_INCOMPLETE = "evaluation_incomplete"
+    EMPTY_GENERATION = "empty_generation"
+    EXTRACTION_FAILED = "extraction_failed"
+    NO_TOP_LEVEL_FUNCTIONS = "no_top_level_functions"
 
 
 class GeneratedCodeScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    outcome: GeneratedCodeOutcome
     score: float
     error: str | None
     raw_code: str | None = None
@@ -40,6 +65,7 @@ class HumanEvalScoreResult(BaseModel):
     prediction_id: str
     score: float
     error: str | None
+    generated_code_outcome: GeneratedCodeOutcome
     raw_code: str | None = None
     raw_compile_ok: bool
     raw_compile_error: str | None = None
@@ -52,6 +78,7 @@ class HumanEvalScoreResult(BaseModel):
     evaluation_total_cases: int | None = None
     evaluation_failure_count: int | None = None
     evaluation_status_counts: dict[str, int] = Field(default_factory=dict)
+    evaluation_summary: EvaluationTaskSummary | None = None
     compression_metrics: CompressionMetrics = Field(default_factory=dict)
     raw_compression_ratio: float | None = None
     best_compression_ratio: float | None = None
@@ -83,6 +110,7 @@ def score_generated_code_for_humaneval(
     if not raw_generation.strip():
         extraction_error = "empty raw generation"
         return GeneratedCodeScore(
+            outcome=GeneratedCodeOutcome.EMPTY_GENERATION,
             score=0.0,
             error=extraction_error,
             raw_code=None,
@@ -117,6 +145,7 @@ def score_generated_code_for_humaneval(
             else "no compilable extracted candidate"
         )
         return GeneratedCodeScore(
+            outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
             score=0.0,
             error=extraction_error,
             raw_code=None,
@@ -134,10 +163,20 @@ def score_generated_code_for_humaneval(
         candidate_code=selected_code,
         timeout_seconds=timeout,
     )
-    error = None if evaluation.passed else "HumanEval tests failed"
     if not evaluation.function_names:
+        outcome = GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
         error = "no top-level candidate functions"
+    elif evaluation.passed:
+        outcome = GeneratedCodeOutcome.PASSED
+        error = None
+    elif not evaluation.coverage_complete and not evaluation.failures:
+        outcome = GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+        error = HUMANEVAL_EVALUATION_INCOMPLETE_ERROR
+    else:
+        outcome = GeneratedCodeOutcome.TESTS_FAILED
+        error = HUMANEVAL_TESTS_FAILED_ERROR
     return GeneratedCodeScore(
+        outcome=outcome,
         score=1.0 if evaluation.passed else 0.0,
         error=error,
         raw_code=selected_code,
@@ -183,6 +222,7 @@ def score_humaneval_prediction(
         prediction_id=prediction_id,
         score=generated_score.score,
         error=generated_score.error,
+        generated_code_outcome=generated_score.outcome,
         raw_code=generated_score.raw_code,
         raw_compile_ok=generated_score.raw_compile_ok,
         raw_compile_error=generated_score.raw_compile_error,
@@ -201,6 +241,7 @@ def score_humaneval_prediction(
         evaluation_status_counts=evaluation.status_counts
         if evaluation
         else {},
+        evaluation_summary=evaluation.to_summary() if evaluation else None,
         compression_metrics=metrics,
         raw_compression_ratio=raw_compression_ratio,
         best_compression_ratio=best.ratio_to_ground_truth if best else None,

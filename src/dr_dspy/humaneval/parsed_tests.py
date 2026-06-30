@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Iterator
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +14,12 @@ PAIR_TARGET_SIZE = 2
 
 class UnsupportedTestFormatError(ValueError):
     pass
+
+
+class HumanEvalTestCaseKind(StrEnum):
+    INPUT_RESULT = "input_result"
+    INPUT_ORACLE = "input_oracle"
+    INPUT_EXPRESSION = "input_expression"
 
 
 class SingleCaseCheck(BaseModel):
@@ -29,7 +36,9 @@ class SingleCaseCheck(BaseModel):
 class InputResultTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_result"] = "input_result"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_RESULT] = (
+        HumanEvalTestCaseKind.INPUT_RESULT
+    )
     case_id: str
     args: list[Any]
     expected: Any
@@ -57,7 +66,9 @@ class InputResultTestCase(BaseModel):
 class InputOracleTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_oracle"] = "input_oracle"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_ORACLE] = (
+        HumanEvalTestCaseKind.INPUT_ORACLE
+    )
     case_id: str
     args: list[Any]
     oracle_name: str
@@ -87,7 +98,9 @@ class InputOracleTestCase(BaseModel):
 class InputExpressionTestCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["input_expression"] = "input_expression"
+    kind: Literal[HumanEvalTestCaseKind.INPUT_EXPRESSION] = (
+        HumanEvalTestCaseKind.INPUT_EXPRESSION
+    )
     case_id: str
     args: list[Any]
     expected: Any
@@ -133,12 +146,7 @@ TestCase = Annotated[
 class ParsedTests(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    test_type: Literal[
-        "input_result",
-        "input_oracle",
-        "input_expression",
-        "unknown",
-    ]
+    test_type: HumanEvalTestCaseKind
     support_code: str
     check_name: str
     candidate_arg_name: str
@@ -156,6 +164,66 @@ class ParsedTests(BaseModel):
                 candidate_name=candidate_name,
                 assertion_name=self.assertion_name,
             )
+
+    def to_summary(self) -> ParsedTestsSummary:
+        return ParsedTestsSummary(
+            test_type=self.test_type,
+            support_code=self.support_code,
+            check_name=self.check_name,
+            candidate_arg_name=self.candidate_arg_name,
+            assertion_name=self.assertion_name,
+            cases=[
+                ParsedTestCaseSummary.from_case(
+                    case,
+                    assertion_name=self.assertion_name,
+                )
+                for case in self.cases
+            ],
+            original_test=self.original_test,
+        )
+
+
+class ParsedTestCaseSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: HumanEvalTestCaseKind
+    case_id: str
+    input_repr: str = ""
+    expected_output_repr: str = ""
+    actual_output_expr: str = ""
+    expected_output_expr: str | None = None
+
+    @classmethod
+    def from_case(
+        cls,
+        case: TestCase,
+        *,
+        assertion_name: str,
+    ) -> ParsedTestCaseSummary:
+        check = case.as_check(
+            candidate_name="candidate",
+            assertion_name=assertion_name,
+        )
+        return cls(
+            kind=case.kind,
+            case_id=case.case_id,
+            input_repr=check.input_repr,
+            expected_output_repr=check.expected_output_repr,
+            actual_output_expr=check.actual_output_expr,
+            expected_output_expr=check.expected_output_expr,
+        )
+
+
+class ParsedTestsSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    test_type: HumanEvalTestCaseKind
+    support_code: str
+    check_name: str
+    candidate_arg_name: str
+    assertion_name: str
+    cases: list[ParsedTestCaseSummary]
+    original_test: str
 
 
 def literal_assignment(function_node: ast.FunctionDef, name: str) -> Any:
@@ -264,4 +332,3 @@ def for_loop_names(loop_node: ast.For) -> tuple[str | None, str, str]:
     ):
         return (None, target.elts[0].id, target.elts[1].id)
     raise UnsupportedTestFormatError("Unsupported for-loop target shape")
-

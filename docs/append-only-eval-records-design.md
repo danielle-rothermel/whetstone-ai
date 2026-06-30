@@ -109,6 +109,23 @@ their own tests and contracts before they sit under DBOS workflows and database
 records. Otherwise, utility code that should remain swappable will tend to
 inherit v0 workflow assumptions or new platform-specific persistence details.
 
+### Implementation Notes
+
+For the core-primitives stage, the HumanEval parser/scorer now exposes
+persistable summaries for parsed code, parsed tests, and per-case evaluation
+results. These summaries are primitive contracts only; v0 experiment write
+paths still persist the legacy score columns.
+
+`GeneratedCodeOutcome` is available on the primitive HumanEval score result so
+later score-attempt rows can store why a generated answer passed, failed,
+failed extraction, or had no top-level function. Persisting that field belongs
+to the score-attempt schema/scoring-profile stage, not the v0 table cleanup.
+
+Subprocess runner output is validated per returned case, but this stage keeps
+the existing behavior that partial runner output is preserved instead of being
+treated as a whole-batch runner error. Stricter cardinality requirements should
+be decided with the per-test persistence and score-attempt semantics.
+
 ## API boundary strategy
 
 Some components should be intentionally clean, reusable APIs. Others can remain

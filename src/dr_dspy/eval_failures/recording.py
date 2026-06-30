@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from psycopg.types.json import Jsonb
+if TYPE_CHECKING:
+    from psycopg.types.json import Jsonb
 
 from dr_dspy.eval_failures.exceptions import (
     EvalFailureError,
@@ -32,6 +33,8 @@ def recordable_jsonb(
     *,
     max_bytes: int = PAYLOAD_MAX_BYTES,
 ) -> Jsonb:
+    from psycopg.types.json import Jsonb
+
     return Jsonb(ensure_recordable(value, max_bytes=max_bytes))
 
 
