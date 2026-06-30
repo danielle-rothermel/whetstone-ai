@@ -226,10 +226,13 @@ def _pop_token_limit(
     request_kwargs: dict[str, Any],
     request: dspy.LMRequest,
 ) -> int | None:
+    selected: int | None = None
     for key in TOKEN_LIMIT_KEYS:
         value = request_kwargs.pop(key, None)
-        if type(value) is int:
-            return value
+        if type(value) is int and selected is None:
+            selected = value
+    if selected is not None:
+        return selected
     return request.config.max_tokens
 
 
