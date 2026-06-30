@@ -1850,7 +1850,10 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
         captured["engine"] = engine
         captured["kwargs"] = kwargs
         return SimpleNamespace(
-            model_dump=lambda mode: {"dry_run": kwargs["dry_run"]}
+            result=SimpleNamespace(
+                model_dump=lambda mode: {"dry_run": kwargs["dry_run"]}
+            ),
+            workflow_handles=(),
         )
 
     def fail_configure_platform_dbos_runtime(**kwargs: Any) -> Any:
@@ -1909,7 +1912,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
     assert result.exit_code == 0
     assert captured["disposed"] is True
     assert captured["kwargs"] == {
-        "database_url": "postgresql://example/db",
+        "database_url": "postgresql+psycopg://example/db",
         "experiment_name": "exp",
         "generation_statuses": (GenerationRunStatus.SUCCESS,),
         "generation_attempt_index": 0,

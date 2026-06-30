@@ -1,18 +1,18 @@
 {
-  "name": "gpt-oss-120b-openai",
+  "name": "gpt-oss-120b-openrouter",
   "providers": [
     {
       "model": "openai/gpt-oss-120b",
       "config_id": "encoder",
-      "provider_kind": "openai",
-      "endpoint_kind": "responses",
+      "provider_kind": "openrouter",
+      "endpoint_kind": "chat_completions",
       "parameters": {"temperature": 0}
     },
     {
       "model": "openai/gpt-oss-120b",
       "config_id": "decoder",
-      "provider_kind": "openai",
-      "endpoint_kind": "responses",
+      "provider_kind": "openrouter",
+      "endpoint_kind": "chat_completions",
       "parameters": {"temperature": 0}
     }
   ]

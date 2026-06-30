@@ -275,6 +275,7 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
+    lifecycle: list[str] = []
 
     class RuntimeConfig:
         database_url = "postgresql://example/db"
@@ -297,10 +298,25 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
         }
         return RuntimeConfig()
 
+    fake_handle = object()
+
     def fake_rescore(engine: FakeEngine, **kwargs: Any) -> SimpleNamespace:
         captured["engine"] = engine
         captured["kwargs"] = kwargs
-        return SimpleNamespace(model_dump=lambda mode: {"scheduled": 1})
+        return SimpleNamespace(
+            result=SimpleNamespace(
+                model_dump=lambda mode: {"scheduled": 1}
+            ),
+            workflow_handles=(fake_handle,),
+        )
+
+    def fake_await(handles: Any) -> None:
+        lifecycle.append("await")
+        captured["await_handles"] = handles
+
+    def fake_destroy() -> None:
+        lifecycle.append("destroy")
+        captured["destroyed"] = True
 
     monkeypatch.setattr(worker, "load_env_file", lambda env_file=None: None)
     monkeypatch.setattr(
@@ -316,9 +332,10 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     monkeypatch.setattr(worker, "rescore_generation_runs", fake_rescore)
     monkeypatch.setattr(
         worker,
-        "destroy_dbos_runtime",
-        lambda: captured.setdefault("destroyed", True),
+        "await_scheduled_score_workflows",
+        fake_await,
     )
+    monkeypatch.setattr(worker, "destroy_dbos_runtime", fake_destroy)
 
     result = CliRunner().invoke(
         worker.APP,
@@ -339,6 +356,8 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     assert captured["kwargs"]["experiment_name"] == "exp"
     assert captured["disposed"] is True
     assert captured["destroyed"] is True
+    assert captured["await_handles"] == (fake_handle,)
+    assert lifecycle == ["await", "destroy"]
 
 
 def test_rescore_rejects_invalid_generation_status() -> None:

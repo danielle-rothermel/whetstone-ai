@@ -38,6 +38,8 @@ Canonical documentation in [`docs/`](docs/):
 - [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
   — backfill retention and post-migration cleanup.
 - [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
+- [Testing logs](docs/testing_logs.md) — chronological manual / live pipeline
+  runs (smoke E2E, sizing notes).
 
 Repository extraction and `dr_dspy` → `whetstone` rename plans live in
 [Remaining implementation intentions](docs/remaining-implementation-intentions.md#repository-extraction-and-rename--not-started).
@@ -136,7 +138,8 @@ for databases that applied draft schemas during hardening.
 Connection config uses the `DATABASE_URL` env var. When unset, Alembic falls
 back to peer-auth `postgresql+psycopg:///dr_dspy` (your OS Postgres role,
 database `dr_dspy`). Copy `.env.example` to `.env` and adjust the URL if your
-local role or database name differs.
+local role or database name differs. Platform CLI entrypoints normalize bare
+`postgresql://` URLs to `postgresql+psycopg://` automatically (same as Alembic).
 
 ```bash
 # Apply all migrations

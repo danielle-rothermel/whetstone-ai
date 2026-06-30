@@ -37,6 +37,7 @@ from dr_dspy.platform.rescoring import (
     rescore_generation_runs,
 )
 from dr_dspy.platform.scoring_workflow import (
+    await_scheduled_score_workflows,
     platform_scoring_workflow_id,
     run_score_generation_workflow_once,
 )
@@ -340,7 +341,7 @@ def rescore(
         launched_dbos = True
     engine = create_engine(resolved_database_url)
     try:
-        result = rescore_generation_runs(
+        execution = rescore_generation_runs(
             engine,
             database_url=resolved_database_url,
             experiment_name=experiment_name,
@@ -356,7 +357,9 @@ def rescore(
             dry_run=dry_run,
             recover_orphans=recover_orphans,
         )
-        CONSOLE.print(result.model_dump(mode="json"))
+        if launched_dbos and execution.workflow_handles:
+            await_scheduled_score_workflows(execution.workflow_handles)
+        CONSOLE.print(execution.result.model_dump(mode="json"))
     finally:
         engine.dispose()
         if launched_dbos:

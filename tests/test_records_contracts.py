@@ -68,6 +68,7 @@ from dr_dspy.records import (
 from dr_dspy.records.limits import (
     METRICS_MAX_BYTES,
     METRICS_STAGES_MAX_COUNT,
+    PER_TEST_RESULTS_MAX_BYTES,
 )
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
@@ -889,6 +890,42 @@ def test_score_attempt_attempt_index_must_be_non_negative() -> None:
             score=1.0,
             started_at=NOW,
             completed_at=NOW,
+        )
+
+
+def test_score_attempt_accepts_many_per_test_results_under_byte_cap() -> None:
+    per_test_results = tuple(
+        PerTestResultPayload(
+            task_id="HumanEval/0",
+            test_id=f"case_{index}",
+            function_name="fn",
+            status=EvaluationCaseStatus.PASSED,
+            test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+        )
+        for index in range(600)
+    )
+    record = ScoreAttemptRecord(
+        **_score_attempt_base_kwargs(),
+        per_test_results=per_test_results,
+    )
+    assert len(record.per_test_results) == 600
+
+
+def test_score_attempt_rejects_oversized_per_test_results_payload() -> None:
+    oversized = "x" * (PER_TEST_RESULTS_MAX_BYTES + 1)
+    with pytest.raises(ValidationError, match="per_test_results:"):
+        ScoreAttemptRecord(
+            **_score_attempt_base_kwargs(),
+            per_test_results=(
+                PerTestResultPayload(
+                    task_id="HumanEval/0",
+                    test_id="case_0",
+                    function_name="fn",
+                    status=EvaluationCaseStatus.PASSED,
+                    test_type=HumanEvalTestCaseKind.INPUT_RESULT,
+                    message=oversized,
+                ),
+            ),
         )
 
 

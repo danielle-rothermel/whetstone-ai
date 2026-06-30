@@ -102,6 +102,16 @@ class BatchRescoreResult(BaseModel):
     items: tuple[BatchRescoreItem, ...] = Field(default_factory=tuple)
 
 
+class BatchRescoreExecution(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    result: BatchRescoreResult
+    workflow_handles: tuple[Any, ...] = Field(
+        default_factory=tuple,
+        exclude=True,
+    )
+
+
 class ScheduleScoreWorkflow(Protocol):
     def __call__(
         self,
@@ -138,7 +148,7 @@ def rescore_generation_runs(
     schedule_workflow: ScheduleScoreWorkflow = (
         schedule_score_generation_workflow
     ),
-) -> BatchRescoreResult:
+) -> BatchRescoreExecution:
     validate_rescore_request(
         chunk_size=chunk_size,
         limit=limit,
@@ -151,6 +161,7 @@ def rescore_generation_runs(
         scoring_profile_version=scoring_profile_version,
     )
     items: list[BatchRescoreItem] = []
+    workflow_handles: list[Any] = []
     offset = 0
     while limit is None or offset < limit:
         page_limit = (
@@ -175,39 +186,43 @@ def rescore_generation_runs(
         if not candidates:
             break
         for candidate in candidates:
-            items.append(
-                plan_or_schedule_rescore_item(
-                    candidate,
-                    database_url=database_url,
-                    score_attempt_index=score_attempt_index,
-                    scoring_profile_id=scoring_profile.profile_id,
-                    scoring_profile_version=scoring_profile.version,
-                    parser_profile_id=scoring_profile.parser_profile.profile_id,
-                    parser_version=scoring_profile.parser_profile.version,
-                    dataset_name=dataset_name,
-                    dataset_split=dataset_split,
-                    dry_run=dry_run,
-                    recover_orphans=recover_orphans,
-                    schedule_workflow=schedule_workflow,
-                )
+            item, handle = plan_or_schedule_rescore_item(
+                candidate,
+                database_url=database_url,
+                score_attempt_index=score_attempt_index,
+                scoring_profile_id=scoring_profile.profile_id,
+                scoring_profile_version=scoring_profile.version,
+                parser_profile_id=scoring_profile.parser_profile.profile_id,
+                parser_version=scoring_profile.parser_profile.version,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+                dry_run=dry_run,
+                recover_orphans=recover_orphans,
+                schedule_workflow=schedule_workflow,
             )
+            items.append(item)
+            if handle is not None:
+                workflow_handles.append(handle)
         offset += len(candidates)
         if len(candidates) < page_limit:
             break
 
-    return batch_rescore_result(
-        experiment_name=experiment_name,
-        generation_statuses=tuple(generation_statuses),
-        generation_attempt_index=generation_attempt_index,
-        scoring_profile_id=scoring_profile.profile_id,
-        scoring_profile_version=scoring_profile.version,
-        parser_profile_id=scoring_profile.parser_profile.profile_id,
-        parser_version=scoring_profile.parser_profile.version,
-        score_attempt_index=score_attempt_index,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-        dry_run=dry_run,
-        items=tuple(items),
+    return BatchRescoreExecution(
+        result=batch_rescore_result(
+            experiment_name=experiment_name,
+            generation_statuses=tuple(generation_statuses),
+            generation_attempt_index=generation_attempt_index,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=scoring_profile.parser_profile.profile_id,
+            parser_version=scoring_profile.parser_profile.version,
+            score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+            dry_run=dry_run,
+            items=tuple(items),
+        ),
+        workflow_handles=tuple(workflow_handles),
     )
 
 
@@ -260,7 +275,7 @@ def plan_or_schedule_rescore_item(
     dry_run: bool,
     recover_orphans: bool,
     schedule_workflow: ScheduleScoreWorkflow,
-) -> BatchRescoreItem:
+) -> tuple[BatchRescoreItem, Any | None]:
     score_attempt_id = stable_score_attempt_id(
         generation_run_id=candidate.generation_run_id,
         scoring_profile_id=scoring_profile_id,
@@ -273,18 +288,24 @@ def plan_or_schedule_rescore_item(
     )
     workflow_id = platform_scoring_workflow_id(score_attempt_id)
     if candidate.existing_score_attempt_id is not None:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.ALREADY_SCORED,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.ALREADY_SCORED,
+            ),
+            None,
         )
     if dry_run:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.WOULD_SCHEDULE,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.WOULD_SCHEDULE,
+            ),
+            None,
         )
     try:
         scheduled = schedule_workflow(
@@ -298,12 +319,15 @@ def plan_or_schedule_rescore_item(
             recover_orphans=recover_orphans,
         )
     except Exception as error:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.FAILED,
-            failure=failure_metadata_from_exception(error),
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.FAILED,
+                failure=failure_metadata_from_exception(error),
+            ),
+            None,
         )
     if scheduled.scheduled:
         status = (
@@ -311,11 +335,14 @@ def plan_or_schedule_rescore_item(
             if scheduled.recovered
             else BatchRescoreItemStatus.SCHEDULED
         )
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=scheduled.score_attempt_id,
-            workflow_id=scheduled.workflow_id,
-            status=status,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=scheduled.score_attempt_id,
+                workflow_id=scheduled.workflow_id,
+                status=status,
+            ),
+            scheduled.workflow_handle,
         )
     presence = classify_scoring_workflow_presence(
         database_url=database_url,
@@ -323,24 +350,33 @@ def plan_or_schedule_rescore_item(
         workflow_id=workflow_id,
     )
     if presence is ScoringWorkflowPresence.COMPLETE:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.ALREADY_SCORED,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.ALREADY_SCORED,
+            ),
+            None,
         )
     if presence is ScoringWorkflowPresence.ORPHAN:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+            ),
+            None,
         )
-    return batch_rescore_item(
-        candidate,
-        score_attempt_id=scheduled.score_attempt_id,
-        workflow_id=scheduled.workflow_id,
-        status=BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
+    return (
+        batch_rescore_item(
+            candidate,
+            score_attempt_id=scheduled.score_attempt_id,
+            workflow_id=scheduled.workflow_id,
+            status=BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
+        ),
+        None,
     )
 
 

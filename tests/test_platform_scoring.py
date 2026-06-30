@@ -1604,7 +1604,7 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
             scheduled=True,
         )
 
-    result = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_generation_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1613,6 +1613,7 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
         dry_run=True,
         schedule_workflow=schedule,
     )
+    result = execution.result
 
     assert scheduler_calls == []
     assert result.selected_count == 1
@@ -1648,13 +1649,14 @@ def test_batch_rescore_dry_run_counts_needed_scores(
             scheduled=True,
         )
 
-    result = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_generation_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
         dry_run=True,
         schedule_workflow=schedule,
     )
+    result = execution.result
 
     assert scheduler_calls == []
     assert result.selected_count == 1
@@ -1722,15 +1724,17 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
             score_attempt_id=score_attempt_id,
             workflow_id=f"platform-score-v1:{score_attempt_id}",
             scheduled=True,
+            workflow_handle=f"handle-{generation_run_id}",
         )
 
-    result = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_generation_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
         chunk_size=2,
         schedule_workflow=schedule,
     )
+    result = execution.result
 
     assert pages == [(2, 0), (2, 2)]
     assert scheduler_calls == [
@@ -1749,6 +1753,7 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
         rescoring.BatchRescoreItemStatus.FAILED,
     ]
     assert result.items[2].failure is not None
+    assert execution.workflow_handles == ("handle-generation-run-0",)
 
 
 def test_batch_rescore_limit_caps_selected_candidates(
@@ -1770,7 +1775,7 @@ def test_batch_rescore_limit_caps_selected_candidates(
         load_candidates,
     )
 
-    result = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_generation_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1778,6 +1783,7 @@ def test_batch_rescore_limit_caps_selected_candidates(
         limit=3,
         dry_run=True,
     )
+    result = execution.result
 
     assert pages == [(2, 0), (1, 2)]
     assert result.selected_count == 3
@@ -1786,6 +1792,23 @@ def test_batch_rescore_limit_caps_selected_candidates(
         "generation-run-1",
         "generation-run-2",
     ]
+
+
+def test_await_scheduled_score_workflows_waits_for_each_handle() -> None:
+    completed: list[str] = []
+
+    class FakeHandle:
+        def __init__(self, label: str) -> None:
+            self.label = label
+
+        def get_result(self) -> None:
+            completed.append(self.label)
+
+    scoring_workflow.await_scheduled_score_workflows(
+        [FakeHandle("first"), FakeHandle("second")]
+    )
+
+    assert completed == ["first", "second"]
 
 
 def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(

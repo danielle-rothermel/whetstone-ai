@@ -2,14 +2,14 @@
   "name": "gpt54-nano-openai",
   "providers": [
     {
-      "model": "openai/gpt-5.4-nano",
+      "model": "gpt-5.4-nano",
       "config_id": "encoder",
       "provider_kind": "openai",
       "endpoint_kind": "responses",
       "parameters": {"temperature": 0}
     },
     {
-      "model": "openai/gpt-5.4-nano",
+      "model": "gpt-5.4-nano",
       "config_id": "decoder",
       "provider_kind": "openai",
       "endpoint_kind": "responses",

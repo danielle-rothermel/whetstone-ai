@@ -7,6 +7,8 @@ import os
 from dbos import DBOS, DBOSConfig
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
+from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
+
 DATABASE_URL_ENV = "DATABASE_URL"
 DBOS_SYSTEM_DATABASE_URL_ENV = "DBOS_SYSTEM_DATABASE_URL"
 
@@ -32,7 +34,7 @@ def resolve_database_url(
         raise ValueError(
             f"--database-url or {database_url_env} is required{suffix}"
         )
-    return resolved
+    return normalize_postgresql_driver_url(resolved)
 
 
 def build_eval_dbos_config(
@@ -50,12 +52,15 @@ def build_eval_dbos_config(
         database_url_env=database_url_env,
         error_suffix=database_url_error_suffix,
     )
+    resolved_system_database_url = (
+        dbos_system_database_url
+        or os.environ.get(dbos_system_database_url_env)
+        or resolved_database_url
+    )
     return EvalDbosConfig(
         database_url=resolved_database_url,
-        dbos_system_database_url=(
-            dbos_system_database_url
-            or os.environ.get(dbos_system_database_url_env)
-            or resolved_database_url
+        dbos_system_database_url=normalize_postgresql_driver_url(
+            resolved_system_database_url
         ),
         generation_concurrency=generation_concurrency,
         scoring_concurrency=scoring_concurrency,

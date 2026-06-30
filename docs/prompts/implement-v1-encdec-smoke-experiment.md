@@ -1,5 +1,11 @@
 # Prompt: implement tiny v1 enc-dec smoke experiment support
 
+**Status (2026-06-30):** Addressed on branch `today_exp` — humaneval enc-dec spec
+builder, composable configs under `configs/`, live smoke r1/r2 documented in
+[`docs/testing_logs.md`](../testing_logs.md). Follow-on platform fixes (model
+strings, `per_test_results` byte cap, `rescore` await, `DATABASE_URL`
+normalization) landed in the r2 smoke pass.
+
 You are working in `/Users/daniellerothermel/drotherm/repos/whetstone-ai` on
 branch `today_exp`.
 
