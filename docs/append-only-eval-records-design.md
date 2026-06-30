@@ -166,9 +166,11 @@ and recoverable code extraction; `humaneval-field-marker@v1` is a narrower
 field-marker adherence parser, not a full mirror of DSPy ChatAdapter recovery.
 Score attempts persist per-test rows, aggregate evaluation counts under
 `metrics.custom["evaluation"]`, and text/code/compression metrics for terminal
-generation text, extracted code, and every node output field. Non-string node
-outputs are converted through the recordability boundary and canonical JSON
-before metric extraction.
+generation output, extracted code, and every node output field. Terminal and
+node-output metrics use the original payloads converted to text at the platform
+boundary; extraction metrics use the parser result. Non-string payloads are
+converted through the recordability boundary and canonical JSON before metric
+extraction.
 
 The scoring workflow is currently a one-generation DBOS workflow plus a
 `score-one` CLI. Task loading uses a process-local cached HumanEval task map

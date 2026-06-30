@@ -173,6 +173,7 @@ def successful_score_attempt(
         score=domain_score.score,
         extracted_code=extracted_payload,
         metrics=score_metrics_payload(
+            terminal_output=generation_run.summary.terminal_output,
             task=task,
             node_attempts=node_attempts,
             scoring_profile=scoring_profile,
@@ -243,13 +244,14 @@ def validate_generation_run_for_scoring(
 
 def score_metrics_payload(
     *,
+    terminal_output: Any,
     task: HumanEvalTask,
     node_attempts: tuple[NodeAttemptRecord, ...],
     scoring_profile: HumanEvalScoringProfile,
     domain_score: HumanEvalGenerationScore,
 ) -> MetricsPayload:
     metrics_payload = build_metrics_payload(
-        raw_generation=domain_score.raw_generation,
+        raw_generation=record_metrics_text(terminal_output),
         extracted_code=domain_score.extraction.extracted_code,
         task=task,
         node_output_sources=node_output_metrics_sources(node_attempts),
@@ -278,13 +280,13 @@ def node_output_metrics_sources(
                 NodeOutputMetricsSource(
                     node_id=attempt.node_id,
                     field_name=field_name,
-                    text=node_output_metrics_text(value),
+                    text=record_metrics_text(value),
                 )
             )
     return tuple(sources)
 
 
-def node_output_metrics_text(value: Any) -> str:
+def record_metrics_text(value: Any) -> str:
     if isinstance(value, str):
         return value
     return canonical_json(ensure_recordable(value))

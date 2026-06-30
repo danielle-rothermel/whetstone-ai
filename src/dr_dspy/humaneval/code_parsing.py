@@ -151,6 +151,11 @@ def extract_best_effort_code(
                 "plain literal modules are not valid HumanEval code"
             )
             continue
+        if is_code_repr_assignment(candidate, code_field=profile.code_field):
+            first_compile_error = first_compile_error or (
+                "code repr assignments are not valid HumanEval code"
+            )
+            continue
         method = selected_method(
             raw_generation=unwrapped,
             candidate=candidate,
@@ -343,6 +348,27 @@ def is_plain_literal_module(source: str) -> bool:
     if not isinstance(stmt, ast.Expr):
         return False
     return isinstance(stmt.value, ast.Dict | ast.List | ast.Set | ast.Tuple)
+
+
+def is_code_repr_assignment(source: str, *, code_field: str) -> bool:
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    if len(tree.body) != 1:
+        return False
+    statement = tree.body[0]
+    if not isinstance(statement, ast.Assign):
+        return False
+    if len(statement.targets) != 1:
+        return False
+    target = statement.targets[0]
+    if not isinstance(target, ast.Name) or target.id != code_field:
+        return False
+    return isinstance(statement.value, ast.Constant) and isinstance(
+        statement.value.value,
+        str,
+    )
 
 
 def extraction_failure(

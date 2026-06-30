@@ -302,6 +302,18 @@ def test_best_effort_parser_unwraps_code_like_object_without_repr() -> None:
     assert result.extraction_method is ExtractionMethod.DSPY_CODE_FIELD
 
 
+def test_best_effort_parser_rejects_code_repr_assignment() -> None:
+    result = extract_best_effort_code(
+        "code='def add_one(x):\\n    return x + 1\\n'"
+    )
+
+    assert result.succeeded is False
+    assert (
+        result.compile_error
+        == "code repr assignments are not valid HumanEval code"
+    )
+
+
 @pytest.mark.parametrize("raw_generation", ["{'code': 'bad'}", "[1, 2, 3]"])
 def test_best_effort_parser_rejects_plain_literals(
     raw_generation: str,
@@ -540,9 +552,10 @@ def test_score_generation_run_persists_infrastructure_error() -> None:
 
 def test_score_generation_run_scores_encdec_terminal_output() -> None:
     spec = _spec(layout="encdec")
+    raw_terminal_output = {"code": "def add_one(x):\n    return x + 1\n"}
     run = _generation_run(
         spec,
-        {"code": "def add_one(x):\n    return x + 1\n"},
+        raw_terminal_output,
     )
 
     score = score_generation_run(
@@ -583,6 +596,9 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
         "node:decoder:code",
     }
     stages = {stage.stage_id: stage for stage in score.metrics.stages}
+    assert stages["terminal"].text.character_count == len(
+        '{"code":"def add_one(x):\\n    return x + 1\\n"}'
+    )
     assert stages["node:encoder:plan"].text.character_count == len(
         '{"ok":true,"steps":["read","write"]}'
     )
