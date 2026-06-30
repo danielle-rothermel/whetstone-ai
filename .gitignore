@@ -5,3 +5,5 @@ __pycache__/
 logs/
 docs/prompts/*
 !docs/prompts/archive-v0-surfaces.md
+.env
+.coverage
