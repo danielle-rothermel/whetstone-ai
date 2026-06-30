@@ -134,6 +134,40 @@ class EvaluationCaseSummary(BaseModel):
     actual_output_repr: str = ""
 
 
+def _results_for_function(
+    results: list[EvaluationCaseResult],
+    function_name: str,
+) -> list[EvaluationCaseResult]:
+    return [
+        result
+        for result in results
+        if result.function_name == function_name
+    ]
+
+
+def select_best_function_name(
+    *,
+    function_names: list[str],
+    entry_point: str,
+    results: list[EvaluationCaseResult],
+) -> str | None:
+    if not function_names:
+        return None
+    return max(
+        function_names,
+        key=lambda function_name: (
+            sum(
+                1
+                for result in results
+                if result.function_name == function_name
+                and result.status is EvaluationCaseStatus.PASSED
+            ),
+            function_name == entry_point,
+            -function_names.index(function_name),
+        ),
+    )
+
+
 class EvaluationTaskResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -145,43 +179,63 @@ class EvaluationTaskResult(BaseModel):
 
     @computed_field
     @property
+    def best_function_name(self) -> str | None:
+        return select_best_function_name(
+            function_names=self.function_names,
+            entry_point=self.entry_point,
+            results=self.results,
+        )
+
+    @computed_field
+    @property
     def failures(self) -> list[EvaluationCaseResult]:
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return []
         return [
             result
             for result in self.results
-            if result.status is not EvaluationCaseStatus.PASSED
+            if result.function_name == best_function_name
+            and result.status is not EvaluationCaseStatus.PASSED
         ]
 
     @computed_field
     @property
     def passed(self) -> bool:
-        if not self.function_names:
+        best_function_name = self.best_function_name
+        if best_function_name is None:
             return False
-        for function_name in self.function_names:
-            function_results = [
-                result
-                for result in self.results
-                if result.function_name == function_name
-            ]
-            if len(function_results) != self.total_cases:
-                return False
-            if not all(
-                result.status is EvaluationCaseStatus.PASSED
-                for result in function_results
-            ):
-                return False
-        return True
+        function_results = _results_for_function(
+            self.results,
+            best_function_name,
+        )
+        if len(function_results) != self.total_cases:
+            return False
+        return all(
+            result.status is EvaluationCaseStatus.PASSED
+            for result in function_results
+        )
 
     @computed_field
     @property
     def status_counts(self) -> dict[str, int]:
-        return dict(Counter(result.status.value for result in self.results))
+        best_function_name = self.best_function_name
+        if best_function_name is None:
+            return {}
+        return dict(
+            Counter(
+                result.status.value
+                for result in self.results
+                if result.function_name == best_function_name
+            )
+        )
 
     def to_summary(self) -> EvaluationTaskSummary:
         return EvaluationTaskSummary(
             task_id=self.task_id,
             entry_point=self.entry_point,
             function_names=self.function_names,
+            best_function_name=self.best_function_name,
             total_cases=self.total_cases,
             results=[result.to_summary() for result in self.results],
             passed=self.passed,
@@ -196,6 +250,7 @@ class EvaluationTaskSummary(BaseModel):
     task_id: str
     entry_point: str
     function_names: list[str]
+    best_function_name: str | None = None
     total_cases: int
     results: list[EvaluationCaseSummary] = Field(default_factory=list)
     passed: bool

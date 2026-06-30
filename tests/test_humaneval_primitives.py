@@ -215,6 +215,101 @@ def test_apply_cleaning_extracts_known_generation_shapes(
     assert "print('trailing')" not in candidates[0]
 
 
+def test_evaluation_passes_when_best_function_passes() -> None:
+    result = evaluate_human_eval_code(
+        task=_task(),
+        candidate_code=(
+            "def broken_helper(x):\n"
+            "    return x\n"
+            "\n"
+            "def add_one(x):\n"
+            "    return x + 1\n"
+        ),
+        timeout_seconds=2.0,
+    )
+
+    assert result.best_function_name == "add_one"
+    assert result.passed is True
+    assert result.status_counts == {"passed": 2}
+    assert result.failures == []
+    summary = result.to_summary()
+    assert summary.passed is True
+    assert summary.best_function_name == "add_one"
+    assert summary.failure_count == 0
+
+
+def test_score_generated_code_passes_when_best_function_passes() -> None:
+    result = score_generated_code_for_humaneval(
+        raw_generation=(
+            "def broken_helper(x):\n"
+            "    return x\n"
+            "\n"
+            "def add_one(x):\n"
+            "    return x + 1\n"
+        ),
+        task=_task(),
+        timeout=2.0,
+    )
+
+    assert result.outcome is GeneratedCodeOutcome.PASSED
+    assert result.score == 1.0
+    assert result.evaluation is not None
+    assert result.evaluation.best_function_name == "add_one"
+
+
+def test_evaluation_prefers_entry_point_when_pass_counts_tie() -> None:
+    result = evaluate_human_eval_code(
+        task=_task(),
+        candidate_code=(
+            "def add_one(x):\n"
+            "    return x + 1\n"
+            "\n"
+            "def also_add_one(x):\n"
+            "    return x + 1\n"
+        ),
+        timeout_seconds=2.0,
+    )
+
+    assert result.best_function_name == "add_one"
+    assert result.passed is True
+
+
+def test_evaluation_fails_when_best_function_does_not_pass_all_cases() -> None:
+    result = evaluate_human_eval_code(
+        task=_task(),
+        candidate_code=(
+            "def broken_helper(x):\n"
+            "    return x\n"
+            "\n"
+            "def add_one(x):\n"
+            "    return x + 1 if x == 1 else x\n"
+        ),
+        timeout_seconds=2.0,
+    )
+
+    assert result.best_function_name == "add_one"
+    assert result.passed is False
+    assert result.status_counts == {"passed": 1, "failed": 1}
+
+
+def test_evaluation_uses_highest_pass_count() -> None:
+    result = evaluate_human_eval_code(
+        task=_task(),
+        candidate_code=(
+            "def add_one(x):\n"
+            "    return x\n"
+            "\n"
+            "def helper(x):\n"
+            "    return x + 1\n"
+        ),
+        timeout_seconds=2.0,
+    )
+
+    assert result.best_function_name == "helper"
+    assert result.passed is True
+    assert result.status_counts == {"passed": 2}
+
+
 def test_score_generated_code_passes_humaneval_task() -> None:
     result = score_generated_code_for_humaneval(
         raw_generation="def add_one(x):\n    return x + 1\n",
