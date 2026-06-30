@@ -6,3 +6,4 @@ logs/
 artifacts/
 .env
 .coverage
+.DS_Store
