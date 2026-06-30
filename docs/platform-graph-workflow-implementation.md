@@ -41,27 +41,30 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
   --specs-file specs.jsonl
 ```
 
-`submit-jsonl` streams JSONL parsing into the submit path, validates bounded
-windows of specs against the requested experiment, rejects duplicate
-`prediction_id` values within the submit operation, inserts the experiment row
-if needed, persists batch operation/item audit rows, and enqueues workflows on
-`dr-dspy-platform-generation-v1`. Submission is resumable by operation key:
-existing completed/enqueued batch items are skipped, while pending or previously
-failed items are retried.
+`submit-jsonl` uses a two-pass JSONL path: a lightweight indexing pass reads
+only `prediction_id`, `fair_order_key`, and `experiment_name` from each line,
+rejects duplicate `prediction_id` values within the submit operation, inserts the
+experiment row if needed, persists batch operation/item audit rows, and enqueues
+workflows on `dr-dspy-platform-generation-v1`. Submission is resumable by
+operation key: existing completed/enqueued batch items are skipped, while
+pending or previously failed items are retried.
 
-The submit path separates chunked persistence from queue admission. It reads and
-validates at most `--chunk-size` specs at a time, orders each persistence window
-by the stored fair-order key, and writes prediction specs plus pending batch
-items without globally materializing every spec in Python. After all windows are
+The submit path separates chunked persistence from queue admission. After
+indexing, refs are globally sorted by `(fair_order_key, prediction_id)` and
+loaded in `--chunk-size` windows for full validation and persistence. Peak
+Python memory stays bounded to O(n) lightweight refs plus O(`--chunk-size`) full
+specs instead of materializing every spec at once. After all windows are
 persisted, enqueueing repeatedly selects pending batch items for the operation
 ordered by `(fair_order_key, prediction_id)` in `--chunk-size` pages. This keeps
 large JSONL submissions bounded while giving deterministic queue mixing across
 the full persisted operation instead of only within the current input window.
-Fair-order keys are part of the `PredictionSpecRecord` contract, so submit
-validates the records but does not recompute a separate scheduling key. If a
-later window contains an invalid spec, earlier windows may already have been
-persisted, but enqueueing does not begin until validation reaches the enqueue
-phase.
+The programmatic `Iterable[PredictionSpecRecord]` submit API may still
+materialize the full operation for global ordering, which is acceptable for
+small in-memory batches. Fair-order keys are part of the `PredictionSpecRecord`
+contract, so submit validates the records but does not recompute a separate
+scheduling key. If a later window contains an invalid spec, earlier windows may
+already have been persisted, but enqueueing does not begin until all persistence
+windows finish.
 
 Fairness currently controls submission and queue-admission order, not strict
 execution order. With registered worker concurrency above 1, DBOS workers can
@@ -160,9 +163,10 @@ in a later provider-config contract change.
 
 ## Throttle preflight and backoff
 
-Each provider node resolves its `ProviderConfigRef` before the LM call. If the
-provider has a `throttle_key`, a DBOS preflight step reads the current throttle
-backoff state and durably sleeps until the key is unblocked. Retryable provider
+Each provider node resolves its `ProviderConfigRef` in a dedicated DBOS preflight
+step before the LM execution step. If the provider has a `throttle_key`, the
+preflight step reads the current throttle backoff state; the workflow durably
+sleeps until the key is unblocked before calling the LM step. Retryable provider
 failures update the backoff state for that throttle key; successful calls clear
 it. Backoff is advisory across concurrent workers, but state read/write errors
 and provider-resolution errors are treated as workflow failures rather than
@@ -189,9 +193,8 @@ queue dispatch.
 - Extend the persisted provider config contract before allowing experiments to
   vary provider runtime details such as `base_url`, `api_key_env`, or capability
   flags from specs.
-- Add Postgres/DBOS integration coverage for submit/resume, throttle
-  upsert/read, and workflow-level preflight behavior once the project has a
-  standard live-fixture setup.
+- Add Postgres/DBOS integration coverage for submit/resume and throttle
+  upsert/read once the project has a standard live-fixture setup.
 
 ## Integration-test status
 
@@ -213,5 +216,5 @@ The default unit suite still covers pure graph orchestration, node execution,
 record conversion, idempotent persistence SQL shape, queue registration,
 submit/resume item selection, partial enqueue failure handling, throttle state
 statement construction, and worker import without Postgres or DBOS. Live
-Postgres/DBOS coverage for submit/resume, throttle upsert/read, and
-workflow-level preflight behavior remains follow-up work.
+Postgres/DBOS coverage for submit/resume and throttle upsert/read remains
+follow-up work.

@@ -514,6 +514,10 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         ("load", (database_url, spec.prediction_id)),
         ("started", generation_run_id),
         (
+            "throttle",
+            (database_url, spec.prediction_id, "direct"),
+        ),
+        (
             "execute",
             (
                 database_url,

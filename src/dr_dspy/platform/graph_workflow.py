@@ -147,19 +147,28 @@ def run_prediction_graph_workflow(
         node: NodeSpec,
         node_inputs: Mapping[str, Any],
     ) -> NodeStepResult:
+        spec_payload = step_spec.model_dump(mode="json")
+        node_payload = node.model_dump(mode="json")
+        node_inputs_payload = dict(node_inputs)
         try:
+            delay_seconds = throttle_preflight_step(
+                database_url,
+                spec_payload,
+                node_payload,
+            )
+            sleep_for_backoff_seconds(delay_seconds)
             result = execute_lm_node_step(
                 database_url,
-                step_spec.model_dump(mode="json"),
-                node.model_dump(mode="json"),
-                dict(node_inputs),
+                spec_payload,
+                node_payload,
+                node_inputs_payload,
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
             timing = node_step_timing_from_exception(error)
             result = node_step_error_result_step(
-                step_spec.model_dump(mode="json"),
-                node.model_dump(mode="json"),
+                spec_payload,
+                node_payload,
                 failure_metadata_from_exception(error).model_dump(mode="json"),
                 timing[0].isoformat() if timing is not None else None,
                 timing[1].isoformat() if timing is not None else None,
@@ -344,14 +353,6 @@ def execute_lm_node_step(
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
     except Exception:
         provider_ref = None
-    if provider_ref is not None:
-        delay_seconds = provider_throttle_delay_seconds(
-            database_url,
-            spec_payload,
-            node_payload,
-        )
-        if delay_seconds > 0:
-            sleep_for_backoff_seconds(delay_seconds)
     step_started_at = datetime.now(UTC)
     try:
         result = execute_lm_node(

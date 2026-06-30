@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated
 
@@ -22,9 +21,8 @@ from dr_dspy.platform.queue_worker import (
 )
 from dr_dspy.platform.submission import (
     DEFAULT_SUBMIT_CHUNK_SIZE,
-    submit_prediction_specs,
+    submit_prediction_specs_jsonl,
 )
-from dr_dspy.records import PredictionSpecRecord
 from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
@@ -240,12 +238,12 @@ def submit_jsonl(
     )
     engine = create_engine(config.database_url)
     try:
-        result = submit_prediction_specs(
+        result = submit_prediction_specs_jsonl(
             engine,
             database_url=config.database_url,
             operation_key=operation_key,
             experiment_name=experiment_name,
-            specs=iter_prediction_specs_jsonl(specs_file),
+            specs_file=specs_file,
             submit_spec={"source": str(specs_file)},
             chunk_size=chunk_size,
             attempt_index=attempt_index,
@@ -254,22 +252,6 @@ def submit_jsonl(
     finally:
         engine.dispose()
         shared_dbos.destroy_dbos_runtime()
-
-
-def iter_prediction_specs_jsonl(
-    path: Path,
-) -> Iterator[PredictionSpecRecord]:
-    with path.open(encoding="utf-8") as file:
-        for line_number, line in enumerate(file, start=1):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                yield PredictionSpecRecord.model_validate_json(stripped)
-            except ValueError as error:
-                raise ValueError(
-                    f"invalid prediction spec JSON on line {line_number}"
-                ) from error
 
 
 def main() -> None:

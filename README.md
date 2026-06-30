@@ -88,16 +88,16 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
   --specs-file specs.jsonl
 ```
 
-`submit-jsonl` validates specs, creates the experiment row if needed, persists
-batch operation/item audit rows, orders specs by their stored fair-order key,
-and enqueues generation workflows on `dr-dspy-platform-generation-v1`.
+`submit-jsonl` indexes specs in a lightweight first pass, globally orders by
+fair-order key, loads and persists `--chunk-size` windows, then enqueues
+generation workflows on `dr-dspy-platform-generation-v1` in matching pages.
 Re-running the same `--operation-key` resumes from durable batch items:
 completed/enqueued items are skipped and pending or failed items are retried.
 
-Queued graph workflow execution now includes throttle preflight/backoff keyed
-by provider throttle key. Rate-limited and transient provider failures update
-the throttle state; later workflows with the same key durably sleep before
-calling the provider.
+Queued graph workflow execution runs a DBOS throttle preflight step before each
+LM node call. Rate-limited and transient provider failures update the throttle
+state; later workflows with the same key durably sleep before calling the
+provider.
 
 Scoring, Unitbench-facing projections, and v0 migration/backfill remain
 deferred.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
 
+from dr_dspy.platform.jsonl_specs import JsonlSpecRef
 from dr_dspy.records import PredictionSpecRecord
 
 
@@ -11,6 +12,23 @@ def fair_ordered_specs(
     return fair_order_specs(
         tuple(validate_fair_order_spec(spec) for spec in specs)
     )
+
+
+def fair_ordered_spec_ref_windows(
+    refs: Sequence[JsonlSpecRef],
+    *,
+    window_size: int,
+) -> Iterator[tuple[JsonlSpecRef, ...]]:
+    if window_size < 1:
+        raise ValueError("window_size must be positive")
+    ordered = tuple(
+        sorted(
+            refs,
+            key=lambda ref: (ref.fair_order_key, ref.prediction_id),
+        )
+    )
+    for index in range(0, len(ordered), window_size):
+        yield ordered[index:index + window_size]
 
 
 def fair_ordered_spec_windows(

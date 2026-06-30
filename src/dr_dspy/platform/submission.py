@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
@@ -12,20 +13,27 @@ from sqlalchemy.engine import Connection, Engine
 from dr_dspy.db import io, schema
 from dr_dspy.eval_failures import summarize_exception
 from dr_dspy.hashing import sha256_json_digest
-from dr_dspy.platform.fairness import fair_ordered_spec_windows
+from dr_dspy.platform.fairness import (
+    fair_ordered_spec_ref_windows,
+    fair_ordered_spec_windows,
+)
+from dr_dspy.platform.jsonl_specs import (
+    index_jsonl_prediction_specs,
+    load_jsonl_prediction_specs,
+)
 from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
     EnqueuedPredictionWorkflow,
     enqueue_prediction_graph_workflow,
 )
 from dr_dspy.records import (
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
-    ENQUEUE_CLAIMED_AT_METADATA_KEY,
-    ENQUEUE_CLAIM_ID_METADATA_KEY,
     ExperimentRecord,
     FailureMetadataPayload,
     PredictionSpecRecord,
@@ -95,13 +103,129 @@ def submit_prediction_specs(
     enqueue_workflow: EnqueueWorkflow | None = None,
 ) -> SubmitPredictionSpecsResult:
     validate_chunk_size(chunk_size)
-    resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
     ordered_windows = list(
         fair_ordered_spec_windows(
             specs,
             window_size=chunk_size,
         )
     )
+    return _submit_materialized_windows(
+        engine,
+        database_url=database_url,
+        operation_key=operation_key,
+        experiment_name=experiment_name,
+        ordered_windows=ordered_windows,
+        submit_spec=submit_spec,
+        metadata=metadata,
+        chunk_size=chunk_size,
+        attempt_index=attempt_index,
+        queue_name=queue_name,
+        enqueue_workflow=enqueue_workflow,
+    )
+
+
+def submit_prediction_specs_jsonl(
+    engine: Engine,
+    *,
+    database_url: str,
+    operation_key: str,
+    experiment_name: str,
+    specs_file: Path,
+    submit_spec: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    chunk_size: int = DEFAULT_SUBMIT_CHUNK_SIZE,
+    attempt_index: int = 0,
+    queue_name: str = PLATFORM_GENERATION_QUEUE_NAME,
+    enqueue_workflow: EnqueueWorkflow | None = None,
+) -> SubmitPredictionSpecsResult:
+    validate_chunk_size(chunk_size)
+    refs = index_jsonl_prediction_specs(
+        specs_file,
+        experiment_name=experiment_name,
+    )
+    ordered_windows: list[tuple[PredictionSpecRecord, ...]] = []
+    seen_prediction_ids: set[str] = set()
+    item_index_offset = 0
+    resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
+    for window_refs in fair_ordered_spec_ref_windows(
+        refs,
+        window_size=chunk_size,
+    ):
+        ordered_specs = load_jsonl_prediction_specs(specs_file, window_refs)
+        validate_submit_specs(
+            experiment_name=experiment_name,
+            specs=ordered_specs,
+        )
+        validate_unique_submit_prediction_ids(
+            specs=ordered_specs,
+            seen_prediction_ids=seen_prediction_ids,
+        )
+        with engine.begin() as connection:
+            prepare_submission_records(
+                connection,
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                ordered_specs=ordered_specs,
+                submit_spec=submit_spec,
+                metadata=metadata,
+                chunk_size=chunk_size,
+                item_index_offset=item_index_offset,
+            )
+        item_index_offset += len(ordered_specs)
+        ordered_windows.append(ordered_specs)
+
+    if not ordered_windows:
+        with engine.begin() as connection:
+            prepare_submission_records(
+                connection,
+                operation_key=operation_key,
+                experiment_name=experiment_name,
+                ordered_specs=(),
+                submit_spec=submit_spec,
+                metadata=metadata,
+                chunk_size=chunk_size,
+            )
+
+    if ordered_windows:
+        with engine.begin() as connection:
+            prepare_enqueue_retries(
+                connection,
+                operation_key=operation_key,
+            )
+        enqueue_pending_batch_items(
+            engine,
+            database_url=database_url,
+            operation_key=operation_key,
+            page_size=chunk_size,
+            attempt_index=attempt_index,
+            queue_name=queue_name,
+            enqueue_workflow=resolved_enqueue_workflow,
+        )
+
+    with engine.begin() as connection:
+        return update_operation_summary(
+            connection,
+            operation_key=operation_key,
+            experiment_name=experiment_name,
+            queue_name=queue_name,
+        )
+
+
+def _submit_materialized_windows(
+    engine: Engine,
+    *,
+    database_url: str,
+    operation_key: str,
+    experiment_name: str,
+    ordered_windows: Sequence[Sequence[PredictionSpecRecord]],
+    submit_spec: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    chunk_size: int = DEFAULT_SUBMIT_CHUNK_SIZE,
+    attempt_index: int = 0,
+    queue_name: str = PLATFORM_GENERATION_QUEUE_NAME,
+    enqueue_workflow: EnqueueWorkflow | None = None,
+) -> SubmitPredictionSpecsResult:
+    resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
     seen_prediction_ids: set[str] = set()
     for ordered_specs in ordered_windows:
         validate_submit_specs(
