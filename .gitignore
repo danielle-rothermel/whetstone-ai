@@ -1,2 +1,3 @@
 logs/
-docs/prompts/
+docs/prompts/*
+!docs/prompts/archive-v0-surfaces.md

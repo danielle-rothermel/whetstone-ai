@@ -11,7 +11,8 @@ complete.
 - `humaneval/` — task parsing, code extraction, scoring, compression metrics
 - `lm/boundary.py` — forward prompt/provider request and response boundary
 - `lm/runner.py`, `lm/signatures.py`, `lm/openrouter.py` — legacy DSPy compatibility for v0 workflows
-- `lm/logging.py`, `lm/utils.py` — shared LM telemetry and JSON helpers
+- `lm/utils.py` — shared JSON/text helpers used by the forward boundary
+- `lm/logging.py` — legacy-adjacent DSPy LM telemetry mixins (recordability at log time)
 - `graph/` — pure graph execution and graph-spec hashing
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads
@@ -58,8 +59,9 @@ operations.
 ### Generation boundary
 
 Typed generation failures (`EmptyGenerationError`, `PredictionParseError`) are
-raised from `eval_failures.generation.require_generation_text` and
-`lm.runner.run_predictor`. Humaneval job builders call
+raised from `eval_failures.generation.require_generation_text` on the forward
+path and from legacy `lm.runner.run_predictor` for v0 DSPy experiment workflows.
+Humaneval job builders call
 `validate_encdec_generation` / `validate_direct_generation` before constructing
 `GenerationResult`, so empty or unparseable LM output becomes
 `generation_error` rather than a false `generated` row.
