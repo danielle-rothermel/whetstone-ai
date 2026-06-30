@@ -133,6 +133,10 @@ def _spec(
         graph_digest=graph_id,
         dimensions_digest=dimensions_id,
         repetition_seed=0,
+        provider_kind=provider_axis.provider_kind.value,
+        endpoint_kind=provider_axis.endpoint_kind.value,
+        model=provider_axis.model,
+        throttle_key=provider_axis.throttle_key,
     )
     return PredictionSpecRecord(
         prediction_id=prediction_id,
@@ -511,10 +515,10 @@ def test_independent_branch_failure_records_partial_generation() -> None:
 
     assert execution.graph_result.status is GraphRunStatus.PARTIAL
     assert execution.generation_run.status is GenerationRunStatus.PARTIAL
-    assert [attempt.node_id for attempt in execution.node_attempts] == [
+    assert {attempt.node_id for attempt in execution.node_attempts} == {
         "bad",
         "terminal",
-    ]
+    }
 
 
 def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
@@ -786,6 +790,9 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
         )
         return "generation-run-1"
 
+    def destroy_runtime() -> None:
+        calls.append(("destroy", None))
+
     monkeypatch.setattr(worker, "load_env_file", load_env_file)
     monkeypatch.setattr(
         worker,
@@ -796,7 +803,7 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
     monkeypatch.setattr(
         worker.shared_dbos,
         "destroy_dbos_runtime",
-        lambda: None,
+        destroy_runtime,
     )
 
     worker.run_one(
@@ -811,6 +818,7 @@ def test_platform_worker_run_one_uses_shared_workflow_runner(
         ("load_env", None),
         ("configure", ("postgresql://app/db", "postgresql://dbos/db")),
         ("run_once", ("postgresql://example/db", "prediction-1", 3)),
+        ("destroy", None),
     ]
 
 

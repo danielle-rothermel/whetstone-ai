@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from dr_dspy.eval_failures import (
     PermanentFailureError,
+    find_classified_exception,
     should_retry_step,
     summarize_exception,
 )
@@ -44,6 +45,8 @@ REASONING_PARAMETER = "reasoning"
 EXTRA_BODY_PARAMETER = "extra_body"
 EXTRA_KWARGS_PARAMETER = "extra_kwargs"
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 120.0
+NODE_STEP_STARTED_AT_METADATA_KEY = "node_step_started_at"
+NODE_STEP_COMPLETED_AT_METADATA_KEY = "node_step_completed_at"
 
 type ProviderClientFactory = Callable[[ProviderConfig], Any]
 type ProviderCaller = Callable[[Any, ProviderRequest], Any]
@@ -220,9 +223,14 @@ def execute_lm_node(
             completed_at=completed_at,
         )
     except Exception as error:
-        if raise_retryable and should_retry_step(error):
-            raise
         completed_at = datetime.now(UTC)
+        if raise_retryable and should_retry_step(error):
+            attach_node_step_timing_to_exception(
+                error,
+                started_at=started_at,
+                completed_at=completed_at,
+            )
+            raise
         return NodeStepResult.error(
             node_id=node.id,
             provider_config=provider_ref,
@@ -230,6 +238,47 @@ def execute_lm_node(
             started_at=started_at,
             completed_at=completed_at,
         )
+
+
+def attach_node_step_timing_to_exception(
+    error: BaseException,
+    *,
+    started_at: datetime,
+    completed_at: datetime,
+) -> None:
+    timing_metadata = {
+        NODE_STEP_STARTED_AT_METADATA_KEY: started_at.isoformat(),
+        NODE_STEP_COMPLETED_AT_METADATA_KEY: completed_at.isoformat(),
+    }
+    classified = find_classified_exception(error)
+    if classified is not None:
+        classified.metadata.update(timing_metadata)
+        return
+    error.__dict__["node_step_started_at"] = started_at
+    error.__dict__["node_step_completed_at"] = completed_at
+
+
+def node_step_timing_from_exception(
+    error: BaseException,
+) -> tuple[datetime, datetime] | None:
+    classified = find_classified_exception(error)
+    if classified is not None:
+        started_at = classified.metadata.get(
+            NODE_STEP_STARTED_AT_METADATA_KEY
+        )
+        completed_at = classified.metadata.get(
+            NODE_STEP_COMPLETED_AT_METADATA_KEY
+        )
+        if isinstance(started_at, str) and isinstance(completed_at, str):
+            return (
+                datetime.fromisoformat(started_at),
+                datetime.fromisoformat(completed_at),
+            )
+    started_at = error.__dict__.get("node_step_started_at")
+    completed_at = error.__dict__.get("node_step_completed_at")
+    if isinstance(started_at, datetime) and isinstance(completed_at, datetime):
+        return started_at, completed_at
+    return None
 
 
 def node_step_error_result_from_failure(
@@ -369,6 +418,7 @@ def create_provider_client(config: ProviderConfig) -> OpenAI:
         api_key=api_key,
         base_url=config.base_url,
         timeout=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+        max_retries=0,
     )
 
 

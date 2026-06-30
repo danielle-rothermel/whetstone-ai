@@ -92,6 +92,12 @@ def _format_user_prompt(
             underlying=error,
             metadata={"node_id": node.id, "missing_input": missing},
         ) from error
+    except ValueError as error:
+        raise PermanentFailureError(
+            "node prompt template is malformed",
+            underlying=error,
+            metadata={"node_id": node.id},
+        ) from error
 
 
 class _InputFormatMapping(dict[str, Any]):

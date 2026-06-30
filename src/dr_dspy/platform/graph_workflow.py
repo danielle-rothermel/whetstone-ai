@@ -12,9 +12,11 @@ from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_dspy.platform.node_execution import (
     NodeStepResult,
+    attach_node_step_timing_to_exception,
     execute_lm_node,
     failure_metadata_from_exception,
     node_step_error_result_from_failure,
+    node_step_timing_from_exception,
 )
 from dr_dspy.platform.persistence import (
     generation_run_record_from_result,
@@ -147,10 +149,13 @@ def run_prediction_graph_workflow(
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
+            timing = node_step_timing_from_exception(error)
             result = node_step_error_result_step(
                 step_spec.model_dump(mode="json"),
                 node.model_dump(mode="json"),
                 failure_metadata_from_exception(error).model_dump(mode="json"),
+                timing[0].isoformat() if timing is not None else None,
+                timing[1].isoformat() if timing is not None else None,
             )
             return NodeStepResult.model_validate(result)
 
@@ -282,13 +287,23 @@ def execute_lm_node_step(
     node_payload: dict[str, Any],
     node_inputs: dict[str, Any],
 ) -> dict[str, Any]:
-    result = execute_lm_node(
-        spec=PredictionSpecRecord.model_validate(spec_payload),
-        node=NodeSpec.model_validate(node_payload),
-        node_inputs=node_inputs,
-        raise_retryable=True,
-    )
-    return result.model_dump(mode="json")
+    step_started_at = datetime.now(UTC)
+    try:
+        result = execute_lm_node(
+            spec=PredictionSpecRecord.model_validate(spec_payload),
+            node=NodeSpec.model_validate(node_payload),
+            node_inputs=node_inputs,
+            raise_retryable=True,
+        )
+        return result.model_dump(mode="json")
+    except Exception as error:
+        if node_step_timing_from_exception(error) is None:
+            attach_node_step_timing_to_exception(
+                error,
+                started_at=step_started_at,
+                completed_at=datetime.now(UTC),
+            )
+        raise
 
 
 @DBOS.step(name=NODE_STEP_ERROR_RESULT_STEP_NAME)
@@ -296,14 +311,22 @@ def node_step_error_result_step(
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
     failure_payload: dict[str, Any],
+    started_at: str | None = None,
+    completed_at: str | None = None,
 ) -> dict[str, Any]:
-    now = datetime.now(UTC)
+    if started_at is not None and completed_at is not None:
+        step_started_at = datetime.fromisoformat(started_at)
+        step_completed_at = datetime.fromisoformat(completed_at)
+    else:
+        now = datetime.now(UTC)
+        step_started_at = now
+        step_completed_at = now
     result = node_step_error_result_from_failure(
         spec=PredictionSpecRecord.model_validate(spec_payload),
         node=NodeSpec.model_validate(node_payload),
         failure=FailureMetadataPayload.model_validate(failure_payload),
-        started_at=now,
-        completed_at=now,
+        started_at=step_started_at,
+        completed_at=step_completed_at,
     )
     return result.model_dump(mode="json")
 

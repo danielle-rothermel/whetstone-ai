@@ -17,6 +17,11 @@ from dr_dspy.runtime import load_env_file, run_typer_app
 
 DBOS_APP_NAME = "dr-dspy-platform-graph-v1"
 DEFAULT_WORKER_CONCURRENCY = 1
+DBOS_SYSTEM_DATABASE_URL_HELP = (
+    "DBOS system database URL; defaults to "
+    f"{shared_dbos.DBOS_SYSTEM_DATABASE_URL_ENV} or the resolved app "
+    "database URL."
+)
 
 CONSOLE = Console()
 APP = typer.Typer(no_args_is_help=True)
@@ -64,7 +69,7 @@ def run_one(
         str | None,
         typer.Option(
             "--dbos-system-database-url",
-            help="DBOS system database URL; defaults to DATABASE_URL.",
+            help=DBOS_SYSTEM_DATABASE_URL_HELP,
         ),
     ] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
@@ -110,7 +115,7 @@ def worker(
         str | None,
         typer.Option(
             "--dbos-system-database-url",
-            help="DBOS system database URL; defaults to DATABASE_URL.",
+            help=DBOS_SYSTEM_DATABASE_URL_HELP,
         ),
     ] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
