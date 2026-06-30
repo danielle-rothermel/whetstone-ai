@@ -49,6 +49,29 @@ from dr_dspy.records import (
 DEFAULT_FAIR_ORDER_SEED = "seed"
 DEFAULT_DIMENSIONS_AXES: tuple[dict[str, Any], ...] = ({"temperature": 0.2},)
 DEFAULT_REPETITION_SEEDS: tuple[int, ...] = (0,)
+DEFAULT_HUMANEVAL_INSTRUCTIONS_START = (
+    "Provide a concise description of the following code."
+)
+DEFAULT_MIN_ENCODER_CHAR_BUDGET = 50
+
+HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE = (
+    "{instructions_start}\n"
+    "Use at most {budget} characters.\n"
+    "\n"
+    "```python\n"
+    "{gt_code}\n"
+    "```\n"
+    "{instructions_end}"
+)
+HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE = (
+    "Write functional code in Python according to the following description.\n"
+    "Output only the final answer, without any descriptions or surrounding\n"
+    "characters.\n"
+    "\n"
+    "{encoded_desc}"
+)
+
+EncDecShape = Literal["legacy", "humaneval"]
 
 
 class GraphLayout(StrEnum):
@@ -81,6 +104,21 @@ class ProviderSpecConfig(BaseModel):
     parameters: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
+class HumanevalEncDecConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instructions_start: StrictStr = DEFAULT_HUMANEVAL_INSTRUCTIONS_START
+    instructions_end: StrictStr = ""
+    encoder_system_prompt: StrictStr = ""
+    min_encoder_char_budget: StrictInt = DEFAULT_MIN_ENCODER_CHAR_BUDGET
+
+    @model_validator(mode="after")
+    def validate_min_encoder_char_budget(self) -> HumanevalEncDecConfig:
+        if self.min_encoder_char_budget < 1:
+            raise ValueError("min_encoder_char_budget must be positive")
+        return self
+
+
 class ExperimentSpecConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -91,6 +129,8 @@ class ExperimentSpecConfig(BaseModel):
     repetition_seeds: tuple[StrictInt, ...] = DEFAULT_REPETITION_SEEDS
     dimensions_axes: tuple[dict[StrictStr, Any], ...] = DEFAULT_DIMENSIONS_AXES
     providers: tuple[ProviderSpecConfig, ...]
+    encdec_shape: EncDecShape = "legacy"
+    humaneval_encdec: HumanevalEncDecConfig | None = None
 
     @model_validator(mode="after")
     def validate_layout_providers(self) -> ExperimentSpecConfig:
@@ -115,6 +155,16 @@ class ExperimentSpecConfig(BaseModel):
                 raise ValueError(
                     "encdec providers must use config_id encoder and decoder"
                 )
+        if self.encdec_shape == "humaneval":
+            if self.graph_layout is not GraphLayout.ENCDEC:
+                raise ValueError(
+                    "humaneval encdec_shape requires encdec graph_layout"
+                )
+            for axis in self.dimensions_axes:
+                if "compression_target" not in axis:
+                    raise ValueError(
+                        "humaneval dimensions_axes require compression_target"
+                    )
         return self
 
 
@@ -174,6 +224,37 @@ def decoder_node() -> NodeSpec:
     )
 
 
+def humaneval_encoder_node(
+    *,
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> NodeSpec:
+    cfg = humaneval_encdec or HumanevalEncDecConfig()
+    system_prompt = cfg.encoder_system_prompt or None
+    return direct_node(
+        "encoder",
+        bindings={
+            "instructions_start": "task.instructions_start",
+            "budget": "task.budget",
+            "gt_code": "task.gt_code",
+            "instructions_end": "task.instructions_end",
+        },
+        output_field="description",
+        user_prompt_template=HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
+        system_prompt=system_prompt,
+        provider_config_id="encoder",
+    )
+
+
+def humaneval_decoder_node() -> NodeSpec:
+    return direct_node(
+        "decoder",
+        bindings={"encoded_desc": "encoder.description"},
+        output_field="code",
+        user_prompt_template=HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
+        provider_config_id="decoder",
+    )
+
+
 def direct_graph() -> GraphSpec:
     return GraphSpec(
         nodes=(direct_node("direct", output_field="output"),),
@@ -186,6 +267,35 @@ def encdec_graph() -> GraphSpec:
         nodes=(decoder_node(), encoder_node()),
         terminal_node_id="decoder",
     )
+
+
+def humaneval_encdec_graph(
+    *,
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> GraphSpec:
+    return GraphSpec(
+        nodes=(
+            humaneval_decoder_node(),
+            humaneval_encoder_node(humaneval_encdec=humaneval_encdec),
+        ),
+        terminal_node_id="decoder",
+    )
+
+
+def encoder_char_budget(
+    *,
+    compression_target: float,
+    gt_code: str,
+    min_budget: int,
+) -> int:
+    return max(min_budget, round(compression_target * len(gt_code)))
+
+
+def humaneval_gt_code(task: HumanEvalTask) -> str:
+    cleaned = task.ground_truth_code_without_comments
+    if cleaned is not None:
+        return cleaned
+    return task.ground_truth_code
 
 
 def provider_ref(
@@ -230,6 +340,35 @@ def task_snapshot_from_humaneval(task: HumanEvalTask) -> TaskSnapshotPayload:
             "canonical_solution": task.canonical_solution,
             "ground_truth_code": task.ground_truth_code,
         },
+    )
+
+
+def humaneval_encdec_task_snapshot(
+    task: HumanEvalTask,
+    *,
+    compression_target: float,
+    humaneval_encdec: HumanevalEncDecConfig,
+) -> TaskSnapshotPayload:
+    gt_code = humaneval_gt_code(task)
+    budget = encoder_char_budget(
+        compression_target=compression_target,
+        gt_code=gt_code,
+        min_budget=humaneval_encdec.min_encoder_char_budget,
+    )
+    base = task_snapshot_from_humaneval(task)
+    inputs = dict(base.inputs.values)
+    inputs.update(
+        {
+            "gt_code": gt_code,
+            "budget": budget,
+            "instructions_start": humaneval_encdec.instructions_start,
+            "instructions_end": humaneval_encdec.instructions_end,
+        }
+    )
+    return TaskSnapshotPayload(
+        task_id=base.task_id,
+        inputs=TaskInputsPayload(values=inputs),
+        metadata=base.metadata,
     )
 
 
@@ -320,9 +459,16 @@ def encdec_spec(
     )
 
 
-def graph_for_layout(layout: GraphLayout) -> GraphSpec:
+def graph_for_layout(
+    layout: GraphLayout,
+    *,
+    encdec_shape: EncDecShape = "legacy",
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> GraphSpec:
     if layout is GraphLayout.DIRECT:
         return direct_graph()
+    if encdec_shape == "humaneval":
+        return humaneval_encdec_graph(humaneval_encdec=humaneval_encdec)
     return encdec_graph()
 
 
@@ -362,16 +508,31 @@ def iter_experiment_specs(
     *,
     rows: Sequence[dict[str, Any]] | None = None,
 ) -> Iterator[PredictionSpecRecord]:
-    graph = graph_for_layout(config.graph_layout)
+    humaneval_cfg = config.humaneval_encdec or HumanevalEncDecConfig()
+    graph = graph_for_layout(
+        config.graph_layout,
+        encdec_shape=config.encdec_shape,
+        humaneval_encdec=humaneval_cfg,
+    )
     layout = config.graph_layout.value
     providers = providers_for_config(config)
     provider_axis = providers[0]
     sampled_tasks = sample_tasks_for_config(config, rows=rows)
     for sampled in sampled_tasks:
-        task_snapshot = task_snapshot_from_humaneval(sampled.task)
         for repetition_seed in config.repetition_seeds:
             for axis_values in config.dimensions_axes:
                 dimensions = DimensionsPayload(values=dict(axis_values))
+                if config.encdec_shape == "humaneval":
+                    compression_target = float(
+                        axis_values["compression_target"]
+                    )
+                    task_snapshot = humaneval_encdec_task_snapshot(
+                        sampled.task,
+                        compression_target=compression_target,
+                        humaneval_encdec=humaneval_cfg,
+                    )
+                else:
+                    task_snapshot = task_snapshot_from_humaneval(sampled.task)
                 yield prediction_spec(
                     graph,
                     providers=providers,

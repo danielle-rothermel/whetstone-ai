@@ -1,0 +1,31 @@
+{
+  "experiment_name": "encdec-humaneval-smoke",
+  "graph_layout": "encdec",
+  "encdec_shape": "humaneval",
+  "fair_order_seed": "seed-smoke",
+  "humaneval_encdec": {
+    "min_encoder_char_budget": 50
+  },
+  "dataset": {
+    "name": "local/fixture",
+    "split": "test",
+    "sample_seed": 3,
+    "sample_count": 1
+  },
+  "repetition_seeds": [0],
+  "dimensions_axes": [
+    {"compression_target": 0.5}
+  ],
+  "providers": [
+    {
+      "model": "gpt-test",
+      "config_id": "encoder",
+      "parameters": {"temperature": 0}
+    },
+    {
+      "model": "gpt-test",
+      "config_id": "decoder",
+      "parameters": {"temperature": 0}
+    }
+  ]
+}

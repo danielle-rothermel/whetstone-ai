@@ -8,8 +8,12 @@ from dr_dspy.humaneval.sampling import SampledHumanEvalTask
 from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 from dr_dspy.platform import jsonl_specs, spec_builder
 from dr_dspy.platform.spec_builder import (
+    HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
+    HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
     ExperimentSpecConfig,
     GraphLayout,
+    encoder_char_budget,
+    humaneval_gt_code,
     iter_experiment_specs,
     load_experiment_spec_config,
     prediction_spec,
@@ -165,3 +169,87 @@ def test_sample_tasks_for_config_uses_injected_rows(
 
     assert len(sampled) == 1
     assert sampled[0].task.task_id == "HumanEval/1"
+
+
+def test_encoder_char_budget_uses_configurable_min_floor() -> None:
+    assert encoder_char_budget(
+        compression_target=0.1,
+        gt_code="short",
+        min_budget=100,
+    ) == 100
+    assert encoder_char_budget(
+        compression_target=0.5,
+        gt_code="x" * 200,
+        min_budget=50,
+    ) == 100
+
+
+def test_humaneval_encdec_config_builds_target_spec() -> None:
+    config = load_experiment_spec_config(
+        FIXTURES_DIR / "encdec_humaneval_smoke.json"
+    )
+    rows = _fixture_rows()
+    specs = tuple(iter_experiment_specs(config, rows=rows))
+
+    assert len(specs) == 1
+    spec = specs[0]
+    assert spec.graph.layout == GraphLayout.ENCDEC.value
+    assert {provider.config_id for provider in spec.provider_configs} == {
+        "encoder",
+        "decoder",
+    }
+    assert spec.provider_configs[0].model == spec.provider_configs[1].model
+    assert all(
+        provider.parameters.get("temperature") == 0
+        for provider in spec.provider_configs
+    )
+
+    inputs = spec.task.inputs.values
+    assert "gt_code" in inputs
+    assert "budget" in inputs
+    assert "instructions_start" in inputs
+    assert "instructions_end" in inputs
+    assert inputs["prompt"]
+    assert inputs["test"]
+    assert inputs["entry_point"]
+
+    task = parse_human_eval_dataset([rows[1]])[0]
+    gt_code = humaneval_gt_code(task)
+    assert config.humaneval_encdec is not None
+    expected_budget = encoder_char_budget(
+        compression_target=0.5,
+        gt_code=gt_code,
+        min_budget=config.humaneval_encdec.min_encoder_char_budget,
+    )
+    assert inputs["gt_code"] == gt_code
+    assert inputs["budget"] == expected_budget
+    assert inputs["instructions_start"] == (
+        "Provide a concise description of the following code."
+    )
+    assert inputs["instructions_end"] == ""
+
+    graph = spec.graph.graph
+    encoder = graph.node("encoder")
+    decoder = graph.node("decoder")
+    assert encoder.config.input_bindings["gt_code"].ref == "task.gt_code"
+    assert encoder.config.input_bindings["budget"].ref == "task.budget"
+    assert (
+        encoder.config.input_bindings["instructions_start"].ref
+        == "task.instructions_start"
+    )
+    assert (
+        encoder.config.input_bindings["instructions_end"].ref
+        == "task.instructions_end"
+    )
+    assert decoder.config.input_bindings["encoded_desc"].ref == (
+        "encoder.description"
+    )
+    assert (
+        encoder.config.metadata["user_prompt_template"]
+        == HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE
+    )
+    assert (
+        decoder.config.metadata["user_prompt_template"]
+        == HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE
+    )
+    assert spec.dimensions.values["compression_target"] == 0.5
