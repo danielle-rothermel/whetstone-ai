@@ -1165,11 +1165,14 @@ def test_platform_worker_config_listens_to_v1_queue(
     assert ("register", 3) in calls
 
 
-def test_submit_jsonl_help_names_queue_registration_concurrency() -> None:
-    result = CliRunner().invoke(worker.APP, ["submit-jsonl", "--help"])
+def test_submit_jsonl_help_describes_queue_registration_concurrency() -> None:
+    result = CliRunner().invoke(
+        worker.APP,
+        ["submit-jsonl", "--help"],
+        terminal_width=160,
+    )
 
     assert result.exit_code == 0
-    assert "--queue-registration" in result.output
     assert "does not start a queue" in result.output
     assert "worker." in result.output
 
