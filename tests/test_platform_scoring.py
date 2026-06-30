@@ -191,14 +191,18 @@ def _spec(layout: str = "direct") -> PredictionSpecRecord:
     graph_id = graph_digest(graph)
     dimensions = DimensionsPayload(values={"temperature": 0.2})
     dimensions_id = dimensions_digest(dimensions)
+    provider = _provider()
     prediction_id = stable_prediction_id(
         experiment_name="exp",
         task_id="HumanEval/fixture",
         graph_digest=graph_id,
         dimensions_digest=dimensions_id,
         repetition_seed=0,
+        provider_kind=provider.provider_kind.value,
+        endpoint_kind=provider.endpoint_kind.value,
+        model=provider.model,
+        throttle_key=provider.throttle_key,
     )
-    provider = _provider()
     return PredictionSpecRecord(
         prediction_id=prediction_id,
         experiment_name="exp",
@@ -303,6 +307,7 @@ def _node_attempt(
         node_id=node_id,
         attempt_index=0,
         status=NodeAttemptStatus.SUCCESS,
+        provider_config=spec.provider_axis,
         output=NodeOutputPayload(values=dict(values)),
         started_at=NOW,
         completed_at=LATER,
