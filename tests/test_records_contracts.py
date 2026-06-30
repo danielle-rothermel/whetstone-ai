@@ -31,6 +31,7 @@ from dr_dspy.records import (
     BatchSubmitOperationRecord,
     BatchSubmitOperationStatus,
     DimensionsPayload,
+    ExtractedCodePayload,
     FailureMetadataPayload,
     GenerationRunRecord,
     GenerationRunStatus,
@@ -120,14 +121,18 @@ def _prediction_spec(
     dimensions = dimensions or _dimensions()
     graph_id = graph_digest(graph)
     dimensions_id = dimensions_digest(dimensions)
+    provider = _provider()
     prediction_id = stable_prediction_id(
         experiment_name="exp",
         task_id="HumanEval/0",
         graph_digest=graph_id,
         dimensions_digest=dimensions_id,
         repetition_seed=7,
+        provider_kind=provider.provider_kind.value,
+        endpoint_kind=provider.endpoint_kind.value,
+        model=provider.model,
+        throttle_key=provider.throttle_key,
     )
-    provider = _provider()
     return PredictionSpecRecord(
         prediction_id=prediction_id,
         experiment_name="exp",
@@ -273,6 +278,49 @@ def test_stable_prediction_id_changes_with_graph_or_dimensions() -> None:
     assert base.prediction_id != changed_graph.prediction_id
     assert base.dimensions_digest != changed_dimensions.dimensions_digest
     assert base.graph.graph_digest != changed_graph.graph.graph_digest
+
+
+def test_stable_prediction_id_changes_with_provider_axis() -> None:
+    base = _prediction_spec()
+    other_provider = ProviderConfigRef(
+        provider_kind=ProviderKind.OPENROUTER,
+        endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
+        model="other-model",
+        throttle_key="openrouter:chat_completions:other-model",
+    )
+    other_prediction_id = stable_prediction_id(
+        experiment_name=base.experiment_name,
+        task_id=base.task_id,
+        graph_digest=base.graph.graph_digest,
+        dimensions_digest=base.dimensions_digest,
+        repetition_seed=base.repetition_seed,
+        provider_kind=other_provider.provider_kind.value,
+        endpoint_kind=other_provider.endpoint_kind.value,
+        model=other_provider.model,
+        throttle_key=other_provider.throttle_key,
+    )
+    changed_provider = base.model_copy(
+        update={
+            "prediction_id": other_prediction_id,
+            "provider_configs": (other_provider,),
+            "provider_axis": other_provider,
+            "fair_order_key": fair_order_key(
+                experiment_seed=base.fair_order_seed,
+                prediction_id=other_prediction_id,
+                provider=other_provider.provider_kind.value,
+                endpoint_kind=other_provider.endpoint_kind.value,
+                model=other_provider.model,
+                throttle_key=other_provider.throttle_key,
+                graph_layout=base.graph.layout,
+                task_id=base.task_id,
+                repetition_seed=base.repetition_seed,
+                config_axis=base.dimensions_digest,
+            ),
+        }
+    )
+
+    PredictionSpecRecord.model_validate(changed_provider.model_dump(mode="json"))
+    assert base.prediction_id != changed_provider.prediction_id
 
 
 def test_v1_prediction_ids_are_not_v0_compatible() -> None:
@@ -507,6 +555,47 @@ def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
         ScoreAttemptRecord.model_validate(success)
     with pytest.raises(ValidationError, match="cannot have score"):
         ScoreAttemptRecord.model_validate(error)
+
+
+def test_score_attempt_error_allows_partial_diagnostics() -> None:
+    attempt = ScoreAttemptRecord(
+        score_attempt_id="score-error",
+        prediction_id="prediction-1",
+        generation_run_id="run-1",
+        attempt_index=0,
+        scoring_profile_id="humaneval",
+        scoring_profile_version="v1",
+        parser_profile_id="best-effort",
+        parser_version="v1",
+        status=ScoreAttemptStatus.ERROR,
+        generated_code_outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
+        extracted_code=ExtractedCodePayload(
+            raw_generation="def broken(",
+            parser_profile_id="best-effort",
+            parser_version="v1",
+        ),
+        metrics=MetricsPayload(
+            profile_id="humaneval",
+            profile_version="v1",
+            text=TextMetricsPayload(
+                character_count=11,
+                byte_count=11,
+                line_count=1,
+                nonempty_line_count=1,
+                word_count=2,
+                average_word_length=5.5,
+            ),
+        ),
+        failure=_failure(),
+        started_at=NOW,
+        completed_at=NOW,
+    )
+
+    assert attempt.generated_code_outcome is (
+        GeneratedCodeOutcome.EXTRACTION_FAILED
+    )
+    assert attempt.metrics is not None
+    assert attempt.extracted_code is not None
 
 
 def test_score_attempt_attempt_index_must_be_non_negative() -> None:

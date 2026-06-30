@@ -74,13 +74,6 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
     graph_id = graph_digest(graph)
     dimensions = DimensionsPayload(values={"budget_ratio": 0.5})
     dimensions_id = dimensions_digest(dimensions)
-    prediction_id = stable_prediction_id(
-        experiment_name="exp",
-        task_id="HumanEval/0",
-        graph_digest=graph_id,
-        dimensions_digest=dimensions_id,
-        repetition_seed=0,
-    )
     encoder = ProviderConfigRef(
         provider_kind=ProviderKind.OPENROUTER,
         endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
@@ -92,6 +85,17 @@ def test_prediction_spec_row_uses_explicit_provider_axis() -> None:
         endpoint_kind=EndpointKind.RESPONSES,
         model="decoder-model",
         throttle_key="openai:responses:decoder-model",
+    )
+    prediction_id = stable_prediction_id(
+        experiment_name="exp",
+        task_id="HumanEval/0",
+        graph_digest=graph_id,
+        dimensions_digest=dimensions_id,
+        repetition_seed=0,
+        provider_kind=decoder.provider_kind.value,
+        endpoint_kind=decoder.endpoint_kind.value,
+        model=decoder.model,
+        throttle_key=decoder.throttle_key,
     )
     fair_key = fair_order_key(
         experiment_seed="seed",

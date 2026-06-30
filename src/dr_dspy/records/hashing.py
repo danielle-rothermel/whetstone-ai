@@ -27,13 +27,17 @@ def stable_prediction_id(
     graph_digest: str,
     dimensions_digest: str,
     repetition_seed: int,
+    provider_kind: str,
+    endpoint_kind: str,
+    model: str,
+    throttle_key: str,
     length: int = PREDICTION_ID_DIGEST_LENGTH,
 ) -> str:
     """Return the v1 graph-aware prediction id.
 
     This is intentionally not compatible with legacy v0 prediction ids from
     ``dr_dspy.harness.flow``. Backfills should store v0 ids as source metadata
-    and compute fresh v1 ids from graph and dimensions digests.
+    and compute fresh v1 ids from graph, dimensions, and provider axes.
     """
 
     return _sha256_digest(
@@ -43,6 +47,10 @@ def stable_prediction_id(
             "graph_digest": graph_digest,
             "dimensions_digest": dimensions_digest,
             "repetition_seed": repetition_seed,
+            "provider_kind": provider_kind,
+            "endpoint_kind": endpoint_kind,
+            "model": model,
+            "throttle_key": throttle_key,
         },
         length=length,
     )

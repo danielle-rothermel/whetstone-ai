@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from sqlalchemy import CheckConstraint, Constraint, Table, UniqueConstraint
+import os
+import uuid
+
+import pytest
+from sqlalchemy import (
+    CheckConstraint,
+    Constraint,
+    Table,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.schema import CreateIndex, CreateTable
@@ -75,6 +86,18 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         UniqueConstraint,
     )
     assert "uq_dr_dspy_score_attempts_profile" in _constraint_names(
+        schema.score_attempts,
+        UniqueConstraint,
+    )
+    assert "uq_dr_dspy_generation_runs_id_prediction" in _constraint_names(
+        schema.generation_runs,
+        UniqueConstraint,
+    )
+    assert "uq_dr_dspy_score_attempts_id_prediction" in _constraint_names(
+        schema.score_attempts,
+        UniqueConstraint,
+    )
+    assert "uq_dr_dspy_score_attempts_id_run" in _constraint_names(
         schema.score_attempts,
         UniqueConstraint,
     )
@@ -185,6 +208,38 @@ def test_postgresql_ddl_compiles_for_all_tables_and_indexes() -> None:
             index_sql = str(CreateIndex(index).compile(dialect=dialect))
             assert index.name is not None
             assert str(index.name) in index_sql
+
+
+def test_postgresql_ddl_applies_composite_foreign_keys() -> None:
+    database_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+psycopg:///dr_dspy",
+    )
+    if database_url.startswith("postgresql://"):
+        database_url = database_url.replace(
+            "postgresql://",
+            "postgresql+psycopg://",
+            1,
+        )
+    schema_name = f"dr_dspy_schema_test_{uuid.uuid4().hex}"
+
+    try:
+        engine = create_engine(database_url)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        pytest.skip(f"PostgreSQL unavailable: {exc}")  # ty: ignore[too-many-positional-arguments]
+
+    with engine.begin() as conn:
+        conn.execute(text(f"CREATE SCHEMA {schema_name}"))
+        conn = conn.execution_options(schema_translate_map={None: schema_name})
+        schema.metadata.create_all(conn)
+
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA {schema_name} CASCADE"))
+    finally:
+        engine.dispose()
 
 
 def _foreign_key_targets(table: Table) -> set[str]:

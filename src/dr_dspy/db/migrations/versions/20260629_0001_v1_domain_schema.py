@@ -52,6 +52,10 @@ def upgrade() -> None:
             "repetition_seed",
             "graph_digest",
             "dimensions_digest",
+            "provider_kind",
+            "endpoint_kind",
+            "model",
+            "throttle_key",
             name="uq_dr_dspy_prediction_specs_identity",
         ),
     )
@@ -86,6 +90,11 @@ def upgrade() -> None:
             "prediction_id",
             "attempt_index",
             name="uq_dr_dspy_generation_runs_attempt",
+        ),
+        sa.UniqueConstraint(
+            "generation_run_id",
+            "prediction_id",
+            name="uq_dr_dspy_generation_runs_id_prediction",
         ),
     )
     op.create_table(
@@ -201,9 +210,6 @@ def upgrade() -> None:
             "AND (status != 'error' OR "
             "(failure IS NOT NULL "
             "AND score IS NULL "
-            "AND generated_code_outcome IS NULL "
-            "AND extracted_code IS NULL "
-            "AND metrics IS NULL "
             "AND per_test_results = '[]'::jsonb))",
             name="ck_dr_dspy_score_attempts_status_payload",
         ),
@@ -220,6 +226,16 @@ def upgrade() -> None:
             "parser_version",
             "attempt_index",
             name="uq_dr_dspy_score_attempts_profile",
+        ),
+        sa.UniqueConstraint(
+            "score_attempt_id",
+            "prediction_id",
+            name="uq_dr_dspy_score_attempts_id_prediction",
+        ),
+        sa.UniqueConstraint(
+            "score_attempt_id",
+            "generation_run_id",
+            name="uq_dr_dspy_score_attempts_id_run",
         ),
     )
     op.create_table(

@@ -100,6 +100,10 @@ prediction_specs = Table(
         "repetition_seed",
         "graph_digest",
         "dimensions_digest",
+        "provider_kind",
+        "endpoint_kind",
+        "model",
+        "throttle_key",
         name="uq_dr_dspy_prediction_specs_identity",
     ),
 )
@@ -137,6 +141,11 @@ generation_runs = Table(
         "prediction_id",
         "attempt_index",
         name="uq_dr_dspy_generation_runs_attempt",
+    ),
+    UniqueConstraint(
+        "generation_run_id",
+        "prediction_id",
+        name="uq_dr_dspy_generation_runs_id_prediction",
     ),
 )
 
@@ -236,9 +245,6 @@ score_attempts = Table(
         "AND (status != 'error' OR ("
         "failure IS NOT NULL "
         "AND score IS NULL "
-        "AND generated_code_outcome IS NULL "
-        "AND extracted_code IS NULL "
-        "AND metrics IS NULL "
         "AND per_test_results = '[]'::jsonb"
         "))",
         name="ck_dr_dspy_score_attempts_status_payload",
@@ -265,6 +271,16 @@ score_attempts = Table(
         "parser_version",
         "attempt_index",
         name="uq_dr_dspy_score_attempts_profile",
+    ),
+    UniqueConstraint(
+        "score_attempt_id",
+        "prediction_id",
+        name="uq_dr_dspy_score_attempts_id_prediction",
+    ),
+    UniqueConstraint(
+        "score_attempt_id",
+        "generation_run_id",
+        name="uq_dr_dspy_score_attempts_id_run",
     ),
     ForeignKeyConstraint(
         ["generation_run_id", "prediction_id"],

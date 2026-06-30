@@ -307,6 +307,10 @@ class PredictionSpecRecord(BaseModel):
             graph_digest=self.graph.graph_digest,
             dimensions_digest=self.dimensions_digest,
             repetition_seed=self.repetition_seed,
+            provider_kind=self.provider_axis.provider_kind.value,
+            endpoint_kind=self.provider_axis.endpoint_kind.value,
+            model=self.provider_axis.model,
+            throttle_key=self.provider_axis.throttle_key,
         )
         if self.prediction_id != expected_prediction_id:
             raise ValueError("prediction_id must match stable prediction id")
@@ -445,16 +449,6 @@ class ScoreAttemptRecord(BaseModel):
                 raise ValueError("error score attempts require failure")
             if self.score is not None:
                 raise ValueError("error score attempts cannot have score")
-            if self.generated_code_outcome is not None:
-                raise ValueError(
-                    "error score attempts cannot have generated_code_outcome"
-                )
-            if self.extracted_code is not None:
-                raise ValueError(
-                    "error score attempts cannot have extracted_code"
-                )
-            if self.metrics is not None:
-                raise ValueError("error score attempts cannot have metrics")
             if self.per_test_results:
                 raise ValueError(
                     "error score attempts cannot have per_test_results"
