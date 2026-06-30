@@ -10,11 +10,7 @@ STABLE_ORDER_DIGEST_SIZE = 16
 
 
 def stable_order_key(*parts: object) -> str:
-    encoded: list[str] = []
-    for part in parts:
-        text = str(part)
-        encoded.append(f"{len(text)}{ORDER_KEY_SEPARATOR}{text}")
-    return ORDER_KEY_SEPARATOR.join(encoded)
+    return ORDER_KEY_SEPARATOR.join(str(part) for part in parts)
 
 
 def stable_shuffle[T](

@@ -36,9 +36,12 @@ def load_env_file(env_file: str | Path = DEFAULT_ENV_FILE) -> Path | None:
 
 def configure_multiprocessing() -> None:
     """Configure multiprocessing consistently for script entrypoints."""
-    start_method = "fork" if platform.system() == "Linux" else "spawn"
-    with contextlib.suppress(RuntimeError):
-        mp.set_start_method(start_method, force=True)
+    if platform.system() != "Windows":
+        with contextlib.suppress(RuntimeError):
+            mp.set_start_method("fork", force=True)
+    else:
+        with contextlib.suppress(RuntimeError):
+            mp.set_start_method("spawn", force=True)
 
 
 def run_typer_app(app: TyperApp) -> None:
