@@ -10,7 +10,7 @@ from rich.console import Console
 from sqlalchemy import create_engine
 
 from dr_dspy.harness import dbos as shared_dbos
-from dr_dspy.platform.code_parsing import (
+from dr_dspy.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
 )
@@ -204,7 +204,7 @@ def score_one(
         consume_generation_queue=False,
     )
     try:
-        score_attempt_id = run_score_generation_workflow_once(
+        score_result = run_score_generation_workflow_once(
             database_url=config.database_url,
             generation_run_id=generation_run_id,
             score_attempt_index=score_attempt_index,
@@ -218,9 +218,12 @@ def score_one(
         )
         CONSOLE.print(
             {
-                "workflow_id": platform_scoring_workflow_id(score_attempt_id),
+                "workflow_id": platform_scoring_workflow_id(
+                    score_result.score_attempt_id
+                ),
                 "generation_run_id": generation_run_id,
-                "score_attempt_id": score_attempt_id,
+                "score_attempt_id": score_result.score_attempt_id,
+                "insert_status": score_result.insert_status,
             }
         )
     finally:

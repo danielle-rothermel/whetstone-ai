@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from dr_dspy.eval_failures import (
@@ -8,18 +8,18 @@ from dr_dspy.eval_failures import (
     exception_type_name,
     failure_metadata_from_exception,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import (
-    EvaluationTaskResult,
-    HumanEvalTask,
-    evaluate_human_eval_code,
-)
-from dr_dspy.platform.code_parsing import (
+from dr_dspy.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
     CodeExtractionResult,
     CodeParserProfile,
     extract_code_with_profile,
+)
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.humaneval.task import (
+    EvaluationTaskResult,
+    HumanEvalTask,
+    evaluate_human_eval_code,
 )
 from dr_dspy.platform.metrics import build_metrics_payload
 from dr_dspy.records import (
@@ -52,7 +52,7 @@ def score_generation_run(
     score_attempt_index: int = 0,
     timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     started_at: datetime,
-    completed_at: datetime,
+    completed_at: datetime | None = None,
 ) -> ScoreAttemptRecord:
     try:
         validate_generation_run_for_scoring(spec=spec, run=generation_run)
@@ -85,7 +85,7 @@ def score_generation_run(
             score_attempt_index=score_attempt_index,
             error=error,
             started_at=started_at,
-            completed_at=completed_at,
+            completed_at=resolve_completed_at(completed_at),
         )
 
 
@@ -102,7 +102,7 @@ def score_attempt_from_extraction(
     timeout_seconds: float,
     extraction: CodeExtractionResult,
     started_at: datetime,
-    completed_at: datetime,
+    completed_at: datetime | None,
 ) -> ScoreAttemptRecord:
     if extraction.extracted_code is None:
         outcome = extraction_failure_outcome(extraction)
@@ -122,7 +122,7 @@ def score_attempt_from_extraction(
             evaluation=None,
             raw_generation=raw_generation,
             started_at=started_at,
-            completed_at=completed_at,
+            completed_at=resolve_completed_at(completed_at),
         )
 
     evaluation = evaluate_human_eval_code(
@@ -146,7 +146,7 @@ def score_attempt_from_extraction(
         evaluation=evaluation,
         raw_generation=extraction.raw_generation or "",
         started_at=started_at,
-        completed_at=completed_at,
+        completed_at=resolve_completed_at(completed_at),
     )
 
 
@@ -329,3 +329,7 @@ def default_parser_profile() -> CodeParserProfile:
         profile_id=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
         version=PARSER_PROFILE_VERSION,
     )
+
+
+def resolve_completed_at(completed_at: datetime | None) -> datetime:
+    return completed_at if completed_at is not None else datetime.now(UTC)

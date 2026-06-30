@@ -4,16 +4,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import create_engine
 
-from dr_dspy.humaneval.sampling import load_human_eval_rows
-from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
-from dr_dspy.platform.code_parsing import (
+from dr_dspy.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
     resolve_parser_profile,
 )
+from dr_dspy.humaneval.sampling import load_human_eval_rows
+from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 from dr_dspy.platform.persistence import (
+    ScoreAttemptInsertResult,
+    ScoreAttemptInsertStatus,
     load_generation_run,
     load_node_attempts_for_generation_run,
     load_prediction_spec,
@@ -37,12 +40,18 @@ PLATFORM_SCORING_WORKFLOW_NAME = "dr_dspy_platform_humaneval_scoring_v1"
 LOAD_SCORING_TARGET_STEP_NAME = "dr_dspy_platform_load_scoring_target_v1"
 LOAD_HUMANEVAL_TASK_STEP_NAME = "dr_dspy_platform_load_humaneval_task_v1"
 SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
-SCORING_COMPLETED_AT_STEP_NAME = "dr_dspy_platform_scoring_completed_at_v1"
 SCORE_GENERATION_STEP_NAME = "dr_dspy_platform_score_generation_v1"
 PERSIST_SCORE_ATTEMPT_STEP_NAME = "dr_dspy_platform_persist_score_attempt_v1"
 WORKFLOW_ID_PREFIX = "platform-score-v1"
 DEFAULT_HUMANEVAL_DATASET_NAME = "evalplus/humanevalplus"
 DEFAULT_HUMANEVAL_DATASET_SPLIT = "test"
+
+
+class ScoreGenerationWorkflowResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_attempt_id: str
+    insert_status: ScoreAttemptInsertStatus
 
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
@@ -57,7 +66,7 @@ def run_score_generation_workflow(
     timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
     dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
-) -> str:
+) -> dict[str, Any]:
     target = load_scoring_target_step(database_url, generation_run_id)
     spec = PredictionSpecRecord.model_validate(target["spec"])
     generation_run = GenerationRunRecord.model_validate(
@@ -85,9 +94,6 @@ def run_score_generation_workflow(
     started_at = datetime.fromisoformat(
         scoring_started_at_step(score_attempt_id)
     )
-    completed_at = datetime.fromisoformat(
-        scoring_completed_at_step(score_attempt_id)
-    )
     score_attempt_payload = score_generation_step(
         spec.model_dump(mode="json"),
         generation_run.model_dump(mode="json"),
@@ -100,10 +106,14 @@ def run_score_generation_workflow(
         score_attempt_index,
         timeout_seconds,
         started_at.isoformat(),
-        completed_at.isoformat(),
     )
-    persist_score_attempt_step(database_url, score_attempt_payload)
-    return score_attempt_id
+    insert_result = ScoreAttemptInsertResult.model_validate(
+        persist_score_attempt_step(database_url, score_attempt_payload)
+    )
+    return ScoreGenerationWorkflowResult(
+        score_attempt_id=score_attempt_id,
+        insert_status=insert_result.status,
+    ).model_dump(mode="json")
 
 
 def start_score_generation_workflow(
@@ -144,7 +154,7 @@ def run_score_generation_workflow_once(
     timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
     dataset_name: str = DEFAULT_HUMANEVAL_DATASET_NAME,
     dataset_split: str = DEFAULT_HUMANEVAL_DATASET_SPLIT,
-) -> str:
+) -> ScoreGenerationWorkflowResult:
     _score_attempt_id, handle = _start_score_generation_workflow_handle(
         database_url=database_url,
         generation_run_id=generation_run_id,
@@ -158,11 +168,9 @@ def run_score_generation_workflow_once(
         dataset_split=dataset_split,
     )
     result = handle.get_result()
-    if not isinstance(result, str):
-        raise TypeError(
-            "platform scoring workflow returned a non-string result"
-        )
-    return result
+    if not isinstance(result, dict):
+        raise TypeError("platform scoring workflow returned a non-dict result")
+    return ScoreGenerationWorkflowResult.model_validate(result)
 
 
 def platform_scoring_workflow_id(score_attempt_id: str) -> str:
@@ -261,11 +269,6 @@ def scoring_started_at_step(score_attempt_id: str) -> str:
     return timestamp_now_iso()
 
 
-@DBOS.step(name=SCORING_COMPLETED_AT_STEP_NAME)
-def scoring_completed_at_step(score_attempt_id: str) -> str:
-    return timestamp_now_iso()
-
-
 def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -283,7 +286,6 @@ def score_generation_step(
     score_attempt_index: int,
     timeout_seconds: float,
     started_at: str,
-    completed_at: str,
 ) -> dict[str, Any]:
     parser_profile = resolve_parser_profile(
         parser_profile_id=parser_profile_id,
@@ -305,7 +307,6 @@ def score_generation_step(
         score_attempt_index=score_attempt_index,
         timeout_seconds=timeout_seconds,
         started_at=datetime.fromisoformat(started_at),
-        completed_at=datetime.fromisoformat(completed_at),
     )
     return record.model_dump(mode="json")
 
@@ -314,12 +315,16 @@ def score_generation_step(
 def persist_score_attempt_step(
     database_url: str,
     score_attempt_payload: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     score_attempt = ScoreAttemptRecord.model_validate(score_attempt_payload)
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
-            persist_score_attempt(connection, score_attempt=score_attempt)
+            result = persist_score_attempt(
+                connection,
+                score_attempt=score_attempt,
+            )
+        return result.model_dump(mode="json")
     finally:
         engine.dispose()
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
@@ -37,6 +39,18 @@ from dr_dspy.records.providers import find_provider_config_ref
 # new node-attempt rows; until explicit node reattempt workflows exist, every
 # invoked node is stored at this initial index.
 INITIAL_NODE_ATTEMPT_INDEX = 0
+
+
+class ScoreAttemptInsertStatus(StrEnum):
+    INSERTED = "inserted"
+    ALREADY_PRESENT = "already_present"
+
+
+class ScoreAttemptInsertResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_attempt_id: str
+    status: ScoreAttemptInsertStatus
 
 
 def load_prediction_spec(
@@ -261,8 +275,17 @@ def persist_score_attempt(
     connection: Connection,
     *,
     score_attempt: ScoreAttemptRecord,
-) -> None:
-    connection.execute(idempotent_insert_score_attempt(score_attempt))
+) -> ScoreAttemptInsertResult:
+    result = connection.execute(idempotent_insert_score_attempt(score_attempt))
+    status = (
+        ScoreAttemptInsertStatus.INSERTED
+        if result.rowcount == 1
+        else ScoreAttemptInsertStatus.ALREADY_PRESENT
+    )
+    return ScoreAttemptInsertResult(
+        score_attempt_id=score_attempt.score_attempt_id,
+        status=status,
+    )
 
 
 def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:

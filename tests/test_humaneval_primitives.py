@@ -329,6 +329,19 @@ def test_score_generated_code_passes_humaneval_task() -> None:
     assert "failures" not in summary.model_dump(mode="json")
 
 
+def test_score_generated_code_uses_shared_json_code_extraction() -> None:
+    result = score_generated_code_for_humaneval(
+        raw_generation=(
+            '{"code": "```python\\ndef add_one(x):\\n    return x + 1\\n```"}'
+        ),
+        task=_task(),
+        timeout=2.0,
+    )
+
+    assert result.outcome is GeneratedCodeOutcome.PASSED
+    assert result.raw_code == "def add_one(x):\n    return x + 1"
+
+
 def test_score_humaneval_prediction_flattens_score_and_compression() -> None:
     result = score_humaneval_prediction(
         prediction_id="prediction-1",

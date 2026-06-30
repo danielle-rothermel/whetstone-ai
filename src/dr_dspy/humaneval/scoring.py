@@ -13,10 +13,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from dr_dspy.humaneval.code_extraction import (
-    apply_cleaning,
-    validate_python_source,
-)
+from dr_dspy.humaneval.code_extraction import validate_python_source
+from dr_dspy.humaneval.code_parsing import extract_best_effort_code
 from dr_dspy.humaneval.compression import (
     CompressionMetric,
     CompressionMetrics,
@@ -124,25 +122,11 @@ def score_generated_code_for_humaneval(
         )
 
     raw_validation = validate_python_source(raw_generation)
-    candidates = apply_cleaning(raw_generation, apply_dedent=True)
-    selected_code: str | None = None
-    selected_index: int | None = None
-    extracted_compile_error: str | None = None
-    for index, candidate in enumerate(candidates):
-        candidate_validation = validate_python_source(candidate)
-        if candidate_validation.compile_ok:
-            selected_code = candidate
-            selected_index = index
-            extracted_compile_error = None
-            break
-        if extracted_compile_error is None:
-            extracted_compile_error = candidate_validation.compile_error
-
+    extraction = extract_best_effort_code(raw_generation)
+    selected_code = extraction.extracted_code
     if selected_code is None:
-        extraction_error = (
-            "no code candidates extracted"
-            if not candidates
-            else "no compilable extracted candidate"
+        extraction_error = extraction.extraction_error or (
+            "no compilable extracted candidate"
         )
         return GeneratedCodeScore(
             outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
@@ -151,10 +135,10 @@ def score_generated_code_for_humaneval(
             raw_code=None,
             raw_compile_ok=raw_validation.compile_ok,
             raw_compile_error=raw_validation.compile_error,
-            extraction_candidate_count=len(candidates),
+            extraction_candidate_count=extraction.candidate_count,
             selected_candidate_index=None,
             extracted_compile_ok=False,
-            extracted_compile_error=extracted_compile_error,
+            extracted_compile_error=extraction.compile_error,
             extraction_error=extraction_error,
         )
 
@@ -182,8 +166,8 @@ def score_generated_code_for_humaneval(
         raw_code=selected_code,
         raw_compile_ok=raw_validation.compile_ok,
         raw_compile_error=raw_validation.compile_error,
-        extraction_candidate_count=len(candidates),
-        selected_candidate_index=selected_index,
+        extraction_candidate_count=extraction.candidate_count,
+        selected_candidate_index=extraction.selected_candidate_index,
         extracted_compile_ok=True,
         extracted_compile_error=None,
         extraction_error=None,

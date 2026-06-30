@@ -64,7 +64,9 @@ The default scoring surface persists one append-only
 The CLI exposes profile id/version options so parser or scoring changes create
 new score attempts instead of mutating old results. The default HumanEval task
 loader reads `evalplus/humanevalplus` split `test` and selects the task by the
-stored v1 prediction spec `task_id`.
+stored v1 prediction spec `task_id`. The command prints `insert_status` as
+`inserted` or `already_present`; rerunning the same generation/profile/parser
+attempt is idempotent and reports `already_present`.
 
 Score attempts use `status=success` for completed domain scoring, including
 zero-score outcomes such as failed tests, empty generations, extraction

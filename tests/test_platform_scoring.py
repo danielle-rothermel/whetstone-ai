@@ -17,11 +17,7 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import HumanEvalTask
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import scoring_workflow
-from dr_dspy.platform.code_parsing import (
+from dr_dspy.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
@@ -31,6 +27,10 @@ from dr_dspy.platform.code_parsing import (
     extract_best_effort_code,
     extract_strict_field_marker_code,
 )
+from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.humaneval.task import HumanEvalTask
+from dr_dspy.lm.boundary import EndpointKind, ProviderKind
+from dr_dspy.platform import scoring_workflow
 from dr_dspy.platform.metrics import (
     HUMANEVAL_METRICS_PROFILE_ID,
     ast_metrics,
@@ -38,7 +38,12 @@ from dr_dspy.platform.metrics import (
     python_leakage_metrics,
     text_metrics,
 )
-from dr_dspy.platform.persistence import idempotent_insert_score_attempt
+from dr_dspy.platform.persistence import (
+    ScoreAttemptInsertResult,
+    ScoreAttemptInsertStatus,
+    idempotent_insert_score_attempt,
+    persist_score_attempt,
+)
 from dr_dspy.platform.scoring import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -361,6 +366,22 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
     ]
 
 
+def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+        started_at=NOW,
+    )
+
+    assert score.completed_at > NOW
+
+
 def test_score_generation_run_persists_tests_failed_as_success() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x\n")
@@ -503,6 +524,35 @@ def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
     assert row["metrics"]["stages"]
 
 
+def test_persist_score_attempt_reports_conflict_status() -> None:
+    spec = _spec()
+    run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
+    score = score_generation_run(
+        spec=spec,
+        generation_run=run,
+        node_attempts=(),
+        task=_task(),
+        parser_profile=BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+        started_at=NOW,
+        completed_at=LATER,
+    )
+
+    class Result:
+        rowcount = 0
+
+    class Connection:
+        def execute(self, statement: Any) -> Result:
+            return Result()
+
+    result = persist_score_attempt(
+        cast(Any, Connection()),
+        score_attempt=score,
+    )
+
+    assert result.score_attempt_id == score.score_attempt_id
+    assert result.status is ScoreAttemptInsertStatus.ALREADY_PRESENT
+
+
 def test_scoring_workflow_uses_dbos_step_boundaries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -533,12 +583,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         calls.append(("started", score_attempt_id))
         return NOW.isoformat()
 
-    def completed(score_attempt_id: str) -> str:
-        calls.append(("completed", score_attempt_id))
-        return LATER.isoformat()
-
     def score_step(*args: Any) -> dict[str, Any]:
-        calls.append(("score", args[4:9]))
+        calls.append(("score", args[4:]))
         return score_generation_run(
             spec=spec,
             generation_run=run,
@@ -549,8 +595,12 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             completed_at=LATER,
         ).model_dump(mode="json")
 
-    def persist(database_url: str, payload: dict[str, Any]) -> None:
+    def persist(database_url: str, payload: dict[str, Any]) -> dict[str, Any]:
         calls.append(("persist", (database_url, payload["score_attempt_id"])))
+        return ScoreAttemptInsertResult(
+            score_attempt_id=payload["score_attempt_id"],
+            status=ScoreAttemptInsertStatus.ALREADY_PRESENT,
+        ).model_dump(mode="json")
 
     monkeypatch.setattr(
         scoring_workflow,
@@ -566,11 +616,6 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         scoring_workflow,
         "scoring_started_at_step",
         started,
-    )
-    monkeypatch.setattr(
-        scoring_workflow,
-        "scoring_completed_at_step",
-        completed,
     )
     monkeypatch.setattr(scoring_workflow, "score_generation_step", score_step)
     monkeypatch.setattr(
@@ -593,7 +638,10 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         parser_version=PARSER_PROFILE_VERSION,
         attempt_index=0,
     )
-    assert result == expected_score_id
+    assert result == {
+        "score_attempt_id": expected_score_id,
+        "insert_status": "already_present",
+    }
     assert calls == [
         ("load", ("postgresql://example/db", run.generation_run_id)),
         (
@@ -605,7 +653,6 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             ),
         ),
         ("started", expected_score_id),
-        ("completed", expected_score_id),
         (
             "score",
             (
@@ -614,6 +661,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
                 PARSER_PROFILE_VERSION,
                 0,
+                2.0,
+                NOW.isoformat(),
             ),
         ),
         ("persist", ("postgresql://example/db", expected_score_id)),
