@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from sqlalchemy import create_engine
 
-from dr_dspy.eval_failures import PermanentFailureError, TransientFailureError
+from dr_dspy.eval_failures import (
+    FailureClass,
+    FailureSummary,
+    PermanentFailureError,
+    TransientFailureError,
+)
 from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import graph_workflow
+from dr_dspy.platform import backoff, graph_workflow
 from dr_dspy.platform.graph_workflow import run_prediction_graph_workflow_once
 from dr_dspy.platform.node_execution import NodeStepResult
 from dr_dspy.records import GenerationRunStatus, stable_generation_run_id
@@ -406,3 +412,87 @@ def test_workflow_surfaces_persist_step_failure_without_writing_rows(
         )
         == 0
     )
+
+
+def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
+    app_postgres_schema,
+    reset_dbos,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = GraphSpec(nodes=(direct_node(),), terminal_node_id="direct")
+    spec = prediction_spec(graph)
+    seed_spec(app_postgres_schema.database_url, spec)
+
+    throttle_key = spec.provider_axis.throttle_key
+    engine = create_engine(app_postgres_schema.database_url)
+    try:
+        with engine.begin() as connection:
+            backoff.record_throttle_failure(
+                connection,
+                throttle_key=throttle_key,
+                failure=FailureSummary(
+                    failure_class=FailureClass.RATE_LIMITED,
+                    failure_exception_type=(
+                        "dr_dspy.eval_failures.RateLimitedFailureError"
+                    ),
+                    underlying_exception_type=(
+                        "dr_dspy.eval_failures.RateLimitedFailureError"
+                    ),
+                    message="rate limited",
+                ),
+                now=datetime.now(UTC),
+            )
+    finally:
+        engine.dispose()
+
+    call_order: list[str] = []
+    sleep_delays: list[float] = []
+    original_sleep = graph_workflow.sleep_for_backoff_seconds
+
+    def sleep_spy(seconds: float) -> None:
+        call_order.append("sleep")
+        sleep_delays.append(seconds)
+        original_sleep(seconds)
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "sleep_for_backoff_seconds",
+        sleep_spy,
+    )
+
+    def fake_execute_lm_node(
+        *,
+        spec: Any,
+        node: Any,
+        node_inputs: dict[str, Any],
+        client_factory: Any = None,
+        provider_caller: Any = None,
+        raise_retryable: bool = False,
+    ) -> NodeStepResult:
+        call_order.append("lm")
+        return step_success(node, f"workflow {node_inputs.get('prompt', '')}")
+
+    monkeypatch.setattr(
+        graph_workflow,
+        "execute_lm_node",
+        fake_execute_lm_node,
+    )
+
+    generation_run_id = run_prediction_graph_workflow_once(
+        app_postgres_schema.database_url,
+        spec.prediction_id,
+        attempt_index=0,
+    )
+
+    assert generation_run_id == stable_generation_run_id(
+        prediction_id=spec.prediction_id,
+        attempt_index=0,
+    )
+    assert call_order.index("sleep") < call_order.index("lm")
+    assert sleep_delays[0] > 0
+
+    snapshot = fetch_workflow_run_snapshot(
+        app_postgres_schema.database_url,
+        generation_run_id,
+    )
+    assert snapshot.run_status == GenerationRunStatus.SUCCESS.value

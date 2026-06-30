@@ -46,15 +46,18 @@ only `prediction_id`, `fair_order_key`, and `experiment_name` from each line,
 rejects duplicate `prediction_id` values within the submit operation, inserts the
 experiment row if needed, persists batch operation/item audit rows, and enqueues
 workflows on `dr-dspy-platform-generation-v1`. Submission is resumable by
-operation key: existing completed/enqueued batch items are skipped, while
-pending or previously failed items are retried.
+operation key: existing terminal enqueue outcomes (`enqueued`,
+`workflow_already_present`) are skipped, while pending or previously failed
+items are retried.
 
 The submit path separates chunked persistence from queue admission. After
 indexing, refs are globally sorted by `(fair_order_key, prediction_id)` and
 loaded in `--chunk-size` windows for full validation and persistence. Peak
 Python memory stays bounded to O(n) lightweight refs plus O(`--chunk-size`) full
-specs instead of materializing every spec at once. After all windows are
-persisted, enqueueing repeatedly selects pending batch items for the operation
+specs during load/persist instead of materializing every spec at once. The
+returned submit summary still loads all batch item audit rows (O(n)), which is
+acceptable for operator visibility. After all windows are persisted, enqueueing
+repeatedly selects pending batch items for the operation
 ordered by `(fair_order_key, prediction_id)` in `--chunk-size` pages. This keeps
 large JSONL submissions bounded while giving deterministic queue mixing across
 the full persisted operation instead of only within the current input window.
@@ -210,8 +213,8 @@ unless noted above:
 - Extend the persisted provider config contract before allowing experiments to
   vary provider runtime details such as `base_url`, `api_key_env`, or capability
   flags from specs.
-- Add Postgres/DBOS integration coverage for submit/resume and throttle
-  upsert/read once the project has a standard live-fixture setup.
+- Add DBOS queue-worker submit/resume E2E coverage once enqueue-to-worker
+  integration fixtures are standardized.
 
 ## Integration-test status
 
@@ -220,18 +223,22 @@ Integration tests live under `tests/integration/` and are opt-in via
 fixtures, and the tier model:
 
 - **Tier 1:** Postgres round-trip for `load_prediction_spec_step` and
-  `persist_generation_result_step`.
+  `persist_generation_result_step`, plus submit/resume helpers:
+  `update_operation_summary` terminal completion for all
+  `workflow_already_present` items, `prepare_enqueue_retries` claiming reset,
+  and `submit_prediction_specs` with real summary accounting (mocked enqueue
+  only).
 - **Tier 2–3:** End-to-end `run_prediction_graph_workflow_once` under DBOS with
   mocked LM (happy path, retry-exhaustion error fallback with
   `node_step_error_result_step` and preserved node-attempt timestamps, upstream
-  `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, and
-  persist idempotency).
+  `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery,
+  persist idempotency, and throttle preflight reading Postgres before the LM
+  step).
 - **Tier 3.5:** Frozen v0 sample rows reshaped through
   `src/dr_dspy/migration/v0_reshape.py` (outcome import and spec pass-through).
 
 The default unit suite still covers pure graph orchestration, node execution,
 record conversion, idempotent persistence SQL shape, queue registration,
 submit/resume item selection, partial enqueue failure handling, throttle state
-statement construction, and worker import without Postgres or DBOS. Live
-Postgres/DBOS coverage for submit/resume and throttle upsert/read remains
-follow-up work.
+statement construction, and worker import without Postgres or DBOS. Full DBOS
+queue-worker submit/resume E2E remains follow-up work.

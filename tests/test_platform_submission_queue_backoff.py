@@ -351,9 +351,12 @@ def test_submit_prediction_specs_chunks_and_records_counts(
     assert engine.begin_count == 13
 
 
-def test_submit_prediction_specs_enqueues_after_all_windows(
+def test_submit_prediction_specs_iterable_materializes_all_specs_before_enqueue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Iterable submit globally sorts before chunked persist, so enqueue cannot
+    start until the full iterable is consumed. JSONL bounded-window behavior is
+    covered by tests/test_platform_jsonl_specs.py."""
     specs = tuple(
         _spec(task_id=f"HumanEval/{task_id}")
         for task_id in range(5)

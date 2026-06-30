@@ -8,7 +8,12 @@ from dbos import DBOS, SetWorkflowID
 from sqlalchemy.engine import Connection
 
 from dr_dspy.db import io as db_io
-from dr_dspy.records import ExperimentRecord, PredictionSpecRecord
+from dr_dspy.records import (
+    BatchSubmitItemRecord,
+    BatchSubmitOperationRecord,
+    ExperimentRecord,
+    PredictionSpecRecord,
+)
 
 
 def seed_experiment(
@@ -32,6 +37,20 @@ def seed_prediction_spec(
     if seed_experiment_row:
         seed_experiment(connection, experiment_name=spec.experiment_name)
     connection.execute(db_io.insert_prediction_spec(spec))
+
+
+def seed_batch_submit_operation(
+    connection: Connection,
+    operation: BatchSubmitOperationRecord,
+) -> None:
+    connection.execute(db_io.insert_batch_submit_operation(operation))
+
+
+def seed_batch_submit_item(
+    connection: Connection,
+    item: BatchSubmitItemRecord,
+) -> None:
+    connection.execute(db_io.insert_batch_submit_item(item))
 
 
 def start_test_workflow(workflow: Any, workflow_id: str, *args: Any) -> Any:

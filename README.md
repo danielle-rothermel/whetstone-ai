@@ -92,7 +92,8 @@ uv run python -m dr_dspy.platform.worker submit-jsonl \
 fair-order key, loads and persists `--chunk-size` windows, then enqueues
 generation workflows on `dr-dspy-platform-generation-v1` in matching pages.
 Re-running the same `--operation-key` resumes from durable batch items:
-completed/enqueued items are skipped and pending or failed items are retried.
+terminal enqueue outcomes (`enqueued`, `workflow_already_present`) are skipped
+and pending or failed items are retried.
 
 Queued graph workflow execution runs a DBOS throttle preflight step before each
 LM node call. Rate-limited and transient provider failures update the throttle

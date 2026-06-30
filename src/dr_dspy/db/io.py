@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, null, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql.dml import Insert, Update
 
@@ -272,6 +272,13 @@ def batch_submit_item_row(record: BatchSubmitItemRecord) -> Row:
     return row
 
 
+def batch_submit_item_insert_values(record: BatchSubmitItemRecord) -> Row:
+    row = dict(batch_submit_item_row(record))
+    if row["failure"] is None:
+        row["failure"] = null()
+    return row
+
+
 def experiment_record_from_row(row: Row) -> ExperimentRecord:
     return ExperimentRecord(
         experiment_name=row["experiment_name"],
@@ -498,7 +505,7 @@ def update_batch_submit_operation(
 
 def insert_batch_submit_item(record: BatchSubmitItemRecord) -> Insert:
     return schema.batch_submit_items.insert().values(
-        batch_submit_item_row(record)
+        batch_submit_item_insert_values(record)
     )
 
 
@@ -507,7 +514,7 @@ def insert_batch_submit_item_on_conflict_do_nothing(
 ) -> Insert:
     return (
         pg_insert(schema.batch_submit_items)
-        .values(batch_submit_item_row(record))
+        .values(batch_submit_item_insert_values(record))
         .on_conflict_do_nothing(
             constraint="uq_dr_dspy_batch_items_operation_prediction"
         )

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
-from sqlalchemy import Select, select, update
+from sqlalchemy import Select, null, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection, Engine
 
@@ -143,7 +143,7 @@ def submit_prediction_specs_jsonl(
         specs_file,
         experiment_name=experiment_name,
     )
-    ordered_windows: list[tuple[PredictionSpecRecord, ...]] = []
+    persisted_spec_count = 0
     seen_prediction_ids: set[str] = set()
     item_index_offset = 0
     resolved_enqueue_workflow = enqueue_workflow or _enqueue_workflow
@@ -172,9 +172,9 @@ def submit_prediction_specs_jsonl(
                 item_index_offset=item_index_offset,
             )
         item_index_offset += len(ordered_specs)
-        ordered_windows.append(ordered_specs)
+        persisted_spec_count += len(ordered_specs)
 
-    if not ordered_windows:
+    if persisted_spec_count == 0:
         with engine.begin() as connection:
             prepare_submission_records(
                 connection,
@@ -186,7 +186,7 @@ def submit_prediction_specs_jsonl(
                 chunk_size=chunk_size,
             )
 
-    if ordered_windows:
+    if persisted_spec_count > 0:
         with engine.begin() as connection:
             prepare_enqueue_retries(
                 connection,
@@ -487,7 +487,7 @@ def insert_batch_item(
 ) -> None:
     connection.execute(
         insert(schema.batch_submit_items)
-        .values(io.batch_submit_item_row(record))
+        .values(io.batch_submit_item_insert_values(record))
         .on_conflict_do_nothing(
             index_elements=["operation_key", "prediction_id"]
         )
@@ -509,7 +509,7 @@ def reset_failed_enqueue_items(
         .values(
             enqueue_status=BatchSubmitItemEnqueueStatus.PENDING.value,
             enqueue_metadata={},
-            failure=None,
+            failure=null(),
         )
     )
 
@@ -751,7 +751,7 @@ def update_batch_item_outcome(
             failure=(
                 updated_item.failure.model_dump(mode="json")
                 if updated_item.failure is not None
-                else None
+                else null()
             ),
         )
     )
