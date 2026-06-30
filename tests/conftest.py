@@ -73,6 +73,8 @@ def _apply_v1_migrations(
         "20260630_0002_batch_submit_terminal_enqueue_accounting",
         "dr_dspy.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status",
+        "dr_dspy.db.migrations.versions."
+        "20260630_0004_batch_submit_remove_prepared_status",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)

@@ -13,14 +13,6 @@ from dr_dspy.records.models import (
     BatchSubmitOperationStatus,
 )
 
-# Legacy metadata key; prefer insert_status on BatchSubmitItemRecord.
-SPEC_OUTCOME_METADATA_KEY = "spec_outcome"
-
-
-class SpecInsertOutcome(StrEnum):
-    INSERTED = "inserted"
-    ALREADY_PRESENT = "already_present"
-
 
 class InsertOutcome(StrEnum):
     INSERTED = "inserted"

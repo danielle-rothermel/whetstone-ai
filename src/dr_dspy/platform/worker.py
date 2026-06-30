@@ -202,7 +202,6 @@ def submit_jsonl(
         int,
         typer.Option(
             "--queue-registration-concurrency",
-            "--queue-worker-concurrency",
             min=1,
             help=(
                 "Worker concurrency to register in DBOS queue metadata. "

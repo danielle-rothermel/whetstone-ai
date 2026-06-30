@@ -51,7 +51,6 @@ class GenerationRunStatus(StrEnum):
 
 
 class BatchSubmitOperationStatus(StrEnum):
-    PREPARED = "prepared"
     ENQUEUING = "enqueuing"
     COMPLETED = "completed"
     PARTIAL = "partial"

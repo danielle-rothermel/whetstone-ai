@@ -75,11 +75,10 @@ policy would need a later queue or leasing design.
 
 The submit command does not start a queue worker. Its
 `--queue-registration-concurrency` option only registers the DBOS queue metadata
-that workers will later use; `--queue-worker-concurrency` remains accepted as a
-compatibility alias.
+that workers will later use.
 
 During submission, `dr_dspy_batch_submit_operations.status` is set to
-`enqueuing` and its `requested_count` tracks the number of specs observed so
+`enqueuing` (the only in-progress operation status) and its `requested_count` tracks the number of specs observed so
 far. The final summary changes the status to `completed`, `partial`, or `error`.
 If a submit process crashes mid-enqueue, operation status remains `enqueuing`
 and item rows show the exact pending/enqueued/failed state.
@@ -96,6 +95,7 @@ reset is safe because platform generation workflows use deterministic IDs.
 
 The CLI currently reuses the legacy `dr_dspy.harness.dbos` bootstrap helpers to
 avoid introducing a second DBOS configuration path while v1 and v0 coexist.
+Workflow start-race detection lives in `dr_dspy.platform.dbos_compat` instead.
 
 ## Migration status
 
@@ -126,8 +126,8 @@ from `(prediction_id, attempt_index)`.
 `_start_prediction_graph_workflow_handle` starts the workflow under
 `SetWorkflowID`. If another caller wins the start race, the platform catches
 DBOS workflow-conflict errors (via the shared `workflow_start_raced` helper from
-`dr_dspy.harness.dbos`) and calls `DBOS.retrieve_workflow(workflow_id)` to join
-the existing run.
+`dr_dspy.platform.dbos_compat`) and calls `DBOS.retrieve_workflow(workflow_id)`
+to join the existing run.
 
 Sequential operator re-runs of `run-one` for the same `(prediction_id,
 attempt_index)` therefore return the existing completed result instead of
@@ -178,6 +178,23 @@ per-provider-key `blocked_until` and `consecutive_failures` state shared by
 independent workflows. The table is therefore the app-owned cross-worker throttle
 coordination point, while DBOS remains responsible for workflow durability and
 queue dispatch.
+
+## Review closure
+
+The following review items were assessed and closed without further code changes
+unless noted above:
+
+- **Partial persist on validation:** intentional chunked commit before enqueue.
+- **Fairness vs execution:** fair submit/enqueue order only; not strict multi-worker
+  execution order.
+- **Throttle table in step 9:** intentional app-owned coordination for backoff.
+- **Append-only vs mutable batch audit:** generation/node/score outcomes are
+  append-only; batch submit rows are mutable operational audit.
+- **Profile/version ambiguity:** deferred to step 10 (HumanEval scoring).
+- **Pure/domain boundary:** no refactor needed.
+- **Legacy v0 / PlainPromptAdapter:** no new ChatAdapter coupling on the platform
+  path.
+- **Raw vs parsed artifacts:** out of scope for this phase.
 
 ## Follow-up notes
 

@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 
 from dr_dspy.eval_failures import should_retry_step
 from dr_dspy.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
-from dr_dspy.harness.dbos import (
+from dr_dspy.platform.dbos_compat import (
     WORKFLOW_START_RACE_ERRORS,
     workflow_start_raced,
 )
