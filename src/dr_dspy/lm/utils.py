@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from dr_dspy.hashing import canonical_json
 
 
 class ModelConfig(BaseModel):
@@ -50,7 +51,7 @@ class LmEventBuffer:
 
 
 def stable_json(data: Any) -> str:
-    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return canonical_json(data)
 
 
 def response_text(response: Any) -> str | None:
