@@ -1,0 +1,13 @@
+# Local hooks mirror ./scripts/ci/lint.sh so pre-commit/pre-push match CI.
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ci-lint
+        name: CI lint (ruff + ty)
+        entry: bash scripts/ci/lint.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, pre-push]

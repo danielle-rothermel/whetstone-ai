@@ -132,6 +132,12 @@ Local equivalents (from the package root):
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
+Install git hooks (runs the same lint script on commit and push):
+
+```bash
+uv run pre-commit install
+```
+
 DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 
 [`Dockerfile.ci`](Dockerfile.ci) builds a unit-test image for future Depot
