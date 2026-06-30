@@ -1162,6 +1162,7 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
         "dr_dspy_score_attempts.parser_profile_id = "
         "'humaneval-best-effort'"
     ) in compiled
+    assert "dr_dspy_score_attempts.score_attempt_id IS NULL" in compiled
     assert (
         "ORDER BY dr_dspy_prediction_specs.fair_order_key, "
         "dr_dspy_prediction_specs.prediction_id, "
@@ -1170,11 +1171,10 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
     assert "LIMIT 10 OFFSET 2" in compiled
 
 
-def test_batch_rescore_dry_run_skips_already_scored(
+def test_batch_rescore_dry_run_counts_needed_scores(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     candidates = (
-        _rescore_candidate(0, existing_score_attempt_id="existing-score"),
         _rescore_candidate(1),
     )
     scheduler_calls: list[str] = []
@@ -1204,15 +1204,13 @@ def test_batch_rescore_dry_run_skips_already_scored(
     )
 
     assert scheduler_calls == []
-    assert result.selected_count == 2
-    assert result.already_scored_count == 1
-    assert result.pending_score_count == 1
+    assert result.selected_count == 1
+    assert result.already_scored_count == 0
+    assert result.needs_score_count == 1
     assert result.scheduled_count == 0
     assert [item.status for item in result.items] == [
-        rescoring.BatchRescoreItemStatus.ALREADY_SCORED,
         rescoring.BatchRescoreItemStatus.WOULD_SCHEDULE,
     ]
-    assert result.items[0].existing_score_attempt_id == "existing-score"
 
 
 def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
@@ -1368,6 +1366,31 @@ def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
         scheduled=False,
     )
     assert starts == []
+
+
+def test_schedule_score_generation_workflow_surfaces_unrelated_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    starts: list[Any] = []
+
+    class FakeDbos:
+        def get_workflow_status(
+            self,
+            workflow_id: str,
+        ) -> dict[str, str] | None:
+            return None if not starts else {"status": "PENDING"}
+
+        def start_workflow(self, *args: Any) -> None:
+            starts.append(args)
+            raise RuntimeError("dbos unavailable")
+
+    monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
+
+    with pytest.raises(RuntimeError, match="dbos unavailable"):
+        scoring_workflow.schedule_score_generation_workflow(
+            database_url="postgresql://example/db",
+            generation_run_id="generation-run-1",
+        )
 
 
 def _rescore_candidate(

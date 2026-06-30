@@ -1493,6 +1493,34 @@ def test_queue_enqueue_uses_stable_workflow_ids(
     )
 
 
+def test_queue_enqueue_surfaces_unrelated_start_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    starts: list[Any] = []
+
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "get_workflow_status",
+        lambda workflow_id: None if not starts else {"status": "PENDING"},
+    )
+
+    def fail_enqueue(*args: Any) -> None:
+        starts.append(args)
+        raise RuntimeError("dbos unavailable")
+
+    monkeypatch.setattr(
+        queue_worker.DBOS,
+        "enqueue_workflow",
+        fail_enqueue,
+    )
+
+    with pytest.raises(RuntimeError, match="dbos unavailable"):
+        queue_worker.enqueue_prediction_graph_workflow(
+            database_url="postgresql://example/db",
+            prediction_id="prediction-1",
+        )
+
+
 def test_register_platform_generation_queue_updates_existing_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1606,12 +1634,13 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
     def fail_configure_platform_dbos_runtime(**kwargs: Any) -> Any:
         raise AssertionError("dry-run should not launch DBOS")
 
+    def fail_build_eval_dbos_config(**kwargs: Any) -> Any:
+        raise AssertionError("dry-run should not resolve DBOS config")
+
     monkeypatch.setattr(
         worker.shared_dbos,
         "build_eval_dbos_config",
-        lambda **kwargs: SimpleNamespace(
-            database_url="postgresql://example/db"
-        ),
+        fail_build_eval_dbos_config,
     )
     monkeypatch.setattr(
         worker,

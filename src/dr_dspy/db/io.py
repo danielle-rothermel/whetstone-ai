@@ -692,6 +692,7 @@ def select_rescore_generation_candidates(
         )
         .where(schema.prediction_specs.c.experiment_name == experiment_name)
         .where(schema.generation_runs.c.status == generation_status.value)
+        .where(schema.score_attempts.c.score_attempt_id.is_(None))
         .order_by(
             schema.prediction_specs.c.fair_order_key,
             schema.prediction_specs.c.prediction_id,

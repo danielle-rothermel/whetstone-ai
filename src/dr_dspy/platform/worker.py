@@ -291,12 +291,9 @@ def rescore(
 
     launched_dbos = False
     if dry_run:
-        config = shared_dbos.build_eval_dbos_config(
+        resolved_database_url = shared_dbos.resolve_database_url(
             database_url=database_url,
-            dbos_system_database_url=dbos_system_database_url,
-            generation_concurrency=DEFAULT_WORKER_CONCURRENCY,
-            scoring_concurrency=DEFAULT_WORKER_CONCURRENCY,
-            database_url_error_suffix="for platform batch rescoring",
+            error_suffix="for platform batch rescoring",
         )
     else:
         config = configure_platform_dbos_runtime(
@@ -304,12 +301,13 @@ def rescore(
             dbos_system_database_url=dbos_system_database_url,
             consume_generation_queue=False,
         )
+        resolved_database_url = config.database_url
         launched_dbos = True
-    engine = create_engine(config.database_url)
+    engine = create_engine(resolved_database_url)
     try:
         result = rescore_generation_runs(
             engine,
-            database_url=config.database_url,
+            database_url=resolved_database_url,
             experiment_name=experiment_name,
             generation_status=resolved_generation_status,
             generation_attempt_index=generation_attempt_index,

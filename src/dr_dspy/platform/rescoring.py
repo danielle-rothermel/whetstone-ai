@@ -82,7 +82,7 @@ class BatchRescoreResult(BaseModel):
     dry_run: StrictBool
     selected_count: StrictInt
     already_scored_count: StrictInt
-    pending_score_count: StrictInt
+    needs_score_count: StrictInt
     scheduled_count: StrictInt
     already_scheduled_count: StrictInt
     failed_count: StrictInt
@@ -351,7 +351,7 @@ def batch_rescore_result(
         dry_run=dry_run,
         selected_count=len(items),
         already_scored_count=already_scored_count,
-        pending_score_count=len(items) - already_scored_count,
+        needs_score_count=len(items) - already_scored_count,
         scheduled_count=scheduled_count,
         already_scheduled_count=already_scheduled_count,
         failed_count=failed_count,

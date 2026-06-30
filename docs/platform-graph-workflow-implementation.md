@@ -121,12 +121,11 @@ The batch rescoring selector reads v1 `dr_dspy_generation_runs` joined to
 `dr_dspy_prediction_specs`, filters by experiment name, generation status, and
 optional generation attempt index, then orders candidates by
 `(fair_order_key, prediction_id, generation_run_id)`. For each candidate, it
-checks for an existing score attempt with the requested generation run, scoring
-profile id/version, parser profile id/version, and score attempt index.
-Already-scored rows are reported and skipped. Rows without a matching score
-attempt are processed in `--chunk-size` pages. `--limit` caps the ordered
-candidate rows inspected, so already-scored rows inside the limit are still
-included in the summary instead of being replaced by later rows.
+anti-joins any existing score attempt with the requested generation run,
+scoring profile id/version, parser profile id/version, and score attempt index.
+Rows without a matching score attempt are processed in `--chunk-size` pages.
+`--limit` caps the ordered unscored candidate rows, so large resume runs do not
+page through completed scores before finding work.
 
 For rows that need scoring, `rescore` computes the same stable score-attempt id
 used by `score-one` and schedules the existing scoring workflow with workflow id
@@ -134,9 +133,11 @@ used by `score-one` and schedules the existing scoring workflow with workflow id
 workflow id but no terminal score attempt exists yet, the summary reports the
 item as `workflow_already_present`. Scheduling failures are reported per item
 and do not stop later items in the batch. The command prints a JSON-like summary
-with selected, already-scored, pending-score, scheduled,
+with selected, already-scored, needs-score, scheduled,
 workflow-already-present, and failed counts plus item ids for debugging small
-runs.
+runs. Because the SQL selector filters out completed scores, already-scored
+normally stays at zero and only protects callers that inject stale candidates
+directly.
 
 Batch rescoring does not write generation rows, node-attempt rows, v0 tables,
 projection rows, or app-owned pending/running scoring lifecycle state. DBOS
@@ -176,8 +177,9 @@ that workers will later use.
 
 The rescore command does not start a generation worker or consume the
 generation queue. A dry run opens only the application database selector path
-and does not launch DBOS. A scheduling run launches the platform DBOS runtime
-only to submit scoring workflows.
+without resolving DBOS system configuration and does not launch DBOS. A
+scheduling run launches the platform DBOS runtime only to submit scoring
+workflows.
 
 During submission, `dr_dspy_batch_submit_operations.status` is set to
 `enqueuing` (the only in-progress operation status) and its `requested_count` tracks the number of specs observed so

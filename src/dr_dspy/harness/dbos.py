@@ -520,6 +520,7 @@ def score_workflow_id(
     return f"score-retry:{retry_token}:{prediction_id}"
 
 
+
 def enqueue_generation_workflows(
     database_url: str,
     jobs: Sequence[PredictionJobLike],

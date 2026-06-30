@@ -245,10 +245,9 @@ def score_attempt_id_for_workflow(
 
 
 def workflow_start_raced(*, workflow_id: str, error: BaseException) -> bool:
+    _ = workflow_id
     if isinstance(error, WORKFLOW_START_RACE_ERRORS):
         return True
-    if isinstance(error, Exception):
-        return DBOS.get_workflow_status(workflow_id) is not None
     return False
 
 
