@@ -93,6 +93,13 @@ class PromptMessage(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    """Runtime provider call configuration.
+
+    Graph workflow persistence stores a narrower provider ref (kind, endpoint,
+    model, throttle_key, parameters). Reconstruct full runtime config from
+    pinned spec fields via template helpers such as ``openrouter_chat_config``.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     provider_kind: ProviderKind
@@ -464,12 +471,9 @@ def _without_none(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _response_metadata(response: Any) -> dict[str, Any]:
-    from dr_dspy.eval_failures.recording import ensure_recordable
+    from dr_dspy.serialization import to_metadata_dict
 
-    recordable = ensure_recordable(response)
-    if isinstance(recordable, dict):
-        return recordable
-    return {"response": recordable}
+    return to_metadata_dict(response)
 
 
 def _usage_metadata(response_metadata: Mapping[str, Any]) -> dict[str, Any]:

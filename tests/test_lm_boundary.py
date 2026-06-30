@@ -11,7 +11,9 @@ from dr_dspy.eval_failures import (
     PermanentFailureError,
     ProviderResponseParseError,
     RateLimitedFailureError,
+    RecordingFailureError,
     TransientFailureError,
+    ensure_recordable,
     summarize_exception,
 )
 from dr_dspy.lm.boundary import (
@@ -32,6 +34,7 @@ from dr_dspy.lm.boundary import (
 )
 from dr_dspy.lm.openrouter import LoggingOpenRouterLM
 from dr_dspy.lm.utils import LmEventBuffer
+from dr_dspy.serialization import PAYLOAD_MAX_BYTES
 
 
 class _PlainComparisonSignature(dspy.Signature):
@@ -234,6 +237,57 @@ def test_parse_malformed_chat_completion_raises_parse_failure() -> None:
             {"model": "model/test"},
             config=openrouter_chat_config(model="model/test"),
         )
+
+
+def test_parse_succeeds_when_response_metadata_is_unrecordable() -> None:
+    class UnrecordableResponse:
+        def __init__(self) -> None:
+            self.bad = object()
+            self.choices = [
+                {"message": {"content": "ok"}, "finish_reason": "stop"}
+            ]
+
+    result = parse_provider_response(
+        UnrecordableResponse(),
+        config=openrouter_chat_config(model="model/test"),
+    )
+
+    assert result.text == "ok"
+    assert result.response_metadata == {}
+
+
+def test_parse_metadata_exceeds_recordable_size_but_parse_succeeds() -> None:
+    huge = "x" * (PAYLOAD_MAX_BYTES + 1)
+    choice = {"message": {"content": "ok"}, "finish_reason": "stop"}
+    result = parse_provider_response(
+        {
+            "choices": [choice],
+            "blob": huge,
+        },
+        config=openrouter_chat_config(model="model/test"),
+    )
+
+    assert result.text == "ok"
+    assert len(result.response_metadata["blob"]) > PAYLOAD_MAX_BYTES
+    with pytest.raises(RecordingFailureError):
+        ensure_recordable(result.response_metadata)
+
+
+def test_openrouter_chat_boundary_round_trip() -> None:
+    """Production v0 path: build request, call provider, parse response."""
+    client = _FakeClient()
+    config = openrouter_chat_config(model="model/test")
+    request = build_chat_completions_request(
+        config=config,
+        messages=[{"role": "user", "content": "hello"}],
+        token_limit=12,
+    )
+
+    response = call_provider_request(client, request)
+    result = parse_provider_response(response, config=config)
+
+    assert result.text == "ok"
+    assert client.completions.kwargs == request.kwargs
 
 
 def test_parse_responses_response_extracts_output_text() -> None:
