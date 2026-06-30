@@ -21,10 +21,39 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 | 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — pre-deployment; draft migration history not frozen |
 | 8 | Platform graph workflow (DBOS + append-only persistence) | **Done** (first path under `dr_dspy.platform`) |
 | 9 | Batch submission, fairness, backoff | **Done** (chunked submit, fair-order enqueue, throttle table) |
-| 10 | HumanEval scoring and metrics | **Partial** — scoring workflow + `humaneval@v1` landed; profile record tables and projection movement not |
-| 11 | Migration and validation (v0 backfill) | **Partial** — `migration/v0_reshape.py` + Tier 3.5 tests kept; full backfill job not done |
-| 12 | Rescoring (workflow/CLI + projection movement) | **Partial** — `score-one` / `rescore` exist; projection movement command not |
-| 13 | Unitbench/export (Neon projections, generated TS types) | **Not done** |
+| 10 | HumanEval scoring and metrics | **Partial** — scoring workflow + `humaneval@v1` landed; profile record tables deferred |
+| 11 | Migration and validation (v0 backfill) | **Partial** — `migration/v0_reshape.py` + Tier 3.5 tests kept; backfill job and validation tooling **deferred** |
+| 12 | Rescoring (workflow/CLI + projection movement) | **Partial** — `score-one` / `rescore` exist; projection movement **deferred** |
+| 13 | Unitbench/export (Neon projections, generated TS types) | **Deferred** |
+
+---
+
+## Deferred platform phases (post–v1 core)
+
+These belong to the same later phase as Unitbench: implement after the v1
+generation/scoring path is code-complete and exercised on new experiments, not
+before.
+
+### v0 migration operations (step 11)
+
+- **v0 backfill job/CLI** — read legacy prediction tables, call `reshape_v0_*`,
+  bulk-insert v1 append-only rows.
+- **Migration validation tooling** — row counts, artifacts, costs, legacy v0
+  scores vs migrated/rescored outcomes.
+- **Reshape hardening** (when backfill starts) — deterministic timestamps,
+  enc-dec `PARTIAL` coverage, v0 score preservation for diffing, provider-axis
+  fidelity.
+- **Legacy import scope** — how much v0 inline score data to backfill versus
+  validate only via rescoring.
+
+### Analysis layer (step 12 projection + step 13 read path)
+
+- **Projection movement command** — upsert selected generation/score attempts
+  into `dr_dspy_prediction_projection` after validated score batches.
+- **Projection storage shape** — physical table vs SQL view vs DuckDB/read-side
+  projection (table exists today; contract not finalized).
+- **Unitbench/export** — Neon publishing, stable projection views, generated
+  TypeScript types, read-side query tooling.
 
 ---
 
@@ -33,8 +62,8 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 From the platform design doc — still unresolved or only partially resolved in code:
 
 1. **Exact table names and primary keys** — largely implemented under `dr_dspy_*` names, but migration history is not yet declared frozen/deployed.
-2. **Legacy import scope** — how much v0/v1 data to backfill into append-only shape versus rescoring in place for short-term model selection.
-3. **Projection storage shape** — physical table vs SQL view vs DuckDB/read-side projection first.
+2. **Legacy import scope** — deferred with v0 backfill (see above).
+3. **Projection storage shape** — deferred with analysis layer (see above).
 
 **Resolved in implementation (no longer open):** node attempts grouped by `generation_run_id`; throttle coordination via `dr_dspy_throttle_backoff` when DBOS alone is insufficient.
 
@@ -57,8 +86,11 @@ From `platform-graph-workflow-implementation.md`:
 
 ### Analysis and projections
 
-- Add **explicit projection movement command** after live validation confirms score-attempt counts, failures, and model rankings/pass rates. Batch rescoring intentionally does not move projections today.
-- Terminal DBOS scoring failures that cannot replay into a persisted `ScoreAttemptRecord` may still need **manual DBOS admin** — v1 does not port v0 repair machinery.
+- Projection movement and storage-shape decisions are **deferred** (see
+  [Deferred platform phases](#deferred-platform-phases-postv1-core)).
+- Terminal DBOS scoring failures that cannot replay into a persisted
+  `ScoreAttemptRecord` may still need **manual DBOS admin** — v1 does not port
+  v0 repair machinery.
 
 ### Execution fairness (optional enhancement)
 
@@ -102,20 +134,14 @@ From core-primitives / LM boundary implementation notes:
 
 ---
 
-## v0 migration and cutover — partial
+## v0 migration and cutover — deferred operations
 
-v0 runtime code is **removed**. Reshape logic and frozen fixtures remain for backfill.
+v0 runtime code is **removed**. Reshape logic and frozen fixtures remain for when
+backfill runs (see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md)).
 
-Operational cutover steps still ahead:
-
-1. **Freeze v0** for new experimental writes (policy/process; code path already gone).
-2. **Backfill** existing v0 direct and enc-dec rows into append-only model (full job not done; reshape in [`migration/v0_reshape.py`](../src/dr_dspy/migration/v0_reshape.py)).
-3. **Validate** migrated counts, artifacts, costs, legacy scores, and projections.
-4. **Rescore** migrated terminal artifacts under new parser/scoring profiles.
-5. **Run next COPRO experiments** on new path only.
-6. **Delete migration package** after validation — see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md).
-
-Legacy v0 Postgres tables may remain as backup until explicitly dropped.
+Backfill, validation, rescoring on migrated rows, and migration-package deletion
+are **deferred** with the analysis/Unitbench phase. Legacy v0 Postgres tables
+may remain as backup until that work starts.
 
 ---
 
@@ -123,9 +149,8 @@ Legacy v0 Postgres tables may remain as backup until explicitly dropped.
 
 - **Declare v1 migration history frozen/deployed** and document upgrade path from any draft schemas applied locally or on Neon.
 - **Reset guidance** for databases that applied earlier draft `20260629_0001` (batch item status shape change: single `status` → `insert_status` + `enqueue_status`).
-- **Generated TypeScript types** for Unitbench from canonical Python contracts or DB introspection.
-- **Unitbench Neon access** — stable projection tables/views for read-only server-side `SELECT`; no second schema owner.
-- Consider **Drizzle** later as read-side query builder if Unitbench queries become painful (generated from canonical schema only).
+- Unitbench/types/Neon/Drizzle items are **deferred** — see
+  [Deferred platform phases](#deferred-platform-phases-postv1-core).
 
 ---
 
@@ -135,7 +160,7 @@ Legacy v0 Postgres tables may remain as backup until explicitly dropped.
 |---|---|
 | Full DBOS queue-worker submit/resume E2E | Follow-up after enqueue-to-worker fixtures standardized |
 | Live Postgres/DBOS integration for scoring | Exists under `tests/integration/test_platform_scoring_*.py` (opt-in `@pytest.mark.integration`) |
-| Projection movement | No command or integration coverage yet |
+| Projection movement | Deferred with analysis layer |
 
 ---
 
@@ -183,15 +208,37 @@ No implementation work for COPRO itself is documented in these three source file
 
 ---
 
+## v1 platform completion (before deferred phases)
+
+Work required for a robust v1 path on **new** experiments (code complete; nothing
+need be executed yet):
+
+1. **Spec construction path** — CLI or config → `PredictionSpecRecord` generator
+   (not only hand-built JSONL / test fixtures).
+2. **PARTIAL run scoring policy** — decide and implement whether enc-dec/graph
+   `PARTIAL` generation runs are scoreable; align `rescore` defaults and
+   `validate_generation_run_for_scoring`.
+3. **Freeze v1 Alembic history** — declare revisions deployed/frozen; document
+   reset path for draft schemas.
+4. **Submit → worker E2E integration test** — enqueue through DBOS worker
+   consumption.
+5. **Small code cleanup** — remove dead `_provider_axis_from_row`; dedupe
+   `failure_payload_from_exception`.
+6. **`dspy` dependency review** — trim or dev-only now that v0 runtime is gone
+   (serialization still references DSPy types).
+7. **Stale docs** — align `completed-design-and-implementation-choices.md` and
+   related notes with post–v0-removal layout (`dbos_bootstrap.py`, etc.).
+
+---
+
 ## Summary priority sketch
 
-Suggested ordering implied across docs (not a new decision — synthesis of existing callouts):
+**Now (v1 core):** items 1–7 in [v1 platform completion](#v1-platform-completion-before-deferred-phases).
 
-1. Freeze v1 migrations + finish schema hardening
-2. v0 backfill + validation + rescoring on migrated artifacts
-3. Projection movement command + Unitbench/types
-4. Delete migration reshape package after backfill validated (see completion checklist)
-5. Provider config contract extension + typed graph prompt fields
-6. Worker runtime pooling + DBOS bootstrap consolidation + E2E submit/worker tests
-7. Land graph-workflow → extract repo → rename to whetstone
-8. First-class scoring/profile tables; optional multi-worker fairness; later analysis pipeline metrics
+**Later (deferred with Unitbench):** v0 backfill + validation + reshape
+hardening; projection movement + storage shape; Unitbench/types/Neon; then delete
+`migration/` after backfill sign-off.
+
+**Follow-ups (explicitly deferred elsewhere in this doc):** provider config
+extension, typed graph prompt fields, engine pooling, first-class profile tables,
+optional multi-worker fairness, later analysis metrics, repo rename to whetstone.
