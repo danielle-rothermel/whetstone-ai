@@ -231,9 +231,12 @@ def test_policy_import_does_not_load_runtime_exception_modules() -> None:
             "-c",
             (
                 "import sys; "
+                "blocked = ('dbos._error', 'openai', 'httpx', 'psycopg'); "
+                "before = set(sys.modules); "
+                "import dr_dspy.eval_failures; "
                 "import dr_dspy.eval_failures.policy; "
-                "print(any(name in sys.modules for name in "
-                "('dbos._error', 'openai', 'httpx', 'psycopg')))"
+                "introduced = set(sys.modules) - before; "
+                "print(any(name in introduced for name in blocked))"
             ),
         ],
         capture_output=True,
@@ -251,8 +254,10 @@ def test_recording_import_defers_psycopg_jsonb() -> None:
             "-c",
             (
                 "import sys; "
+                "before = set(sys.modules); "
                 "import dr_dspy.eval_failures.recording; "
-                "print('psycopg.types.json' in sys.modules)"
+                "introduced = set(sys.modules) - before; "
+                "print('psycopg.types.json' in introduced)"
             ),
         ],
         capture_output=True,

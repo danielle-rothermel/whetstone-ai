@@ -157,14 +157,20 @@ class EvaluationTaskResult(BaseModel):
     def passed(self) -> bool:
         if not self.function_names:
             return False
-        return any(
-            all(
-                result.status is EvaluationCaseStatus.PASSED
+        for function_name in self.function_names:
+            function_results = [
+                result
                 for result in self.results
                 if result.function_name == function_name
-            )
-            for function_name in self.function_names
-        )
+            ]
+            if len(function_results) != self.total_cases:
+                return False
+            if not all(
+                result.status is EvaluationCaseStatus.PASSED
+                for result in function_results
+            ):
+                return False
+        return True
 
     @computed_field
     @property
@@ -521,30 +527,57 @@ def run_subprocess_batch(
             function_name=function_name,
             message=f"Could not decode runner output: {exc}",
         )
-    try:
-        runner_results = TypeAdapter(
-            list[HumanEvalRunnerCaseOutput]
-        ).validate_python(raw_results)
-    except ValidationError as exc:
+    if not isinstance(raw_results, list):
         return error_results(
             task=task,
             function_name=function_name,
-            message=f"Invalid runner output: {exc}",
+            message=(
+                "Invalid runner output: expected a JSON list of case results"
+            ),
         )
-    return [
-        EvaluationCaseResult(
-            task_id=task.task_id,
-            case_id=result.case_id,
-            function_name=function_name,
-            status=result.status,
-            message=result.message,
-            test_type=parsed_tests.test_type,
-            input_repr=result.input_repr,
-            expected_output_repr=result.expected_output_repr,
-            actual_output_repr=result.actual_output_repr,
+
+    adapter = TypeAdapter(HumanEvalRunnerCaseOutput)
+    results: list[EvaluationCaseResult] = []
+    for item in raw_results:
+        try:
+            runner_result = adapter.validate_python(item)
+        except ValidationError as exc:
+            case_id = (
+                str(item["case_id"])
+                if isinstance(item, dict) and "case_id" in item
+                else f"case_{len(results)}"
+            )
+            metadata: dict[str, str] = {}
+            for case in parsed_tests.cases:
+                if case.case_id == case_id:
+                    metadata = case_metadata(parsed_tests, case)
+                    break
+            results.append(
+                EvaluationCaseResult(
+                    task_id=task.task_id,
+                    case_id=case_id,
+                    function_name=function_name,
+                    status=EvaluationCaseStatus.ERROR,
+                    message=f"Invalid runner output: {exc}",
+                    test_type=parsed_tests.test_type,
+                    **metadata,
+                )
+            )
+            continue
+        results.append(
+            EvaluationCaseResult(
+                task_id=task.task_id,
+                case_id=runner_result.case_id,
+                function_name=function_name,
+                status=runner_result.status,
+                message=runner_result.message,
+                test_type=parsed_tests.test_type,
+                input_repr=runner_result.input_repr,
+                expected_output_repr=runner_result.expected_output_repr,
+                actual_output_repr=runner_result.actual_output_repr,
+            )
         )
-        for result in runner_results
-    ]
+    return results
 
 
 def timeout_results(

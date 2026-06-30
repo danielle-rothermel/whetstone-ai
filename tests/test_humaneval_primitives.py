@@ -350,7 +350,10 @@ def test_evaluate_humaneval_code_reports_timeout_per_case() -> None:
 def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(
-            stdout='[{"case_id": "case_0", "status": "nonsense"}]',
+            stdout=(
+                '[{"case_id": "case_0", "status": "passed", "message": ""}, '
+                '{"case_id": "case_1", "status": "nonsense"}]'
+            ),
         )
 
     with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
@@ -361,11 +364,11 @@ def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
             timeout_seconds=2.0,
         )
 
-    assert {result.case_id for result in results} == {"case_0", "case_1"}
-    assert {result.status for result in results} == {
-        EvaluationCaseStatus.ERROR
-    }
-    assert all("Invalid runner output" in result.message for result in results)
+    by_case_id = {result.case_id: result for result in results}
+    assert set(by_case_id) == {"case_0", "case_1"}
+    assert by_case_id["case_0"].status is EvaluationCaseStatus.PASSED
+    assert by_case_id["case_1"].status is EvaluationCaseStatus.ERROR
+    assert "Invalid runner output" in by_case_id["case_1"].message
 
 
 def test_compression_metrics_are_stable_for_methods_and_ratios() -> None:
