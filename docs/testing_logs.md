@@ -4,6 +4,40 @@ Chronological record of manual / live pipeline runs. Newest entries at the top.
 
 ---
 
+## 2026-06-30 — Rescore sliding-window `max_in_flight`
+
+**Branch:** `today_exp`  
+**Change:** Replace batch-gate rescore backpressure with FIFO sliding window  
+**Operator:** agent (Cursor)
+
+### Behavior
+
+`--max-in-flight` now keeps at most N score workflows running concurrently. When at cap, rescore **awaits only the oldest** handle before scheduling the next candidate — not the entire wave.
+
+Progress stderr changes:
+
+- **Removed:** `awaiting wave`, `wave complete`, `awaiting final wave`, `waves=`
+- **Added:** `awaiting slot`, `awaiting remaining`, `slots_released=`, `pending=` (always ≤ `max_in_flight` during steady scheduling)
+
+### Automated tests
+
+```bash
+uv run pytest tests/test_platform_scoring.py tests/test_platform_worker_cli.py \
+  tests/test_platform_progress_log.py -q
+```
+
+### Recommended rescore command (unchanged)
+
+```bash
+uv run python -m dr_dspy.platform.worker rescore \
+  --experiment-name encdec-budget-full-v0 \
+  --generation-status success \
+  --max-in-flight 200 \
+  --progress-interval 5
+```
+
+---
+
 ## 2026-06-30 — Rescore schema fix (`evaluation_incomplete`) + progress `total_candidates`
 
 **Branch:** `today_exp`  
@@ -72,7 +106,7 @@ Use `--generation-status success` only for v0 backfill pass-rate work; many `par
 
 1. **[`src/dr_dspy/migration/v0_encdec_backfill.py`](../src/dr_dspy/migration/v0_encdec_backfill.py):** chunked backfill with per-chunk commits, offset paging, parallel reshape (`ThreadPoolExecutor`), Rich stderr progress (heartbeats + events).
 2. **[`src/dr_dspy/platform/progress_log.py`](../src/dr_dspy/platform/progress_log.py):** shared Rich progress helper for backfill and rescore.
-3. **[`src/dr_dspy/platform/rescoring.py`](../src/dr_dspy/platform/rescoring.py):** `--max-in-flight` wave scheduling with internal await (default **100**).
+3. **[`src/dr_dspy/platform/rescoring.py`](../src/dr_dspy/platform/rescoring.py):** `--max-in-flight` sliding-window concurrency (default **100**).
 4. **[`src/dr_dspy/platform/worker.py`](../src/dr_dspy/platform/worker.py):** new CLI flags on `backfill-v0-encdec` and `rescore`.
 
 ### New CLI flags
@@ -81,7 +115,7 @@ Use `--generation-status success` only for v0 backfill pass-rate work; many `par
 |---------|------|---------|---------|
 | `backfill-v0-encdec` | `--chunk-size` | omitted (legacy single transaction) | Commit after each chunk |
 | `backfill-v0-encdec` | `--reshape-workers` | `1` | Parallel CPU-bound reshape (writes stay serial) |
-| `rescore` | `--max-in-flight` | `100` | Cap scheduled scoring workflows before awaiting |
+| `rescore` | `--max-in-flight` | `100` | Max concurrent score workflows (FIFO slot release) |
 | both | `--progress-interval` | `5` | Rich heartbeat interval on stderr (seconds); `0` = events only |
 
 Omitting `--chunk-size` preserves the legacy single-transaction backfill path.
@@ -139,7 +173,7 @@ uv run python -m dr_dspy.platform.worker rescore \
 ### Caveats
 
 1. Partial backfill commits are durable; rerun is idempotent (`already_present` counts rise).
-2. Rescore default `--max-in-flight 100` replaces prior unbounded schedule-then-await-at-end behavior.
+2. Rescore `--max-in-flight` uses a sliding window: at cap, only the oldest workflow is awaited before scheduling the next.
 3. Offset paging is acceptable on the frozen read-only v0 table; no keyset cursor needed for this one-shot migration.
 
 ---
@@ -732,3 +766,37 @@ HumanEval/146 appears to exceed the platform's `ScoreAttemptRecord` per-test cap
 ### Verdict
 
 **Partial pass.** The v1 composable enc-dec pipeline is live and fast at concurrency 30. OpenRouter generation succeeded for all 8 Qwen specs. OpenAI configs need model ID fixes; scoring needs a fix or smaller smoke task before pass-rate numbers are trustworthy.
+
+## COPRO minimal enc-dec (2026-06-30 23:43 UTC)
+
+### Command
+
+```bash
+scripts/optimization/run_copro_encdec.py --model-config configs/models/gpt54-nano-openai.json --split configs/splits/tiny.json --compression-target 0.5 --breadth 2 --depth 1 --repeats 1 --proposal-mode manual --output-dir artifacts/optimization/copro_smoke_live --execution-mode sync
+```
+
+### Config
+
+- breadth/depth/repeats: 2/1/[0]
+- model_config: `configs/models/gpt54-nano-openai.json`
+- split: `configs/splits/tiny.json`
+- compression_targets: [0.5]
+- proposal_mode: manual
+- execution_mode: sync
+
+### Results
+
+- experiment_name: `copro_minimal_e9ac044686a4`
+- candidates evaluated: 2
+- best candidate: `d0_c0` pass_rate=1.000
+
+### Artifacts
+
+- candidates: `artifacts/optimization/copro_smoke_live/candidates.jsonl`
+- attempts: `artifacts/optimization/copro_smoke_live/attempts.csv`
+- best_prompt: `artifacts/optimization/copro_smoke_live/best_prompt.json`
+- summary: `artifacts/optimization/copro_smoke_live/summary.md`
+
+### Verdict
+
+PASS
