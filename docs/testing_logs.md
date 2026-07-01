@@ -10,9 +10,29 @@ Chronological record of manual / live pipeline runs. Newest entries at the top.
 **Change:** Replace batch-gate rescore backpressure with FIFO sliding window  
 **Operator:** agent (Cursor)
 
-### Behavior
+### Issue observed (live `encdec-budget-full-v0` rescore)
 
-`--max-in-flight` now keeps at most N score workflows running concurrently. When at cap, rescore **awaits only the oldest** handle before scheduling the next candidate — not the entire wave.
+Initial `--max-in-flight 200` implementation used a **batch gate**: when 200 handles accumulated, rescore called `await_workflows` on **all 200** and blocked the scheduling loop until the slowest workflow in that wave finished. Only then did it schedule the next batch.
+
+Progress stderr showed the pattern every ~200 candidates:
+
+```text
+awaiting wave awaiting=200 selected=12801 waves=64
+wave complete … scheduled=12801 selected=12801 waves=64
+… phase=scheduling …
+awaiting wave awaiting=200 selected=13001 waves=65
+wave complete …
+```
+
+Scoring **did** start per candidate (`DBOS.start_workflow` on schedule), but **new** scheduling stalled on each wave boundary. With serial per-candidate presence checks (~100ms+ each), filling a wave of 200 took ~20s while early workflows often finished in that window — so `wave complete` looked instant even though throughput was gated on the batch, not a true concurrency cap.
+
+### Fix
+
+[`src/dr_dspy/platform/rescoring.py`](../src/dr_dspy/platform/rescoring.py) now uses a **FIFO sliding window**: at cap, await **one** oldest handle, then immediately schedule the next candidate. Up to N workflows run concurrently; scheduling no longer pauses for an entire wave.
+
+### Behavior (after fix)
+
+`--max-in-flight` keeps at most N score workflows running concurrently. When at cap, rescore **awaits only the oldest** handle before scheduling the next candidate — not the entire wave.
 
 Progress stderr changes:
 
@@ -24,6 +44,7 @@ Progress stderr changes:
 ```bash
 uv run pytest tests/test_platform_scoring.py tests/test_platform_worker_cli.py \
   tests/test_platform_progress_log.py -q
+# → 79 passed
 ```
 
 ### Recommended rescore command (unchanged)

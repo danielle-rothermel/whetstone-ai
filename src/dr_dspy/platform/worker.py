@@ -293,8 +293,9 @@ def rescore(
             "--max-in-flight",
             min=1,
             help=(
-                "Maximum number of scoring workflows scheduled before "
-                "awaiting completion."
+                "Maximum concurrent scoring workflows; when at cap, "
+                "scheduling waits for the oldest to finish before "
+                "starting the next."
             ),
         ),
     ] = DEFAULT_MAX_IN_FLIGHT,

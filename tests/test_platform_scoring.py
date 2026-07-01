@@ -1820,7 +1820,7 @@ def test_batch_rescore_limit_caps_selected_candidates(
     ]
 
 
-def test_batch_rescore_max_in_flight_awaits_in_waves(
+def test_batch_rescore_max_in_flight_uses_sliding_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     candidates = tuple(_rescore_candidate(index) for index in range(5))
@@ -1862,14 +1862,93 @@ def test_batch_rescore_max_in_flight_awaits_in_waves(
     result = execution.result
 
     assert await_batches == [
-        ("handle-generation-run-0", "handle-generation-run-1"),
-        ("handle-generation-run-2", "handle-generation-run-3"),
+        ("handle-generation-run-0",),
+        ("handle-generation-run-1",),
+        ("handle-generation-run-2",),
+        ("handle-generation-run-3",),
         ("handle-generation-run-4",),
     ]
     assert result.max_in_flight == 2
     assert result.total_candidates == 5
     assert result.scheduled_count == 5
     assert execution.workflow_handles == ()
+
+
+def test_batch_rescore_sliding_window_keeps_scheduling_under_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tuple(_rescore_candidate(index) for index in range(4))
+    schedule_order: list[str] = []
+    await_order: list[str] = []
+    blocked: dict[str, bool] = {
+        "handle-generation-run-0": True,
+        "handle-generation-run-1": True,
+    }
+
+    monkeypatch.setattr(
+        rescoring,
+        "load_rescore_generation_candidates",
+        lambda connection, **kwargs: candidates,
+    )
+    monkeypatch.setattr(
+        rescoring,
+        "count_rescore_generation_candidates",
+        _mock_rescore_candidate_count(4),
+    )
+
+    def schedule(
+        **kwargs: Any,
+    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+        generation_run_id = kwargs["generation_run_id"]
+        handle_label = f"handle-{generation_run_id}"
+        schedule_order.append(handle_label)
+
+        class FakeHandle:
+            def __init__(self, label: str) -> None:
+                self.label = label
+
+            def get_result(self) -> None:
+                if blocked.get(self.label):
+                    raise AssertionError(
+                        f"{self.label} should not complete before slot release"
+                    )
+
+        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            score_attempt_id=f"score-{generation_run_id}",
+            workflow_id=f"workflow-{generation_run_id}",
+            scheduled=True,
+            workflow_handle=FakeHandle(handle_label),
+        )
+
+    def await_workflows(handles: list[Any]) -> None:
+        assert len(handles) == 1
+        handle = handles[0]
+        await_order.append(handle.label)
+        blocked.pop(handle.label, None)
+        handle.get_result()
+
+    execution = rescoring.rescore_generation_runs(
+        cast(Any, DummyEngine()),
+        database_url="postgresql://example/db",
+        experiment_name="exp",
+        max_in_flight=2,
+        schedule_workflow=schedule,
+        await_workflows=await_workflows,
+    )
+
+    assert schedule_order == [
+        "handle-generation-run-0",
+        "handle-generation-run-1",
+        "handle-generation-run-2",
+        "handle-generation-run-3",
+    ]
+    assert await_order == [
+        "handle-generation-run-0",
+        "handle-generation-run-1",
+        "handle-generation-run-2",
+        "handle-generation-run-3",
+    ]
+    assert execution.result.scheduled_count == 4
 
 
 def test_batch_rescore_dry_run_does_not_await_workflows(

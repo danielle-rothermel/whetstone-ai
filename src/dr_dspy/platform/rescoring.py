@@ -134,6 +134,80 @@ class ScheduleScoreWorkflow(Protocol):
     ) -> ScheduledScoreGenerationWorkflow: ...
 
 
+def _await_oldest_handle(
+    pending_handles: list[Any],
+    *,
+    await_workflows: Any,
+) -> Any:
+    oldest = pending_handles.pop(0)
+    await_workflows([oldest])
+    return oldest
+
+
+def _wait_for_in_flight_slot(
+    pending_handles: list[Any],
+    *,
+    max_in_flight: int,
+    await_workflows: Any,
+    progress: OperationProgress | None = None,
+    selected: int,
+    items: Sequence[BatchRescoreItem],
+    slots_released: int,
+) -> int:
+    while len(pending_handles) >= max_in_flight:
+        if progress is not None:
+            progress.update(
+                phase="awaiting",
+                selected=selected,
+                pending=len(pending_handles),
+                slots_released=slots_released,
+                **_rescore_count_metrics(items),
+            )
+            progress.event(
+                "awaiting slot",
+                {
+                    "in_flight": len(pending_handles),
+                    "selected": selected,
+                    "slots_released": slots_released + 1,
+                },
+            )
+        _await_oldest_handle(pending_handles, await_workflows=await_workflows)
+        slots_released += 1
+    return slots_released
+
+
+def _await_remaining_handles(
+    pending_handles: list[Any],
+    *,
+    await_workflows: Any,
+    progress: OperationProgress | None = None,
+    selected: int,
+    items: Sequence[BatchRescoreItem],
+    slots_released: int,
+) -> int:
+    if not pending_handles:
+        return slots_released
+    if progress is not None:
+        progress.update(
+            phase="awaiting",
+            selected=selected,
+            pending=len(pending_handles),
+            slots_released=slots_released,
+            **_rescore_count_metrics(items),
+        )
+        progress.event(
+            "awaiting remaining",
+            {
+                "remaining": len(pending_handles),
+                "selected": selected,
+            },
+        )
+    while pending_handles:
+        _await_oldest_handle(pending_handles, await_workflows=await_workflows)
+        slots_released += 1
+    return slots_released
+
+
 def rescore_generation_runs(
     engine: Engine,
     *,
@@ -173,7 +247,7 @@ def rescore_generation_runs(
     )
     items: list[BatchRescoreItem] = []
     pending_handles: list[Any] = []
-    waves_completed = 0
+    slots_released = 0
     offset = 0
     with engine.begin() as connection:
         total_candidates = count_rescore_generation_candidates(
@@ -252,41 +326,23 @@ def rescore_generation_runs(
             )
             items.append(item)
             if handle is not None:
+                if not dry_run:
+                    slots_released = _wait_for_in_flight_slot(
+                        pending_handles,
+                        max_in_flight=max_in_flight,
+                        await_workflows=await_workflows,
+                        progress=progress,
+                        selected=len(items),
+                        items=items,
+                        slots_released=slots_released,
+                    )
                 pending_handles.append(handle)
-                if len(pending_handles) >= max_in_flight:
-                    if not dry_run:
-                        if progress is not None:
-                            progress.update(
-                                phase="awaiting",
-                                selected=len(items),
-                                awaiting=len(pending_handles),
-                                waves=waves_completed,
-                                **_rescore_count_metrics(items),
-                            )
-                            progress.event(
-                                "awaiting wave",
-                                {
-                                    "awaiting": len(pending_handles),
-                                    "selected": len(items),
-                                    "waves": waves_completed + 1,
-                                },
-                            )
-                        await_workflows(pending_handles)
-                        waves_completed += 1
-                        if progress is not None:
-                            wave_metrics = {
-                                "waves": waves_completed,
-                                "selected": len(items),
-                                **_rescore_count_metrics(items),
-                            }
-                            progress.event("wave complete", wave_metrics)
-                    pending_handles = []
             if progress is not None:
                 progress.update(
                     phase="scheduling",
                     selected=len(items),
                     pending=len(pending_handles),
-                    waves=waves_completed,
+                    slots_released=slots_released,
                     **_rescore_count_metrics(items),
                 )
         offset += len(candidates)
@@ -294,30 +350,14 @@ def rescore_generation_runs(
             break
 
     if not dry_run and pending_handles:
-        if progress is not None:
-            progress.update(
-                phase="awaiting",
-                selected=len(items),
-                awaiting=len(pending_handles),
-                waves=waves_completed,
-                **_rescore_count_metrics(items),
-            )
-            progress.event(
-                "awaiting final wave",
-                {
-                    "awaiting": len(pending_handles),
-                    "selected": len(items),
-                },
-            )
-        await_workflows(pending_handles)
-        waves_completed += 1
-        if progress is not None:
-            wave_metrics = {
-                "waves": waves_completed,
-                "selected": len(items),
-                **_rescore_count_metrics(items),
-            }
-            progress.event("wave complete", wave_metrics)
+        slots_released = _await_remaining_handles(
+            pending_handles,
+            await_workflows=await_workflows,
+            progress=progress,
+            selected=len(items),
+            items=items,
+            slots_released=slots_released,
+        )
 
     result = batch_rescore_result(
         experiment_name=experiment_name,
@@ -343,7 +383,7 @@ def rescore_generation_runs(
                 "scheduled": result.scheduled_count,
                 "recovered": result.recovered_count,
                 "failed": result.failed_count,
-                "waves": waves_completed,
+                "slots_released": slots_released,
                 "max_in_flight": max_in_flight,
             }
         )
