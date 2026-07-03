@@ -26,3 +26,13 @@ LimitOption = Annotated[
     int | None,
     typer.Option("--limit", help="Optional row limit for debugging."),
 ]
+RequireScoreOption = Annotated[
+    bool,
+    typer.Option(
+        "--require-score/--include-unscored",
+        help=(
+            "Only include runs with a successful humaneval@v1 score attempt "
+            "(excludes in-progress rescoring)."
+        ),
+    ),
+]

@@ -170,7 +170,12 @@ def list_encdec_run_index(
     frame = _dedupe_score_attempts(frame)
     rows = _frame_to_index_rows(frame)
     if require_score:
-        rows = [row for row in rows if row.score_attempt_id is not None]
+        rows = [
+            row
+            for row in rows
+            if row.score_attempt_id is not None
+            and row.score_status == ScoreAttemptStatus.SUCCESS.value
+        ]
     return rows
 
 

@@ -37,6 +37,7 @@ class AnalysisReporter:
         experiment_names: Sequence[str],
         row_count: int,
         limit: int | None,
+        require_score: bool | None = None,
     ) -> None:
         experiments = ", ".join(experiment_names)
         limit_text = str(limit) if limit is not None else "none"
@@ -45,6 +46,12 @@ class AnalysisReporter:
             f"[bold]Rows loaded[/]   {row_count}\n"
             f"[bold]Row limit[/]     {limit_text}"
         )
+        if require_score is not None:
+            score_filter = (
+                "success only" if require_score 
+                else "include unscored"
+            )
+            body += f"\n[bold]Score filter[/]  {score_filter}"
         self.console.print(
             Panel(
                 body,

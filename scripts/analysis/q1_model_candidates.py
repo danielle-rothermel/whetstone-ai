@@ -15,6 +15,7 @@ from dr_dspy.analysis.cli_options import (
     EnvFileOption,
     ExperimentNameOption,
     LimitOption,
+    RequireScoreOption,
 )
 from dr_dspy.analysis.db import create_analysis_engine
 from dr_dspy.analysis.figures import FigureRun
@@ -229,6 +230,7 @@ def main(
     database_url: DatabaseUrlOption = None,
     env_file: EnvFileOption = None,
     limit: LimitOption = None,
+    require_score: RequireScoreOption = True,
 ) -> None:
     if env_file is not None:
         load_env_file(env_file)
@@ -248,6 +250,7 @@ def main(
         frame = load_encdec_analysis_frame(
             engine,
             experiment_name,
+            require_score=require_score,
             limit=limit,
         )
     finally:
@@ -257,6 +260,7 @@ def main(
         experiment_names=experiment_name,
         row_count=len(frame),
         limit=limit,
+        require_score=require_score,
     )
 
     summary = build_model_candidate_summary(frame)

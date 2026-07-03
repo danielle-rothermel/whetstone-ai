@@ -194,22 +194,11 @@ def _enrich_frame(frame: pd.DataFrame) -> pd.DataFrame:
 def select_encdec_analysis_rows(
     experiment_names: Sequence[str],
     *,
+    require_score: bool = True,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     limit: int | None = None,
 ) -> Select[tuple[Any, ...]]:
-    provider_cost = cast(
-        schema.node_attempts.c.usage_cost["provider_cost"].astext,
-        Float,
-    )
-    cost_subquery = (
-        select(
-            schema.node_attempts.c.generation_run_id.label("generation_run_id"),
-            func.sum(provider_cost).label("total_provider_cost"),
-        )
-        .group_by(schema.node_attempts.c.generation_run_id)
-        .subquery("run_costs")
-    )
     score_match = and_(
         schema.score_attempts.c.generation_run_id
         == schema.generation_runs.c.generation_run_id,
@@ -219,6 +208,20 @@ def select_encdec_analysis_rows(
         schema.score_attempts.c.scoring_profile_version
         == scoring_profile_version,
     )
+    if require_score:
+        score_match = and_(
+            score_match,
+            schema.score_attempts.c.status == ScoreAttemptStatus.SUCCESS.value,
+        )
+    from_clause = schema.prediction_specs.join(
+        schema.generation_runs,
+        schema.generation_runs.c.prediction_id
+        == schema.prediction_specs.c.prediction_id,
+    )
+    if require_score:
+        from_clause = from_clause.join(schema.score_attempts, score_match)
+    else:
+        from_clause = from_clause.outerjoin(schema.score_attempts, score_match)
     statement = (
         select(
             schema.prediction_specs.c.experiment_name,
@@ -239,21 +242,8 @@ def select_encdec_analysis_rows(
             schema.prediction_specs.c.provider_configs,
             schema.score_attempts.c.metrics,
             schema.score_attempts.c.attempt_index.label("score_attempt_index"),
-            cost_subquery.c.total_provider_cost,
         )
-        .select_from(
-            schema.prediction_specs.join(
-                schema.generation_runs,
-                schema.generation_runs.c.prediction_id
-                == schema.prediction_specs.c.prediction_id,
-            )
-            .outerjoin(schema.score_attempts, score_match)
-            .outerjoin(
-                cost_subquery,
-                cost_subquery.c.generation_run_id
-                == schema.generation_runs.c.generation_run_id,
-            )
-        )
+        .select_from(from_clause)
         .where(schema.prediction_specs.c.experiment_name.in_(experiment_names))
         .where(schema.prediction_specs.c.graph_layout == "encdec")
         .order_by(
@@ -268,16 +258,45 @@ def select_encdec_analysis_rows(
     return statement
 
 
+def _load_run_costs(
+    engine: Engine,
+    generation_run_ids: Sequence[str],
+) -> dict[str, float]:
+    if not generation_run_ids:
+        return {}
+    provider_cost = cast(
+        schema.node_attempts.c.usage_cost["provider_cost"].astext,
+        Float,
+    )
+    statement = (
+        select(
+            schema.node_attempts.c.generation_run_id,
+            func.sum(provider_cost).label("total_provider_cost"),
+        )
+        .where(schema.node_attempts.c.generation_run_id.in_(generation_run_ids))
+        .group_by(schema.node_attempts.c.generation_run_id)
+    )
+    with engine.connect() as connection:
+        rows = connection.execute(statement).all()
+    return {
+        str(generation_run_id): float(total_cost)
+        for generation_run_id, total_cost in rows
+        if total_cost is not None
+    }
+
+
 def load_encdec_analysis_frame(
     engine: Engine,
     experiment_names: Sequence[str],
     *,
+    require_score: bool = True,
     limit: int | None = None,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
 ) -> pd.DataFrame:
     statement = select_encdec_analysis_rows(
         experiment_names,
+        require_score=require_score,
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
         limit=limit,
@@ -285,6 +304,12 @@ def load_encdec_analysis_frame(
     with engine.connect() as connection:
         frame = pd.read_sql(statement, connection)
     frame = _dedupe_score_attempts(frame)
+    if not frame.empty:
+        costs = _load_run_costs(
+            engine,
+            frame["generation_run_id"].astype(str).tolist(),
+        )
+        frame["total_provider_cost"] = frame["generation_run_id"].map(costs)
     frame = _enrich_frame(frame)
     return frame.reindex(columns=[*BASE_FRAME_COLUMNS], fill_value=None)
 

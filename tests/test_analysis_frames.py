@@ -13,8 +13,10 @@ from dr_dspy.analysis.frames import (
     is_pass_row,
     normalize_compression_target,
     parse_score_metrics,
+    select_encdec_analysis_rows,
 )
 from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
+from dr_dspy.records import ScoreAttemptStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts" / "analysis"
@@ -27,6 +29,24 @@ def load_analysis_script(module_name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_select_encdec_analysis_rows_require_score_uses_inner_join() -> None:
+    scored = select_encdec_analysis_rows(
+        ["encdec-budget-full-v0"],
+        require_score=True,
+    )
+    scored_sql = str(scored.compile(compile_kwargs={"literal_binds": True}))
+    assert ScoreAttemptStatus.SUCCESS.value in scored_sql
+    assert "JOIN dr_dspy_score_attempts" in scored_sql
+    assert "LEFT OUTER JOIN dr_dspy_score_attempts" not in scored_sql
+
+    all_rows = select_encdec_analysis_rows(
+        ["encdec-budget-full-v0"],
+        require_score=False,
+    )
+    all_sql = str(all_rows.compile(compile_kwargs={"literal_binds": True}))
+    assert "LEFT OUTER JOIN dr_dspy_score_attempts" in all_sql
 
 
 def test_figure_run_path_uses_script_folder_and_timestamp() -> None:

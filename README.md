@@ -135,7 +135,9 @@ figures, and a styled HTML run log. Tabular outputs go to
 run logs go to `figs/{script_name}/` (tracked in git).
 
 Replace the experiment name with your backfill or sweep experiment as data
-becomes available:
+becomes available. By default only runs with a successful `humaneval@v1` score
+are included (`--require-score`); use `--include-unscored` while rescoring is
+still in progress.
 
 ```bash
 uv run python scripts/analysis/q1_model_candidates.py \
