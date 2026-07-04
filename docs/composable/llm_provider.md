@@ -171,4 +171,9 @@ batch-runner extraction).
 - Exact home and shape of the shared JSON contract / corpus so a future
   TS implementation can consume it.
 - Conformance severity policy: which violations default to warnings vs
-  errors at the library level.
+  errors at the library level. **Resolved at extraction (Stage 4b,
+  2026-07-04), smallest conservative choice:** every conformance check
+  (reasoning-not-observed, token-limit-exceeded, model-substitution)
+  defaults to severity WARNING; nothing is fatal at the library level —
+  the caller decides. Escalation policies can land later without a
+  breaking change because severity is data on the warning record.

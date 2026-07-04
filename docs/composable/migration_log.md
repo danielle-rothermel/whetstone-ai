@@ -8,7 +8,7 @@
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
-| 4 dr-providers v0.2 | in_progress | 4a kernel done (60 tests, PR #3); next: 4b transport/conformance/corpus, 4c cutover |
+| 4 dr-providers v0.2 | in_progress | 4a+4b done (83 tests: kernel, httpx transport, conformance, corpus); next: 4c cutover |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
 | final e2e | pending | |
@@ -231,3 +231,27 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   openai/httpx table, node_attempt_id as idempotency key,
   FixtureProvider end-to-end node execution test, optional live smokes
   — OPENAI/GEMINI/OPENROUTER keys all present).
+
+### 2026-07-04 — stage 4, sub-step 4b (transport + conformance + corpus)
+
+- Landed (dr-providers 68920d1): `kernel/transport.py` — `HttpProvider`
+  over raw httpx implementing the Provider protocol; explicit timeouts;
+  all failure classification in one place; retry strictly opt-in
+  (`TransportPolicy.max_retries` default 0, bounded exponential backoff
+  with jitter, injectable sleep/rng); `Idempotency-Key` header from
+  `request.idempotency_key`. `kernel/conformance.py` — evidence-based
+  post-response checks (reasoning-not-observed, token-limit-exceeded,
+  model-substitution) emitted as WARNING-severity records; severity
+  default recorded as resolved in `llm_provider.md`.
+- Corpus: `data/kernel-corpus/responses.jsonl` seeded with 8 response
+  shapes grown from whetstone's boundary fixtures, each with
+  ground-truth parses; `test_kernel_corpus.py` regression-checks the
+  parsers against it (never edit expectations to match a parser change
+  without a recorded decision).
+- Verified: dr-providers 83 tests green; ruff + ty clean.
+- Remaining for stage 4: **4c** whetstone cutover — `lm/boundary.py`
+  becomes the thin adapter over the kernel; `eval_failures/policy.py`
+  drops the openai/httpx heuristic table (keeps psycopg/DBOS);
+  `node_attempt_id` passed as idempotency key; whetstone test exercises
+  node execution end-to-end against `FixtureProvider` with no network;
+  optional one live smoke per configured provider (all keys present).
