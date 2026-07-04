@@ -8,7 +8,7 @@
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
-| 4 dr-providers v0.2 | in_progress | 4a+4b done (83 tests: kernel, httpx transport, conformance, corpus); next: 4c cutover |
+| 4 dr-providers v0.2 | in_progress | 4a+4b+4c-i done (FailureClass re-homed); next: 4c-ii boundary/SDK cutover + e2e + smokes |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
 | final e2e | pending | |
@@ -255,3 +255,34 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   `node_attempt_id` passed as idempotency key; whetstone test exercises
   node execution end-to-end against `FixtureProvider` with no network;
   optional one live smoke per configured provider (all keys present).
+
+### 2026-07-04 — stage 4, sub-step 4c-i (FailureClass re-home)
+
+- Landed (whetstone 9deae23): `eval_failures/types.py` deleted;
+  `FailureClass` + RECOVERABLE/RETRYABLE sets import from
+  `dr_providers.kernel.failures` (canonical home; enum values unchanged
+  so persisted `failure_class` strings are byte-identical);
+  `RETRYABLE_STEP_FAILURE_CLASSES` → kernel's
+  `RETRYABLE_FAILURE_CLASSES` at all call sites; policy chain-walker
+  unwraps kernel `ProviderFailureError` carriers; dr-providers wired as
+  path dep.
+- Landed (dr-providers 4c3434e): package root and kernel `__init__` use
+  PEP 562 lazy exports so importing the failure taxonomy never loads
+  httpx — required by whetstone's import-hygiene tests
+  (test_lm_imports, test_eval_failures_policy). Public surfaces
+  unchanged.
+- Deliberately kept: policy's openai/httpx heuristic table stays until
+  4c-ii removes the OpenAI SDK from node_execution (dropping the table
+  first would degrade runtime classification while the SDK is the
+  transport).
+- Verified: whetstone 605 unit + 45 integration + 4 golden green; ty +
+  ruff clean; dr-providers 83 green.
+- Remaining for stage 4 (**4c-ii**): lm/boundary.py → thin adapter over
+  the kernel (enums imported from kernel everywhere; whetstone
+  ProviderConfig replaced by kernel config; LlmResponse →
+  ProviderResult converter); node_execution.py drops the OpenAI SDK for
+  Provider injection (HttpProvider default, node_attempt_id as
+  idempotency key); policy drops the openai/httpx table; FixtureProvider
+  end-to-end node execution test; test updates (test_lm_boundary,
+  node_execution/graph_workflow mocks); optional live smokes (keys
+  present).
