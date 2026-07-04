@@ -33,6 +33,11 @@ from dr_platform import (
     submit_batch,
 )
 
+# 6d validation note: whetstone ships this loop for real —
+# platform/submission.py wires the seed hook + enqueue target, and
+# optimization/copro.py's evaluate_specs_queue awaits the operation.
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
+
 # --- app-side domain (stays in whetstone) ----------------------------------
 # Spec manufacture stays on the app's frozen identity contract:
 # spec_builder + records/hashing own prediction_id / fair_order_key.
@@ -43,35 +48,23 @@ from whetstone.platform.spec_builder import (  # noqa: E402 -- illustrative
 from whetstone.records import PredictionSpecRecord  # noqa: E402
 
 
-class SpecItem(BaseModel):
-    """Adapter: PredictionSpecRecord -> SubmittableItem. The protocol
-    maps onto the app's frozen axes; nothing is re-hashed."""
-
-    spec: PredictionSpecRecord
-
-    @property
-    def item_id(self) -> str:
-        return self.spec.prediction_id
-
-    @property
-    def order_key(self) -> str:
-        return self.spec.fair_order_key
-
-    @property
-    def group_key(self) -> str:
-        return self.spec.experiment_name
+# (6d validation: no adapter class needed — PredictionSpecRecord
+# itself satisfies SubmittableItem via item_id/order_key/group_key
+# properties on the frozen axes; nothing is re-hashed.)
 
 
-def insert_domain_rows(engine: Any, specs: Sequence[Any]) -> None:
-    """App-side: experiment + prediction-spec rows in the app's outcome
-    schema (idempotent inserts). The library never writes these."""
+def insert_domain_rows(connection: Any, specs: Sequence[Any]) -> set[str]:
+    """App-side seed hook: experiment + prediction-spec rows in the
+    app's outcome schema, inside the library's registration
+    transaction; returns newly-inserted ids (whetstone ships this as
+    submission._seed_experiment_and_specs)."""
     raise NotImplementedError("domain code, not part of the sketch")
 
 
-def start_generation_workflow(item_id: str) -> str:
-    """App-side enqueue target (today:
-    start_prediction_graph_workflow with its deterministic
-    workflow id). item_id is prediction_id."""
+def start_generation_workflow(item_id: str) -> "EnqueueOutcome":
+    """App-side enqueue target (whetstone ships this: queue_worker's
+    enqueue_prediction_graph_workflow over dr_platform.dedup_enqueue).
+    item_id is prediction_id."""
     raise NotImplementedError("domain code, not part of the sketch")
 
 
@@ -126,7 +119,6 @@ def run_optimizer(
             candidates,
             experiment_name=experiment_name,
         )
-        insert_domain_rows(engine, specs)
 
         # One operation key per population: re-running a crashed depth
         # reconciles instead of double-submitting (stable item ids).
@@ -134,20 +126,27 @@ def run_optimizer(
         submit_batch(
             engine,
             operation_key=operation_key,
-            items=[SpecItem(spec=spec) for spec in specs],
+            group_key=experiment_name,
+            items=list(specs),
             enqueue=start_generation_workflow,
+            schema=PLATFORM_SCHEMA,
+            seed=lambda connection, window: insert_domain_rows(
+                connection, window
+            ),
         )
         await_operation(
             engine,
             operation_key=operation_key,
+            schema=PLATFORM_SCHEMA,
             poll_interval_seconds=15.0,
             timeout_seconds=3600.0,
         )
 
-        rebuild_projection(engine, SCORES_PROJECTION)
+        rebuild_projection(engine, SCORES_PROJECTION, schema=PLATFORM_SCHEMA)
         frame = load_projection_frame(
             engine,
             SCORES_PROJECTION,
+            schema=PLATFORM_SCHEMA,
             group_key=experiment_name,
         )
         best = select_best(frame, candidates)

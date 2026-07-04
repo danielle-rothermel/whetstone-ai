@@ -20,18 +20,24 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import create_engine
 
-# The entire import surface a consumer needs. No internals, no
-# dr_platform.db / dr_platform.submission / dr_platform._anything.
+# The entire import surface a consumer needs. No internals beyond the
+# public facade. (6d validation: signatures below match the shipped
+# dr-platform API.)
 from dr_platform import (
     LocalDirArtifactStore,
+    PlatformSchema,
     ProjectionSpec,
     await_operation,
-    load_operation_progress,
+    load_operation_snapshot,
     load_projection_frame,
     rebuild_projection,
     stable_item_id,
     submit_batch,
 )
+
+# One schema handle per app: physical naming (fresh adopters keep the
+# neutral defaults).
+PLATFORM = PlatformSchema()
 
 # --- app-side domain (stays in nl_latents) --------------------------------
 
@@ -82,10 +88,11 @@ def sample_prompts(seed: int) -> list[tuple[str, str]]:
     raise NotImplementedError("domain code, not part of the sketch")
 
 
-def start_probe_workflow(item_id: str) -> str:
+def start_probe_workflow(item_id: str) -> "EnqueueOutcome":
     """App-side enqueue target: starts the durable DBOS workflow for
-    one item and returns the (deterministic) workflow id. The app owns
-    workflows and steps; the library never sees a step definition."""
+    one item (dr_platform.dedup_enqueue makes this a one-liner) and
+    reports the outcome. The app owns workflows and steps; the library
+    never sees a step definition."""
     raise NotImplementedError("domain code, not part of the sketch")
 
 
@@ -120,8 +127,10 @@ def run(database_url: str) -> None:
     result = submit_batch(
         engine,
         operation_key=f"{RUN_NAME}-seed",
+        group_key=RUN_NAME,
         items=items,
         enqueue=start_probe_workflow,
+        schema=PLATFORM,
     )
     print(result.enqueued_count, result.already_scheduled_count)
 
@@ -130,13 +139,17 @@ def run(database_url: str) -> None:
     await_operation(
         engine,
         operation_key=f"{RUN_NAME}-seed",
+        schema=PLATFORM,
         poll_interval_seconds=30.0,
         timeout_seconds=6 * 3600.0,
     )
-    progress = load_operation_progress(
-        engine, operation_key=f"{RUN_NAME}-seed"
-    )
-    print(progress.model_dump())
+    with engine.connect() as connection:
+        snapshot = load_operation_snapshot(
+            connection,
+            operation_key=f"{RUN_NAME}-seed",
+            schema=PLATFORM,
+        )
+    print(snapshot.model_dump() if snapshot else None)
 
 
 # --- 3) read: rebuildable typed projection ---------------------------------
@@ -166,8 +179,8 @@ PROBE_PROJECTION = ProjectionSpec(
 
 def read(database_url: str) -> None:
     engine = create_engine(database_url)
-    rebuild_projection(engine, PROBE_PROJECTION)
-    frame = load_projection_frame(engine, PROBE_PROJECTION)
+    rebuild_projection(engine, PROBE_PROJECTION, schema=PLATFORM)
+    frame = load_projection_frame(engine, PROBE_PROJECTION, schema=PLATFORM)
 
     store = LocalDirArtifactStore(root="~/.nl-latents/artifacts")
     heavy = frame.loc[frame["activation_sparsity"] < 0.01]

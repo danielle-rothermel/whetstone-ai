@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import json
 import re
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dr_platform import AwaitOperationTimeoutError, await_operation
 from dr_providers.kernel import EndpointKind, ProviderKind
 from dr_serialize import sha256_json_digest
 from pydantic import (
@@ -25,15 +25,13 @@ from pydantic import (
     StrictStr,
     model_validator,
 )
-from sqlalchemy import Engine, func, select
-from sqlalchemy.engine import Connection
+from sqlalchemy import Engine
 
 from whetstone.analysis.frames import (
     load_encdec_analysis_frame,
     pass_mask,
     score_success_mask,
 )
-from whetstone.db import schema
 from whetstone.lm.boundary import (
     PlainPromptAdapter,
     llm_request_for_node,
@@ -46,6 +44,7 @@ from whetstone.platform.node_execution import (
     default_http_provider,
     runtime_provider_config,
 )
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
 from whetstone.platform.rescoring import rescore_generation_runs
 from whetstone.platform.scoring_workflow import (
     run_score_generation_workflow_once,
@@ -116,11 +115,6 @@ Baseline instructions_end:
 Prior attempts, ordered by score:
 {attempt_history}
 """
-TERMINAL_GENERATION_STATUSES = frozenset(
-    status.value for status in GenerationRunStatus
-)
-
-
 class CoproProposalMode(StrEnum):
     MANUAL = "manual"
     LM = "lm"
@@ -818,81 +812,7 @@ def evaluate_specs_sync(
     return generation_run_ids
 
 
-def _count_non_terminal_generation_runs(
-    connection: Connection,
-    *,
-    experiment_name: str,
-    prediction_ids: Sequence[str],
-) -> int:
-    if not prediction_ids:
-        return 0
-    statement = (
-        select(func.count())
-        .select_from(schema.generation_runs.join(schema.prediction_specs))
-        .where(
-            schema.prediction_specs.c.experiment_name == experiment_name,
-            schema.prediction_specs.c.prediction_id.in_(prediction_ids),
-            schema.generation_runs.c.prediction_id
-            == schema.prediction_specs.c.prediction_id,
-            schema.generation_runs.c.status.notin_(
-                TERMINAL_GENERATION_STATUSES
-            ),
-        )
-    )
-    return int(connection.execute(statement).scalar_one())
 
-
-def _count_missing_generation_runs(
-    connection: Connection,
-    *,
-    experiment_name: str,
-    prediction_ids: Sequence[str],
-) -> int:
-    if not prediction_ids:
-        return 0
-    existing = select(schema.generation_runs.c.prediction_id).where(
-        schema.generation_runs.c.prediction_id.in_(prediction_ids)
-    )
-    statement = (
-        select(func.count())
-        .select_from(schema.prediction_specs)
-        .where(
-            schema.prediction_specs.c.experiment_name == experiment_name,
-            schema.prediction_specs.c.prediction_id.in_(prediction_ids),
-            schema.prediction_specs.c.prediction_id.notin_(existing),
-        )
-    )
-    return int(connection.execute(statement).scalar_one())
-
-
-def wait_for_generation_runs(
-    engine: Engine,
-    *,
-    experiment_name: str,
-    prediction_ids: Sequence[str],
-    poll_interval_seconds: float,
-    poll_timeout_seconds: float,
-) -> None:
-    deadline = time.monotonic() + poll_timeout_seconds
-    while time.monotonic() < deadline:
-        with engine.connect() as connection:
-            missing = _count_missing_generation_runs(
-                connection,
-                experiment_name=experiment_name,
-                prediction_ids=prediction_ids,
-            )
-            non_terminal = _count_non_terminal_generation_runs(
-                connection,
-                experiment_name=experiment_name,
-                prediction_ids=prediction_ids,
-            )
-        if missing == 0 and non_terminal == 0:
-            return
-        time.sleep(poll_interval_seconds)
-    raise TimeoutError(
-        "timed out waiting for generation runs to complete; "
-        "ensure `python -m whetstone.platform.worker worker` is running"
-    )
 
 
 def evaluate_specs_queue(
@@ -914,14 +834,20 @@ def evaluate_specs_queue(
         specs=specs,
         metadata={"optimizer": OPTIMIZER_NAME},
     )
-    prediction_ids = [spec.prediction_id for spec in specs]
-    wait_for_generation_runs(
-        engine,
-        experiment_name=experiment_name,
-        prediction_ids=prediction_ids,
-        poll_interval_seconds=poll_interval_seconds,
-        poll_timeout_seconds=poll_timeout_seconds,
-    )
+    try:
+        await_operation(
+            engine,
+            operation_key=operation_key,
+            schema=PLATFORM_SCHEMA,
+            poll_interval_seconds=poll_interval_seconds,
+            timeout_seconds=poll_timeout_seconds,
+        )
+    except AwaitOperationTimeoutError as error:
+        raise TimeoutError(
+            "timed out waiting for generation workflows to complete; "
+            "ensure `python -m whetstone.platform.worker worker` is "
+            f"running ({error.breakdown.status_counts})"
+        ) from error
     rescore_generation_runs(
         engine,
         database_url=database_url,

@@ -2,10 +2,13 @@
 
 # Platform Extraction: High-Level Design
 
-Status: design complete (Stage 6 design half, 2026-07-04) — the former
-open sections are filled in at the bottom; consumer sketches live in
-`sketches/nl_latents_loop.py` and `sketches/optimizer_population_eval.py`.
-Extraction has not started.
+Status: extracted (Stage 6 complete, 2026-07-04). The library lives at
+`danielle-rothermel/dr-platform`; whetstone consumes it via
+`platform/platform_db.py` (frozen physical naming + lineage adoption),
+`platform/submission.py` (the app composition), and `queue_worker.py`.
+The former open sections are filled in at the bottom; consumer sketches
+live in `sketches/` and were re-checked against the shipped facade
+(6d).
 
 This doc covers the **platform library** extraction: the durable
 experiment-running machinery currently embedded in `dr_dspy.platform` (plus
@@ -162,6 +165,16 @@ no internals.
 maps to exactly one facade call. The one facade addition they forced
 is `await_operation` — both consumers otherwise re-implement
 work-completion polling.)*
+
+*(6d re-check against the shipped library: the altitude held — no
+passthrough wrappers accreted. Drift folded back into the sketches:
+facade calls take an explicit `schema` handle (`PlatformSchema`) and
+`group_key`; the seed hook runs inside the registration transaction
+and returns inserted ids; no adapter class is needed for whetstone
+(`PredictionSpecRecord` satisfies `SubmittableItem` directly). The
+optimizer loop is no longer hypothetical: whetstone's
+`evaluate_specs_queue` now runs submit_batch → await_operation →
+rescore in production code.)*
 
 Second consumer sketch: **optimizer population evaluation**. An outer-loop
 optimizer (COPRO today; GEPA/RL later) manufactures a population of graph
