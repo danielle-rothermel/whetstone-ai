@@ -13,6 +13,7 @@ from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 from dr_graph import GraphSpec
+from dr_platform import BatchOperationStatus
 from sqlalchemy import create_engine
 
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
@@ -35,7 +36,6 @@ from whetstone.platform.scoring_workflow import (
     run_score_generation_workflow_once,
 )
 from whetstone.records import (
-    BatchSubmitOperationStatus,
     GenerationRunStatus,
     stable_generation_run_id,
     stable_score_attempt_id,
@@ -122,7 +122,7 @@ def test_jsonl_submit_enqueue_generation_and_scoring(
     assert submit_result.enqueued_count == 1
     assert (
         fetch_batch_submit_operation_status(database_url, operation_key)
-        == BatchSubmitOperationStatus.COMPLETED.value
+        == BatchOperationStatus.COMPLETED.value
     )
 
     generation_run_id = stable_generation_run_id(

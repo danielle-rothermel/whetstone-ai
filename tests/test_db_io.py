@@ -23,11 +23,6 @@ from whetstone.db import io
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
     DimensionsPayload,
     ExperimentRecord,
     GenerationRunRecord,
@@ -560,7 +555,7 @@ def test_generation_run_row_round_trips_through_record_from_row() -> None:
     assert round_tripped == record
 
 
-def test_batch_and_projection_rows_round_trip() -> None:
+def test_projection_rows_round_trip() -> None:
     projection = PredictionProjectionRecord(
         prediction_id="prediction-1",
         generation_run_id="run-1",
@@ -569,29 +564,6 @@ def test_batch_and_projection_rows_round_trip() -> None:
         projection_version="v1",
         selected_at=NOW,
         selection_reason="latest validated score",
-    )
-    operation = BatchSubmitOperationRecord(
-        operation_key="op-1",
-        experiment_name="exp",
-        status=BatchSubmitOperationStatus.PARTIAL,
-        requested_count=2,
-        inserted_count=1,
-        failed_count=1,
-        spec={"batch_size": 2},
-        metadata={"source": "test"},
-        created_at=NOW,
-        completed_at=NOW,
-    )
-    item = BatchSubmitItemRecord(
-        batch_submit_item_id="item-1",
-        operation_key="op-1",
-        item_index=1,
-        prediction_id="prediction-1",
-        fair_order_key="abc",
-        insert_status=BatchSubmitItemInsertStatus.INSERTED,
-        enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
-        enqueue_metadata={"queue": "generation"},
-        created_at=NOW,
     )
     experiment = ExperimentRecord(
         experiment_name="exp",
@@ -603,12 +575,6 @@ def test_batch_and_projection_rows_round_trip() -> None:
     assert io.prediction_projection_record_from_row(
         io.prediction_projection_row(projection)
     ) == projection
-    assert io.batch_submit_operation_record_from_row(
-        io.batch_submit_operation_row(operation)
-    ) == operation
-    assert io.batch_submit_item_record_from_row(
-        io.batch_submit_item_row(item)
-    ) == item
     assert io.experiment_record_from_row(io.experiment_row(experiment)) == (
         experiment
     )

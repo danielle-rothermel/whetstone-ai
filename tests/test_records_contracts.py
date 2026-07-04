@@ -35,11 +35,6 @@ from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
     AstMetricsPayload,
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
     DimensionsPayload,
     ExtractedCodePayload,
     FailureMetadataPayload,
@@ -969,7 +964,7 @@ def test_per_test_result_aligns_with_humaneval_case_summary() -> None:
     }
 
 
-def test_projection_and_batch_records_validate_json_contracts() -> None:
+def test_projection_record_validates_json_contracts() -> None:
     projection = PredictionProjectionRecord(
         prediction_id="prediction-1",
         generation_run_id="run-1",
@@ -979,63 +974,12 @@ def test_projection_and_batch_records_validate_json_contracts() -> None:
         selected_at=NOW,
         selection_reason="latest validated score",
     )
-    operation = BatchSubmitOperationRecord(
-        operation_key="op-1",
-        experiment_name="exp",
-        status=BatchSubmitOperationStatus.PARTIAL,
-        requested_count=2,
-        inserted_count=1,
-        failed_count=1,
-        created_at=NOW,
-        completed_at=NOW,
-    )
-    item = BatchSubmitItemRecord(
-        batch_submit_item_id="item-1",
-        operation_key="op-1",
-        item_index=1,
-        prediction_id="prediction-1",
-        fair_order_key="abc",
-        insert_status=BatchSubmitItemInsertStatus.INSERTED,
-        enqueue_status=BatchSubmitItemEnqueueStatus.FAILED,
-        failure=_failure(),
-        created_at=NOW,
-    )
 
     assert projection.model_dump(mode="json")["selected_at"].startswith(
         "2026-06-29"
     )
-    assert operation.model_dump(mode="json")["status"] == "partial"
-    assert item.model_dump(mode="json")["failure"]["message"] == "boom"
 
 
-def test_batch_submit_item_claiming_requires_claim_metadata() -> None:
-    with pytest.raises(ValidationError, match="enqueue_claim_id"):
-        BatchSubmitItemRecord(
-            batch_submit_item_id="item-1",
-            operation_key="op-1",
-            item_index=0,
-            prediction_id="prediction-1",
-            fair_order_key="abc",
-            insert_status=BatchSubmitItemInsertStatus.INSERTED,
-            enqueue_status=BatchSubmitItemEnqueueStatus.CLAIMING,
-            enqueue_metadata={},
-            created_at=NOW,
-        )
-
-
-def test_batch_submit_item_pending_rejects_claim_metadata() -> None:
-    with pytest.raises(ValidationError, match="empty enqueue_metadata"):
-        BatchSubmitItemRecord(
-            batch_submit_item_id="item-1",
-            operation_key="op-1",
-            item_index=0,
-            prediction_id="prediction-1",
-            fair_order_key="abc",
-            insert_status=BatchSubmitItemInsertStatus.INSERTED,
-            enqueue_status=BatchSubmitItemEnqueueStatus.PENDING,
-            enqueue_metadata={"enqueue_claim_id": "claim-1"},
-            created_at=NOW,
-        )
 
 
 def test_projection_requires_selected_generation_or_score() -> None:

@@ -3,8 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
-from dr_platform import WORKFLOW_START_RACE_ERRORS
+from dbos import DBOS
+from dr_platform import dedup_enqueue
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
 from whetstone.platform.graph_workflow import (
@@ -101,51 +101,15 @@ def enqueue_prediction_graph_workflow(
         prediction_id=prediction_id,
         attempt_index=attempt_index,
     )
-    workflow_id = platform_generation_workflow_id(generation_run_id)
-    if DBOS.get_workflow_status(workflow_id) is not None:
-        return _enqueued_workflow(
-            prediction_id=prediction_id,
-            generation_run_id=generation_run_id,
-            workflow_id=workflow_id,
-            enqueued=False,
-        )
-    with (
-        SetWorkflowID(workflow_id),
-        SetEnqueueOptions(deduplication_id=workflow_id),
-    ):
-        try:
-            DBOS.enqueue_workflow(
-                queue_name,
-                workflow,
-                database_url,
-                prediction_id,
-                attempt_index,
-            )
-        except WORKFLOW_START_RACE_ERRORS:
-            return _enqueued_workflow(
-                prediction_id=prediction_id,
-                generation_run_id=generation_run_id,
-                workflow_id=workflow_id,
-                enqueued=False,
-            )
-    return _enqueued_workflow(
-        prediction_id=prediction_id,
-        generation_run_id=generation_run_id,
-        workflow_id=workflow_id,
-        enqueued=True,
+    outcome = dedup_enqueue(
+        queue_name=queue_name,
+        workflow_id=platform_generation_workflow_id(generation_run_id),
+        workflow=workflow,
+        args=(database_url, prediction_id, attempt_index),
     )
-
-
-def _enqueued_workflow(
-    *,
-    prediction_id: str,
-    generation_run_id: str,
-    workflow_id: str,
-    enqueued: bool,
-) -> EnqueuedPredictionWorkflow:
     return EnqueuedPredictionWorkflow(
         prediction_id=prediction_id,
         generation_run_id=generation_run_id,
-        workflow_id=workflow_id,
-        enqueued=enqueued,
+        workflow_id=outcome.workflow_id,
+        enqueued=outcome.enqueued,
     )

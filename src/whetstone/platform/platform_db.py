@@ -40,8 +40,15 @@ def ensure_platform_schema(database_url: str) -> None:
     engine = create_engine(resolved)
     try:
         with engine.connect() as connection:
+            # Pin to the first search_path schema: a lineage living in a
+            # fallback schema (e.g. public on the dev DB) must not mask
+            # an unadopted scratch schema.
+            current_schema = connection.exec_driver_sql(
+                "SELECT current_schema()"
+            ).scalar()
             has_lineage = inspect(connection).has_table(
-                WHETSTONE_PLATFORM_NAMING.alembic_version_table
+                WHETSTONE_PLATFORM_NAMING.alembic_version_table,
+                schema=current_schema,
             )
     finally:
         engine.dispose()

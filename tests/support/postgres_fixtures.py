@@ -5,12 +5,17 @@ from __future__ import annotations
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
+from dr_platform import BatchItemRecord, BatchOperationRecord
+from dr_platform.submission import (
+    batch_item_insert_values,
+    batch_operation_row,
+)
 from sqlalchemy.engine import Connection
 
 from whetstone.db import io as db_io
+from whetstone.db import schema as db_schema
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
 from whetstone.records import (
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
     ExperimentRecord,
     PredictionSpecRecord,
 )
@@ -41,16 +46,24 @@ def seed_prediction_spec(
 
 def seed_batch_submit_operation(
     connection: Connection,
-    operation: BatchSubmitOperationRecord,
+    operation: BatchOperationRecord,
 ) -> None:
-    connection.execute(db_io.insert_batch_submit_operation(operation))
+    connection.execute(
+        db_schema.batch_submit_operations.insert().values(
+            batch_operation_row(operation, schema=PLATFORM_SCHEMA)
+        )
+    )
 
 
 def seed_batch_submit_item(
     connection: Connection,
-    item: BatchSubmitItemRecord,
+    item: BatchItemRecord,
 ) -> None:
-    connection.execute(db_io.insert_batch_submit_item(item))
+    connection.execute(
+        db_schema.batch_submit_items.insert().values(
+            batch_item_insert_values(item, schema=PLATFORM_SCHEMA)
+        )
+    )
 
 
 def start_test_workflow(workflow: Any, workflow_id: str, *args: Any) -> Any:

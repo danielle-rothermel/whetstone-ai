@@ -7,17 +7,12 @@ from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_graph import GraphRunStatus, NodeError, NodeOutput
 from dr_providers.kernel.failures import FailureClass
 from pydantic import BaseModel
-from sqlalchemy import Select, and_, func, null, select, update
-from sqlalchemy.sql.dml import Insert, Update
+from sqlalchemy import Select, and_, func, select
+from sqlalchemy.sql.dml import Insert
 
 from whetstone.db import schema
 from whetstone.eval_failures.recording import ensure_recordable
 from whetstone.records import (
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
     DimensionsPayload,
     ExperimentRecord,
     ExtractedCodePayload,
@@ -236,48 +231,7 @@ def prediction_projection_row(record: PredictionProjectionRecord) -> Row:
     }
 
 
-def batch_submit_operation_row(record: BatchSubmitOperationRecord) -> Row:
-    row = {
-        "operation_key": record.operation_key,
-        "experiment_name": record.experiment_name,
-        "status": record.status.value,
-        "requested_count": record.requested_count,
-        "inserted_count": record.inserted_count,
-        "already_present_count": record.already_present_count,
-        "enqueued_count": record.enqueued_count,
-        "already_scheduled_count": record.already_scheduled_count,
-        "failed_count": record.failed_count,
-        "spec": record.spec,
-        "metadata": record.metadata,
-        "created_at": record.created_at,
-        "completed_at": record.completed_at,
-    }
-    _validate_jsonb_fields(row, *BATCH_SUBMIT_OPERATION_JSONB_FIELDS)
-    return row
 
-
-def batch_submit_item_row(record: BatchSubmitItemRecord) -> Row:
-    row = {
-        "batch_submit_item_id": record.batch_submit_item_id,
-        "operation_key": record.operation_key,
-        "item_index": record.item_index,
-        "prediction_id": record.prediction_id,
-        "fair_order_key": record.fair_order_key,
-        "insert_status": record.insert_status.value,
-        "enqueue_status": record.enqueue_status.value,
-        "enqueue_metadata": record.enqueue_metadata,
-        "failure": _dump_optional(record.failure),
-        "created_at": record.created_at,
-    }
-    _validate_jsonb_fields(row, *BATCH_SUBMIT_ITEM_JSONB_FIELDS)
-    return row
-
-
-def batch_submit_item_insert_values(record: BatchSubmitItemRecord) -> Row:
-    row = dict(batch_submit_item_row(record))
-    if row["failure"] is None:
-        row["failure"] = null()
-    return row
 
 
 def experiment_record_from_row(row: Row) -> ExperimentRecord:
@@ -402,38 +356,6 @@ def prediction_projection_record_from_row(
     )
 
 
-def batch_submit_operation_record_from_row(
-    row: Row,
-) -> BatchSubmitOperationRecord:
-    return BatchSubmitOperationRecord(
-        operation_key=row["operation_key"],
-        experiment_name=row["experiment_name"],
-        status=BatchSubmitOperationStatus(row["status"]),
-        requested_count=row["requested_count"],
-        inserted_count=row["inserted_count"],
-        already_present_count=row["already_present_count"],
-        enqueued_count=row["enqueued_count"],
-        failed_count=row["failed_count"],
-        spec=row["spec"],
-        metadata=row["metadata"],
-        created_at=row["created_at"],
-        completed_at=row["completed_at"],
-    )
-
-
-def batch_submit_item_record_from_row(row: Row) -> BatchSubmitItemRecord:
-    return BatchSubmitItemRecord(
-        batch_submit_item_id=row["batch_submit_item_id"],
-        operation_key=row["operation_key"],
-        item_index=row["item_index"],
-        prediction_id=row["prediction_id"],
-        fair_order_key=row["fair_order_key"],
-        insert_status=BatchSubmitItemInsertStatus(row["insert_status"]),
-        enqueue_status=BatchSubmitItemEnqueueStatus(row["enqueue_status"]),
-        enqueue_metadata=row["enqueue_metadata"],
-        failure=_load_optional(FailureMetadataPayload, row["failure"]),
-        created_at=row["created_at"],
-    )
 
 
 def insert_experiment(record: ExperimentRecord) -> Insert:
@@ -466,46 +388,9 @@ def insert_prediction_projection(
     )
 
 
-def insert_batch_submit_operation(
-    record: BatchSubmitOperationRecord,
-) -> Insert:
-    return schema.batch_submit_operations.insert().values(
-        batch_submit_operation_row(record)
-    )
 
 
-def update_batch_submit_operation(
-    record: BatchSubmitOperationRecord,
-) -> Update:
-    row = batch_submit_operation_row(record)
-    operation_key = row.pop("operation_key")
-    return (
-        update(schema.batch_submit_operations)
-        .where(schema.batch_submit_operations.c.operation_key == operation_key)
-        .values(row)
-    )
 
-
-def insert_batch_submit_item(record: BatchSubmitItemRecord) -> Insert:
-    return schema.batch_submit_items.insert().values(
-        batch_submit_item_insert_values(record)
-    )
-
-
-def select_batch_submit_operation(
-    operation_key: str,
-) -> Select[tuple[Any, ...]]:
-    return select(schema.batch_submit_operations).where(
-        schema.batch_submit_operations.c.operation_key == operation_key
-    )
-
-
-def select_batch_submit_items(
-    operation_key: str,
-) -> Select[tuple[Any, ...]]:
-    return select(schema.batch_submit_items).where(
-        schema.batch_submit_items.c.operation_key == operation_key
-    ).order_by(schema.batch_submit_items.c.item_index)
 
 
 def select_prediction_spec(prediction_id: str) -> Select[tuple[Any, ...]]:

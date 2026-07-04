@@ -3,6 +3,11 @@ from __future__ import annotations
 from enum import StrEnum
 
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_platform.batch_status import (
+    BatchItemEnqueueStatus,
+    BatchItemInsertStatus,
+    BatchOperationStatus,
+)
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -20,9 +25,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 
 from whetstone.records import (
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitOperationStatus,
     GenerationRunStatus,
     NodeAttemptStatus,
     ScoreAttemptStatus,
@@ -442,7 +444,7 @@ batch_submit_operations = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True)),
     CheckConstraint(
-        enum_check("status", BatchSubmitOperationStatus),
+        enum_check("status", BatchOperationStatus),
         name="ck_dr_dspy_batch_ops_status",
     ),
     CheckConstraint(
@@ -493,11 +495,11 @@ batch_submit_items = Table(
         name="ck_dr_dspy_batch_items_item_index",
     ),
     CheckConstraint(
-        enum_check("insert_status", BatchSubmitItemInsertStatus),
+        enum_check("insert_status", BatchItemInsertStatus),
         name="ck_dr_dspy_batch_items_insert_status",
     ),
     CheckConstraint(
-        enum_check("enqueue_status", BatchSubmitItemEnqueueStatus),
+        enum_check("enqueue_status", BatchItemEnqueueStatus),
         name="ck_dr_dspy_batch_items_enqueue_status",
     ),
     CheckConstraint(
