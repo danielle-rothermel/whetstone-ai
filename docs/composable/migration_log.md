@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design + 6a + 6b done (dr-platform complete, 101 tests incl. Postgres claim/lease); 6c whetstone cutover, 6d validation pending |
+| 6 platform | in_progress | design + 6a + 6b + 6c-i done (dep, lineage adoption, progress/compat/bootstrap/backoff cut over); 6c-ii submission/jsonl/fairness/queue_worker/batch-records/worker-CLI, 6d validation pending |
 | final e2e | pending | |
 
 ## Environment
@@ -502,3 +502,35 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   enqueue target over dedup_enqueue, backoff call-site updates, stamp
   0001 + run 0002, delete extracted modules, worker CLI rewire); 6d
   consumer validation.
+
+### 2026-07-04 — stage 6, sub-step 6c-i (whetstone cutover: lineage + first modules)
+
+- Landed (whetstone ace4241): dr-platform path dep;
+  platform/platform_db.py — WHETSTONE_PLATFORM_NAMING (prefix dr_dspy,
+  item/order/group labels prediction_id/fair_order_key/experiment_name;
+  id_length 32 — keeps batch_submit_item_id digest bytes identical),
+  PLATFORM_SCHEMA singleton, ensure_platform_schema (stamp baseline if
+  the library version table is absent, then upgrade). Integration
+  fixture app_postgres_schema now adopts the platform lineage in every
+  scratch schema — the stamp-then-0002 path runs 45 times per
+  integration tier. Dev DB dr_dspy adopted once (version table at
+  0002_holds_tags_projections; throttle hold_until/hold_reason/tags
+  columns verified live). TESTING.md documents the one-time adoption
+  command for real databases.
+- Cutovers: progress_log + dbos_compat deleted (callers ->
+  dr_platform); dbos_bootstrap slimmed to EvalDbosConfig/
+  build_eval_dbos_config/build_dbos_config (resolve_database_url +
+  destroy_dbos_runtime now imported from dr_platform at call sites);
+  backoff deleted — graph_workflow passes explicit failure fields from
+  summarize_exception (failure_class/error_type/message/metadata) +
+  schema=PLATFORM_SCHEMA; whetstone FailureSummary no longer crosses
+  the library boundary.
+- Library fix folded in (dr-platform 14635f7): alembic Config
+  interpolation choked on percent-encoded search_path URLs from the
+  scratch-schema fixture; sqlalchemy.url now %%-escaped, regression
+  test added (dr-platform 102 tests green).
+- Verified: whetstone 485 unit (17 moved tests deleted) + 45
+  integration + 4 golden green; ruff + ty clean.
+- Remaining for stage 6: 6c-ii submission/jsonl/fairness/queue_worker/
+  batch-records/worker-CLI cutover + copro rewire; 6d consumer
+  validation.
