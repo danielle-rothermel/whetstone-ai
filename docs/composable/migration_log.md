@@ -7,7 +7,7 @@
 | 0 baselines | done | golden fixtures + tests committed; full suite 696 passed; integration 45 passed |
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
-| 3 dr-code nucleus | pending | repo exists at ../dr-code |
+| 3 dr-code nucleus | in_progress | 3a done (prune + absorb, 226 tests green, PR #9); next: 3b port v1 parsing/scoring, 3c cutover |
 | 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
@@ -127,6 +127,32 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   to dr-serialize); goldens 4 passed (digests now produced through
   dr-serialize); integration tier 45 passed; `grep` shows no remaining
   `whetstone.hashing`/`whetstone.serialization` imports.
+### 2026-07-04 — stage 3, sub-step 3a (dr-code prune + absorb)
+
+- Landed (dr-code branch `composable-migration`, PR #9 draft): deleted
+  `pipeline/` + `generation/` with dependent tests/scripts (16 files);
+  absorbed code-eval as `src/code_eval` in-repo source and dropped the
+  `code-eval==0.2.0` / `dr-providers` / `dr-queues` deps + uv.sources +
+  ruff override; ported code-eval's tests and the 4,100-sample corruption
+  corpus to `tests/code_eval/` (regression harness for 3b).
+- Conservative choices: absorbed the FULL code_eval package verbatim
+  (slimming to the ~530-line load-bearing core is profile-v2 territory,
+  out of scope); only fixture paths re-homed
+  (`SNAPSHOT_REL_PATH`, `DEFAULT_DATASET_PATH`, ladder/viewer script +
+  template locations); `src/code_eval` excluded from ty (legacy lineage
+  typing — 10 pre-existing diagnostics), ruff clean without exclusions.
+- Kept dr-code's own `tests/corpus/humanevalplus_snapshot.json` (11 MB,
+  different schema from code-eval's 127 KB snapshot — two loaders, two
+  fixtures; briefly clobbered during the port and restored from git).
+- Verified: dr-code suite 226 passed (nucleus 90 + absorbed 136); ruff +
+  ty clean. Whetstone untouched this sub-step (its suite unchanged from
+  stage 2: 666 unit + 45 integration + goldens).
+- Remaining for stage 3: **3b** port whetstone humaneval parsing/scoring
+  into dr-code byte-identically under v1 profile IDs (golden fixtures
+  from Stage 0; corpus regression run); **3c** whetstone cutover
+  (humaneval/ deleted, thin app-side module keeps `recordable_text`
+  injection).
+
 - Note: `gh` is authenticated as `drothermel`; the first
   `gh repo create dr-serialize` call landed an **empty stray repo
   `drothermel/dr-serialize`** before I created the correct
