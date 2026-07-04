@@ -11,7 +11,7 @@
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
 | 6 platform | done | dr-platform extracted (103 tests); whetstone cut over; copro on await_operation; sketches re-checked; 432 unit+integration + goldens green |
-| final e2e | pending | |
+| final e2e | done | 432 unit + 45 integration + 4 golden green; zero-spend E2E smoke: 24 specs -> 24 workflows SUCCESS -> 48 node attempts -> 24 score attempts landed |
 
 ## Environment
 
@@ -602,3 +602,52 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Verified: whetstone 432 (unit + integration) + 4 goldens green;
   ruff + ty clean; copro unit tests 9 green.
 - Stage 6 complete. Remaining: final end-to-end verification.
+
+### 2026-07-04 — final end-to-end verification — migration complete
+
+- Suites (fresh runs, this session): full suite `uv run pytest` -> 432
+  passed (includes the 45 integration tests — Postgres reachable via
+  local socket); goldens `uv run pytest -k golden` -> 4 passed;
+  integration tier `DATABASE_URL=postgresql:///dr_dspy_test uv run
+  pytest -m integration tests/integration/` -> 45 passed; ruff + ty
+  clean across the repo including the new smoke script.
+- Zero-spend E2E smoke (scripts/e2e/fixture_smoke.py, committed):
+  `createdb dr_dspy_e2e_smoke && uv run python
+  scripts/e2e/fixture_smoke.py --database-url
+  postgresql:///dr_dspy_e2e_smoke`. The script migrates the scratch DB
+  (whetstone alembic head + ensure_platform_schema stamp/0002), builds
+  specs from configs/experiments/humaneval_encdec_smoke.json, patches
+  the node_execution.default_http_provider seam to dr-providers'
+  FixtureProvider (every LM call scripted — zero network spend), then
+  drives submit-jsonl semantics + an in-process queue worker
+  (configure_platform_dbos_runtime consume_generation_queue=True,
+  sqlite DBOS system DB) + rescore_generation_runs.
+- Evidence: spec_count=24 (1 tiny-split task x 3 model pairings x 4
+  repetition seeds x 2 dimension axes); submit result requested=24
+  inserted=24 enqueued=24 failed=0; batch operation ('completed', 24,
+  24, 0); await_operation workflow breakdown {'SUCCESS': 24};
+  generation_runs [('success', 24)]; node_attempts [('success', 48)]
+  (24 encoder + 24 decoder — both graph nodes executed);
+  score_attempts [('success', 'tests_failed', 24)] — extraction parsed
+  the fixture's fenced code and the sandboxed HumanEval tests ran and
+  failed as expected for placeholder code, proving the full
+  parse+execute scoring path. Sample ID triple (prediction /
+  generation_run / score_attempt): 24f9c90f317006e09ead83d0 /
+  638dc1f8008ae64bad836482 / 07e56b6d43dbda8ed1d38e51a68cd777.
+  Scratch DB dropped afterwards. Note: spec building emitted an HF Hub
+  unauthenticated-request warning from the datasets library (dataset
+  snapshot access, not an LM call; no paid API involved).
+- Branches/PRs: whetstone-ai composable-migration -> draft PR #4;
+  dr-code -> draft PR #9; dr-providers -> draft PR #3; dr-graph ->
+  draft PR #1; dr-platform -> draft PR #1. dr-serialize: branch pushed
+  but identical to main (new repo whose library landed on main at
+  creation, per the stage-2 log) — no diff exists to open a PR over;
+  recorded here as the documented exception. All path-dependency
+  [tool.uv.sources] entries must become git/PyPI pins before merge
+  (noted in each PR/pyproject); dr-providers' version metadata still
+  reads 0.1.1 despite the v0.2 kernel — pre-merge bump recorded at
+  6b-i.
+- Human follow-ups carried from earlier entries: delete stray empty
+  repo drothermel/dr-serialize (stage 3 note); clear the pin-before-
+  merge notes at merge time.
+- Every stage row above reads done. Migration complete.
