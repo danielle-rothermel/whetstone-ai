@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design + 6a done (dr-platform kernel, 48 tests); 6b schema/stateful, 6c cutover, 6d validation pending |
+| 6 platform | in_progress | design + 6a + 6b-i done (76 tests incl. Postgres migration/backoff); 6b-ii submission/enqueue/observability/projections/artifacts, 6c cutover, 6d validation pending |
 | final e2e | pending | |
 
 ## Environment
@@ -434,3 +434,38 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   submission claim/lease, enqueue, await_operation/observability,
   projections, artifacts); 6c whetstone cutover; 6d consumer
   validation.
+
+### 2026-07-04 — stage 6, sub-step 6b-i (schema + lineage + backoff)
+
+- Landed (dr-platform 634c78a): naming.py (PlatformNaming — prefix +
+  item/order/group column-word labels; whetstone config dr_dspy/
+  prediction_id/fair_order_key/experiment_name preserves all frozen
+  physical names); records.py (BatchOperationRecord/BatchItemRecord
+  with ported validators on neutral field names; EnqueueFailure ==
+  FailureMetadataPayload JSONB shape; frozen enqueue_metadata keys);
+  db/schema.py (PlatformSchema — batch ops/items, throttle w/ holds+
+  tags head shape, projections registry; constraint/index names
+  library-generated, only table/column names load-bearing for
+  stamped adopters); db/alembic (0001 baseline + 0002 holds/tags/
+  registry, version table {prefix}_platform_alembic_version) with
+  programmatic upgrade/stamp; backoff.py (ported math + explicit
+  failure fields instead of whetstone FailureSummary; set/clear hold
+  with duration or absolute expiry, tags with containment filter,
+  delay = max(blocked_until, hold_until)).
+- Port notes: clear_throttle_backoff now explicitly preserves holds/
+  tags (whetstone's full-row upsert predates those columns);
+  record_throttle_failure re-reads state after write so returned
+  state includes hold/tag fields. Behaviorally identical for existing
+  whetstone callers.
+- Verified: 76 tests green — including real-Postgres coverage
+  (scratch DB dr_platform_test, created via createdb): fresh upgrade
+  under default naming, fresh upgrade under whetstone naming
+  (column-word parity asserted), stamp-then-0002 with a sentinel row
+  proving 0001 never re-ran; backoff/hold/tag behavior end-to-end.
+  ruff format/check + ty clean. dr-providers consumed via path dep
+  (version constraint >=0.1.1 — note: dr-providers' pyproject still
+  says 0.1.1 despite the v0.2 kernel; version bump is a pre-merge
+  task for that repo). Whetstone untouched.
+- Remaining for stage 6: 6b-ii submission claim/lease + dedup enqueue
+  + observability/await_operation + projections + artifacts; 6c
+  whetstone cutover; 6d consumer validation.
