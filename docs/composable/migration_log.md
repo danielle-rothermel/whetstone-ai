@@ -7,7 +7,7 @@
 | 0 baselines | done | golden fixtures + tests committed; full suite 696 passed; integration 45 passed |
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
-| 3 dr-code nucleus | in_progress | 3a done (prune + absorb, 226 tests green, PR #9); next: 3b port v1 parsing/scoring, 3c cutover |
+| 3 dr-code nucleus | in_progress | 3a + 3b done (port green: 309 tests, goldens byte-equal, corpus baseline pinned); next: 3c whetstone cutover |
 | 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
@@ -152,6 +152,31 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   from Stage 0; corpus regression run); **3c** whetstone cutover
   (humaneval/ deleted, thin app-side module keeps `recordable_text`
   injection).
+
+### 2026-07-04 — stage 3, sub-step 3b (v1 parsing/scoring port)
+
+- Landed (dr-code commit e1a9dbd): `src/dr_code/humaneval/` = whetstone's
+  humaneval package verbatim (imports rewritten only; the package had
+  exactly one whetstone-internal import). v1 profile IDs unchanged.
+- Injection point per code_parse_test.md: `score_humaneval_generation`
+  now takes a required `recordable_text: Callable[[Any], str]` keyword;
+  whetstone will pass `eval_failures.recording.recordable_text` at 3c
+  (for the golden fixtures' all-string inputs, `str` is behaviorally
+  identical — used in dr-code tests).
+- Regression gates: whetstone Stage 0 `parser_scoring.json` copied to
+  `tests/humaneval/fixtures/parser_scoring_golden.json`, 21 golden tests
+  byte-equal; corpus baseline
+  `tests/humaneval/fixtures/corpus_baseline_v1.json` pins per-recipe
+  extraction outcomes over the 4,100-sample corpus (3707 extracted);
+  regenerate only to intentionally re-baseline via
+  `uv run python tests/humaneval/corpus_baseline.py`.
+- Verified: dr-code full suite 309 passed (226 + 61 ported + 21 golden +
+  1 corpus); ruff + ty clean. Whetstone untouched this sub-step.
+- Remaining for stage 3: **3c** whetstone cutover — delete `humaneval/`,
+  depend on dr-code via path source, swap imports (callers:
+  records/models, analysis/*, platform/{worker,scoring,spec_builder}),
+  pass `recordable_text` at the platform scoring call site, move
+  humaneval tests out of whetstone, full suite + goldens + integration.
 
 - Note: `gh` is authenticated as `drothermel`; the first
   `gh repo create dr-serialize` call landed an **empty stray repo
