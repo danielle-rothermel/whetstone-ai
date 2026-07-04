@@ -10,7 +10,7 @@ def test_lm_boundary_import_does_not_load_provider_or_dspy_modules() -> None:
         """
         import sys
 
-        import dr_dspy.lm.boundary
+        import whetstone.lm.boundary
 
         blocked = ("dspy", "openai", "httpx", "dbos", "psycopg")
         loaded = [module for module in blocked if module in sys.modules]
@@ -34,7 +34,7 @@ def test_parse_provider_response_does_not_load_recording_or_psycopg() -> None:
         """
         import sys
 
-        import dr_dspy.lm.boundary as boundary
+        import whetstone.lm.boundary as boundary
 
         boundary.parse_provider_response(
             {
@@ -46,7 +46,7 @@ def test_parse_provider_response_does_not_load_recording_or_psycopg() -> None:
             config=boundary.openrouter_chat_config(model="model/test"),
         )
 
-        blocked = ("psycopg", "dr_dspy.eval_failures.recording")
+        blocked = ("psycopg", "whetstone.eval_failures.recording")
         loaded = [module for module in blocked if module in sys.modules]
         if loaded:
             raise SystemExit(",".join(loaded))
@@ -68,7 +68,7 @@ def test_serialization_import_does_not_load_dspy_module() -> None:
         """
         import sys
 
-        from dr_dspy.eval_failures import ensure_recordable
+        from whetstone.eval_failures import ensure_recordable
 
         ensure_recordable({"telemetry": {"ok": True}})
 

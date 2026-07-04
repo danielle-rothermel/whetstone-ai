@@ -3,14 +3,14 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import create_engine, text
 
-from dr_dspy.migration.v0_reshape import (
+from tests.integration.v0_sample_loader import load_v0_sample
+from tests.support.postgres_fixtures import seed_prediction_spec
+from whetstone.migration.v0_reshape import (
     V0_SOURCE_METADATA_KEY,
     reshape_v0_direct_row,
     reshape_v0_encdec_row,
 )
-from dr_dspy.platform.persistence import persist_generation_result
-from tests.integration.v0_sample_loader import load_v0_sample
-from tests.support.postgres_fixtures import seed_prediction_spec
+from whetstone.platform.persistence import persist_generation_result
 
 pytestmark = pytest.mark.integration
 

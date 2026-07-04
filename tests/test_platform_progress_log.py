@@ -4,7 +4,7 @@ from io import StringIO
 
 from rich.console import Console
 
-from dr_dspy.platform.progress_log import OperationProgress
+from whetstone.platform.progress_log import OperationProgress
 
 
 def test_operation_progress_event_uses_fixed_width_timestamp() -> None:

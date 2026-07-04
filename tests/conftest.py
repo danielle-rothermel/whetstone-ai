@@ -16,21 +16,21 @@ from dbos import DBOS
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-import dr_dspy.platform.graph_workflow
-import dr_dspy.platform.scoring_workflow  # noqa: F401
 import tests.integration.dbos_test_workflows  # noqa: F401
-from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
-from dr_dspy.platform.dbos_bootstrap import (
+import whetstone.platform.graph_workflow
+import whetstone.platform.scoring_workflow  # noqa: F401
+from whetstone.db.migrations.url import normalize_postgresql_driver_url
+from whetstone.platform.dbos_bootstrap import (
     EvalDbosConfig,
     build_dbos_config,
     build_eval_dbos_config,
     destroy_dbos_runtime,
 )
-from dr_dspy.platform.queue_worker import (
+from whetstone.platform.queue_worker import (
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
 )
-from dr_dspy.platform.worker import DBOS_APP_NAME
+from whetstone.platform.worker import DBOS_APP_NAME
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -71,23 +71,23 @@ def _apply_v1_migrations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     migration_modules = (
-        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
-        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema",
+        "whetstone.db.migrations.versions.20260629_0002_throttle_backoff",
+        "whetstone.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0004_batch_submit_enqueuing_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0002_batch_submit_terminal_enqueue_accounting",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0004_batch_submit_remove_prepared_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0006_score_attempt_evaluation_incomplete_outcome",
     )
     for module_name in migration_modules:

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from dr_dspy.humaneval.code_extraction import (
+from whetstone.humaneval.code_extraction import (
     apply_cleaning,
     validate_python_source,
 )
-from dr_dspy.humaneval.import_inference import infer_necessary_imports
+from whetstone.humaneval.import_inference import infer_necessary_imports
 
 
 @pytest.mark.parametrize(

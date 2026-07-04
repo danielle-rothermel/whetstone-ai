@@ -5,30 +5,32 @@ from unittest.mock import patch
 
 import pytest
 
-from dr_dspy.humaneval.code_extraction import (
+from whetstone.humaneval.code_extraction import (
     apply_cleaning,
     extract_dspy_code,
     validate_python_source,
 )
-from dr_dspy.humaneval.code_parsing import BEST_EFFORT_HUMANEVAL_PARSER_PROFILE
-from dr_dspy.humaneval.compression import (
+from whetstone.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
+)
+from whetstone.humaneval.compression import (
     CompressionMethod,
     compression_metrics,
 )
-from dr_dspy.humaneval.parsed_code import ParsedCode, ParsedCodeSummary
-from dr_dspy.humaneval.parsed_tests import (
+from whetstone.humaneval.parsed_code import ParsedCode, ParsedCodeSummary
+from whetstone.humaneval.parsed_tests import (
     HumanEvalTestCaseKind,
     UnsupportedTestFormatError,
 )
-from dr_dspy.humaneval.sampling import sample_human_eval_tasks_from_rows
-from dr_dspy.humaneval.scoring import (
+from whetstone.humaneval.sampling import sample_human_eval_tasks_from_rows
+from whetstone.humaneval.scoring import (
     GeneratedCodeOutcome,
     evaluation_outcome,
     score_generated_code_for_humaneval,
     score_humaneval_generation,
     score_humaneval_prediction,
 )
-from dr_dspy.humaneval.task import (
+from whetstone.humaneval.task import (
     EvaluationCaseResult,
     EvaluationCaseStatus,
     EvaluationTaskResult,
@@ -480,7 +482,7 @@ def test_run_subprocess_batch_maps_malformed_runner_output_to_errors() -> None:
             ),
         )
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         results = run_subprocess_batch(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",
@@ -561,7 +563,7 @@ def test_score_humaneval_generation_reports_incomplete_runner_output() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         result = score_humaneval_generation(
             raw_generation="def add_one(x):\n    return x + 1\n",
             task=_task(),
@@ -580,7 +582,7 @@ def test_evaluation_incomplete_when_runner_returns_partial_results() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         result = evaluate_human_eval_code(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",
@@ -597,7 +599,7 @@ def test_score_generated_code_reports_incomplete_runner_output() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(stdout=_PARTIAL_RUNNER_PASSED_CASE_0)
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         result = score_generated_code_for_humaneval(
             raw_generation="def add_one(x):\n    return x + 1\n",
             task=_task(),
@@ -622,7 +624,7 @@ def test_score_generated_code_reports_test_failure_when_case_fails() -> None:
             ),
         )
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         result = score_generated_code_for_humaneval(
             raw_generation="def add_one(x):\n    return x + 1\n",
             task=_task(),
@@ -747,7 +749,7 @@ def test_run_subprocess_batch_maps_nonzero_returncode_to_errors() -> None:
             returncode=1,
         )
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         results = run_subprocess_batch(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",
@@ -765,7 +767,7 @@ def test_run_subprocess_batch_maps_invalid_json_to_errors() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(stdout="not-json")
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         results = run_subprocess_batch(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",
@@ -783,7 +785,7 @@ def test_run_subprocess_batch_maps_non_list_json_to_errors() -> None:
     def fake_run(*args: Any, **kwargs: Any) -> _CompletedProcessStub:
         return _CompletedProcessStub(stdout='{"not": "a list"}')
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         results = run_subprocess_batch(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",
@@ -800,7 +802,7 @@ def test_run_subprocess_batch_assigns_fallback_case_id() -> None:
             stdout='[{"status": "passed", "message": ""}]',
         )
 
-    with patch("dr_dspy.humaneval.task.subprocess.run", fake_run):
+    with patch("whetstone.humaneval.task.subprocess.run", fake_run):
         results = run_subprocess_batch(
             task=_task(),
             candidate_code="def add_one(x):\n    return x + 1\n",

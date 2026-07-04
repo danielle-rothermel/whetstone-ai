@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 import dspy
-from dr_dspy.eval_failures import (
+from whetstone.eval_failures import (
     EmptyGenerationError,
     FailureClass,
     PermanentFailureError,
@@ -16,7 +16,7 @@ from dr_dspy.eval_failures import (
     ensure_recordable,
     summarize_exception,
 )
-from dr_dspy.lm.boundary import (
+from whetstone.lm.boundary import (
     EndpointKind,
     PlainPromptAdapter,
     ProviderConfig,
@@ -33,7 +33,7 @@ from dr_dspy.lm.boundary import (
     parse_provider_response,
     translate_provider_error,
 )
-from dr_dspy.serialization import PAYLOAD_MAX_BYTES
+from whetstone.serialization import PAYLOAD_MAX_BYTES
 
 
 class _PlainComparisonSignature(dspy.Signature):

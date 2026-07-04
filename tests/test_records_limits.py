@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dr_dspy.records import limits
-from dr_dspy.serialization import PAYLOAD_MAX_BYTES
+from whetstone.records import limits
+from whetstone.serialization import PAYLOAD_MAX_BYTES
 
 _BYTE_CAP_NAMES = (
     "TASK_INPUTS_MAX_BYTES",

@@ -4,7 +4,7 @@ import ast
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC_ROOT = PROJECT_ROOT / "src" / "dr_dspy"
+SRC_ROOT = PROJECT_ROOT / "src" / "whetstone"
 PURE_PACKAGE_PATHS = (
     SRC_ROOT / "graph",
     SRC_ROOT / "humaneval",
@@ -24,9 +24,9 @@ FORBIDDEN_PLATFORM_IMPORTS = (
     "psycopg",
     "psycopg_pool",
     "sqlalchemy",
-    "dr_dspy.db",
-    "dr_dspy.migration",
-    "dr_dspy.records",
+    "whetstone.db",
+    "whetstone.migration",
+    "whetstone.records",
 )
 FORBIDDEN_DSPY_IMPORTS = ("dspy",)
 ALLOWED_EXISTING_IMPORTS = {
@@ -35,7 +35,7 @@ ALLOWED_EXISTING_IMPORTS = {
     # FailureMetadataPayload for platform batch/rescore failure rows.
     SRC_ROOT / "eval_failures" / "recording.py": {
         "psycopg.types.json",
-        "dr_dspy.records",
+        "whetstone.records",
     },
 }
 

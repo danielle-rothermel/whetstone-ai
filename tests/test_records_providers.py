@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from dr_dspy.graph import (
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -14,8 +14,8 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.records import (
+from whetstone.lm.boundary import EndpointKind, ProviderKind
+from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,
     NodeAttemptRecord,
@@ -29,7 +29,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records.providers import find_provider_config_ref
+from whetstone.records.providers import find_provider_config_ref
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 

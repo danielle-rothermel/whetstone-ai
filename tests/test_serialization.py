@@ -1,4 +1,4 @@
-"""Contract tests for dr_dspy.serialization.
+"""Contract tests for whetstone.serialization.
 
 Deliberately not covered here:
 - Full round-trip / lossless serialization
@@ -14,23 +14,8 @@ from typing import Any, cast
 
 import pytest
 
-import dr_dspy.serialization as serialization
 import dspy
-from dr_dspy.serialization import (
-    MAX_JSONABLE_DEPTH,
-    POSTGRES_JSONB_MAX_BYTES,
-    ExampleSerializationError,
-    JsonEncodeError,
-    MaxDepthExceededError,
-    ModelDumpError,
-    ObjectVarsSerializationError,
-    PayloadTooLargeError,
-    SerializationError,
-    SignatureSummaryError,
-    sanitize_lm_kwargs,
-    to_jsonable,
-    to_metadata_dict,
-)
+import whetstone.serialization as serialization
 from tests.serialization_support import (
     BadModel,
     QASig,
@@ -44,6 +29,21 @@ from tests.serialization_support import (
     nested_list,
     ok_pydantic_model,
     stub_lm,
+)
+from whetstone.serialization import (
+    MAX_JSONABLE_DEPTH,
+    POSTGRES_JSONB_MAX_BYTES,
+    ExampleSerializationError,
+    JsonEncodeError,
+    MaxDepthExceededError,
+    ModelDumpError,
+    ObjectVarsSerializationError,
+    PayloadTooLargeError,
+    SerializationError,
+    SignatureSummaryError,
+    sanitize_lm_kwargs,
+    to_jsonable,
+    to_metadata_dict,
 )
 
 

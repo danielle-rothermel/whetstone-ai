@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dr_dspy.graph import (
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -16,9 +16,9 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.humaneval.task import HumanEvalTask
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.records import (
+from whetstone.humaneval.task import HumanEvalTask
+from whetstone.lm.boundary import EndpointKind, ProviderKind
+from whetstone.records import (
     DimensionsPayload,
     GenerationRunRecord,
     GenerationRunStatus,

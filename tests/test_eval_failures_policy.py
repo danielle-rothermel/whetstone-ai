@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from dr_dspy.eval_failures import (
+from whetstone.eval_failures import (
     FailureClass,
     PermanentFailureError,
     RateLimitedFailureError,
@@ -332,8 +332,8 @@ def test_policy_import_does_not_load_runtime_exception_modules() -> None:
                 "import sys; "
                 "blocked = ('dbos._error', 'openai', 'httpx', 'psycopg'); "
                 "before = set(sys.modules); "
-                "import dr_dspy.eval_failures; "
-                "import dr_dspy.eval_failures.policy; "
+                "import whetstone.eval_failures; "
+                "import whetstone.eval_failures.policy; "
                 "introduced = set(sys.modules) - before; "
                 "print(any(name in introduced for name in blocked))"
             ),
@@ -354,7 +354,7 @@ def test_recording_import_defers_psycopg_jsonb() -> None:
             (
                 "import sys; "
                 "before = set(sys.modules); "
-                "import dr_dspy.eval_failures.recording; "
+                "import whetstone.eval_failures.recording; "
                 "introduced = set(sys.modules) - before; "
                 "print('psycopg.types.json' in introduced)"
             ),

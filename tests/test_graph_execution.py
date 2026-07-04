@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 
-from dr_dspy.eval_failures import PermanentFailureError
-from dr_dspy.graph import (
+from whetstone.eval_failures import PermanentFailureError
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,

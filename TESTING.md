@@ -62,7 +62,7 @@ scripts/ci/                   # portable CI entrypoints (package-root cwd)
   unit.sh
   integration.sh
   lint.sh
-src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
+src/whetstone/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
 
 ## Shared fixtures
@@ -107,7 +107,7 @@ Integration polling helpers live in
   DBOS memoization, replay, or step registration.
 - Using `_RecordingConnection` when the goal is a real Postgres round-trip.
 - Putting migration reshape logic inline in test files (belongs in
-  `src/dr_dspy/migration/`).
+  `src/whetstone/migration/`).
 
 ### v0 sample fixtures
 

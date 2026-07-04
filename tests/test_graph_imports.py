@@ -10,7 +10,7 @@ def test_graph_import_does_not_load_lm_or_eval_failures() -> None:
         """
         import sys
 
-        import dr_dspy.graph
+        import whetstone.graph
 
         blocked = (
             "dspy",
@@ -18,8 +18,8 @@ def test_graph_import_does_not_load_lm_or_eval_failures() -> None:
             "httpx",
             "dbos",
             "psycopg",
-            "dr_dspy.lm",
-            "dr_dspy.eval_failures",
+            "whetstone.lm",
+            "whetstone.eval_failures",
         )
         loaded = [module for module in blocked if module in sys.modules]
         if loaded:
@@ -42,8 +42,8 @@ def test_node_error_from_exception_does_not_load_policy() -> None:
         """
         import sys
 
-        from dr_dspy.eval_failures import PermanentFailureError
-        from dr_dspy.graph.models import NodeError
+        from whetstone.eval_failures import PermanentFailureError
+        from whetstone.graph.models import NodeError
 
         NodeError.from_exception(
             PermanentFailureError(
@@ -53,10 +53,10 @@ def test_node_error_from_exception_does_not_load_policy() -> None:
             )
         )
 
-        if "dr_dspy.eval_failures.policy" in sys.modules:
-            raise SystemExit("dr_dspy.eval_failures.policy")
-        if "dr_dspy.lm" in sys.modules:
-            raise SystemExit("dr_dspy.lm")
+        if "whetstone.eval_failures.policy" in sys.modules:
+            raise SystemExit("whetstone.eval_failures.policy")
+        if "whetstone.lm" in sys.modules:
+            raise SystemExit("whetstone.lm")
         """
     )
 

@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from dr_dspy.humaneval.sampling import SampledHumanEvalTask
-from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
-from dr_dspy.platform import jsonl_specs, spec_builder
-from dr_dspy.platform.spec_builder import (
+from whetstone.humaneval.sampling import SampledHumanEvalTask
+from whetstone.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from whetstone.platform import jsonl_specs, spec_builder
+from whetstone.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
     HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
     ComposableExperimentConfig,
@@ -25,7 +25,7 @@ from dr_dspy.platform.spec_builder import (
     resolve_config_path,
     task_snapshot_from_humaneval,
 )
-from dr_dspy.records import PredictionSpecRecord
+from whetstone.records import PredictionSpecRecord
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "experiment_configs"
 

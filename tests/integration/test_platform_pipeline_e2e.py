@@ -6,27 +6,6 @@ from typing import Any
 import pytest
 from sqlalchemy import create_engine
 
-from dr_dspy.graph import GraphSpec
-from dr_dspy.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-)
-from dr_dspy.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
-from dr_dspy.platform import graph_workflow, scoring_workflow, submission
-from dr_dspy.platform.graph_workflow import platform_generation_workflow_id
-from dr_dspy.platform.node_execution import NodeStepResult
-from dr_dspy.platform.scoring_workflow import (
-    run_score_generation_workflow_once,
-)
-from dr_dspy.records import (
-    BatchSubmitOperationStatus,
-    GenerationRunStatus,
-    stable_generation_run_id,
-    stable_score_attempt_id,
-)
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
 from tests.support.platform_integration_helpers import (
     fetch_batch_submit_operation_status,
@@ -39,6 +18,27 @@ from tests.support.platform_workflow_fixtures import (
     direct_node,
     prediction_spec,
     step_success,
+)
+from whetstone.graph import GraphSpec
+from whetstone.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    PARSER_PROFILE_VERSION,
+)
+from whetstone.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
+from whetstone.platform import graph_workflow, scoring_workflow, submission
+from whetstone.platform.graph_workflow import platform_generation_workflow_id
+from whetstone.platform.node_execution import NodeStepResult
+from whetstone.platform.scoring_workflow import (
+    run_score_generation_workflow_once,
+)
+from whetstone.records import (
+    BatchSubmitOperationStatus,
+    GenerationRunStatus,
+    stable_generation_run_id,
+    stable_score_attempt_id,
 )
 
 pytestmark = pytest.mark.integration

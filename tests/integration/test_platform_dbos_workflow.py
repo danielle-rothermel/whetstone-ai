@@ -6,17 +6,6 @@ from typing import Any
 import pytest
 from sqlalchemy import create_engine
 
-from dr_dspy.eval_failures import (
-    FailureClass,
-    FailureSummary,
-    PermanentFailureError,
-    TransientFailureError,
-)
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import backoff, graph_workflow
-from dr_dspy.platform.graph_workflow import run_prediction_graph_workflow_once
-from dr_dspy.platform.node_execution import NodeStepResult
-from dr_dspy.records import GenerationRunStatus, stable_generation_run_id
 from tests.support.platform_integration_helpers import (
     count_generation_runs,
     fetch_node_attempts,
@@ -29,6 +18,19 @@ from tests.support.platform_workflow_fixtures import (
     prediction_spec,
     step_success,
 )
+from whetstone.eval_failures import (
+    FailureClass,
+    FailureSummary,
+    PermanentFailureError,
+    TransientFailureError,
+)
+from whetstone.graph import GraphSpec
+from whetstone.platform import backoff, graph_workflow
+from whetstone.platform.graph_workflow import (
+    run_prediction_graph_workflow_once,
+)
+from whetstone.platform.node_execution import NodeStepResult
+from whetstone.records import GenerationRunStatus, stable_generation_run_id
 
 pytestmark = pytest.mark.integration
 
@@ -433,10 +435,10 @@ def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
                 failure=FailureSummary(
                     failure_class=FailureClass.RATE_LIMITED,
                     failure_exception_type=(
-                        "dr_dspy.eval_failures.RateLimitedFailureError"
+                        "whetstone.eval_failures.RateLimitedFailureError"
                     ),
                     underlying_exception_type=(
-                        "dr_dspy.eval_failures.RateLimitedFailureError"
+                        "whetstone.eval_failures.RateLimitedFailureError"
                     ),
                     message="rate limited",
                 ),

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from dr_dspy.platform import cli_env
+from whetstone.platform import cli_env
 
 
 def test_load_env_file_returns_none_when_missing(

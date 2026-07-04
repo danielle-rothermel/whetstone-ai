@@ -5,8 +5,8 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from dr_dspy.db import io
-from dr_dspy.graph import (
+from whetstone.db import io
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -18,9 +18,9 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.records import (
+from whetstone.humaneval.scoring import GeneratedCodeOutcome
+from whetstone.lm.boundary import EndpointKind, ProviderKind
+from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
     BatchSubmitItemEnqueueStatus,
@@ -52,7 +52,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records import models as records_models
+from whetstone.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -315,7 +315,7 @@ def test_failure_payload_from_node_error_is_persistable() -> None:
 
 def test_failure_payload_promotes_underlying_exception_type() -> None:
     error = NodeError(
-        error_type="dr_dspy.eval_failures.TransientFailureError",
+        error_type="whetstone.eval_failures.TransientFailureError",
         message="provider failed",
         failure_class="transient",
         metadata={

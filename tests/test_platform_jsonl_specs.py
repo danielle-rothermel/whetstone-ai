@@ -6,13 +6,13 @@ from typing import Any, cast
 
 import pytest
 
-from dr_dspy.platform import fairness, jsonl_specs, queue_worker, submission
-from dr_dspy.platform.jsonl_specs import JsonlSpecRef
-from dr_dspy.records import BatchSubmitItemInsertStatus, PredictionSpecRecord
 from tests.test_platform_submission_queue_backoff import (
     DummyEngine,
     _spec,
 )
+from whetstone.platform import fairness, jsonl_specs, queue_worker, submission
+from whetstone.platform.jsonl_specs import JsonlSpecRef
+from whetstone.records import BatchSubmitItemInsertStatus, PredictionSpecRecord
 
 
 def _write_jsonl(path: Path, specs: tuple[PredictionSpecRecord, ...]) -> None:

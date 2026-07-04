@@ -552,61 +552,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dr-dspy"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "datasets" },
-    { name = "dbos" },
-    { name = "marimo", extra = ["recommended"] },
-    { name = "matplotlib" },
-    { name = "pandas" },
-    { name = "pre-commit" },
-    { name = "psycopg" },
-    { name = "psycopg-pool" },
-    { name = "pygments" },
-    { name = "pytest" },
-    { name = "python-dotenv" },
-    { name = "rich" },
-    { name = "ruff" },
-    { name = "sqlalchemy" },
-    { name = "ty" },
-    { name = "typer" },
-    { name = "zstandard" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "dspy" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = ">=1.16.2" },
-    { name = "datasets", specifier = ">=3.6.0" },
-    { name = "dbos", specifier = ">=2.25.0" },
-    { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
-    { name = "matplotlib", specifier = ">=3.11.0" },
-    { name = "pandas", specifier = ">=3.0.3" },
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "psycopg", specifier = ">=3.3.4" },
-    { name = "psycopg-pool", specifier = ">=3.3.1" },
-    { name = "pygments", specifier = ">=2.20.0" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
-    { name = "rich", specifier = ">=13.9.4" },
-    { name = "ruff", specifier = ">=0.15.10" },
-    { name = "sqlalchemy", specifier = ">=2.0.51" },
-    { name = "ty", specifier = ">=0.0.54" },
-    { name = "typer", specifier = ">=0.26.7" },
-    { name = "zstandard", specifier = ">=0.25.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "dspy", specifier = "==3.3.0b1" }]
-
-[[package]]
 name = "dspy"
 version = "3.3.0b1"
 source = { registry = "https://pypi.org/simple" }
@@ -3366,6 +3311,61 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/9f/3e/28135a24e384493fa804216b79a6a6759a38cc4ff59118787b9fb693df93/websockets-16.0-cp314-cp314t-win_amd64.whl", hash = "sha256:b14dc141ed6d2dde437cddb216004bcac6a1df0935d79656387bd41632ba0bbd", size = 178531, upload-time = "2026-01-10T09:23:35.016Z" },
     { url = "https://files.pythonhosted.org/packages/6f/28/258ebab549c2bf3e64d2b0217b973467394a9cea8c42f70418ca2c5d0d2e/websockets-16.0-py3-none-any.whl", hash = "sha256:1637db62fad1dc833276dded54215f2c7fa46912301a24bd94d45d46a011ceec", size = 171598, upload-time = "2026-01-10T09:23:45.395Z" },
 ]
+
+[[package]]
+name = "whetstone-ai"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "datasets" },
+    { name = "dbos" },
+    { name = "marimo", extra = ["recommended"] },
+    { name = "matplotlib" },
+    { name = "pandas" },
+    { name = "pre-commit" },
+    { name = "psycopg" },
+    { name = "psycopg-pool" },
+    { name = "pygments" },
+    { name = "pytest" },
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "ruff" },
+    { name = "sqlalchemy" },
+    { name = "ty" },
+    { name = "typer" },
+    { name = "zstandard" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "dspy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.16.2" },
+    { name = "datasets", specifier = ">=3.6.0" },
+    { name = "dbos", specifier = ">=2.25.0" },
+    { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
+    { name = "matplotlib", specifier = ">=3.11.0" },
+    { name = "pandas", specifier = ">=3.0.3" },
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "psycopg", specifier = ">=3.3.4" },
+    { name = "psycopg-pool", specifier = ">=3.3.1" },
+    { name = "pygments", specifier = ">=2.20.0" },
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "rich", specifier = ">=13.9.4" },
+    { name = "ruff", specifier = ">=0.15.10" },
+    { name = "sqlalchemy", specifier = ">=2.0.51" },
+    { name = "ty", specifier = ">=0.0.54" },
+    { name = "typer", specifier = ">=0.26.7" },
+    { name = "zstandard", specifier = ">=0.25.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "dspy", specifier = "==3.3.0b1" }]
 
 [[package]]
 name = "xxhash"

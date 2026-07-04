@@ -8,8 +8,8 @@ from typing import Any
 import pydantic
 
 import dspy
-from dr_dspy.serialization import SerializationError, to_jsonable
 from dspy.utils.dummies import DummyLM
+from whetstone.serialization import SerializationError, to_jsonable
 
 _JSON_TYPES = (type(None), bool, int, float, str, list, dict)
 

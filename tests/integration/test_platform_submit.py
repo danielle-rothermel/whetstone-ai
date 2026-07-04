@@ -3,19 +3,6 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import create_engine, text
 
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import queue_worker, submission
-from dr_dspy.records import (
-    ENQUEUE_CLAIM_ID_METADATA_KEY,
-    ENQUEUE_CLAIMED_AT_METADATA_KEY,
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
-    PredictionSpecRecord,
-    stable_generation_run_id,
-)
 from tests.support.platform_workflow_fixtures import (
     NOW,
     direct_node,
@@ -26,6 +13,19 @@ from tests.support.postgres_fixtures import (
     seed_batch_submit_operation,
     seed_experiment,
     seed_prediction_spec,
+)
+from whetstone.graph import GraphSpec
+from whetstone.platform import queue_worker, submission
+from whetstone.records import (
+    ENQUEUE_CLAIM_ID_METADATA_KEY,
+    ENQUEUE_CLAIMED_AT_METADATA_KEY,
+    BatchSubmitItemEnqueueStatus,
+    BatchSubmitItemInsertStatus,
+    BatchSubmitItemRecord,
+    BatchSubmitOperationRecord,
+    BatchSubmitOperationStatus,
+    PredictionSpecRecord,
+    stable_generation_run_id,
 )
 
 pytestmark = pytest.mark.integration

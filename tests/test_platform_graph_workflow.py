@@ -9,14 +9,14 @@ import pytest
 from dbos._error import DBOSWorkflowConflictIDError
 from sqlalchemy.dialects import postgresql
 
-from dr_dspy.db import io as db_io
-from dr_dspy.eval_failures import (
+from whetstone.db import io as db_io
+from whetstone.eval_failures import (
     FailureClass,
     PermanentFailureError,
     RateLimitedFailureError,
     TransientFailureError,
 )
-from dr_dspy.graph import (
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -27,30 +27,30 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import (
+from whetstone.lm.boundary import (
     EndpointKind,
     ProviderConfig,
     ProviderKind,
 )
-from dr_dspy.platform import backoff, graph_workflow
-from dr_dspy.platform.graph_workflow import (
+from whetstone.platform import backoff, graph_workflow
+from whetstone.platform.graph_workflow import (
     _start_prediction_graph_workflow_handle,
     execute_prediction_graph,
     platform_generation_workflow_id,
 )
-from dr_dspy.platform.node_execution import (
+from whetstone.platform.node_execution import (
     NodeStepResult,
     execute_lm_node,
     failure_metadata_from_exception,
     provider_config_ref_for_node,
 )
-from dr_dspy.platform.persistence import (
+from whetstone.platform.persistence import (
     idempotent_insert_generation_run,
     idempotent_insert_node_attempt,
     persist_generation_result,
     prediction_spec_from_row,
 )
-from dr_dspy.records import (
+from whetstone.records import (
     DimensionsPayload,
     FailureMetadataPayload,
     GenerationRunStatus,
@@ -1126,7 +1126,7 @@ def test_start_workflow_handle_retrieves_on_generic_race() -> None:
 
 
 def test_platform_worker_import_registers_entrypoint() -> None:
-    from dr_dspy.platform import worker
+    from whetstone.platform import worker
 
     assert worker.APP is not None
 
@@ -1134,7 +1134,7 @@ def test_platform_worker_import_registers_entrypoint() -> None:
 def test_platform_worker_run_one_uses_shared_workflow_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import worker
+    from whetstone.platform import worker
 
     class RuntimeConfig:
         database_url = "postgresql://example/db"

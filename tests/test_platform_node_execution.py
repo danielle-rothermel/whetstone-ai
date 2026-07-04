@@ -4,19 +4,19 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dr_dspy.eval_failures import (
+from whetstone.eval_failures import (
     PermanentFailureError,
     TransientFailureError,
 )
-from dr_dspy.graph import NodeOutput
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform.node_execution import (
+from whetstone.graph import NodeOutput
+from whetstone.lm.boundary import EndpointKind, ProviderKind
+from whetstone.platform.node_execution import (
     NodeStepFailure,
     NodeStepResult,
     attach_node_step_timing_to_exception,
     node_step_timing_from_exception,
 )
-from dr_dspy.records import NodeAttemptStatus, ProviderConfigRef
+from whetstone.records import NodeAttemptStatus, ProviderConfigRef
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = datetime(2026, 6, 29, 12, 1, tzinfo=UTC)

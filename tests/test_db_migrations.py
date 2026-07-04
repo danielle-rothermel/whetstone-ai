@@ -22,37 +22,37 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
-from dr_dspy.db import schema
-from dr_dspy.db.migrations.head import (
+from whetstone.db import schema
+from whetstone.db.migrations.head import (
     V1_MIGRATION_BASE,
     V1_MIGRATION_HEAD,
     V1_MIGRATION_REVISION_COUNT,
 )
 
 V1_MIGRATION_MODULES = (
-    "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
-    "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema",
+    "whetstone.db.migrations.versions.20260629_0002_throttle_backoff",
+    "whetstone.db.migrations.versions."
     "20260629_0003_batch_submit_already_scheduled_count",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260629_0004_batch_submit_enqueuing_status",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0001_append_only_outcome_triggers",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0002_batch_submit_terminal_enqueue_accounting",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0003_batch_submit_claiming_status",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0004_batch_submit_remove_prepared_status",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0005_score_attempt_dataset_axes",
-    "dr_dspy.db.migrations.versions."
+    "whetstone.db.migrations.versions."
     "20260630_0006_score_attempt_evaluation_incomplete_outcome",
 )
 
 
 def test_alembic_env_normalizes_database_url_driver() -> None:
-    from dr_dspy.db.migrations.url import normalize_postgresql_driver_url
+    from whetstone.db.migrations.url import normalize_postgresql_driver_url
 
     assert normalize_postgresql_driver_url(
         "postgresql://localhost/dr_dspy"
@@ -105,7 +105,7 @@ def test_alembic_score_attempt_dataset_revision_renders_constraint(
     monkeypatch: Any,
 ) -> None:
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes"
     )
     statements: list[str] = []
@@ -131,7 +131,7 @@ def test_alembic_evaluation_incomplete_outcome_revision_renders_constraint(
     monkeypatch: Any,
 ) -> None:
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0006_score_attempt_evaluation_incomplete_outcome"
     )
     statements: list[str] = []
@@ -157,7 +157,7 @@ def test_alembic_v1_schema_revision_matches_live_named_contracts(
     _, statements = _render_upgrade(monkeypatch)
     dataset_statements: list[str] = []
     dataset_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes"
     )
     engine = create_mock_engine(
@@ -186,7 +186,7 @@ def test_alembic_append_only_outcome_revision_renders_triggers(
     monkeypatch: Any,
 ) -> None:
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers"
     )
     statements: list[str] = []
@@ -211,7 +211,7 @@ def test_alembic_terminal_enqueue_accounting_revision_renders_constraints(
     monkeypatch: Any,
 ) -> None:
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0002_batch_submit_terminal_enqueue_accounting"
     )
     statements: list[str] = []
@@ -236,7 +236,7 @@ def test_alembic_claiming_status_revision_renders_constraint_and_heals_rows(
     monkeypatch: Any,
 ) -> None:
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status"
     )
     statements: list[str] = []
@@ -280,29 +280,29 @@ def test_alembic_v1_schema_revision_applies_to_postgres(
         pytest.skip(f"PostgreSQL unavailable: {exc}")
 
     migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
+        "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema"
     )
     throttle_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff"
+        "whetstone.db.migrations.versions.20260629_0002_throttle_backoff"
     )
     batch_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count"
     )
     enqueuing_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0004_batch_submit_enqueuing_status"
     )
     append_only_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers"
     )
     terminal_enqueue_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0002_batch_submit_terminal_enqueue_accounting"
     )
     claiming_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status"
     )
 
@@ -603,23 +603,23 @@ def test_alembic_score_attempt_dataset_revision_allows_dual_rows(
         pytest.skip(f"PostgreSQL unavailable: {exc}")
 
     migration_modules = (
-        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema",
-        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema",
+        "whetstone.db.migrations.versions.20260629_0002_throttle_backoff",
+        "whetstone.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0004_batch_submit_enqueuing_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0001_append_only_outcome_triggers",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0002_batch_submit_terminal_enqueue_accounting",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0004_batch_submit_remove_prepared_status",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes",
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0006_score_attempt_evaluation_incomplete_outcome",
     )
 
@@ -775,17 +775,17 @@ def _seed_generation_run_chain(conn: Any) -> None:
 
 def _render_upgrade(monkeypatch: Any) -> tuple[tuple[Any, ...], list[str]]:
     first_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions.20260629_0001_v1_domain_schema"
+        "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema"
     )
     second_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions.20260629_0002_throttle_backoff"
+        "whetstone.db.migrations.versions.20260629_0002_throttle_backoff"
     )
     third_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0003_batch_submit_already_scheduled_count"
     )
     fourth_migration = importlib.import_module(
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0004_batch_submit_enqueuing_status"
     )
     statements: list[str] = []
@@ -905,7 +905,7 @@ def test_alembic_claiming_status_downgrade_resets_claiming_rows(
 ) -> None:
     engine = _require_postgres_engine()
     claiming_migration = (
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0003_batch_submit_claiming_status"
     )
 
@@ -996,7 +996,7 @@ def test_alembic_remove_prepared_status_upgrade_backfills_rows(
 ) -> None:
     engine = _require_postgres_engine()
     prepared_migration = (
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0004_batch_submit_remove_prepared_status"
     )
 
@@ -1052,7 +1052,7 @@ def test_alembic_enqueuing_status_downgrade_maps_to_prepared(
 ) -> None:
     engine = _require_postgres_engine()
     enqueuing_migration = (
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260629_0004_batch_submit_enqueuing_status"
     )
 
@@ -1105,7 +1105,7 @@ def test_alembic_score_dataset_downgrade_rejects_dual_profile_rows(
 ) -> None:
     engine = _require_postgres_engine()
     dataset_migration = (
-        "dr_dspy.db.migrations.versions."
+        "whetstone.db.migrations.versions."
         "20260630_0005_score_attempt_dataset_axes"
     )
 

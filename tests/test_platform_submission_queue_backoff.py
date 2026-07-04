@@ -15,8 +15,8 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
 from typer.testing import CliRunner
 
-from dr_dspy.eval_failures import FailureClass, FailureSummary
-from dr_dspy.graph import (
+from whetstone.eval_failures import FailureClass, FailureSummary
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -25,8 +25,8 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import (
+from whetstone.lm.boundary import EndpointKind, ProviderKind
+from whetstone.platform import (
     backoff,
     fairness,
     graph_workflow,
@@ -34,8 +34,8 @@ from dr_dspy.platform import (
     submission,
     worker,
 )
-from dr_dspy.platform.progress_log import OperationProgress
-from dr_dspy.records import (
+from whetstone.platform.progress_log import OperationProgress
+from whetstone.records import (
     ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,

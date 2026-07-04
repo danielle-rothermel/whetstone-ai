@@ -6,14 +6,14 @@ from __future__ import annotations
 import typer
 from rich.panel import Panel
 
-from dr_dspy.analysis.cli_options import (
+from whetstone.analysis.cli_options import (
     DatabaseUrlOption,
     EnvFileOption,
     LimitOption,
 )
-from dr_dspy.analysis.db import create_analysis_engine
-from dr_dspy.analysis.figures import SampleInspectionRun
-from dr_dspy.analysis.inspect import (
+from whetstone.analysis.db import create_analysis_engine
+from whetstone.analysis.figures import SampleInspectionRun
+from whetstone.analysis.inspect import (
     SCRIPT_NAME,
     SampleIndexError,
     build_debug_metadata,
@@ -24,8 +24,8 @@ from dr_dspy.analysis.inspect import (
     resolve_sample_index,
     summarize_test_results,
 )
-from dr_dspy.analysis.sample_html import write_sample_report
-from dr_dspy.platform.cli_env import load_env_file, run_typer_app
+from whetstone.analysis.sample_html import write_sample_report
+from whetstone.platform.cli_env import load_env_file, run_typer_app
 
 app = typer.Typer(add_completion=False)
 

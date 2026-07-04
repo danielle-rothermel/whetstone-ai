@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from dr_dspy.graph import NodeOutput, NodeSpec
-from dr_dspy.platform.node_execution import NodeStepResult
-from dr_dspy.platform.spec_builder import (
+from whetstone.graph import NodeOutput, NodeSpec
+from whetstone.platform.node_execution import NodeStepResult
+from whetstone.platform.spec_builder import (
     decoder_node,
     direct_node,
     encdec_graph,
@@ -15,7 +15,7 @@ from dr_dspy.platform.spec_builder import (
     prediction_spec,
     provider_ref,
 )
-from dr_dspy.records import NodeAttemptStatus, ProviderConfigRef
+from whetstone.records import NodeAttemptStatus, ProviderConfigRef
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -61,8 +61,8 @@ def step_error(
     *,
     provider: ProviderConfigRef | None = None,
 ) -> NodeStepResult:
-    from dr_dspy.eval_failures import FailureClass
-    from dr_dspy.records import FailureMetadataPayload
+    from whetstone.eval_failures import FailureClass
+    from whetstone.records import FailureMetadataPayload
 
     return NodeStepResult(
         node_id=node.id,

@@ -5,7 +5,7 @@
 | stage | state | notes |
 |-------|-------|-------|
 | 0 baselines | done | golden fixtures + tests committed; full suite 696 passed; integration 45 passed |
-| 1 rename | pending | |
+| 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | pending | repo not yet created |
 | 3 dr-code nucleus | pending | repo exists at ../dr-code |
 | 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
@@ -63,4 +63,33 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   a script (never regenerate to paper over a migration mismatch — see the
   test module docstring). Added `.claude/ralph-loop.local.md` to
   `.gitignore` (loop state, not repo content).
+- Skips: none.
+
+### 2026-07-04 — stage 1
+
+- Landed: `git mv src/dr_dspy src/whetstone`; all `dr_dspy.` module
+  references rewritten to `whetstone.` across src/tests/scripts (sed on
+  `dr_dspy\.` — safe because every frozen string uses `dr_dspy_` or
+  `dr-dspy-` shapes, never a dot); pyproject `name = "whetstone-ai"`
+  (bare `whetstone` is taken on PyPI per
+  docs/remaining-implementation-intentions.md), isort first-party
+  `whetstone`, new `[tool.hatch.build.targets.wheel] packages =
+  ["src/whetstone"]` (name no longer matches package dir); README/TESTING
+  current-code references updated; `uv.lock` resynced.
+- Frozen and verified untouched: queue `dr-dspy-platform-generation-v1`,
+  `dr_dspy_platform_*` step names, `DBOS_APP_NAME =
+  "dr-dspy-platform-graph-v1"` (same persisted-string family as
+  queue/workflow names — conservative choice), all `dr_dspy_*` table/
+  constraint/index/trigger names, Alembic revision IDs (all version files
+  byte-identical except pure import lines; verified by diffing against
+  HEAD blobs), `sqlalchemy.url` default DB `dr_dspy`, test DB
+  `dr_dspy_test`, CI workflow Postgres env.
+- Conservative choice: `alembic.ini` is listed as frozen, but its
+  `script_location` is a filesystem path that must track the package move
+  or alembic breaks; updated only that line, everything else
+  byte-identical. Historical changelog entries and rename-plan references
+  in TESTING.md/AGENTS.md/README.md deliberately left as `dr_dspy`.
+- Verified: `uv run alembic heads` → 20260630_0006 (head); full suite 696
+  passed; integration tier 45 passed; goldens 4 passed; ruff + ty clean
+  (22 isort fixes after first-party rename).
 - Skips: none.

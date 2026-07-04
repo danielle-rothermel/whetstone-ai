@@ -7,8 +7,8 @@ from typing import Any
 from dbos import DBOS, SetWorkflowID
 from sqlalchemy.engine import Connection
 
-from dr_dspy.db import io as db_io
-from dr_dspy.records import (
+from whetstone.db import io as db_io
+from whetstone.records import (
     BatchSubmitItemRecord,
     BatchSubmitOperationRecord,
     ExperimentRecord,

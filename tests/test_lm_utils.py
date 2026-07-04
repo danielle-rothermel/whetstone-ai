@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dr_dspy.lm.utils import content_to_text, provider_cost_from_response
+from whetstone.lm.utils import content_to_text, provider_cost_from_response
 
 
 @pytest.mark.parametrize(

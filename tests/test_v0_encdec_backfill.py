@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import create_engine, text
 
-from dr_dspy.migration.v0_encdec_backfill import (
+from tests.integration.v0_sample_loader import load_v0_sample
+from whetstone.migration.v0_encdec_backfill import (
     V0_ENC_DEC_TABLE,
     V0EncdecBackfillResult,
     backfill_v0_encdec_rows,
@@ -18,8 +19,7 @@ from dr_dspy.migration.v0_encdec_backfill import (
     terminal_rows_select_sql,
     with_target_experiment,
 )
-from dr_dspy.migration.v0_reshape import reshape_v0_encdec_row
-from tests.integration.v0_sample_loader import load_v0_sample
+from whetstone.migration.v0_reshape import reshape_v0_encdec_row
 
 
 def test_terminal_generation_statuses_match_reshape_contract() -> None:
@@ -127,19 +127,19 @@ def test_run_v0_encdec_backfill_chunked_processes_multiple_chunks(
         )
 
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
+        "whetstone.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
         fake_count,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
+        "whetstone.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
         lambda connection, limit=None: 3,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
+        "whetstone.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
         fake_fetch,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill._process_backfill_chunk",
+        "whetstone.migration.v0_encdec_backfill._process_backfill_chunk",
         fake_process_chunk,
     )
 
@@ -189,19 +189,19 @@ def test_run_v0_encdec_backfill_chunked_limit_caps_total_rows(
         return [row] * limit
 
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
+        "whetstone.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
         lambda connection: 0,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
+        "whetstone.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
         lambda connection, limit=None: 3,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
+        "whetstone.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
         fake_fetch,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill._process_backfill_chunk",
+        "whetstone.migration.v0_encdec_backfill._process_backfill_chunk",
         lambda engine, rows, **kwargs: V0EncdecBackfillResult(
             dry_run=True,
             selected_v0_rows=len(rows),
@@ -244,15 +244,15 @@ def test_run_v0_encdec_backfill_chunked_dry_run_writes_nothing(
             return FakeConnection()
 
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
+        "whetstone.migration.v0_encdec_backfill.count_non_terminal_v0_rows",
         lambda connection: 0,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
+        "whetstone.migration.v0_encdec_backfill.count_v0_encdec_terminal_rows",
         lambda connection, limit=None: 1,
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
+        "whetstone.migration.v0_encdec_backfill.fetch_v0_encdec_terminal_rows_page",
         lambda connection, *, limit, offset: [row],
     )
 
@@ -276,18 +276,18 @@ def test_reshape_v0_encdec_rows_uses_parallel_workers(
     executor = MagicMock()
     executor.__enter__.return_value = executor
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.ThreadPoolExecutor",
+        "whetstone.migration.v0_encdec_backfill.ThreadPoolExecutor",
         lambda max_workers: executor,
     )
     executor.submit.side_effect = lambda fn, *args: MagicMock(
         result=lambda: fn(*args)
     )
     monkeypatch.setattr(
-        "dr_dspy.migration.v0_encdec_backfill.as_completed",
+        "whetstone.migration.v0_encdec_backfill.as_completed",
         lambda futures: futures,
     )
 
-    from dr_dspy.migration.v0_encdec_backfill import reshape_v0_encdec_rows
+    from whetstone.migration.v0_encdec_backfill import reshape_v0_encdec_rows
 
     reshaped, failures, first_error = reshape_v0_encdec_rows(
         [row, row],

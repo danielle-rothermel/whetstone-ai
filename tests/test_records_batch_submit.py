@@ -6,7 +6,7 @@ from typing import Any, cast
 import pytest
 from pydantic import ValidationError
 
-from dr_dspy.records import (
+from whetstone.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,
     BatchSubmitItemRecord,
@@ -19,7 +19,7 @@ from dr_dspy.records import (
     is_terminal_enqueue_status,
     operation_status_from_counts,
 )
-from dr_dspy.records import models as records_models
+from whetstone.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 

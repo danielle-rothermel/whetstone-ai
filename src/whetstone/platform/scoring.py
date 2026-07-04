@@ -1,0 +1,350 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+from whetstone.eval_failures import (
+    classify_exception,
+    exception_type_name,
+)
+from whetstone.eval_failures.recording import recordable_text
+from whetstone.humaneval.metrics import (
+    NodeOutputMetricsSource,
+    build_metrics_payload,
+)
+from whetstone.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    HumanEvalScoringProfile,
+    resolve_humaneval_scoring_profile,
+)
+from whetstone.humaneval.scoring import (
+    HumanEvalGenerationScore,
+    evaluation_aggregate_metrics,
+    score_humaneval_generation,
+)
+from whetstone.humaneval.task import HumanEvalTask
+from whetstone.platform.node_execution import failure_metadata_from_exception
+from whetstone.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
+    ExtractedCodePayload,
+    FailureMetadataPayload,
+    GenerationRunRecord,
+    GenerationRunStatus,
+    MetricsPayload,
+    NodeAttemptRecord,
+    PerTestResultPayload,
+    PredictionSpecRecord,
+    ScoreAttemptRecord,
+    ScoreAttemptStatus,
+    stable_score_attempt_id,
+)
+from whetstone.records.limits import METRICS_STAGES_MAX_COUNT
+
+
+def score_generation_run(
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    node_attempts: tuple[NodeAttemptRecord, ...],
+    task: HumanEvalTask,
+    scoring_profile: HumanEvalScoringProfile | None = None,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    score_attempt_index: int = 0,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    started_at: datetime,
+    completed_at: datetime | None = None,
+) -> ScoreAttemptRecord:
+    scoring_profile = scoring_profile or resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    try:
+        validate_generation_run_for_scoring(
+            spec=spec,
+            run=generation_run,
+            task=task,
+        )
+        raw_generation = generation_run.summary.terminal_output
+        domain_score = score_humaneval_generation(
+            raw_generation=raw_generation,
+            task=task,
+            parser_profile=scoring_profile.parser_profile,
+            timeout_seconds=scoring_profile.timeout_seconds,
+        )
+        return score_attempt_from_domain_score(
+            spec=spec,
+            generation_run=generation_run,
+            node_attempts=node_attempts,
+            task=task,
+            scoring_profile=scoring_profile,
+            score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+            domain_score=domain_score,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+    except Exception as error:
+        return error_score_attempt(
+            spec=spec,
+            generation_run=generation_run,
+            scoring_profile=scoring_profile,
+            score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+            error=error,
+            started_at=started_at,
+            completed_at=resolve_completed_at(completed_at),
+        )
+
+
+def score_attempt_from_domain_score(
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    node_attempts: tuple[NodeAttemptRecord, ...],
+    task: HumanEvalTask,
+    scoring_profile: HumanEvalScoringProfile,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+    domain_score: HumanEvalGenerationScore,
+    started_at: datetime,
+    completed_at: datetime | None,
+) -> ScoreAttemptRecord:
+    return successful_score_attempt(
+        spec=spec,
+        generation_run=generation_run,
+        node_attempts=node_attempts,
+        task=task,
+        scoring_profile=scoring_profile,
+        score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        domain_score=domain_score,
+        started_at=started_at,
+        completed_at=resolve_completed_at(completed_at),
+    )
+
+
+def successful_score_attempt(
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    node_attempts: tuple[NodeAttemptRecord, ...],
+    task: HumanEvalTask,
+    scoring_profile: HumanEvalScoringProfile,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+    domain_score: HumanEvalGenerationScore,
+    started_at: datetime,
+    completed_at: datetime,
+) -> ScoreAttemptRecord:
+    extraction = domain_score.extraction
+    parser_profile = scoring_profile.parser_profile
+    extracted_payload = ExtractedCodePayload(
+        raw_generation=domain_score.raw_generation,
+        extracted_code=extraction.extracted_code,
+        extraction_method=(
+            extraction.extraction_method.value
+            if extraction.extraction_method is not None
+            else None
+        ),
+        parser_profile_id=parser_profile.profile_id,
+        parser_version=parser_profile.version,
+        metadata={
+            **extraction.metadata,
+            "compile_ok": extraction.compile_ok,
+            "compile_error": extraction.compile_error,
+            "extraction_error": extraction.extraction_error,
+        },
+    )
+    per_test_results = ()
+    if domain_score.evaluation is not None:
+        per_test_results = tuple(
+            PerTestResultPayload.from_evaluation_case(result.to_summary())
+            for result in domain_score.evaluation.results
+        )
+    return ScoreAttemptRecord(
+        score_attempt_id=stable_score_attempt_id(
+            generation_run_id=generation_run.generation_run_id,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=parser_profile.profile_id,
+            parser_version=parser_profile.version,
+            attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        ),
+        prediction_id=spec.prediction_id,
+        generation_run_id=generation_run.generation_run_id,
+        attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=parser_profile.profile_id,
+        parser_version=parser_profile.version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        status=ScoreAttemptStatus.SUCCESS,
+        generated_code_outcome=domain_score.outcome,
+        score=domain_score.score,
+        extracted_code=extracted_payload,
+        metrics=score_metrics_payload(
+            task=task,
+            node_attempts=node_attempts,
+            scoring_profile=scoring_profile,
+            domain_score=domain_score,
+        ),
+        per_test_results=per_test_results,
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+
+def error_score_attempt(
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    scoring_profile: HumanEvalScoringProfile,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+    error: BaseException,
+    started_at: datetime,
+    completed_at: datetime,
+) -> ScoreAttemptRecord:
+    return ScoreAttemptRecord(
+        score_attempt_id=stable_score_attempt_id(
+            generation_run_id=generation_run.generation_run_id,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=scoring_profile.parser_profile.profile_id,
+            parser_version=scoring_profile.parser_profile.version,
+            attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        ),
+        prediction_id=spec.prediction_id,
+        generation_run_id=generation_run.generation_run_id,
+        attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        status=ScoreAttemptStatus.ERROR,
+        failure=failure_payload(
+            error,
+            metadata={
+                "prediction_id": spec.prediction_id,
+                "generation_run_id": generation_run.generation_run_id,
+                "task_id": spec.task_id,
+                "parser_profile_id": scoring_profile.parser_profile.profile_id,
+                "parser_version": scoring_profile.parser_profile.version,
+                "scoring_profile_id": scoring_profile.profile_id,
+                "scoring_profile_version": scoring_profile.version,
+            },
+        ),
+        started_at=started_at,
+        completed_at=completed_at,
+    )
+
+
+def validate_generation_run_for_scoring(
+    *,
+    spec: PredictionSpecRecord,
+    run: GenerationRunRecord,
+    task: HumanEvalTask,
+) -> None:
+    if run.prediction_id != spec.prediction_id:
+        raise ValueError("generation run prediction_id does not match spec")
+    if task.task_id != spec.task_id:
+        raise ValueError(
+            "HumanEval task_id does not match spec: "
+            f"{task.task_id!r} != {spec.task_id!r}"
+        )
+    if run.status is GenerationRunStatus.SUCCESS:
+        return
+    if run.status is GenerationRunStatus.PARTIAL:
+        if run.summary.terminal_output is None:
+            raise ValueError(
+                "partial generation run missing terminal_output"
+            )
+        return
+    raise ValueError(
+        f"generation run is not scoreable: {run.status.value}"
+    )
+
+
+def score_metrics_payload(
+    *,
+    task: HumanEvalTask,
+    node_attempts: tuple[NodeAttemptRecord, ...],
+    scoring_profile: HumanEvalScoringProfile,
+    domain_score: HumanEvalGenerationScore,
+) -> MetricsPayload:
+    node_output_sources = node_output_metrics_sources(node_attempts)
+    max_node_sources = METRICS_STAGES_MAX_COUNT - 1
+    if len(node_output_sources) > max_node_sources:
+        raise ValueError(
+            f"node output metrics sources cannot exceed {max_node_sources} "
+            f"entries (metrics.stages cap is {METRICS_STAGES_MAX_COUNT})"
+        )
+    metrics_payload = build_metrics_payload(
+        raw_generation=domain_score.raw_generation,
+        extracted_code=domain_score.extraction.extracted_code,
+        task=task,
+        node_output_sources=node_output_sources,
+        profile_id=scoring_profile.metrics_profile_id,
+        profile_version=scoring_profile.metrics_profile_version,
+    ).model_dump(mode="json")
+    if domain_score.evaluation is not None:
+        metrics_payload["custom"] = {
+            **metrics_payload["custom"],
+            "evaluation": evaluation_aggregate_metrics(
+                domain_score.evaluation
+            ).model_dump(mode="json"),
+        }
+    return MetricsPayload.model_validate(metrics_payload)
+
+
+def node_output_metrics_sources(
+    node_attempts: tuple[NodeAttemptRecord, ...],
+) -> tuple[NodeOutputMetricsSource, ...]:
+    sources: list[NodeOutputMetricsSource] = []
+    for attempt in node_attempts:
+        if attempt.output is None:
+            continue
+        for field_name, value in sorted(attempt.output.values.items()):
+            sources.append(
+                NodeOutputMetricsSource(
+                    node_id=attempt.node_id,
+                    field_name=field_name,
+                    text=recordable_text(value),
+                )
+            )
+    return tuple(sources)
+
+
+def failure_payload(
+    error: BaseException,
+    *,
+    metadata: dict[str, Any],
+) -> FailureMetadataPayload:
+    failure = failure_metadata_from_exception(error)
+    return FailureMetadataPayload(
+        failure_class=classify_exception(error),
+        error_type=exception_type_name(error),
+        message=str(error),
+        metadata={**metadata, **failure.metadata},
+    )
+
+
+def resolve_completed_at(completed_at: datetime | None) -> datetime:
+    return completed_at if completed_at is not None else datetime.now(UTC)

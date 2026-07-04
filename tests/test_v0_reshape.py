@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dr_dspy.migration.v0_reshape import (
+from tests.integration.v0_sample_loader import load_v0_sample
+from whetstone.migration.v0_reshape import (
     reshape_v0_direct_row,
     reshape_v0_encdec_row,
 )
-from dr_dspy.records import GenerationRunStatus, NodeAttemptStatus
-from tests.integration.v0_sample_loader import load_v0_sample
+from whetstone.records import GenerationRunStatus, NodeAttemptStatus
 
 
 def test_v0_direct_success_maps_to_success_status() -> None:

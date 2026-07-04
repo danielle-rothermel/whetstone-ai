@@ -11,23 +11,23 @@ import pandas as pd
 import typer
 from rich.table import Table
 
-from dr_dspy.analysis.cli_options import (
+from whetstone.analysis.cli_options import (
     DatabaseUrlOption,
     EnvFileOption,
     ExperimentNameOption,
     LimitOption,
     RequireScoreOption,
 )
-from dr_dspy.analysis.db import create_analysis_engine
-from dr_dspy.analysis.figures import FigureRun
-from dr_dspy.analysis.frames import (
+from whetstone.analysis.db import create_analysis_engine
+from whetstone.analysis.figures import FigureRun
+from whetstone.analysis.frames import (
     load_encdec_analysis_frame,
     pass_mask,
     score_success_mask,
 )
-from dr_dspy.analysis.plotting import apply_light_plot_style, save_figure
-from dr_dspy.analysis.report import AnalysisReporter
-from dr_dspy.platform.cli_env import load_env_file, run_typer_app
+from whetstone.analysis.plotting import apply_light_plot_style, save_figure
+from whetstone.analysis.report import AnalysisReporter
+from whetstone.platform.cli_env import load_env_file, run_typer_app
 
 app = typer.Typer(add_completion=False)
 SCRIPT_NAME = "q4_task_variation"

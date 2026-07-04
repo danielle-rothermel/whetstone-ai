@@ -16,23 +16,23 @@ from typing import Annotated, Any
 
 import typer
 
-from dr_dspy.graph import canonical_graph_payload, graph_digest
-from dr_dspy.hashing import canonical_json, sha256_json_digest
-from dr_dspy.humaneval.code_parsing import (
+from whetstone.graph import canonical_graph_payload, graph_digest
+from whetstone.hashing import canonical_json, sha256_json_digest
+from whetstone.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     STRICT_FIELD_MARKER_PARSER_PROFILE,
     CodeParserProfile,
     extract_code_with_profile,
 )
-from dr_dspy.humaneval.profiles import DEFAULT_HUMANEVAL_SCORING_PROFILE
-from dr_dspy.humaneval.scoring import score_humaneval_generation
-from dr_dspy.humaneval.task import HumanEvalTask
-from dr_dspy.platform.spec_builder import (
+from whetstone.humaneval.profiles import DEFAULT_HUMANEVAL_SCORING_PROFILE
+from whetstone.humaneval.scoring import score_humaneval_generation
+from whetstone.humaneval.task import HumanEvalTask
+from whetstone.platform.spec_builder import (
     direct_graph,
     encdec_graph,
     humaneval_encdec_graph,
 )
-from dr_dspy.records.hashing import (
+from whetstone.records.hashing import (
     dimensions_digest,
     fair_order_key,
     stable_generation_run_id,
@@ -40,7 +40,7 @@ from dr_dspy.records.hashing import (
     stable_prediction_id,
     stable_score_attempt_id,
 )
-from dr_dspy.records.models import DimensionsPayload
+from whetstone.records.models import DimensionsPayload
 
 GOLDEN_FIXTURES_DIR = (
     Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "golden"

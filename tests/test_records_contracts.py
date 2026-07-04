@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from dr_dspy.graph import (
+from whetstone.graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -18,17 +18,20 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.hashing import canonical_json
-from dr_dspy.humaneval import metrics as humaneval_metrics
-from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import EvaluationCaseStatus, EvaluationCaseSummary
-from dr_dspy.lm.boundary import (
+from whetstone.hashing import canonical_json
+from whetstone.humaneval import metrics as humaneval_metrics
+from whetstone.humaneval.parsed_tests import HumanEvalTestCaseKind
+from whetstone.humaneval.scoring import GeneratedCodeOutcome
+from whetstone.humaneval.task import (
+    EvaluationCaseStatus,
+    EvaluationCaseSummary,
+)
+from whetstone.lm.boundary import (
     EndpointKind,
     ProviderKind,
     openai_responses_config,
 )
-from dr_dspy.records import (
+from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
     AstMetricsPayload,
@@ -65,7 +68,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records import models as records_models
+from whetstone.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 

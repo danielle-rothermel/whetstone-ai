@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from dr_dspy.platform import dbos_bootstrap
+from whetstone.platform import dbos_bootstrap
 
 
 def test_resolve_database_url_prefers_explicit_arg(
