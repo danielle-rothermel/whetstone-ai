@@ -8,7 +8,7 @@
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
-| 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
+| 4 dr-providers v0.2 | in_progress | 4a kernel done (60 tests, PR #3); next: 4b transport/conformance/corpus, 4c cutover |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
 | final e2e | pending | |
@@ -202,3 +202,32 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   `danielle-rothermel/dr-serialize`. Token lacks `delete_repo` scope and
   repo deletion is a human call — please delete the stray repo.
 - Skips: none.
+
+### 2026-07-04 — stage 4, sub-step 4a (dr-providers v0.2 kernel)
+
+- Landed (dr-providers branch `composable-migration`, PR #3 draft):
+  `dr_providers/kernel/` subpackage — failures (FailureClass +
+  ProviderFailure record, carriers, status-code classification,
+  SANITIZE_KEYS), config records with `supported_controls` + presets
+  (OpenRouter, OpenAI chat/responses, Gemini via the OpenAI-compat
+  endpoint / GEMINI_API_KEY), `LlmRequest` + public pure
+  `build_payload` (loud UnsupportedControlError; explicit
+  `allow_unsupported_control_drop` opt-in preserving whetstone's
+  silent-drop use case for knob-rejecting models), `LlmResponse` as
+  materialized parts (TokenUsage w/ reasoning extraction, CostInfo,
+  warnings channel, continuation handle, payload-on-response) with
+  chat/responses body parsers, and `FixtureProvider` (public, Provider
+  protocol, scripted outcomes).
+- Conservative choices: kernel lives as a new subpackage; the 0.1.x
+  `query/` package stays untouched until the v0.2 cutover settles its
+  fate; extra_body flattens inline into the wire payload (raw httpx —
+  the SDK-era extra_body indirection is gone).
+- Verified: dr-providers 60 tests green (27 existing + 33 kernel);
+  ruff + ty clean.
+- Remaining for stage 4: **4b** raw-httpx transport (opt-in retry),
+  conformance module, audit corpus grown with whetstone's real response
+  fixtures, corpus-tested parsers; **4c** whetstone cutover (boundary →
+  thin adapter over the kernel, eval_failures/policy.py drops the
+  openai/httpx table, node_attempt_id as idempotency key,
+  FixtureProvider end-to-end node execution test, optional live smokes
+  — OPENAI/GEMINI/OPENROUTER keys all present).
