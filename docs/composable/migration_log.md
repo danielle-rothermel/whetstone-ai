@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design + 6a + 6b + 6c done (whetstone fully on dr-platform; 432 unit+integration + goldens green); 6d consumer validation pending |
+| 6 platform | done | dr-platform extracted (103 tests); whetstone cut over; copro on await_operation; sketches re-checked; 432 unit+integration + goldens green |
 | final e2e | pending | |
 
 ## Environment
@@ -578,3 +578,27 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Stage 6c complete. Remaining: 6d consumer validation (copro
   evaluate_specs_queue onto await_operation; sketches re-checked
   against the real facade).
+
+### 2026-07-04 — stage 6, sub-step 6d (consumer validation) — stage 6 done
+
+- Landed (whetstone baaa3c6): copro's evaluate_specs_queue collapsed
+  onto dr_platform.await_operation — the recorded deterministic
+  workflow ids replace hand-rolled polling over generation_runs
+  (wait_for_generation_runs + _count_non_terminal/_count_missing
+  deleted; dead TERMINAL_GENERATION_STATUSES removed). Timeout still
+  carries the run-the-worker operational hint plus the library's
+  status breakdown. The copro process launches the DBOS runtime
+  (configure_platform_dbos_runtime), so the default
+  DBOS.get_workflow_status status_fn works in-process.
+- Sketch re-check (the design-half validation artifacts vs the
+  shipped facade): altitude held, no passthrough wrappers accreted.
+  Drift folded back in: explicit PlatformSchema handle + group_key on
+  facade calls; seed hook inside the registration transaction
+  returning inserted ids; adapter class unnecessary
+  (PredictionSpecRecord satisfies SubmittableItem directly);
+  load_operation_progress -> load_operation_snapshot. Recorded in
+  platform.md Validation section; status header updated to
+  "extracted".
+- Verified: whetstone 432 (unit + integration) + 4 goldens green;
+  ruff + ty clean; copro unit tests 9 green.
+- Stage 6 complete. Remaining: final end-to-end verification.
