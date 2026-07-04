@@ -1,0 +1,17 @@
+compression_target,model,total_runs,scoreable_count,pass_count,pass_rate,generation_error_count,score_error_count,avg_realized_compression_ratio,rollup,model_count
+0.25,qwen/qwen3-coder-next,1,1,0,0.0,0,0,,model,
+0.5,mistralai/codestral-2508,1,1,1,1.0,0,0,,model,
+0.5,openai/gpt-5.4-nano,1,1,0,0.0,0,0,,model,
+0.5,z-ai/glm-4.7,1,1,0,0.0,0,0,,model,
+0.5,z-ai/glm-5,1,1,1,1.0,0,0,,model,
+0.75,deepseek/deepseek-chat-v3.1,1,1,1,1.0,0,0,,model,
+1.5,deepseek/deepseek-v4-pro,1,1,1,1.0,0,0,,model,
+2.0,deepseek/deepseek-chat-v3.1,1,1,0,0.0,0,0,,model,
+2.0,z-ai/glm-5,1,1,1,1.0,0,0,,model,
+,mistralai/codestral-2508,1,1,0,0.0,0,0,,model,
+0.25,,1,1,0,0.0,0,0,,overall,1.0
+0.5,,4,4,2,0.5,0,0,,overall,4.0
+0.75,,1,1,1,1.0,0,0,,overall,1.0
+1.5,,1,1,1,1.0,0,0,,overall,1.0
+2.0,,2,2,1,0.5,0,0,,overall,2.0
+,,1,1,0,0.0,0,0,,overall,1.0

@@ -1,0 +1,2447 @@
+{
+  "inspector": {
+    "script": "sample_run_inspector",
+    "generated_at": "2026-06-30T23:21:20.635430+00:00",
+    "sample_index": 3,
+    "sample_count": 10,
+    "prompts_source": "reconstructed_from_graph_snapshot",
+    "output_paths": {
+      "html": "/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_192120_3.html",
+      "json": "/Users/daniellerothermel/drotherm/repos/whetstone-ai/analysis/samples/v0_encdec_backfill_smoke_20260630/20260630_192120_3.json"
+    }
+  },
+  "experiment": {
+    "experiment_name": "v0_encdec_backfill_smoke_20260630",
+    "fair_order_key": "b4ba3f44d8bf02012dfb2df24cd28c88",
+    "fair_order_seed": "legacy-v0-migration"
+  },
+  "spec": {
+    "prediction_id": "c0dfd08b5b15df25e626a4d7",
+    "task_id": "HumanEval/25",
+    "repetition_seed": 2,
+    "dimensions": {
+      "budget_ratio": 0.5,
+      "decoder_model": "z-ai/glm-5",
+      "encoder_model": "z-ai/glm-5",
+      "decoder_reasoning": {
+        "enabled": false
+      },
+      "encoder_reasoning": {
+        "enabled": false
+      },
+      "decoder_temperature": 0.0,
+      "encoder_temperature": 0.0
+    },
+    "dimensions_digest": "bf236e569d40b224",
+    "graph_layout": "encdec",
+    "graph_digest": "ec4e636b819ecfbf",
+    "provider_axis": {
+      "provider_kind": "openrouter",
+      "endpoint_kind": "chat_completions",
+      "model": "z-ai/glm-5",
+      "config_id": "decoder",
+      "throttle_key": "openrouter:chat_completions:z-ai/glm-5",
+      "parameters": {
+        "temperature": 0.0
+      }
+    },
+    "provider_configs": [
+      {
+        "provider_kind": "openrouter",
+        "endpoint_kind": "chat_completions",
+        "model": "z-ai/glm-5",
+        "config_id": "encoder",
+        "throttle_key": "openrouter:chat_completions:z-ai/glm-5",
+        "parameters": {
+          "temperature": 0.0
+        }
+      },
+      {
+        "provider_kind": "openrouter",
+        "endpoint_kind": "chat_completions",
+        "model": "z-ai/glm-5",
+        "config_id": "decoder",
+        "throttle_key": "openrouter:chat_completions:z-ai/glm-5",
+        "parameters": {
+          "temperature": 0.0
+        }
+      }
+    ],
+    "compression_target": 0.5,
+    "encoder_model": "z-ai/glm-5",
+    "decoder_model": "z-ai/glm-5",
+    "model": "z-ai/glm-5"
+  },
+  "task_snapshot": {
+    "task_id": "HumanEval/25",
+    "inputs": {
+      "values": {
+        "test": "\n\nimport numpy as np\n\ndef is_floats(x) -> bool:\n    # check if it is float; List[float]; Tuple[float]\n    if isinstance(x, float):\n        return True\n    if isinstance(x, (list, tuple)):\n        return all(isinstance(i, float) for i in x)\n    if isinstance(x, np.ndarray):\n        return x.dtype == np.float64 or x.dtype == np.float32\n    return False\n\n\ndef assertion(out, exp, atol):\n    exact_match = out == exp\n\n    if atol == 0 and is_floats(exp):\n        atol = 1e-6\n    if not exact_match and atol != 0:\n        assert np.allclose(out, exp, rtol=1e-07, atol=atol)\n    else:\n        assert exact_match\n\n\ndef check(candidate):\n    inputs = [[2], [4], [8], [57], [3249], [185193], [20577], [18], [10], [15], [28], [1024], [131], [33], [1000], [100], [123456789], [987654321], [1025], [11], [1026], [29], [1027], [14], [34], [13], [99], [132], [123456790], [1023], [123456788], [32], [31], [1022], [987654320], [123456791], [1028], [123456787], [123456792], [27], [39], [12], [30], [2147483647], [1207943], [112234369], [999983], [1003001001], [43121192843], [1073741789], [9999999967], [1003001000], [112234370], [56], [9999999966], [2147483646], [1003000999], [1207942], [999984], [79], [80], [1003001002], [78], [77], [112234368], [9999999965], [83], [76], [75], [112234367], [52], [112234371], [2147483645], [53], [9999999964], [112234372], [1003001004], [101], [6], [1003001005], [1073741788], [67], [123456786], [1003001003], [47], [58], [26], [51], [55], [38], [37], [17], [125], [7919], [987654322], [43121192841], [43121192844], [987654323], [43121192842], [123456785], [112234366], [999982], [112234365], [43121192845], [2147483644], [1207944], [1073741790], [1073741791], [9999999969], [2147483643], [1207945], [43121192840], [1207946], [1003000998], [43121192839], [112234364], [9999999968], [987654324], [1207947], [999980], [999979], [999981], [43121192838], [987654319], [999985], [2147483642], [2147483641], [46], [43121192837], [999987], [987654325], [1003000997], [987654326], [1207948], [999986], [987654327], [50], [999978], [999988], [999977], [999989], [9999999963], [44], [43], [42]]\n    results = [[2], [2, 2], [2, 2, 2], [3, 19], [3, 3, 19, 19], [3, 3, 3, 19, 19, 19], [3, 19, 19, 19], [2, 3, 3], [2, 5], [3, 5], [2, 2, 7], [2, 2, 2, 2, 2, 2, 2, 2, 2, 2], [131], [3, 11], [2, 2, 2, 5, 5, 5], [2, 2, 5, 5], [3, 3, 3607, 3803], [3, 3, 17, 17, 379721], [5, 5, 41], [11], [2, 3, 3, 3, 19], [29], [13, 79], [2, 7], [2, 17], [13], [3, 3, 11], [2, 2, 3, 11], [2, 5, 37, 333667], [3, 11, 31], [2, 2, 7, 13, 17, 71, 281], [2, 2, 2, 2, 2], [31], [2, 7, 73], [2, 2, 2, 2, 5, 37, 333667], [123456791], [2, 2, 257], [31, 31, 128467], [2, 2, 2, 3, 59, 87187], [3, 3, 3], [3, 13], [2, 2, 3], [2, 3, 5], [2147483647], [11, 11, 67, 149], [13, 8633413], [999983], [3, 31, 10784957], [26731, 1613153], [1073741789], [9999999967], [2, 2, 2, 5, 5, 5, 1003001], [2, 5, 11223437], [2, 2, 2, 7], [2, 3, 11, 457, 331543], [2, 3, 3, 7, 11, 31, 151, 331], [7, 11, 13, 41, 24439], [2, 41, 14731], [2, 2, 2, 2, 3, 83, 251], [79], [2, 2, 2, 2, 5], [2, 181, 631, 4391], [2, 3, 13], [7, 11], [2, 2, 2, 2, 2, 2, 2, 3, 19, 15383], [5, 29, 1327, 51971], [83], [2, 2, 19], [3, 5, 5], [7, 16033481], [2, 2, 13], [3, 37411457], [5, 19, 22605091], [53], [2, 2, 17, 17, 31, 173, 1613], [2, 2, 28058593], [2, 2, 3, 3, 27861139], [101], [2, 3], [5, 200600201], [2, 2, 7, 2341, 16381], [67], [2, 3, 20576131], [17, 59, 101, 9901], [47], [2, 29], [2, 13], [3, 17], [5, 11], [2, 19], [37], [17], [5, 5, 5], [7919], [2, 701, 704461], [3, 3, 131, 1237, 29567], [2, 2, 3, 3593432737], [987654323], [2, 7, 13, 5717, 41443], [5, 24691357], [2, 56117183], [2, 79, 6329], [3, 3, 5, 23, 108439], [5, 8624238569], [2, 2, 233, 1103, 2089], [2, 2, 2, 3, 3, 19, 883], [2, 3, 5, 11, 47, 107, 647], [29, 97, 381707], [3, 3333333323], [3, 715827881], [5, 241589], [2, 2, 2, 5, 11, 98002711], [2, 31, 19483], [2, 3, 167, 1000999], [239, 180423401], [2, 2, 11, 643, 3967], [2, 2, 2, 2, 2, 7, 7, 6377551], [2, 2, 3, 443, 185789], [3, 13, 47, 659], [2, 2, 5, 49999], [999979], [3, 3, 111109], [2, 3, 7186865473], [987654319], [5, 7, 28571], [2, 23, 46684427], [2699, 795659], [2, 23], [769, 2383, 23531], [3, 257, 1297], [5, 5, 7, 337, 16747], [23, 317, 137567], [2, 131, 3769673], [2, 2, 7, 7, 6163], [2, 13, 38461], [3, 11, 31, 163, 5923], [2, 5, 5], [2, 3, 7, 29, 821], [2, 2, 11, 22727], [11, 90907], [19, 52631], [3, 3, 3, 370370369], [2, 2, 11], [43], [2, 3, 7]]\n    for i, (inp, exp) in enumerate(zip(inputs, results)):\n        assertion(candidate(*inp), exp, 0)\n",
+        "prompt": "from typing import List\n\n\ndef factorize(n: int) -> List[int]:\n    \"\"\" Return list of prime factors of given integer in the order from smallest to largest.\n    Each of the factors should be listed number of times corresponding to how many times it appeares in factorization.\n    Input number should be equal to the product of all factors\n    >>> factorize(8)\n    [2, 2, 2]\n    >>> factorize(25)\n    [5, 5]\n    >>> factorize(70)\n    [2, 5, 7]\n    \"\"\"\n",
+        "entry_point": "factorize"
+      }
+    },
+    "source": null,
+    "metadata": {
+      "ground_truth_code": "from typing import List\n\ndef factorize(n: int) -> List[int]:\n    import math\n    fact = []\n    i = 2\n    while i <= int(math.sqrt(n) + 1):\n        if n % i == 0:\n            fact.append(i)\n            n //= i\n        else:\n            i += 1\n    if n > 1:\n        fact.append(n)\n    return fact",
+      "canonical_solution": "\n    import math\n    fact = []\n    i = 2\n    while i <= int(math.sqrt(n) + 1):\n        if n % i == 0:\n            fact.append(i)\n            n //= i\n        else:\n            i += 1\n\n    if n > 1:\n        fact.append(n)\n    return fact\n\n"
+    }
+  },
+  "generation_run": {
+    "generation_run_id": "621ff6d8a046dcb5571c2c28",
+    "prediction_id": "c0dfd08b5b15df25e626a4d7",
+    "attempt_index": 0,
+    "status": "success",
+    "terminal_node_id": "decoder",
+    "terminal_output_node_id": "decoder",
+    "started_at": "2026-06-28T01:21:32.364141-04:00",
+    "completed_at": "2026-06-28T01:24:58.383370-04:00",
+    "summary": {
+      "execution_order": [
+        "encoder",
+        "decoder"
+      ],
+      "terminal_node_id": "decoder",
+      "terminal_output": "import math\n\ndef prime_factors(n):\n    factors = []\n    i = 2\n    while i <= int(math.sqrt(n)) + 1:\n        if n % i == 0:\n            factors.append(i)\n            n = n // i\n        else:\n            i += 1\n    if n > 1:\n        factors.append(n)\n    return factors",
+      "terminal_error": null,
+      "metadata": {
+        "v0_source": {
+          "v0_layout": "encdec",
+          "v0_prediction_id": "0005d1bdde8d629f7f65bfbfa72256fd",
+          "v0_scoring_status": "scored",
+          "v0_generation_status": "generated"
+        },
+        "extraction_error": null
+      }
+    },
+    "v0_source": {
+      "v0_layout": "encdec",
+      "v0_prediction_id": "0005d1bdde8d629f7f65bfbfa72256fd",
+      "v0_scoring_status": "scored",
+      "v0_generation_status": "generated"
+    }
+  },
+  "node_attempts": [
+    {
+      "node_id": "decoder",
+      "node_attempt_id": "425e2b5a3b8e85ba5ab561f546e9d487",
+      "attempt_index": 0,
+      "status": "success",
+      "provider_config": {
+        "provider_kind": "openrouter",
+        "endpoint_kind": "chat_completions",
+        "model": "z-ai/glm-5",
+        "config_id": "decoder",
+        "throttle_key": "openrouter:chat_completions:z-ai/glm-5",
+        "parameters": {
+          "temperature": 0.0
+        }
+      },
+      "output": {
+        "values": {
+          "code": "import math\n\ndef prime_factors(n):\n    factors = []\n    i = 2\n    while i <= int(math.sqrt(n)) + 1:\n        if n % i == 0:\n            factors.append(i)\n            n = n // i\n        else:\n            i += 1\n    if n > 1:\n        factors.append(n)\n    return factors"
+        },
+        "metadata": {}
+      },
+      "usage_cost": {
+        "usage_metadata": {
+          "cost": 0.0004946,
+          "is_byok": false,
+          "cost_details": {
+            "upstream_inference_cost": 0.0004946,
+            "upstream_inference_prompt_cost": 0.00025745,
+            "upstream_inference_completions_cost": 0.00023715
+          },
+          "total_tokens": 364,
+          "prompt_tokens": 271,
+          "completion_tokens": 93,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "video_tokens": 0,
+            "cached_tokens": 0,
+            "cache_write_tokens": 0
+          },
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        },
+        "provider_cost": 0.0004946
+      },
+      "response_metadata": {
+        "response_metadata": {
+          "id": "gen-1782624088-uDybRQFVkR6aEczEwv36",
+          "model": "z-ai/glm-5-20260211",
+          "usage": {
+            "cost": 0.0004946,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0.0004946,
+              "upstream_inference_prompt_cost": 0.00025745,
+              "upstream_inference_completions_cost": 0.00023715
+            },
+            "total_tokens": 364,
+            "prompt_tokens": 271,
+            "completion_tokens": 93,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "video_tokens": 0,
+              "cached_tokens": 0,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0,
+              "accepted_prediction_tokens": null,
+              "rejected_prediction_tokens": null
+            }
+          },
+          "object": "chat.completion",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "audio": null,
+                "content": "[[ ## code ## ]]\n```python\nimport math\n\ndef prime_factors(n):\n    factors = []\n    i = 2\n    while i <= int(math.sqrt(n)) + 1:\n        if n % i == 0:\n            factors.append(i)\n            n = n // i\n        else:\n            i += 1\n    if n > 1:\n        factors.append(n)\n    return factors\n```\n[[ ## completed ## ]]",
+                "refusal": null,
+                "reasoning": null,
+                "tool_calls": null,
+                "annotations": null,
+                "function_call": null
+              },
+              "logprobs": null,
+              "finish_reason": "stop",
+              "native_finish_reason": "stop"
+            }
+          ],
+          "created": 1782624088,
+          "provider": "SiliconFlow",
+          "moderation": null,
+          "service_tier": null,
+          "system_fingerprint": null
+        }
+      },
+      "failure": null,
+      "started_at": "2026-06-28T01:21:32.364141-04:00",
+      "completed_at": "2026-06-28T01:24:58.383370-04:00"
+    },
+    {
+      "node_id": "encoder",
+      "node_attempt_id": "dfb99edba9ce669aabb20d66fea3aea0",
+      "attempt_index": 0,
+      "status": "success",
+      "provider_config": {
+        "provider_kind": "openrouter",
+        "endpoint_kind": "chat_completions",
+        "model": "z-ai/glm-5",
+        "config_id": "encoder",
+        "throttle_key": "openrouter:chat_completions:z-ai/glm-5",
+        "parameters": {
+          "temperature": 0.0
+        }
+      },
+      "output": {
+        "values": {
+          "description": "[[ ## description ## ]]\nFunction takes integer n, returns list of prime factors. Imports math. While loop with i from 2 to sqrt(n)+1: if n divisible by i, append i to list, divide n by i; else increment i. If n>1 after loop, append n. Returns factor list.\n\n[[ ## completed ## ]]"
+        },
+        "metadata": {}
+      },
+      "usage_cost": {
+        "usage_metadata": {
+          "cost": 0.00025004,
+          "is_byok": false,
+          "cost_details": {
+            "upstream_inference_cost": 0.00025004,
+            "upstream_inference_prompt_cost": 0.00010236,
+            "upstream_inference_completions_cost": 0.00014768
+          },
+          "total_tokens": 344,
+          "prompt_tokens": 273,
+          "completion_tokens": 71,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "video_tokens": 0,
+            "cached_tokens": 128,
+            "cache_write_tokens": 0
+          },
+          "completion_tokens_details": {
+            "audio_tokens": 0,
+            "image_tokens": 0,
+            "reasoning_tokens": 0,
+            "accepted_prediction_tokens": null,
+            "rejected_prediction_tokens": null
+          }
+        },
+        "provider_cost": 0.00025004
+      },
+      "response_metadata": {
+        "response_metadata": {
+          "id": "gen-1782624082-Z23l6duOVaxLR0kz2uH5",
+          "model": "z-ai/glm-5-20260211",
+          "usage": {
+            "cost": 0.00025004,
+            "is_byok": false,
+            "cost_details": {
+              "upstream_inference_cost": 0.00025004,
+              "upstream_inference_prompt_cost": 0.00010236,
+              "upstream_inference_completions_cost": 0.00014768
+            },
+            "total_tokens": 344,
+            "prompt_tokens": 273,
+            "completion_tokens": 71,
+            "prompt_tokens_details": {
+              "audio_tokens": 0,
+              "video_tokens": 0,
+              "cached_tokens": 128,
+              "cache_write_tokens": 0
+            },
+            "completion_tokens_details": {
+              "audio_tokens": 0,
+              "image_tokens": 0,
+              "reasoning_tokens": 0,
+              "accepted_prediction_tokens": null,
+              "rejected_prediction_tokens": null
+            }
+          },
+          "object": "chat.completion",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "audio": null,
+                "content": "[[ ## description ## ]]\nFunction takes integer n, returns list of prime factors. Imports math. While loop with i from 2 to sqrt(n)+1: if n divisible by i, append i to list, divide n by i; else increment i. If n>1 after loop, append n. Returns factor list.\n\n[[ ## completed ## ]]",
+                "refusal": null,
+                "reasoning": null,
+                "tool_calls": null,
+                "annotations": null,
+                "function_call": null
+              },
+              "logprobs": null,
+              "finish_reason": "stop",
+              "native_finish_reason": "stop"
+            }
+          ],
+          "created": 1782624082,
+          "provider": "DeepInfra",
+          "moderation": null,
+          "service_tier": null,
+          "system_fingerprint": null
+        }
+      },
+      "failure": null,
+      "started_at": "2026-06-28T01:21:32.364141-04:00",
+      "completed_at": "2026-06-28T01:24:58.383370-04:00"
+    }
+  ],
+  "score_attempt": {
+    "score_attempt_id": "ca0b5d51413ae0a3bbf8f709b96cab0c",
+    "generation_run_id": "621ff6d8a046dcb5571c2c28",
+    "prediction_id": "c0dfd08b5b15df25e626a4d7",
+    "attempt_index": 0,
+    "scoring_profile_id": "humaneval",
+    "scoring_profile_version": "v1",
+    "parser_profile_id": "humaneval-best-effort",
+    "parser_version": "v1",
+    "dataset_name": "evalplus/humanevalplus",
+    "dataset_split": "test",
+    "status": "success",
+    "score": 1.0,
+    "generated_code_outcome": "passed",
+    "extracted_code": {
+      "raw_generation": "import math\n\ndef prime_factors(n):\n    factors = []\n    i = 2\n    while i <= int(math.sqrt(n)) + 1:\n        if n % i == 0:\n            factors.append(i)\n            n = n // i\n        else:\n            i += 1\n    if n > 1:\n        factors.append(n)\n    return factors",
+      "extracted_code": "import math\n\ndef prime_factors(n):\n    factors = []\n    i = 2\n    while i <= int(math.sqrt(n)) + 1:\n        if n % i == 0:\n            factors.append(i)\n            n = n // i\n        else:\n            i += 1\n    if n > 1:\n        factors.append(n)\n    return factors",
+      "extraction_method": "bare_python",
+      "parser_profile_id": "humaneval-best-effort",
+      "parser_version": "v1",
+      "metadata": {
+        "compile_ok": true,
+        "compile_error": null,
+        "candidate_count": 1,
+        "extraction_error": null,
+        "selected_candidate_index": 0
+      }
+    },
+    "metrics": {
+      "profile_id": "humaneval-metrics",
+      "profile_version": "v1",
+      "task_tests": {
+        "parse_ok": true,
+        "parse_error": null,
+        "task_id": "HumanEval/25",
+        "entry_point": "factorize",
+        "test_type": "input_result",
+        "case_count": 145,
+        "support_code_character_count": 552,
+        "support_code_line_count": 19,
+        "original_test_character_count": 4534,
+        "original_test_line_count": 32,
+        "assertion_name": "assertion",
+        "check_name": "check",
+        "candidate_arg_name": "candidate",
+        "input_repr_character_total": 1174,
+        "expected_output_repr_character_total": 2018,
+        "expected_output_expr_count": 0,
+        "oracle_case_count": 0,
+        "input_result_case_count": 145,
+        "input_expression_case_count": 0
+      },
+      "text": {
+        "character_count": 267,
+        "byte_count": 267,
+        "line_count": 14,
+        "nonempty_line_count": 13,
+        "word_count": 36,
+        "average_word_length": 3.1666666666666665,
+        "punctuation_count": 35,
+        "symbol_count": 19
+      },
+      "python_leakage": {
+        "keyword_count": 7,
+        "code_marker_count": 3,
+        "fenced_code_block_count": 0,
+        "code_like_line_count": 9,
+        "operator_count": 19,
+        "punctuation_density": 0.13108614232209737,
+        "task_name_hit_count": 0
+      },
+      "ast": {
+        "parse_ok": true,
+        "parse_error": null,
+        "top_level_function_count": 1,
+        "top_level_function_names": [
+          "prime_factors"
+        ],
+        "nested_function_count": 0,
+        "async_function_count": 0,
+        "lambda_count": 0,
+        "class_count": 0,
+        "import_count": 1,
+        "ast_node_count": 82,
+        "statement_count": 12,
+        "branch_count": 3,
+        "return_count": 1,
+        "yield_count": 0,
+        "call_count": 4,
+        "assignment_count": 4,
+        "comprehension_count": 0,
+        "literal_count": 6,
+        "max_branch_depth": 2,
+        "function_count": 1,
+        "total_argument_count": 1,
+        "positional_only_argument_count": 0,
+        "keyword_only_argument_count": 0,
+        "vararg_count": 0,
+        "kwarg_count": 0,
+        "decorated_function_count": 0,
+        "annotated_return_count": 0,
+        "docstring_function_count": 0,
+        "total_function_body_statement_count": 5,
+        "max_function_body_statement_count": 5,
+        "max_function_line_span": 12
+      },
+      "compression": {
+        "bz2": {
+          "method": "bz2",
+          "compressed_bytes": 171,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.24927113702623907,
+          "percent_reduction_vs_ground_truth": 75.0728862973761
+        },
+        "raw": {
+          "method": "raw",
+          "compressed_bytes": 267,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.3892128279883382,
+          "percent_reduction_vs_ground_truth": 61.07871720116618
+        },
+        "gzip": {
+          "method": "gzip",
+          "compressed_bytes": 162,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.23615160349854228,
+          "percent_reduction_vs_ground_truth": 76.38483965014578
+        },
+        "lzma": {
+          "method": "lzma",
+          "compressed_bytes": 216,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.31486880466472306,
+          "percent_reduction_vs_ground_truth": 68.5131195335277
+        },
+        "zlib": {
+          "method": "zlib",
+          "compressed_bytes": 150,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.21865889212827988,
+          "percent_reduction_vs_ground_truth": 78.134110787172
+        },
+        "zstd": {
+          "method": "zstd",
+          "compressed_bytes": 161,
+          "ground_truth_bytes": 686,
+          "representation_bytes": 267,
+          "ratio_to_ground_truth": 0.23469387755102042,
+          "percent_reduction_vs_ground_truth": 76.53061224489795
+        }
+      },
+      "stages": [
+        {
+          "stage_id": "terminal",
+          "source_kind": "terminal_raw_generation",
+          "text": {
+            "character_count": 267,
+            "byte_count": 267,
+            "line_count": 14,
+            "nonempty_line_count": 13,
+            "word_count": 36,
+            "average_word_length": 3.1666666666666665,
+            "punctuation_count": 35,
+            "symbol_count": 19
+          },
+          "python_leakage": {
+            "keyword_count": 7,
+            "code_marker_count": 3,
+            "fenced_code_block_count": 0,
+            "code_like_line_count": 9,
+            "operator_count": 19,
+            "punctuation_density": 0.13108614232209737,
+            "task_name_hit_count": 0
+          },
+          "ast": null,
+          "compression": {
+            "bz2": {
+              "method": "bz2",
+              "compressed_bytes": 171,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.24927113702623907,
+              "percent_reduction_vs_ground_truth": 75.0728862973761
+            },
+            "raw": {
+              "method": "raw",
+              "compressed_bytes": 267,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.3892128279883382,
+              "percent_reduction_vs_ground_truth": 61.07871720116618
+            },
+            "gzip": {
+              "method": "gzip",
+              "compressed_bytes": 162,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.23615160349854228,
+              "percent_reduction_vs_ground_truth": 76.38483965014578
+            },
+            "lzma": {
+              "method": "lzma",
+              "compressed_bytes": 216,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.31486880466472306,
+              "percent_reduction_vs_ground_truth": 68.5131195335277
+            },
+            "zlib": {
+              "method": "zlib",
+              "compressed_bytes": 150,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.21865889212827988,
+              "percent_reduction_vs_ground_truth": 78.134110787172
+            },
+            "zstd": {
+              "method": "zstd",
+              "compressed_bytes": 161,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.23469387755102042,
+              "percent_reduction_vs_ground_truth": 76.53061224489795
+            }
+          },
+          "custom": {}
+        },
+        {
+          "stage_id": "extracted_code",
+          "source_kind": "extracted_code",
+          "text": {
+            "character_count": 267,
+            "byte_count": 267,
+            "line_count": 14,
+            "nonempty_line_count": 13,
+            "word_count": 36,
+            "average_word_length": 3.1666666666666665,
+            "punctuation_count": 35,
+            "symbol_count": 19
+          },
+          "python_leakage": {
+            "keyword_count": 7,
+            "code_marker_count": 3,
+            "fenced_code_block_count": 0,
+            "code_like_line_count": 9,
+            "operator_count": 19,
+            "punctuation_density": 0.13108614232209737,
+            "task_name_hit_count": 0
+          },
+          "ast": {
+            "parse_ok": true,
+            "parse_error": null,
+            "top_level_function_count": 1,
+            "top_level_function_names": [
+              "prime_factors"
+            ],
+            "nested_function_count": 0,
+            "async_function_count": 0,
+            "lambda_count": 0,
+            "class_count": 0,
+            "import_count": 1,
+            "ast_node_count": 82,
+            "statement_count": 12,
+            "branch_count": 3,
+            "return_count": 1,
+            "yield_count": 0,
+            "call_count": 4,
+            "assignment_count": 4,
+            "comprehension_count": 0,
+            "literal_count": 6,
+            "max_branch_depth": 2,
+            "function_count": 1,
+            "total_argument_count": 1,
+            "positional_only_argument_count": 0,
+            "keyword_only_argument_count": 0,
+            "vararg_count": 0,
+            "kwarg_count": 0,
+            "decorated_function_count": 0,
+            "annotated_return_count": 0,
+            "docstring_function_count": 0,
+            "total_function_body_statement_count": 5,
+            "max_function_body_statement_count": 5,
+            "max_function_line_span": 12
+          },
+          "compression": {
+            "bz2": {
+              "method": "bz2",
+              "compressed_bytes": 171,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.24927113702623907,
+              "percent_reduction_vs_ground_truth": 75.0728862973761
+            },
+            "raw": {
+              "method": "raw",
+              "compressed_bytes": 267,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.3892128279883382,
+              "percent_reduction_vs_ground_truth": 61.07871720116618
+            },
+            "gzip": {
+              "method": "gzip",
+              "compressed_bytes": 162,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.23615160349854228,
+              "percent_reduction_vs_ground_truth": 76.38483965014578
+            },
+            "lzma": {
+              "method": "lzma",
+              "compressed_bytes": 216,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.31486880466472306,
+              "percent_reduction_vs_ground_truth": 68.5131195335277
+            },
+            "zlib": {
+              "method": "zlib",
+              "compressed_bytes": 150,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.21865889212827988,
+              "percent_reduction_vs_ground_truth": 78.134110787172
+            },
+            "zstd": {
+              "method": "zstd",
+              "compressed_bytes": 161,
+              "ground_truth_bytes": 686,
+              "representation_bytes": 267,
+              "ratio_to_ground_truth": 0.23469387755102042,
+              "percent_reduction_vs_ground_truth": 76.53061224489795
+            }
+          },
+          "custom": {}
+        },
+        {
+          "stage_id": "node:decoder:code",
+          "source_kind": "node_output",
+          "text": {
+            "character_count": 267,
+            "byte_count": 267,
+            "line_count": 14,
+            "nonempty_line_count": 13,
+            "word_count": 36,
+            "average_word_length": 3.1666666666666665,
+            "punctuation_count": 35,
+            "symbol_count": 19
+          },
+          "python_leakage": {
+            "keyword_count": 7,
+            "code_marker_count": 3,
+            "fenced_code_block_count": 0,
+            "code_like_line_count": 9,
+            "operator_count": 19,
+            "punctuation_density": 0.13108614232209737,
+            "task_name_hit_count": 0
+          },
+          "ast": {
+            "parse_ok": true,
+            "parse_error": null,
+            "top_level_function_count": 1,
+            "top_level_function_names": [
+              "prime_factors"
+            ],
+            "nested_function_count": 0,
+            "async_function_count": 0,
+            "lambda_count": 0,
+            "class_count": 0,
+            "import_count": 1,
+            "ast_node_count": 82,
+            "statement_count": 12,
+            "branch_count": 3,
+            "return_count": 1,
+            "yield_count": 0,
+            "call_count": 4,
+            "assignment_count": 4,
+            "comprehension_count": 0,
+            "literal_count": 6,
+            "max_branch_depth": 2,
+            "function_count": 1,
+            "total_argument_count": 1,
+            "positional_only_argument_count": 0,
+            "keyword_only_argument_count": 0,
+            "vararg_count": 0,
+            "kwarg_count": 0,
+            "decorated_function_count": 0,
+            "annotated_return_count": 0,
+            "docstring_function_count": 0,
+            "total_function_body_statement_count": 5,
+            "max_function_body_statement_count": 5,
+            "max_function_line_span": 12
+          },
+          "compression": {},
+          "custom": {}
+        },
+        {
+          "stage_id": "node:encoder:description",
+          "source_kind": "node_output",
+          "text": {
+            "character_count": 278,
+            "byte_count": 278,
+            "line_count": 4,
+            "nonempty_line_count": 3,
+            "word_count": 49,
+            "average_word_length": 3.938775510204082,
+            "punctuation_count": 31,
+            "symbol_count": 3
+          },
+          "python_leakage": {
+            "keyword_count": 4,
+            "code_marker_count": 0,
+            "fenced_code_block_count": 0,
+            "code_like_line_count": 0,
+            "operator_count": 3,
+            "punctuation_density": 0.11151079136690648,
+            "task_name_hit_count": 0
+          },
+          "ast": {
+            "parse_ok": false,
+            "parse_error": "SyntaxError: invalid syntax. Perhaps you forgot a comma? (<unknown>, line 2)",
+            "top_level_function_count": 0,
+            "top_level_function_names": [],
+            "nested_function_count": 0,
+            "async_function_count": 0,
+            "lambda_count": 0,
+            "class_count": 0,
+            "import_count": 0,
+            "ast_node_count": 0,
+            "statement_count": 0,
+            "branch_count": 0,
+            "return_count": 0,
+            "yield_count": 0,
+            "call_count": 0,
+            "assignment_count": 0,
+            "comprehension_count": 0,
+            "literal_count": 0,
+            "max_branch_depth": 0,
+            "function_count": 0,
+            "total_argument_count": 0,
+            "positional_only_argument_count": 0,
+            "keyword_only_argument_count": 0,
+            "vararg_count": 0,
+            "kwarg_count": 0,
+            "decorated_function_count": 0,
+            "annotated_return_count": 0,
+            "docstring_function_count": 0,
+            "total_function_body_statement_count": 0,
+            "max_function_body_statement_count": 0,
+            "max_function_line_span": 0
+          },
+          "compression": {},
+          "custom": {}
+        }
+      ],
+      "custom": {
+        "task_id": "HumanEval/25",
+        "evaluation": {
+          "passed": true,
+          "error_count": 0,
+          "total_cases": 145,
+          "failed_count": 0,
+          "passed_count": 145,
+          "result_count": 145,
+          "failure_count": 0,
+          "status_counts": {
+            "passed": 145
+          },
+          "timeout_count": 0,
+          "function_names": [
+            "prime_factors"
+          ]
+        },
+        "entry_point": "factorize",
+        "stage_count": 4
+      }
+    },
+    "test_summary": {
+      "total": 145,
+      "passed": 145,
+      "failed": 0,
+      "error": 0,
+      "truncated": false
+    },
+    "per_test_results": [
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_0",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2]",
+        "expected_output_repr": "[2]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_1",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[4]",
+        "expected_output_repr": "[2, 2]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_2",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[8]",
+        "expected_output_repr": "[2, 2, 2]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_3",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[57]",
+        "expected_output_repr": "[3, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_4",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[3249]",
+        "expected_output_repr": "[3, 3, 19, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_5",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[185193]",
+        "expected_output_repr": "[3, 3, 3, 19, 19, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_6",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[20577]",
+        "expected_output_repr": "[3, 19, 19, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_7",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[18]",
+        "expected_output_repr": "[2, 3, 3]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_8",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[10]",
+        "expected_output_repr": "[2, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_9",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[15]",
+        "expected_output_repr": "[3, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_10",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[28]",
+        "expected_output_repr": "[2, 2, 7]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_11",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1024]",
+        "expected_output_repr": "[2, 2, 2, 2, 2, 2, 2, 2, 2, 2]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_12",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[131]",
+        "expected_output_repr": "[131]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_13",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[33]",
+        "expected_output_repr": "[3, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_14",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1000]",
+        "expected_output_repr": "[2, 2, 2, 5, 5, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_15",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[100]",
+        "expected_output_repr": "[2, 2, 5, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_16",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456789]",
+        "expected_output_repr": "[3, 3, 3607, 3803]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_17",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654321]",
+        "expected_output_repr": "[3, 3, 17, 17, 379721]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_18",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1025]",
+        "expected_output_repr": "[5, 5, 41]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_19",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[11]",
+        "expected_output_repr": "[11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_20",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1026]",
+        "expected_output_repr": "[2, 3, 3, 3, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_21",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[29]",
+        "expected_output_repr": "[29]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_22",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1027]",
+        "expected_output_repr": "[13, 79]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_23",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[14]",
+        "expected_output_repr": "[2, 7]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_24",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[34]",
+        "expected_output_repr": "[2, 17]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_25",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[13]",
+        "expected_output_repr": "[13]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_26",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[99]",
+        "expected_output_repr": "[3, 3, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_27",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[132]",
+        "expected_output_repr": "[2, 2, 3, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_28",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456790]",
+        "expected_output_repr": "[2, 5, 37, 333667]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_29",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1023]",
+        "expected_output_repr": "[3, 11, 31]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_30",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456788]",
+        "expected_output_repr": "[2, 2, 7, 13, 17, 71, 281]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_31",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[32]",
+        "expected_output_repr": "[2, 2, 2, 2, 2]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_32",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[31]",
+        "expected_output_repr": "[31]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_33",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1022]",
+        "expected_output_repr": "[2, 7, 73]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_34",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654320]",
+        "expected_output_repr": "[2, 2, 2, 2, 5, 37, 333667]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_35",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456791]",
+        "expected_output_repr": "[123456791]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_36",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1028]",
+        "expected_output_repr": "[2, 2, 257]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_37",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456787]",
+        "expected_output_repr": "[31, 31, 128467]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_38",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456792]",
+        "expected_output_repr": "[2, 2, 2, 3, 59, 87187]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_39",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[27]",
+        "expected_output_repr": "[3, 3, 3]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_40",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[39]",
+        "expected_output_repr": "[3, 13]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_41",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[12]",
+        "expected_output_repr": "[2, 2, 3]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_42",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[30]",
+        "expected_output_repr": "[2, 3, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_43",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483647]",
+        "expected_output_repr": "[2147483647]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_44",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207943]",
+        "expected_output_repr": "[11, 11, 67, 149]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_45",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234369]",
+        "expected_output_repr": "[13, 8633413]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_46",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999983]",
+        "expected_output_repr": "[999983]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_47",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001001]",
+        "expected_output_repr": "[3, 31, 10784957]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_48",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192843]",
+        "expected_output_repr": "[26731, 1613153]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_49",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1073741789]",
+        "expected_output_repr": "[1073741789]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_50",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999967]",
+        "expected_output_repr": "[9999999967]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_51",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001000]",
+        "expected_output_repr": "[2, 2, 2, 5, 5, 5, 1003001]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_52",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234370]",
+        "expected_output_repr": "[2, 5, 11223437]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_53",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[56]",
+        "expected_output_repr": "[2, 2, 2, 7]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_54",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999966]",
+        "expected_output_repr": "[2, 3, 11, 457, 331543]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_55",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483646]",
+        "expected_output_repr": "[2, 3, 3, 7, 11, 31, 151, 331]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_56",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003000999]",
+        "expected_output_repr": "[7, 11, 13, 41, 24439]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_57",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207942]",
+        "expected_output_repr": "[2, 41, 14731]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_58",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999984]",
+        "expected_output_repr": "[2, 2, 2, 2, 3, 83, 251]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_59",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[79]",
+        "expected_output_repr": "[79]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_60",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[80]",
+        "expected_output_repr": "[2, 2, 2, 2, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_61",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001002]",
+        "expected_output_repr": "[2, 181, 631, 4391]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_62",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[78]",
+        "expected_output_repr": "[2, 3, 13]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_63",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[77]",
+        "expected_output_repr": "[7, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_64",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234368]",
+        "expected_output_repr": "[2, 2, 2, 2, 2, 2, 2, 3, 19, 15383]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_65",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999965]",
+        "expected_output_repr": "[5, 29, 1327, 51971]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_66",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[83]",
+        "expected_output_repr": "[83]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_67",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[76]",
+        "expected_output_repr": "[2, 2, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_68",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[75]",
+        "expected_output_repr": "[3, 5, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_69",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234367]",
+        "expected_output_repr": "[7, 16033481]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_70",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[52]",
+        "expected_output_repr": "[2, 2, 13]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_71",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234371]",
+        "expected_output_repr": "[3, 37411457]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_72",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483645]",
+        "expected_output_repr": "[5, 19, 22605091]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_73",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[53]",
+        "expected_output_repr": "[53]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_74",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999964]",
+        "expected_output_repr": "[2, 2, 17, 17, 31, 173, 1613]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_75",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234372]",
+        "expected_output_repr": "[2, 2, 28058593]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_76",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001004]",
+        "expected_output_repr": "[2, 2, 3, 3, 27861139]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_77",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[101]",
+        "expected_output_repr": "[101]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_78",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[6]",
+        "expected_output_repr": "[2, 3]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_79",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001005]",
+        "expected_output_repr": "[5, 200600201]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_80",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1073741788]",
+        "expected_output_repr": "[2, 2, 7, 2341, 16381]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_81",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[67]",
+        "expected_output_repr": "[67]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_82",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456786]",
+        "expected_output_repr": "[2, 3, 20576131]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_83",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003001003]",
+        "expected_output_repr": "[17, 59, 101, 9901]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_84",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[47]",
+        "expected_output_repr": "[47]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_85",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[58]",
+        "expected_output_repr": "[2, 29]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_86",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[26]",
+        "expected_output_repr": "[2, 13]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_87",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[51]",
+        "expected_output_repr": "[3, 17]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_88",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[55]",
+        "expected_output_repr": "[5, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_89",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[38]",
+        "expected_output_repr": "[2, 19]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_90",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[37]",
+        "expected_output_repr": "[37]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_91",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[17]",
+        "expected_output_repr": "[17]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_92",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[125]",
+        "expected_output_repr": "[5, 5, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_93",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[7919]",
+        "expected_output_repr": "[7919]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_94",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654322]",
+        "expected_output_repr": "[2, 701, 704461]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_95",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192841]",
+        "expected_output_repr": "[3, 3, 131, 1237, 29567]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_96",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192844]",
+        "expected_output_repr": "[2, 2, 3, 3593432737]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_97",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654323]",
+        "expected_output_repr": "[987654323]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_98",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192842]",
+        "expected_output_repr": "[2, 7, 13, 5717, 41443]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_99",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[123456785]",
+        "expected_output_repr": "[5, 24691357]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_100",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234366]",
+        "expected_output_repr": "[2, 56117183]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_101",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999982]",
+        "expected_output_repr": "[2, 79, 6329]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_102",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234365]",
+        "expected_output_repr": "[3, 3, 5, 23, 108439]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_103",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192845]",
+        "expected_output_repr": "[5, 8624238569]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_104",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483644]",
+        "expected_output_repr": "[2, 2, 233, 1103, 2089]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_105",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207944]",
+        "expected_output_repr": "[2, 2, 2, 3, 3, 19, 883]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_106",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1073741790]",
+        "expected_output_repr": "[2, 3, 5, 11, 47, 107, 647]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_107",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1073741791]",
+        "expected_output_repr": "[29, 97, 381707]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_108",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999969]",
+        "expected_output_repr": "[3, 3333333323]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_109",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483643]",
+        "expected_output_repr": "[3, 715827881]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_110",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207945]",
+        "expected_output_repr": "[5, 241589]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_111",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192840]",
+        "expected_output_repr": "[2, 2, 2, 5, 11, 98002711]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_112",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207946]",
+        "expected_output_repr": "[2, 31, 19483]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_113",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003000998]",
+        "expected_output_repr": "[2, 3, 167, 1000999]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_114",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192839]",
+        "expected_output_repr": "[239, 180423401]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_115",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[112234364]",
+        "expected_output_repr": "[2, 2, 11, 643, 3967]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_116",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999968]",
+        "expected_output_repr": "[2, 2, 2, 2, 2, 7, 7, 6377551]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_117",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654324]",
+        "expected_output_repr": "[2, 2, 3, 443, 185789]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_118",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207947]",
+        "expected_output_repr": "[3, 13, 47, 659]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_119",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999980]",
+        "expected_output_repr": "[2, 2, 5, 49999]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_120",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999979]",
+        "expected_output_repr": "[999979]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_121",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999981]",
+        "expected_output_repr": "[3, 3, 111109]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_122",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192838]",
+        "expected_output_repr": "[2, 3, 7186865473]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_123",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654319]",
+        "expected_output_repr": "[987654319]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_124",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999985]",
+        "expected_output_repr": "[5, 7, 28571]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_125",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483642]",
+        "expected_output_repr": "[2, 23, 46684427]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_126",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[2147483641]",
+        "expected_output_repr": "[2699, 795659]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_127",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[46]",
+        "expected_output_repr": "[2, 23]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_128",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43121192837]",
+        "expected_output_repr": "[769, 2383, 23531]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_129",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999987]",
+        "expected_output_repr": "[3, 257, 1297]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_130",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654325]",
+        "expected_output_repr": "[5, 5, 7, 337, 16747]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_131",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1003000997]",
+        "expected_output_repr": "[23, 317, 137567]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_132",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654326]",
+        "expected_output_repr": "[2, 131, 3769673]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_133",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[1207948]",
+        "expected_output_repr": "[2, 2, 7, 7, 6163]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_134",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999986]",
+        "expected_output_repr": "[2, 13, 38461]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_135",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[987654327]",
+        "expected_output_repr": "[3, 11, 31, 163, 5923]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_136",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[50]",
+        "expected_output_repr": "[2, 5, 5]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_137",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999978]",
+        "expected_output_repr": "[2, 3, 7, 29, 821]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_138",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999988]",
+        "expected_output_repr": "[2, 2, 11, 22727]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_139",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999977]",
+        "expected_output_repr": "[11, 90907]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_140",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[999989]",
+        "expected_output_repr": "[19, 52631]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_141",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[9999999963]",
+        "expected_output_repr": "[3, 3, 3, 370370369]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_142",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[44]",
+        "expected_output_repr": "[2, 2, 11]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_143",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[43]",
+        "expected_output_repr": "[43]",
+        "actual_output_repr": ""
+      },
+      {
+        "task_id": "HumanEval/25",
+        "test_id": "case_144",
+        "function_name": "prime_factors",
+        "status": "passed",
+        "message": "",
+        "test_type": "input_result",
+        "input_repr": "[42]",
+        "expected_output_repr": "[2, 3, 7]",
+        "actual_output_repr": ""
+      }
+    ],
+    "failure": null,
+    "started_at": "2026-06-30T18:21:14.768764-04:00",
+    "completed_at": "2026-06-30T18:21:17.579243-04:00"
+  },
+  "reconstructed_prompts": {
+    "encoder": [
+      {
+        "role": "user",
+        "content": "Describe from typing import List\n\n\ndef factorize(n: int) -> List[int]:\n    \"\"\" Return list of prime factors of given integer in the order from smallest to largest.\n    Each of the factors should be listed number of times corresponding to how many times it appeares in factorization.\n    Input number should be equal to the product of all factors\n    >>> factorize(8)\n    [2, 2, 2]\n    >>> factorize(25)\n    [5, 5]\n    >>> factorize(70)\n    [2, 5, 7]\n    \"\"\"\n"
+      }
+    ],
+    "decoder": [
+      {
+        "role": "user",
+        "content": "Write code from [[ ## description ## ]]\nFunction takes integer n, returns list of prime factors. Imports math. While loop with i from 2 to sqrt(n)+1: if n divisible by i, append i to list, divide n by i; else increment i. If n>1 after loop, append n. Returns factor list.\n\n[[ ## completed ## ]]"
+      }
+    ]
+  },
+  "reconstruction_errors": []
+}

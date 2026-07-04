@@ -7,4 +7,4 @@ artifacts/
 analysis/samples/**/*.json
 .env
 .coverage
-.DS_Store
+.DS_STORE

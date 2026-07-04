@@ -1,0 +1,3 @@
+candidate_id,depth,parent_candidate_id,instructions_start,instructions_end,proposal_source,instructions_digest,experiment_name,scoreable_count,pass_count,pass_rate,generation_error_count,score_error_count
+d0_c0,0,d0_c0,Provide a concise description of the following code.,,carry_forward,81d1c37a0b1a246e,copro_minimal_e9ac044686a4,1,1,1.0,0,0
+d0_c1,0,d0_c0,Summarize the code's purpose and main logic steps concisely.,,manual,1b4a5deb4c5b1df6,copro_minimal_e9ac044686a4,1,1,1.0,0,0

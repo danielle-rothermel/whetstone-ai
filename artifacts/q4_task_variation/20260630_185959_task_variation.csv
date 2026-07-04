@@ -1,0 +1,10 @@
+task_id,pass_rate,scoreable_count,distinct_models,distinct_compression_targets,pass_variance,entropy,sparse,always_pass,always_fail,useful_signal
+HumanEval/161,0.0,2,2,1,0.0,0.0,True,False,False,False
+HumanEval/157,0.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/22,0.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/25,1.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/26,1.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/31,1.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/35,1.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/36,0.0,1,1,1,0.0,0.0,True,False,False,False
+HumanEval/91,1.0,1,1,1,0.0,0.0,True,False,False,False
