@@ -42,12 +42,7 @@ from dr_code.humaneval.task import (
     EvaluationTaskResult,
     HumanEvalTask,
 )
-from dr_providers.kernel import EndpointKind, ProviderKind
-from sqlalchemy.dialects import postgresql
-
-from whetstone.db import io as db_io
-from whetstone.eval_failures.recording import recordable_text
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -56,6 +51,11 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+from sqlalchemy.dialects import postgresql
+
+from whetstone.db import io as db_io
+from whetstone.eval_failures.recording import recordable_text
 from whetstone.platform import rescoring, scoring_workflow
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
@@ -162,6 +162,7 @@ def _node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

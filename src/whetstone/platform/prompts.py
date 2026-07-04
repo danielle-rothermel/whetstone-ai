@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from dr_graph import NodeSpec
 from dr_providers.kernel import PromptMessage
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from whetstone.eval_failures import PermanentFailureError
-from whetstone.graph import NodeSpec
 from whetstone.lm.boundary import PlainPromptAdapter
 
 SYSTEM_PROMPT_KEY = "system_prompt"

@@ -6,11 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from dr_providers.kernel import EndpointKind, ProviderKind
-from dr_providers.kernel.failures import FailureClass
-from pydantic import BaseModel, ConfigDict, Field
-
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -19,6 +15,11 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers.kernel.failures import FailureClass
+from pydantic import BaseModel, ConfigDict, Field
+
+from whetstone.node_ops import LLM_CALL_OP
 from whetstone.records import (
     DimensionsPayload,
     FailureMetadataPayload,
@@ -407,6 +408,7 @@ def _llm_node(
         metadata["provider_config_id"] = provider_config_id
     return NodeSpec(
         id=node_id,
+        op=LLM_CALL_OP,
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

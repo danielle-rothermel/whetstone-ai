@@ -8,9 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dr_code.humaneval.task import HumanEvalTask
-from dr_providers.kernel import EndpointKind, ProviderKind
-
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -19,6 +17,8 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+
 from whetstone.records import (
     DimensionsPayload,
     GenerationRunRecord,
@@ -76,6 +76,7 @@ def scoring_node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

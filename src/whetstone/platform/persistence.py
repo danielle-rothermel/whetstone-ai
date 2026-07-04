@@ -5,17 +5,17 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from dr_graph import (
+    GraphRunResult,
+    NodeOutcomeStatus,
+    TerminalError,
+)
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import null
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
 from whetstone.db import io, schema
-from whetstone.graph import (
-    GraphRunResult,
-    NodeOutcomeStatus,
-    TerminalError,
-)
 from whetstone.platform.node_execution import NodeStepResult
 from whetstone.records import (
     GenerationRunRecord,

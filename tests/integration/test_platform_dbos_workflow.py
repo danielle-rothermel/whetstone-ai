@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from dr_graph import GraphSpec
 from sqlalchemy import create_engine
 
 from tests.support.platform_integration_helpers import (
@@ -24,7 +25,6 @@ from whetstone.eval_failures import (
     PermanentFailureError,
     TransientFailureError,
 )
-from whetstone.graph import GraphSpec
 from whetstone.platform import backoff, graph_workflow
 from whetstone.platform.graph_workflow import (
     run_prediction_graph_workflow_once,

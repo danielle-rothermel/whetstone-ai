@@ -9,7 +9,7 @@
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
-| 5 dr-graph | pending | repo not yet created |
+| 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
 | 6 platform | pending | gated on design completion |
 | final e2e | pending | |
 
@@ -318,3 +318,51 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Wire-shape note (recorded): extra_body/extra_kwargs flatten inline
   into the raw-httpx payload — byte-equivalent to what the SDK's
   extra_body indirection put on the wire.
+
+### 2026-07-04 — stage 5 (dr-graph extraction + cutover)
+
+- Landed (dr-graph): new private repo `danielle-rothermel/dr-graph`
+  (`../dr-graph`), scaffolded to match dr-serialize conventions;
+  scaffold on `main`, library on `composable-migration` (draft PR #1).
+  models/execution/hashing ported from whetstone's `graph/` with the v1
+  generalizations: open-string `op` (required, non-empty — neutrality
+  choice recorded in graph_runner.md) and `type_name` (default "str");
+  parameterized external namespace via validation context (default
+  "task"; `BindingSource.TASK` → `EXTERNAL`, `validate_task_bindings` →
+  `validate_external_bindings(allowed_fields=...)`; graphs reject mixed
+  namespaces and node-id/namespace collisions); `ClassifiedFailure`
+  runtime-checkable Protocol (partial conformance tolerated — the
+  wrapped-step-failure shape has no `underlying` attr); neutral
+  `node()`/`graph()`/`as_binding_ref` builders; `inline_subgraph`
+  flattening composition (separator ":"); `completed` resume hook on
+  `execute_graph` (upfront validation → `CompletedNodeError`, skipped
+  nodes appear as SUCCESS outcomes and in execution_order). Depends on
+  dr-serialize (path dep — pin before merge, noted in PR).
+- Tests (dr-graph): 111 green — ported whetstone graph execution suite
+  (test doubles localized; dict-shape source values "task"→"external"),
+  golden digest tests reproducing Stage 0 `graph_digests.json`
+  canonical payloads AND digests byte-for-byte, plus new namespace/
+  builders/compose/completed/protocol/import-hygiene suites. ruff + ty
+  clean.
+- Landed (whetstone cutover): `src/whetstone/graph/` deleted; dr-graph
+  path dep; imports swapped in 9 src + 15 test/support files + golden
+  generator; new `whetstone/node_ops.py` (`LLM_CALL_OP = "llm_call"`,
+  frozen persisted spec content) used by node_execution dispatch
+  (`node.op != LLM_CALL_OP`), spec_builder, and v0_reshape; NodeSpec
+  constructions pass `op` explicitly (dr-graph made it required);
+  test_platform_boundaries drops the moved `graph/` scan path;
+  moved tests deleted (test_graph_execution, test_graph_imports — the
+  hygiene checks live in dr-graph now).
+- Process note: an over-eager `ruff format` pass initially reformatted
+  ~30 unrelated whetstone files (whetstone CI runs `ruff check` only,
+  not format) — fully reverted via `git restore` and re-applied as
+  scoped edits; final diff touches only cutover files.
+- Verified: whetstone 502 unit (74 graph tests moved out, 1 message
+  expectation updated for the external-bindings rename) + 45
+  integration (`dr_dspy_test`) + 4 golden green — graph digests now
+  byte-equal through dr-graph; ruff + ty clean; no remaining
+  `whetstone.graph`/`NodeOp`/`validate_task_bindings` references.
+- Choices recorded in graph_runner.md "Resolved at extraction" block;
+  additive-canonicalization and routing/iteration shapes stay open (not
+  needed for the migration).
+- Skips: none.

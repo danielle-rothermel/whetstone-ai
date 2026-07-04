@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from dr_graph import NodeOutput, NodeSpec
 from dr_providers.kernel import (
     EndpointKind,
     Provider,
@@ -23,12 +24,12 @@ from whetstone.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from whetstone.graph import NodeOp, NodeOutput, NodeSpec
 from whetstone.lm.boundary import (
     llm_request_for_node,
     provider_result_from_response,
     translate_provider_failure,
 )
+from whetstone.node_ops import LLM_CALL_OP
 from whetstone.platform.prompts import build_node_messages, node_prompt_spec
 from whetstone.records import (
     FailureMetadataPayload,
@@ -159,7 +160,7 @@ def execute_lm_node(
     provider_ref: ProviderConfigRef | None = None
     resolved_provider = provider or default_http_provider()
     try:
-        if node.op is not NodeOp.LLM_CALL:
+        if node.op != LLM_CALL_OP:
             raise PermanentFailureError(
                 "unsupported node operation for LM executor",
                 metadata={

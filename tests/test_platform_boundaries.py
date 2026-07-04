@@ -6,7 +6,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src" / "whetstone"
 PURE_PACKAGE_PATHS = (
-    SRC_ROOT / "graph",
     SRC_ROOT / "humaneval",
     SRC_ROOT / "eval_failures",
 )

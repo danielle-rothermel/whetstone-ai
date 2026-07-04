@@ -4,11 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
-from dr_providers.kernel import EndpointKind, ProviderKind
-from pydantic import ValidationError
-
-from whetstone.db import io
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -20,6 +16,10 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+from pydantic import ValidationError
+
+from whetstone.db import io
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -74,6 +74,7 @@ def _node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

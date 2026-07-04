@@ -12,6 +12,7 @@ from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
+from dr_graph import GraphSpec
 from sqlalchemy import create_engine
 
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
@@ -27,7 +28,6 @@ from tests.support.platform_workflow_fixtures import (
     prediction_spec,
     step_success,
 )
-from whetstone.graph import GraphSpec
 from whetstone.platform import graph_workflow, scoring_workflow, submission
 from whetstone.platform.graph_workflow import platform_generation_workflow_id
 from whetstone.platform.node_execution import NodeStepResult

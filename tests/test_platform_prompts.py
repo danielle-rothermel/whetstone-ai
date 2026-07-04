@@ -3,15 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from whetstone.eval_failures import PermanentFailureError
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
     NodeConfig,
     NodeSpec,
 )
+
+from whetstone.eval_failures import PermanentFailureError
 from whetstone.platform.prompts import (
     USER_PROMPT_TEMPLATE_KEY,
     NodePromptSpec,
@@ -38,6 +38,7 @@ def _node(
         )
     return NodeSpec(
         id="direct",
+        op="llm_call",
         config=NodeConfig(
             fields=(
                 FieldSpec(name="prompt", role=FieldRole.INPUT),

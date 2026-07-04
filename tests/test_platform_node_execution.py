@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from dr_graph import NodeOutput
 from dr_providers.kernel import EndpointKind, ProviderKind
 
 from whetstone.eval_failures import (
     PermanentFailureError,
     TransientFailureError,
 )
-from whetstone.graph import NodeOutput
 from whetstone.platform.node_execution import (
     NodeStepFailure,
     NodeStepResult,
@@ -113,6 +113,7 @@ def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
     Exercises spec → runtime config → LlmRequest (with idempotency key)
     → FixtureProvider.complete → ProviderResult → NodeStepResult.
     """
+    from dr_graph import GraphSpec
     from dr_providers.kernel import (
         CostInfo,
         FixtureOutcome,
@@ -121,7 +122,6 @@ def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
     )
 
     from tests.test_platform_graph_workflow import _node, _spec
-    from whetstone.graph import GraphSpec
     from whetstone.platform.node_execution import execute_lm_node
 
     node = _node("direct", bindings={"prompt": "task.prompt"})

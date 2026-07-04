@@ -3,10 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from dr_providers.kernel import EndpointKind, ProviderKind
-from pydantic import ValidationError
-
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -15,6 +12,9 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+from pydantic import ValidationError
+
 from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,
@@ -37,6 +37,7 @@ NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 def _node(node_id: str) -> NodeSpec:
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=(
                 FieldSpec(name="prompt", role=FieldRole.INPUT),

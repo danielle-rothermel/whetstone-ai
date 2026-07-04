@@ -11,6 +11,7 @@ from dr_code.humaneval.task import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
 )
+from dr_graph import GraphSpec, validate_external_bindings
 from dr_providers.kernel import EndpointKind, ProviderConfig, ProviderKind
 from dr_providers.kernel.failures import FailureClass
 from pydantic import (
@@ -23,7 +24,6 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.graph import GraphSpec, validate_task_bindings
 from whetstone.records.limits import (
     BATCH_SUBMIT_SPEC_MAX_BYTES,
     GRAPH_SNAPSHOT_MAX_BYTES,
@@ -134,7 +134,7 @@ class GraphSnapshotPayload(BaseModel):
 
     @model_validator(mode="after")
     def validate_graph_digest(self) -> GraphSnapshotPayload:
-        from whetstone.graph import graph_digest
+        from dr_graph import graph_digest
 
         if self.graph_digest != graph_digest(self.graph):
             raise ValueError("graph_digest must match graph")
@@ -324,9 +324,9 @@ class PredictionSpecRecord(BaseModel):
             raise ValueError("repetition_seed must be non-negative")
         if self.task.task_id != self.task_id:
             raise ValueError("task snapshot task_id must match spec task_id")
-        validate_task_bindings(
+        validate_external_bindings(
             self.graph.graph,
-            allowed_task_fields=self.task.inputs.values.keys(),
+            allowed_fields=self.task.inputs.values.keys(),
         )
         if self.provider_axis not in self.provider_configs:
             raise ValueError("provider_axis must be one of provider_configs")

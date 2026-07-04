@@ -11,13 +11,7 @@ from dbos._error import (
     DBOSQueueDeduplicatedError,
     DBOSWorkflowConflictIDError,
 )
-from dr_providers.kernel import EndpointKind, ProviderKind
-from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import Connection
-from typer.testing import CliRunner
-
-from whetstone.eval_failures import FailureClass, FailureSummary
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -26,6 +20,12 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.engine import Connection
+from typer.testing import CliRunner
+
+from whetstone.eval_failures import FailureClass, FailureSummary
 from whetstone.platform import (
     backoff,
     fairness,
@@ -110,6 +110,7 @@ class DummyEngine:
 def _node() -> NodeSpec:
     return NodeSpec(
         id="direct",
+        op="llm_call",
         config=NodeConfig(
             fields=(
                 FieldSpec(name="prompt", role=FieldRole.INPUT),

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from dr_graph import GraphSpec
 from typer.testing import CliRunner
 
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
@@ -12,7 +13,6 @@ from tests.support.platform_workflow_fixtures import (
     direct_node,
     prediction_spec,
 )
-from whetstone.graph import GraphSpec
 from whetstone.platform import worker
 
 

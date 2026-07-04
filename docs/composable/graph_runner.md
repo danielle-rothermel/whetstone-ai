@@ -137,7 +137,45 @@ population-evaluation use case (see `platform.md`).
 
 ## Open sections (to fill in)
 
-- Neutral builder API surface.
-- Additive canonicalization / digest policy for growth features.
-- Subgraph composition representation (inline vs referenced-and-digested).
+- Additive canonicalization / digest policy for growth features. (v1
+  note, recorded at extraction: none of the v1 generalizations changed
+  bytes of existing specs — open-string `op`/`type_name` serialize
+  identically to the old enum values, and the parameterized namespace
+  only appears through the serialized ref strings, unchanged under the
+  default. Growth features must keep this property.)
 - Conditional-routing and bounded-iteration spec shapes.
+
+## Resolved at extraction (Stage 5, 2026-07-04)
+
+- **Neutral builder surface**: `node(node_id, *, op, output_field,
+  bindings=None, fields=None, parameters=None, metadata=None,
+  external_namespace="task")` derives str-typed input fields from
+  bindings plus one output field when `fields` is omitted;
+  `graph(nodes, *, terminal, external_namespace="task")`;
+  `as_binding_ref(ref, *, external_namespace)` for string→ref parsing.
+- **`op` is required** (non-empty open string, no default). A neutral
+  spec library defaulting to `"llm_call"` would bake an LM notion into
+  an explicitly non-LM package; whetstone stamps its own
+  `LLM_CALL_OP = "llm_call"` constant (`whetstone/node_ops.py`).
+  `type_name` keeps the neutral default `"str"`.
+- **Namespace mechanism**: reserved external-input namespace resolves
+  from pydantic validation context
+  (`context={"external_namespace": ...}`, default `"task"`); external
+  refs record their namespace; graphs reject mixed namespaces and
+  node-id/namespace collisions. `BindingSource.TASK` renamed to
+  `EXTERNAL`; `validate_task_bindings` → `validate_external_bindings`.
+- **Subgraph composition is inline flattening**: `inline_subgraph`
+  returns prefixed, rewired `NodeSpec`s (default separator `":"`);
+  the composed graph is an ordinary `GraphSpec` and its digest is the
+  flattened spec's digest. Referenced-and-digested composition can be
+  layered later without changing existing digests.
+- **Completed-nodes hook semantics**: entries are validated upfront
+  (unknown node / bad shape / missing output field →
+  `CompletedNodeError` before any `run_node` call is made or money
+  spent); skipped nodes appear as SUCCESS outcomes and in
+  `execution_order`.
+- **`ClassifiedFailure`** is a `runtime_checkable` Protocol
+  (`failure_class`, `error_type`, `metadata`, `underlying`) documenting
+  the introspection contract; partial conformance stays tolerated
+  because real exceptions (e.g. wrapped step failures) implement
+  subsets.

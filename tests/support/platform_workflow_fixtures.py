@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from whetstone.graph import NodeOutput, NodeSpec
+from dr_graph import NodeOutput, NodeSpec
+
 from whetstone.platform.node_execution import NodeStepResult
 from whetstone.platform.spec_builder import (
     decoder_node,

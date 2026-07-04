@@ -7,6 +7,17 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
+from dr_graph import (
+    BindingRef,
+    FieldRole,
+    FieldSpec,
+    GraphRunStatus,
+    GraphSpec,
+    NodeConfig,
+    NodeOutput,
+    NodeSpec,
+    graph_digest,
+)
 from dr_providers.kernel import (
     EndpointKind,
     LlmRequest,
@@ -23,17 +34,6 @@ from whetstone.eval_failures import (
     PermanentFailureError,
     RateLimitedFailureError,
     TransientFailureError,
-)
-from whetstone.graph import (
-    BindingRef,
-    FieldRole,
-    FieldSpec,
-    GraphRunStatus,
-    GraphSpec,
-    NodeConfig,
-    NodeOutput,
-    NodeSpec,
-    graph_digest,
 )
 from whetstone.platform import backoff, graph_workflow
 from whetstone.platform.graph_workflow import (
@@ -100,6 +100,7 @@ def _node(
         metadata["provider_config_id"] = provider_config_id
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

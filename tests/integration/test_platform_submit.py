@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from dr_graph import GraphSpec
 from sqlalchemy import create_engine, text
 
 from tests.support.platform_workflow_fixtures import (
@@ -14,7 +15,6 @@ from tests.support.postgres_fixtures import (
     seed_experiment,
     seed_prediction_spec,
 )
-from whetstone.graph import GraphSpec
 from whetstone.platform import queue_worker, submission
 from whetstone.records import (
     ENQUEUE_CLAIM_ID_METADATA_KEY,

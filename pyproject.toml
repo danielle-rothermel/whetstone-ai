@@ -11,6 +11,7 @@ dependencies = [
     "datasets>=3.6.0",
     "dbos>=2.25.0",
     "dr-code",
+    "dr-graph",
     "dr-providers",
     "dr-serialize",
     "marimo[recommended]>=0.23.11",
@@ -39,6 +40,7 @@ dev = [
 # before this branch merges.
 [tool.uv.sources]
 dr-code = { path = "../dr-code", editable = true }
+dr-graph = { path = "../dr-graph", editable = true }
 dr-providers = { path = "../dr-providers", editable = true }
 dr-serialize = { path = "../dr-serialize", editable = true }
 

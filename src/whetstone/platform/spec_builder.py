@@ -15,6 +15,15 @@ from dr_code.humaneval.sampling import (
     sample_human_eval_tasks_from_rows,
 )
 from dr_code.humaneval.task import HumanEvalTask
+from dr_graph import (
+    BindingRef,
+    FieldRole,
+    FieldSpec,
+    GraphSpec,
+    NodeConfig,
+    NodeSpec,
+    graph_digest,
+)
 from dr_providers.kernel import EndpointKind, ProviderKind
 from pydantic import (
     BaseModel,
@@ -25,15 +34,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.graph import (
-    BindingRef,
-    FieldRole,
-    FieldSpec,
-    GraphSpec,
-    NodeConfig,
-    NodeSpec,
-    graph_digest,
-)
+from whetstone.node_ops import LLM_CALL_OP
 from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,
@@ -265,6 +266,7 @@ def direct_node(
         metadata["provider_config_id"] = provider_config_id
     return NodeSpec(
         id=node_id,
+        op=LLM_CALL_OP,
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,

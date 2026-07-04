@@ -24,10 +24,10 @@ from dr_code.humaneval.code_parsing import (
 from dr_code.humaneval.profiles import DEFAULT_HUMANEVAL_SCORING_PROFILE
 from dr_code.humaneval.scoring import score_humaneval_generation
 from dr_code.humaneval.task import HumanEvalTask
+from dr_graph import canonical_graph_payload, graph_digest
 from dr_serialize import canonical_json, sha256_json_digest
 
 from whetstone.eval_failures.recording import recordable_text
-from whetstone.graph import canonical_graph_payload, graph_digest
 from whetstone.platform.spec_builder import (
     direct_graph,
     encdec_graph,

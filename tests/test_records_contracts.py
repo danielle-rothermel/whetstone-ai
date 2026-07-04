@@ -13,15 +13,7 @@ from dr_code.humaneval.task import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
 )
-from dr_providers.kernel import (
-    EndpointKind,
-    ProviderKind,
-    openai_responses_config,
-)
-from dr_serialize import canonical_json
-from pydantic import ValidationError
-
-from whetstone.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -31,6 +23,14 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_providers.kernel import (
+    EndpointKind,
+    ProviderKind,
+    openai_responses_config,
+)
+from dr_serialize import canonical_json
+from pydantic import ValidationError
+
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -109,6 +109,7 @@ def _node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,
@@ -259,7 +260,10 @@ def test_prediction_spec_validates_task_bindings() -> None:
 
     with pytest.raises(
         ValidationError,
-        match="task binding field\\(s\\) 'promt' not in allowed task fields",
+        match=(
+            "external binding field\\(s\\) 'promt' not in allowed "
+            "external fields"
+        ),
     ):
         PredictionSpecRecord.model_validate(dumped)
 

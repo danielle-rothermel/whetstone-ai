@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
+from dr_graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from whetstone.eval_failures import should_retry_step
-from whetstone.graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from whetstone.platform.backoff import (
     clear_throttle_backoff,
     record_throttle_failure,
