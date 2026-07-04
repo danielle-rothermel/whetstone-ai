@@ -4,16 +4,17 @@ import errno
 import sys
 from typing import Any, cast
 
+from dr_providers.kernel.failures import (
+    RECOVERABLE_FAILURE_CLASSES,
+    RETRYABLE_FAILURE_CLASSES,
+    FailureClass,
+    ProviderFailureError,
+)
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from whetstone.eval_failures.exceptions import (
     EvalFailureError,
     failure_exception_type_for_class,
-)
-from whetstone.eval_failures.types import (
-    RECOVERABLE_FAILURE_CLASSES,
-    RETRYABLE_STEP_FAILURE_CLASSES,
-    FailureClass,
 )
 
 DBOS_ERROR_MODULE = "dbos._error"
@@ -23,7 +24,7 @@ PSYCOPG_MODULE = "psycopg"
 
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
-    "RETRYABLE_STEP_FAILURE_CLASSES",
+    "RETRYABLE_FAILURE_CLASSES",
     "FailureClass",
     "FailureSummary",
     "classify_exception",
@@ -79,7 +80,10 @@ def unwrap_exception(error: BaseException) -> BaseException:
     errors = getattr(error, "errors", None)
     if _is_dbos_max_step_retries_exceeded(error) and errors:
         return unwrap_exception(errors[-1])
-    if isinstance(error, EvalFailureError) and error.underlying is not None:
+    if (
+        isinstance(error, EvalFailureError | ProviderFailureError)
+        and error.underlying is not None
+    ):
         return unwrap_exception(error.underlying)
     if error.__cause__ is not None:
         return unwrap_exception(error.__cause__)
@@ -112,7 +116,7 @@ def _iter_exception_chain(error: BaseException) -> list[BaseException]:
             current = errors[-1]
             continue
         if (
-            isinstance(current, EvalFailureError)
+            isinstance(current, EvalFailureError | ProviderFailureError)
             and current.underlying is not None
         ):
             current = current.underlying
@@ -256,7 +260,7 @@ def summarize_exception(error: BaseException) -> FailureSummary:
 
 
 def should_retry_step(error: BaseException) -> bool:
-    return classify_exception(error) in RETRYABLE_STEP_FAILURE_CLASSES
+    return classify_exception(error) in RETRYABLE_FAILURE_CLASSES
 
 
 def error_text(summary: FailureSummary) -> str:

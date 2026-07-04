@@ -6,9 +6,9 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from dr_providers.kernel.failures import FailureClass
 from pydantic import BaseModel, ConfigDict, Field
 
-from whetstone.eval_failures.types import FailureClass
 from whetstone.graph import (
     BindingRef,
     FieldRole,

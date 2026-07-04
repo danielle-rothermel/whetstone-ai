@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from whetstone.eval_failures.types import FailureClass
+from dr_providers.kernel.failures import FailureClass
 
 
 class EvalFailureError(Exception):

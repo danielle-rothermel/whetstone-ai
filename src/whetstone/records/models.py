@@ -11,6 +11,7 @@ from dr_code.humaneval.task import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
 )
+from dr_providers.kernel.failures import FailureClass
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -21,7 +22,6 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.eval_failures.types import FailureClass
 from whetstone.graph import GraphSpec, validate_task_bindings
 from whetstone.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
 from whetstone.records.limits import (

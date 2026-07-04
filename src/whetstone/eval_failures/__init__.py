@@ -11,6 +11,12 @@ heuristics in ``eval_failures.policy`` without requiring custom types.
 from importlib import import_module
 from typing import Any
 
+from dr_providers.kernel.failures import (
+    RECOVERABLE_FAILURE_CLASSES,
+    RETRYABLE_FAILURE_CLASSES,
+    FailureClass,
+)
+
 from whetstone.eval_failures.exceptions import (
     EmptyGenerationError,
     EvalFailureError,
@@ -30,15 +36,10 @@ from whetstone.eval_failures.generation import (
     validate_direct_generation,
     validate_encdec_generation,
 )
-from whetstone.eval_failures.types import (
-    RECOVERABLE_FAILURE_CLASSES,
-    RETRYABLE_STEP_FAILURE_CLASSES,
-    FailureClass,
-)
 
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
-    "RETRYABLE_STEP_FAILURE_CLASSES",
+    "RETRYABLE_FAILURE_CLASSES",
     "EmptyGenerationError",
     "EvalFailureError",
     "FailureClass",
