@@ -6,17 +6,17 @@ from functools import cache
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import create_engine
-
-from whetstone.humaneval.profiles import (
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     resolve_humaneval_scoring_profile,
 )
-from whetstone.humaneval.sampling import load_human_eval_rows
-from whetstone.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_code.humaneval.sampling import load_human_eval_rows
+from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import create_engine
+
 from whetstone.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,

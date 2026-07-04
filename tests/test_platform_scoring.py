@@ -6,20 +6,8 @@ from typing import Any, cast
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
-from sqlalchemy.dialects import postgresql
-
-from whetstone.db import io as db_io
-from whetstone.graph import (
-    BindingRef,
-    FieldRole,
-    FieldSpec,
-    GraphSpec,
-    NodeConfig,
-    NodeSpec,
-    graph_digest,
-)
-from whetstone.humaneval import scoring as humaneval_scoring
-from whetstone.humaneval.code_parsing import (
+from dr_code.humaneval import scoring as humaneval_scoring
+from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
@@ -31,7 +19,7 @@ from whetstone.humaneval.code_parsing import (
     extract_strict_field_marker_code,
     resolve_parser_profile,
 )
-from whetstone.humaneval.metrics import (
+from dr_code.humaneval.metrics import (
     HUMANEVAL_METRICS_PROFILE_ID,
     NodeOutputMetricsSource,
     ast_metrics,
@@ -40,19 +28,32 @@ from whetstone.humaneval.metrics import (
     task_test_metrics,
     text_metrics,
 )
-from whetstone.humaneval.parsed_tests import HumanEvalTestCaseKind
-from whetstone.humaneval.profiles import (
+from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     resolve_humaneval_scoring_profile,
 )
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
-from whetstone.humaneval.task import (
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import (
     EvaluationCaseResult,
     EvaluationCaseStatus,
     EvaluationTaskResult,
     HumanEvalTask,
+)
+from sqlalchemy.dialects import postgresql
+
+from whetstone.db import io as db_io
+from whetstone.eval_failures.recording import recordable_text
+from whetstone.graph import (
+    BindingRef,
+    FieldRole,
+    FieldSpec,
+    GraphSpec,
+    NodeConfig,
+    NodeSpec,
+    graph_digest,
 )
 from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.platform import rescoring, scoring_workflow
@@ -723,6 +724,7 @@ def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
         task=_task(),
         parser_profile=scoring_profile.parser_profile,
         timeout_seconds=scoring_profile.timeout_seconds,
+        recordable_text=recordable_text,
     )
 
     with pytest.raises(

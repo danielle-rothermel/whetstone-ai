@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 
 from whetstone.analysis.figures import FigureRun
 from whetstone.analysis.frames import (
@@ -15,7 +16,6 @@ from whetstone.analysis.frames import (
     parse_score_metrics,
     select_encdec_analysis_rows,
 )
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
 from whetstone.records import ScoreAttemptStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

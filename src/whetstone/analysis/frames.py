@@ -7,15 +7,15 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from sqlalchemy import Float, Select, and_, cast, func, select
 from sqlalchemy.engine import Engine
 
 from whetstone.db import schema
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
 from whetstone.records import GenerationRunStatus, ScoreAttemptStatus
 
 BASE_FRAME_COLUMNS = (

@@ -3,6 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dr_code.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    PARSER_PROFILE_VERSION,
+)
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 
 from tests.support.platform_integration_helpers import (
     count_score_attempts,
@@ -14,14 +22,6 @@ from tests.support.platform_scoring_fixtures import (
     seeded_scoring_target,
 )
 from tests.support.postgres_fixtures import start_test_workflow
-from whetstone.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-)
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
 from whetstone.platform import scoring_workflow
 from whetstone.platform.scoring_workflow import (
     run_score_generation_workflow,

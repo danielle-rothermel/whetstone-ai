@@ -5,11 +5,12 @@ description = "Add your description here"
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
-requires-python = ">=3.12, <3.15"
+requires-python = ">=3.13, <3.15"
 dependencies = [
     "alembic>=1.16.2",
     "datasets>=3.6.0",
     "dbos>=2.25.0",
+    "dr-code",
     "dr-serialize",
     "marimo[recommended]>=0.23.11",
     "matplotlib>=3.11.0",
@@ -36,6 +37,7 @@ dev = [
 # NOTE(composable-migration): path dependency must become a git/PyPI pin
 # before this branch merges.
 [tool.uv.sources]
+dr-code = { path = "../dr-code", editable = true }
 dr-serialize = { path = "../dr-serialize", editable = true }
 
 [build-system]

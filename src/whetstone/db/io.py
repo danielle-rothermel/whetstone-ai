@@ -3,6 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from pydantic import BaseModel
 from sqlalchemy import Select, and_, func, null, select, update
 from sqlalchemy.sql.dml import Insert, Update
@@ -11,7 +12,6 @@ from whetstone.db import schema
 from whetstone.eval_failures.recording import ensure_recordable
 from whetstone.eval_failures.types import FailureClass
 from whetstone.graph import GraphRunStatus, NodeError, NodeOutput
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
 from whetstone.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,

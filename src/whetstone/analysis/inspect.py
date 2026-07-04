@@ -7,6 +7,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import EvaluationCaseStatus
 from sqlalchemy import Select, and_, select
 from sqlalchemy.engine import Connection, Engine
 
@@ -19,12 +25,6 @@ from whetstone.analysis.frames import (
 from whetstone.db import io, schema
 from whetstone.graph import NodeOutcome, NodeOutput
 from whetstone.graph.execution import resolve_node_inputs
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
-from whetstone.humaneval.task import EvaluationCaseStatus
 from whetstone.lm.boundary import PromptMessage
 from whetstone.migration.v0_reshape import V0_SOURCE_METADATA_KEY
 from whetstone.platform.persistence import (

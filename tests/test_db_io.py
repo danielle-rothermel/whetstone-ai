@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from pydantic import ValidationError
 
 from whetstone.db import io
@@ -18,7 +19,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
 from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,

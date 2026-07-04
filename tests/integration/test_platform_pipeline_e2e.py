@@ -4,6 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dr_code.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    PARSER_PROFILE_VERSION,
+)
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 from sqlalchemy import create_engine
 
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
@@ -20,14 +28,6 @@ from tests.support.platform_workflow_fixtures import (
     step_success,
 )
 from whetstone.graph import GraphSpec
-from whetstone.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-)
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
 from whetstone.platform import graph_workflow, scoring_workflow, submission
 from whetstone.platform.graph_workflow import platform_generation_workflow_id
 from whetstone.platform.node_execution import NodeStepResult

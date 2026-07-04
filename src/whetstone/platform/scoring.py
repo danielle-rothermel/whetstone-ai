@@ -3,27 +3,28 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from whetstone.eval_failures import (
-    classify_exception,
-    exception_type_name,
-)
-from whetstone.eval_failures.recording import recordable_text
-from whetstone.humaneval.metrics import (
+from dr_code.humaneval.metrics import (
     NodeOutputMetricsSource,
     build_metrics_payload,
 )
-from whetstone.humaneval.profiles import (
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     resolve_humaneval_scoring_profile,
 )
-from whetstone.humaneval.scoring import (
+from dr_code.humaneval.scoring import (
     HumanEvalGenerationScore,
     evaluation_aggregate_metrics,
     score_humaneval_generation,
 )
-from whetstone.humaneval.task import HumanEvalTask
+from dr_code.humaneval.task import HumanEvalTask
+
+from whetstone.eval_failures import (
+    classify_exception,
+    exception_type_name,
+)
+from whetstone.eval_failures.recording import recordable_text
 from whetstone.platform.node_execution import failure_metadata_from_exception
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
@@ -74,6 +75,7 @@ def score_generation_run(
             task=task,
             parser_profile=scoring_profile.parser_profile,
             timeout_seconds=scoring_profile.timeout_seconds,
+            recordable_text=recordable_text,
         )
         return score_attempt_from_domain_score(
             spec=spec,

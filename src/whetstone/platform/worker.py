@@ -6,13 +6,13 @@ from typing import Annotated
 
 import typer
 from dbos import DBOS
-from rich.console import Console
-from sqlalchemy import create_engine
-
-from whetstone.humaneval.profiles import (
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
+from rich.console import Console
+from sqlalchemy import create_engine
+
 from whetstone.migration.v0_encdec_backfill import run_v0_encdec_backfill
 from whetstone.platform.cli_env import load_env_file, run_typer_app
 from whetstone.platform.dbos_bootstrap import (

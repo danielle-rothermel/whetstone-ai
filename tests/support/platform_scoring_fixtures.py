@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from dr_code.humaneval.task import HumanEvalTask
+
 from whetstone.graph import (
     BindingRef,
     FieldRole,
@@ -16,7 +18,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.humaneval.task import HumanEvalTask
 from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,

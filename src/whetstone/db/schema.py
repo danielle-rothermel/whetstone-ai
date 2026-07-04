@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -18,7 +19,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
 from whetstone.records import (
     BatchSubmitItemEnqueueStatus,
     BatchSubmitItemInsertStatus,

@@ -3,6 +3,14 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from dr_code.humaneval.code_parsing import (
+    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
+    PARSER_PROFILE_VERSION,
+)
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
@@ -19,14 +27,6 @@ from tests.support.platform_scoring_fixtures import (
     seeded_scoring_target,
 )
 from tests.support.postgres_fixtures import start_test_workflow
-from whetstone.humaneval.code_parsing import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
-    PARSER_PROFILE_VERSION,
-)
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-)
 from whetstone.platform.persistence import persist_score_attempt
 from whetstone.platform.scoring import score_generation_run
 from whetstone.records import stable_score_attempt_id

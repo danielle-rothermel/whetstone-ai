@@ -4,6 +4,11 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    resolve_humaneval_scoring_profile,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -16,11 +21,6 @@ from sqlalchemy.engine import Connection, Engine
 
 from whetstone.db import io
 from whetstone.eval_failures import failure_metadata_from_exception
-from whetstone.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-    resolve_humaneval_scoring_profile,
-)
 from whetstone.platform.scoring_workflow import (
     ScheduledScoreGenerationWorkflow,
     await_scheduled_score_workflows,

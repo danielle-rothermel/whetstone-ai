@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from dr_code.humaneval.task import EvaluationCaseStatus
 from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers.python import PythonLexer
@@ -20,7 +21,6 @@ from whetstone.analysis.inspect import (
     node_attempt_by_id,
     summarize_test_results,
 )
-from whetstone.humaneval.task import EvaluationCaseStatus
 from whetstone.lm.boundary import PromptMessage
 
 ENCODER_NODE_ID = "encoder"

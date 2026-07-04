@@ -7,7 +7,7 @@
 | 0 baselines | done | golden fixtures + tests committed; full suite 696 passed; integration 45 passed |
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
-| 3 dr-code nucleus | in_progress | 3a + 3b done (port green: 309 tests, goldens byte-equal, corpus baseline pinned); next: 3c whetstone cutover |
+| 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
@@ -177,6 +177,24 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   records/models, analysis/*, platform/{worker,scoring,spec_builder}),
   pass `recordable_text` at the platform scoring call site, move
   humaneval tests out of whetstone, full suite + goldens + integration.
+
+### 2026-07-04 — stage 3, sub-step 3c (whetstone cutover) — stage 3 done
+
+- Landed (whetstone): `src/whetstone/humaneval/` deleted; all imports
+  swapped to `dr_code.humaneval` (19 src + 11 test/support files +
+  golden generator); dr-code consumed via `[tool.uv.sources]` path dep
+  (pin before merge); `recordable_text` injected at the three
+  `score_humaneval_generation` call sites (platform/scoring.py, golden
+  generator, test_platform_scoring); whetstone's
+  test_humaneval_primitives + test_import_inference deleted (they moved
+  to dr-code in 3b).
+- Conservative choices: `requires-python` narrowed to `>=3.13, <3.15`
+  (dr-code requires ≥3.13; whetstone already runs 3.13 per
+  `.python-version`); CI workflow python bumped 3.12 → 3.13 to match.
+- Verified: whetstone full suite 605 passed (61 tests moved out);
+  goldens 4 passed — parser/scoring fixtures now byte-equal through
+  dr-code under the v1 profile IDs; integration tier 45 passed; ruff +
+  ty clean. dr-code suite unchanged green (309, from 3b).
 
 - Note: `gh` is authenticated as `drothermel`; the first
   `gh repo create dr-serialize` call landed an **empty stray repo

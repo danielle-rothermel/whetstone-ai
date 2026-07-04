@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
+from dr_code.humaneval.sampling import SampledHumanEvalTask
+from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 
-from whetstone.humaneval.sampling import SampledHumanEvalTask
-from whetstone.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 from whetstone.platform import jsonl_specs, spec_builder
 from whetstone.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,

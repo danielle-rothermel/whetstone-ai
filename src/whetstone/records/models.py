@@ -4,6 +4,13 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from dr_code.humaneval import metric_models
+from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import (
+    EvaluationCaseStatus,
+    EvaluationCaseSummary,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -16,13 +23,6 @@ from pydantic import (
 
 from whetstone.eval_failures.types import FailureClass
 from whetstone.graph import GraphSpec, validate_task_bindings
-from whetstone.humaneval import metric_models
-from whetstone.humaneval.parsed_tests import HumanEvalTestCaseKind
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
-from whetstone.humaneval.task import (
-    EvaluationCaseStatus,
-    EvaluationCaseSummary,
-)
 from whetstone.lm.boundary import EndpointKind, ProviderConfig, ProviderKind
 from whetstone.records.limits import (
     BATCH_SUBMIT_SPEC_MAX_BYTES,

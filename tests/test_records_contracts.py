@@ -6,6 +6,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from dr_code.humaneval import metrics as humaneval_metrics
+from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import (
+    EvaluationCaseStatus,
+    EvaluationCaseSummary,
+)
 from dr_serialize import canonical_json
 from pydantic import ValidationError
 
@@ -18,13 +25,6 @@ from whetstone.graph import (
     NodeConfig,
     NodeSpec,
     graph_digest,
-)
-from whetstone.humaneval import metrics as humaneval_metrics
-from whetstone.humaneval.parsed_tests import HumanEvalTestCaseKind
-from whetstone.humaneval.scoring import GeneratedCodeOutcome
-from whetstone.humaneval.task import (
-    EvaluationCaseStatus,
-    EvaluationCaseSummary,
 )
 from whetstone.lm.boundary import (
     EndpointKind,

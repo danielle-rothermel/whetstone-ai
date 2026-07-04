@@ -9,6 +9,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
+from dr_code.humaneval.sampling import (
+    SampledHumanEvalTask,
+    sample_human_eval_tasks,
+    sample_human_eval_tasks_from_rows,
+)
+from dr_code.humaneval.task import HumanEvalTask
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,12 +33,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.humaneval.sampling import (
-    SampledHumanEvalTask,
-    sample_human_eval_tasks,
-    sample_human_eval_tasks_from_rows,
-)
-from whetstone.humaneval.task import HumanEvalTask
 from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,
