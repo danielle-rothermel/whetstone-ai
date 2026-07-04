@@ -14,10 +14,10 @@ from dr_code.humaneval.profiles import (
 )
 from dr_code.humaneval.sampling import load_human_eval_rows
 from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_platform import WORKFLOW_START_RACE_ERRORS
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
-from whetstone.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,

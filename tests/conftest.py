@@ -13,6 +13,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from dbos import DBOS
+from dr_platform import destroy_dbos_runtime
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -24,8 +25,8 @@ from whetstone.platform.dbos_bootstrap import (
     EvalDbosConfig,
     build_dbos_config,
     build_eval_dbos_config,
-    destroy_dbos_runtime,
 )
+from whetstone.platform.platform_db import ensure_platform_schema
 from whetstone.platform.queue_worker import (
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
@@ -133,6 +134,9 @@ def app_postgres_schema(
                 text(f"SET search_path TO {schema_name}, public")
             )
             _apply_v1_migrations(connection, monkeypatch)
+        ensure_platform_schema(
+            database_url_with_search_path(postgres_base_url, schema_name)
+        )
         yield AppPostgresSchema(
             engine=engine,
             schema_name=schema_name,

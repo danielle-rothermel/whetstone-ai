@@ -546,6 +546,43 @@ dev = [
 ]
 
 [[package]]
+name = "dr-platform"
+version = "0.1.0"
+source = { editable = "../dr-platform" }
+dependencies = [
+    { name = "alembic" },
+    { name = "dbos" },
+    { name = "dr-providers" },
+    { name = "dr-serialize" },
+    { name = "pydantic" },
+    { name = "rich" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.16.2" },
+    { name = "dbos", specifier = ">=2.25.0" },
+    { name = "dr-providers", editable = "../dr-providers" },
+    { name = "dr-serialize", editable = "../dr-serialize" },
+    { name = "pandas", marker = "extra == 'frames'", specifier = ">=2.2.0" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+]
+provides-extras = ["frames"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pandas", specifier = ">=2.2.0" },
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
+]
+
+[[package]]
 name = "dr-providers"
 version = "0.1.1"
 source = { editable = "../dr-providers" }
@@ -3042,6 +3079,7 @@ dependencies = [
     { name = "dbos" },
     { name = "dr-code" },
     { name = "dr-graph" },
+    { name = "dr-platform" },
     { name = "dr-providers" },
     { name = "dr-serialize" },
     { name = "marimo", extra = ["recommended"] },
@@ -3073,6 +3111,7 @@ requires-dist = [
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", editable = "../dr-code" },
     { name = "dr-graph", editable = "../dr-graph" },
+    { name = "dr-platform", editable = "../dr-platform" },
     { name = "dr-providers", editable = "../dr-providers" },
     { name = "dr-serialize", editable = "../dr-serialize" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },

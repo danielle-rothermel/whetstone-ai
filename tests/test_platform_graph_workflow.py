@@ -18,6 +18,7 @@ from dr_graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_platform import backoff
 from dr_providers.kernel import (
     EndpointKind,
     LlmRequest,
@@ -35,7 +36,7 @@ from whetstone.eval_failures import (
     RateLimitedFailureError,
     TransientFailureError,
 )
-from whetstone.platform import backoff, graph_workflow
+from whetstone.platform import graph_workflow
 from whetstone.platform.graph_workflow import (
     _start_prediction_graph_workflow_handle,
     execute_prediction_graph,
@@ -825,17 +826,21 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
         connection: object,
         *,
         throttle_key: str,
-        failure: Any,
+        failure_class: Any,
+        error_type: str | None = None,
+        message: str | None = None,
+        metadata: dict[str, Any] | None = None,
         now: datetime,
+        schema: Any,
     ) -> backoff.ThrottleBackoffState:
         state = backoff.ThrottleBackoffState(
             throttle_key=throttle_key,
             blocked_until=now + timedelta(seconds=12),
             consecutive_failures=1,
-            failure_class=failure.failure_class,
-            last_error_type=failure.failure_exception_type,
-            last_message=failure.message,
-            metadata=failure.failure_metadata,
+            failure_class=failure_class,
+            last_error_type=error_type,
+            last_message=message,
+            metadata=dict(metadata or {}),
             updated_at=now,
         )
         state_by_key[throttle_key] = state
@@ -862,7 +867,7 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
     monkeypatch.setattr(
         graph_workflow,
         "throttle_delay_seconds",
-        lambda connection, *, throttle_key, now: (
+        lambda connection, *, throttle_key, now, schema: (
             backoff.delay_until_unblocked_seconds(
                 state_by_key.get(throttle_key),
                 now=now,
@@ -872,14 +877,16 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
     monkeypatch.setattr(
         graph_workflow,
         "clear_throttle_backoff",
-        lambda connection, *, throttle_key, now: state_by_key.__setitem__(
-            throttle_key,
-            backoff.ThrottleBackoffState(
-                throttle_key=throttle_key,
-                consecutive_failures=0,
-                metadata={},
-                updated_at=now,
-            ),
+        lambda connection, *, throttle_key, now, schema: (
+            state_by_key.__setitem__(
+                throttle_key,
+                backoff.ThrottleBackoffState(
+                    throttle_key=throttle_key,
+                    consecutive_failures=0,
+                    metadata={},
+                    updated_at=now,
+                ),
+            )
         ),
     )
     monkeypatch.setattr(graph_workflow, "execute_lm_node", run_node)

@@ -9,10 +9,10 @@ from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
+from dr_platform import resolve_database_url
 from sqlalchemy import Engine, create_engine
 
 from whetstone.platform.cli_env import load_env_file
-from whetstone.platform.dbos_bootstrap import resolve_database_url
 
 
 @dataclass(frozen=True)

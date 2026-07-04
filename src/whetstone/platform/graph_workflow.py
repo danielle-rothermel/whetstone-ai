@@ -7,20 +7,18 @@ from typing import Any
 
 from dbos import DBOS, SetWorkflowID
 from dr_graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
+from dr_platform import (
+    WORKFLOW_START_RACE_ERRORS,
+    clear_throttle_backoff,
+    record_throttle_failure,
+    throttle_delay_seconds,
+    workflow_start_raced,
+)
+from dr_platform.backoff import utc_now
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from whetstone.eval_failures import should_retry_step
-from whetstone.platform.backoff import (
-    clear_throttle_backoff,
-    record_throttle_failure,
-    throttle_delay_seconds,
-    utc_now,
-)
-from whetstone.platform.dbos_compat import (
-    WORKFLOW_START_RACE_ERRORS,
-    workflow_start_raced,
-)
 from whetstone.platform.node_execution import (
     NodeStepResult,
     attach_node_step_timing_to_exception,
@@ -36,6 +34,7 @@ from whetstone.platform.persistence import (
     node_attempt_records_from_steps,
     persist_generation_result,
 )
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
 from whetstone.records import (
     FailureMetadataPayload,
     GenerationRunRecord,
@@ -335,6 +334,7 @@ def provider_throttle_delay_seconds(
                 connection,
                 throttle_key=provider_ref.throttle_key,
                 now=utc_now(),
+                schema=PLATFORM_SCHEMA,
             )
     finally:
         engine.dispose()
@@ -402,14 +402,19 @@ def record_throttle_failure_state(
 ) -> None:
     from whetstone.eval_failures import summarize_exception
 
+    summary = summarize_exception(error)
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
             record_throttle_failure(
                 connection,
                 throttle_key=throttle_key,
-                failure=summarize_exception(error),
+                failure_class=summary.failure_class,
+                error_type=summary.failure_exception_type,
+                message=summary.message,
+                metadata=summary.failure_metadata,
                 now=utc_now(),
+                schema=PLATFORM_SCHEMA,
             )
     finally:
         engine.dispose()
@@ -427,6 +432,7 @@ def clear_throttle_backoff_state(
                 connection,
                 throttle_key=throttle_key,
                 now=utc_now(),
+                schema=PLATFORM_SCHEMA,
             )
     finally:
         engine.dispose()

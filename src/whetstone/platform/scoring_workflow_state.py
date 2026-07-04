@@ -4,14 +4,14 @@ from enum import StrEnum
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
-from sqlalchemy import create_engine, select
-
-from whetstone.db import schema
-from whetstone.platform.dbos_compat import (
+from dr_platform import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
     DbosWorkflowStatus,
 )
+from sqlalchemy import create_engine, select
+
+from whetstone.db import schema
 
 
 class ScoringWorkflowPresence(StrEnum):

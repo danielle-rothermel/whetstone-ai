@@ -40,7 +40,7 @@ from whetstone.records import (
 )
 
 if TYPE_CHECKING:
-    from whetstone.platform.progress_log import OperationProgress
+    from dr_platform import OperationProgress
 
 DEFAULT_RESCORE_CHUNK_SIZE = 500
 DEFAULT_MAX_IN_FLIGHT = 100

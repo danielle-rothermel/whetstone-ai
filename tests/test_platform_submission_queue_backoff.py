@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -20,21 +20,19 @@ from dr_graph import (
     NodeSpec,
     graph_digest,
 )
+from dr_platform import OperationProgress
 from dr_providers.kernel import EndpointKind, ProviderKind
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
 from typer.testing import CliRunner
 
-from whetstone.eval_failures import FailureClass, FailureSummary
 from whetstone.platform import (
-    backoff,
     fairness,
     graph_workflow,
     queue_worker,
     submission,
     worker,
 )
-from whetstone.platform.progress_log import OperationProgress
 from whetstone.records import (
     ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
@@ -1974,108 +1972,6 @@ def test_run_one_runtime_keeps_empty_queue_listener(
     assert ("listen", []) in calls
 
 
-def test_backoff_delay_is_per_throttle_key_and_bounded() -> None:
-    delay_a = backoff.next_backoff_delay_seconds(
-        throttle_key="openai:model-a",
-        consecutive_failures=3,
-        failure_class=FailureClass.RATE_LIMITED,
-        max_seconds=30.0,
-    )
-    delay_b = backoff.next_backoff_delay_seconds(
-        throttle_key="openai:model-b",
-        consecutive_failures=3,
-        failure_class=FailureClass.RATE_LIMITED,
-        max_seconds=30.0,
-    )
-
-    assert 0 < delay_a <= 30.0
-    assert 0 < delay_b <= 30.0
-    assert delay_a != delay_b
-    assert backoff.next_backoff_delay_seconds(
-        throttle_key="openai:model-a",
-        consecutive_failures=3,
-        failure_class=FailureClass.PERMANENT,
-    ) == 0.0
 
 
-def test_backoff_preflight_only_blocks_matching_state() -> None:
-    state = backoff.ThrottleBackoffState(
-        throttle_key="openai:model-a",
-        blocked_until=NOW + timedelta(seconds=12),
-        consecutive_failures=1,
-        updated_at=NOW,
-    )
 
-    assert backoff.delay_until_unblocked_seconds(state, now=NOW) == 12.0
-    assert backoff.delay_until_unblocked_seconds(None, now=NOW) == 0.0
-
-
-def test_record_throttle_failure_ignores_permanent_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    executed: list[Any] = []
-    monkeypatch.setattr(
-        backoff,
-        "load_throttle_backoff_state",
-        lambda connection, *, throttle_key: None,
-    )
-    failure = FailureSummary(
-        failure_class=FailureClass.PERMANENT,
-        failure_exception_type="builtins.ValueError",
-        underlying_exception_type="builtins.ValueError",
-        message="bad request",
-    )
-
-    result = backoff.record_throttle_failure(
-        cast(
-            Connection,
-            SimpleNamespace(
-                execute=lambda statement: executed.append(statement)
-            ),
-        ),
-        throttle_key="openai:model-a",
-        failure=failure,
-        now=NOW,
-    )
-
-    assert result is None
-    assert executed == []
-
-
-def test_record_throttle_failure_updates_retryable_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    executed: list[Any] = []
-
-    class IncrementResult:
-        def scalar_one(self) -> int:
-            return 1
-
-    failure = FailureSummary(
-        failure_class=FailureClass.RATE_LIMITED,
-        failure_exception_type="openai.RateLimitError",
-        underlying_exception_type="openai.RateLimitError",
-        message="rate limited",
-    )
-
-    result = backoff.record_throttle_failure(
-        cast(
-            Connection,
-            SimpleNamespace(
-                execute=lambda statement: (
-                    executed.append(statement),
-                    IncrementResult(),
-                )[1]
-            ),
-        ),
-        throttle_key="openai:model-a",
-        failure=failure,
-        now=NOW,
-    )
-
-    assert result is not None
-    assert result.throttle_key == "openai:model-a"
-    assert result.consecutive_failures == 1
-    assert result.blocked_until is not None
-    assert result.blocked_until > NOW
-    assert len(executed) == 2

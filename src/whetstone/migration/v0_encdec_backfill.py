@@ -29,7 +29,7 @@ from whetstone.platform.submission import (
 from whetstone.records import ExperimentRecord
 
 if TYPE_CHECKING:
-    from whetstone.platform.progress_log import OperationProgress
+    from dr_platform import OperationProgress
 
 V0_ENC_DEC_TABLE = "dr_dspy_encdec_eval_predictions"
 V0_BACKFILL_SOURCE = "v0_encdec_backfill"

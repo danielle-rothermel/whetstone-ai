@@ -4,9 +4,9 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from dbos import DBOS, SetEnqueueOptions, SetWorkflowID
+from dr_platform import WORKFLOW_START_RACE_ERRORS
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
-from whetstone.platform.dbos_compat import WORKFLOW_START_RACE_ERRORS
 from whetstone.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow,

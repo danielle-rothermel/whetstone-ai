@@ -70,8 +70,15 @@ src/whetstone/migration/        # v0 → v1 reshape logic (not inline in tests)
 Defined in [`tests/conftest.py`](tests/conftest.py):
 
 - **`app_postgres_schema`** — creates an isolated schema, applies v1 migrations +
-  append-only triggers, exposes `database_url` with `search_path` set for steps
-  that open their own SQLAlchemy engines.
+  append-only triggers, then adopts the dr-platform lineage
+  (`ensure_platform_schema`: stamp the library baseline — the tables already
+  exist from whetstone's own history — and apply post-baseline platform
+  migrations such as throttle holds/tags). Exposes `database_url` with
+  `search_path` set for steps that open their own SQLAlchemy engines.
+  For a real database, run the same adoption once:
+  `uv run python -c "from whetstone.platform.platform_db import
+  ensure_platform_schema; import os;
+  ensure_platform_schema(os.environ['DATABASE_URL'])"`.
 - **`reset_dbos`** — destroys/reconfigures DBOS, resets the system database
   (SQLite file under `tmp_path` by default), and launches the platform runtime.
 - **`reset_dbos_generation_consumer`** — like `reset_dbos`, but listens to the

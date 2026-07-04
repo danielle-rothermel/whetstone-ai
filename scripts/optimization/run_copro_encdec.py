@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dr_platform import destroy_dbos_runtime
 from dr_providers.kernel import EndpointKind, ProviderKind
 from rich.console import Console
 from sqlalchemy import create_engine
@@ -22,7 +23,6 @@ from whetstone.optimization.copro import (
     write_copro_artifacts,
 )
 from whetstone.platform.cli_env import load_env_file, run_typer_app
-from whetstone.platform.dbos_bootstrap import destroy_dbos_runtime
 from whetstone.platform.spec_builder import DEFAULT_CONFIGS_ROOT
 from whetstone.platform.worker import configure_platform_dbos_runtime
 

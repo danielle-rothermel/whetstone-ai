@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from dr_graph import GraphSpec
+from dr_platform import backoff
 from sqlalchemy import create_engine
 
 from tests.support.platform_integration_helpers import (
@@ -21,15 +22,15 @@ from tests.support.platform_workflow_fixtures import (
 )
 from whetstone.eval_failures import (
     FailureClass,
-    FailureSummary,
     PermanentFailureError,
     TransientFailureError,
 )
-from whetstone.platform import backoff, graph_workflow
+from whetstone.platform import graph_workflow
 from whetstone.platform.graph_workflow import (
     run_prediction_graph_workflow_once,
 )
 from whetstone.platform.node_execution import NodeStepResult
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
 from whetstone.records import GenerationRunStatus, stable_generation_run_id
 
 pytestmark = pytest.mark.integration
@@ -432,17 +433,13 @@ def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
             backoff.record_throttle_failure(
                 connection,
                 throttle_key=throttle_key,
-                failure=FailureSummary(
-                    failure_class=FailureClass.RATE_LIMITED,
-                    failure_exception_type=(
-                        "whetstone.eval_failures.RateLimitedFailureError"
-                    ),
-                    underlying_exception_type=(
-                        "whetstone.eval_failures.RateLimitedFailureError"
-                    ),
-                    message="rate limited",
+                failure_class=FailureClass.RATE_LIMITED,
+                error_type=(
+                    "whetstone.eval_failures.RateLimitedFailureError"
                 ),
+                message="rate limited",
                 now=datetime.now(UTC),
+                schema=PLATFORM_SCHEMA,
             )
     finally:
         engine.dispose()

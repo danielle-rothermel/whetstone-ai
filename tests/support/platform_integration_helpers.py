@@ -6,15 +6,15 @@ import time
 from datetime import datetime
 
 from dbos import DBOS
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection, Row
-
-from tests.support.postgres_fixtures import seed_prediction_spec
-from whetstone.platform.dbos_compat import (
+from dr_platform import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
     DbosWorkflowStatus,
 )
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection, Row
+
+from tests.support.postgres_fixtures import seed_prediction_spec
 from whetstone.platform.scoring_workflow_state import (
     dbos_workflow_status_value,
 )
