@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from dr_serialize import POSTGRES_JSONB_PAYLOAD_MAX_BYTES as PAYLOAD_MAX_BYTES
+
 from whetstone.records import limits
-from whetstone.serialization import PAYLOAD_MAX_BYTES
 
 _BYTE_CAP_NAMES = (
     "TASK_INPUTS_MAX_BYTES",

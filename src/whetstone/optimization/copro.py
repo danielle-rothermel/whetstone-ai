@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dr_serialize import sha256_json_digest
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -32,7 +33,6 @@ from whetstone.analysis.frames import (
     score_success_mask,
 )
 from whetstone.db import schema
-from whetstone.hashing import sha256_json_digest
 from whetstone.lm.boundary import (
     EndpointKind,
     PlainPromptAdapter,

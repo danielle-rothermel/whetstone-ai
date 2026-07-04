@@ -471,7 +471,7 @@ def _without_none(data: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _response_metadata(response: Any) -> dict[str, Any]:
-    from whetstone.serialization import to_metadata_dict
+    from dr_serialize import to_metadata_dict
 
     return to_metadata_dict(response)
 

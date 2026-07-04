@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from whetstone.serialization import (
-    PAYLOAD_MAX_BYTES,
+from dr_serialize import (
+    POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
     SerializationError,
+    postgres_jsonb_limits,
     to_jsonable,
 )
 
 # Tier-1 catastrophe guards — aligned with serialization ceiling.
-DOMAIN_PAYLOAD_MAX_BYTES = PAYLOAD_MAX_BYTES  # ~768 MiB
+DOMAIN_PAYLOAD_MAX_BYTES = POSTGRES_JSONB_PAYLOAD_MAX_BYTES  # ~768 MiB
 
 TASK_INPUTS_MAX_BYTES = DOMAIN_PAYLOAD_MAX_BYTES
 NODE_OUTPUT_MAX_BYTES = DOMAIN_PAYLOAD_MAX_BYTES
@@ -28,6 +29,6 @@ def validate_payload_size(
     label: str,
 ) -> None:
     try:
-        to_jsonable(value, max_bytes=max_bytes)
+        to_jsonable(value, limits=postgres_jsonb_limits(max_bytes))
     except SerializationError as exc:
         raise ValueError(f"{label}: {exc}") from exc

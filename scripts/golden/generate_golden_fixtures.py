@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from dr_serialize import canonical_json, sha256_json_digest
 
 from whetstone.graph import canonical_graph_payload, graph_digest
-from whetstone.hashing import canonical_json, sha256_json_digest
 from whetstone.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     STRICT_FIELD_MARKER_PARSER_PROFILE,

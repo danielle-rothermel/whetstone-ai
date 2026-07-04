@@ -10,6 +10,7 @@ dependencies = [
     "alembic>=1.16.2",
     "datasets>=3.6.0",
     "dbos>=2.25.0",
+    "dr-serialize",
     "marimo[recommended]>=0.23.11",
     "matplotlib>=3.11.0",
     "pandas>=3.0.3",
@@ -31,6 +32,11 @@ dependencies = [
 dev = [
     "dspy==3.3.0b1",
 ]
+
+# NOTE(composable-migration): path dependency must become a git/PyPI pin
+# before this branch merges.
+[tool.uv.sources]
+dr-serialize = { path = "../dr-serialize", editable = true }
 
 [build-system]
 requires = ["hatchling"]

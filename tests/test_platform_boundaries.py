@@ -10,10 +10,7 @@ PURE_PACKAGE_PATHS = (
     SRC_ROOT / "humaneval",
     SRC_ROOT / "eval_failures",
 )
-PURE_MODULE_PATHS = (
-    SRC_ROOT / "serialization.py",
-    SRC_ROOT / "lm" / "boundary.py",
-)
+PURE_MODULE_PATHS = (SRC_ROOT / "lm" / "boundary.py",)
 DSPY_FREE_PATHS = (
     *PURE_PACKAGE_PATHS,
     SRC_ROOT / "lm" / "boundary.py",

@@ -3,6 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+SANITIZE_KEYS = frozenset(
+    {"api_key", "api_base", "base_url", "model_list", "authorization"}
+)
+
+
+def sanitize_lm_kwargs(kwargs: dict[str, Any] | None) -> dict[str, Any]:
+    """Strip credential-like keys from an LM kwargs dict before logging."""
+    if not kwargs:
+        return {}
+    return {
+        k: ("<redacted>" if k.lower() in SANITIZE_KEYS else v)
+        for k, v in kwargs.items()
+    }
+
 
 def content_to_text(content: Any) -> str | None:
     if isinstance(content, str):

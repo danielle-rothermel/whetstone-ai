@@ -3,7 +3,7 @@
 This package handles eval workflow failures: classify, retry, summarize, and
 persist failure records. It is not a global exception registry.
 
-Encoding errors live in ``whetstone.serialization`` and are bridged at
+Encoding errors live in ``dr_serialize`` and are bridged at
 ``eval_failures.recording``. Third-party exceptions are classified by
 heuristics in ``eval_failures.policy`` without requiring custom types.
 """

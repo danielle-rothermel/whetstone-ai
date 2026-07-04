@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from dr_serialize import canonical_json
 from pydantic import ValidationError
 
 from whetstone.graph import (
@@ -18,7 +19,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.hashing import canonical_json
 from whetstone.humaneval import metrics as humaneval_metrics
 from whetstone.humaneval.parsed_tests import HumanEvalTestCaseKind
 from whetstone.humaneval.scoring import GeneratedCodeOutcome

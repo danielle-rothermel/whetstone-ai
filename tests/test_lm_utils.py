@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from whetstone.lm.utils import content_to_text, provider_cost_from_response
+from whetstone.lm.utils import (
+    content_to_text,
+    provider_cost_from_response,
+    sanitize_lm_kwargs,
+)
 
 
 @pytest.mark.parametrize(
@@ -40,3 +44,46 @@ def test_provider_cost_from_response(
     expected: float | None,
 ) -> None:
     assert provider_cost_from_response(metadata) == expected
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        (None, {}),
+        ({}, {}),
+        (
+            {"api_key": "secret", "temperature": 0.7},
+            {"api_key": "<redacted>", "temperature": 0.7},
+        ),
+        (
+            {"API_BASE": "https://x", "max_tokens": 100},
+            {"API_BASE": "<redacted>", "max_tokens": 100},
+        ),
+        (
+            {
+                "authorization": "Bearer x",
+                "model_list": ["a"],
+                "base_url": "https://y",
+                "other": "keep",
+            },
+            {
+                "authorization": "<redacted>",
+                "model_list": "<redacted>",
+                "base_url": "<redacted>",
+                "other": "keep",
+            },
+        ),
+    ],
+    ids=[
+        "none",
+        "empty",
+        "api_key_mixed",
+        "case_insensitive_key",
+        "all_sensitive_keys",
+    ],
+)
+def test_sanitize_lm_kwargs(
+    kwargs: dict[str, object] | None,
+    expected: dict[str, object],
+) -> None:
+    assert sanitize_lm_kwargs(kwargs) == expected

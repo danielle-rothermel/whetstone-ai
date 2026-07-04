@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from dr_serialize import sha256_json_digest
+
 from whetstone.graph.models import GraphSpec
-from whetstone.hashing import sha256_json_digest
 
 GRAPH_DIGEST_LENGTH = 16
 

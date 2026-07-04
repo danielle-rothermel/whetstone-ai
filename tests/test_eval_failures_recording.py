@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dr_serialize import (
+    JsonEncodeError,
+    MaxDepthExceededError,
+    ModelDumpError,
+    PayloadTooLargeError,
+)
 
 from whetstone.eval_failures import (
     FailureClass,
@@ -15,12 +21,6 @@ from whetstone.eval_failures import (
     summarize_exception,
 )
 from whetstone.eval_failures.exceptions import TransientFailureError
-from whetstone.serialization import (
-    JsonEncodeError,
-    MaxDepthExceededError,
-    ModelDumpError,
-    PayloadTooLargeError,
-)
 
 
 def test_recordable_text_passthrough_str() -> None:

@@ -14,25 +14,27 @@ if TYPE_CHECKING:
 
     from whetstone.records import FailureMetadataPayload
 
+from dr_serialize import (
+    POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
+    SerializationError,
+    postgres_jsonb_limits,
+    to_jsonable,
+)
+
 from whetstone.eval_failures.exceptions import (
     EvalFailureError,
     RecordingFailureError,
-)
-from whetstone.serialization import (
-    PAYLOAD_MAX_BYTES,
-    SerializationError,
-    to_jsonable,
 )
 
 
 def ensure_recordable(
     value: Any,
     *,
-    max_bytes: int = PAYLOAD_MAX_BYTES,
+    max_bytes: int = POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
 ) -> Any:
     """Shared path for all storable JSON/JSONB values."""
     try:
-        return to_jsonable(value, max_bytes=max_bytes)
+        return to_jsonable(value, limits=postgres_jsonb_limits(max_bytes))
     except SerializationError as exc:
         raise RecordingFailureError(str(exc), underlying=exc) from exc
 
@@ -41,7 +43,7 @@ def recordable_text(value: Any) -> str:
     """Convert a payload to canonical text for metrics recording."""
     if isinstance(value, str):
         return value
-    from whetstone.hashing import canonical_json
+    from dr_serialize import canonical_json
 
     return canonical_json(ensure_recordable(value))
 
@@ -49,7 +51,7 @@ def recordable_text(value: Any) -> str:
 def recordable_jsonb(
     value: Any,
     *,
-    max_bytes: int = PAYLOAD_MAX_BYTES,
+    max_bytes: int = POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
 ) -> Jsonb:
     from psycopg.types.json import Jsonb
 

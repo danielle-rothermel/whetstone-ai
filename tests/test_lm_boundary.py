@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dr_serialize import POSTGRES_JSONB_PAYLOAD_MAX_BYTES as PAYLOAD_MAX_BYTES
 
 import dspy
 from whetstone.eval_failures import (
@@ -33,7 +34,6 @@ from whetstone.lm.boundary import (
     parse_provider_response,
     translate_provider_error,
 )
-from whetstone.serialization import PAYLOAD_MAX_BYTES
 
 
 class _PlainComparisonSignature(dspy.Signature):

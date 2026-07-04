@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from dr_serialize import sha256_json_digest
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
@@ -10,7 +11,6 @@ from sqlalchemy.engine import Connection
 
 from whetstone.db import schema
 from whetstone.eval_failures import FailureClass, FailureSummary
-from whetstone.hashing import sha256_json_digest
 
 DEFAULT_INITIAL_BACKOFF_SECONDS = 5.0
 DEFAULT_MAX_BACKOFF_SECONDS = 300.0

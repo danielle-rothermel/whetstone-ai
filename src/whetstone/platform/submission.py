@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from dr_serialize import sha256_json_digest
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import Select, null, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -12,7 +13,6 @@ from sqlalchemy.engine import Connection, Engine
 
 from whetstone.db import io, schema
 from whetstone.eval_failures import failure_metadata_from_exception
-from whetstone.hashing import sha256_json_digest
 from whetstone.platform.fairness import (
     fair_ordered_spec_ref_windows,
     fair_ordered_spec_windows,

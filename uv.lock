@@ -552,6 +552,25 @@ wheels = [
 ]
 
 [[package]]
+name = "dr-serialize"
+version = "0.1.0"
+source = { editable = "../dr-serialize" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
+]
+
+[[package]]
 name = "dspy"
 version = "3.3.0b1"
 source = { registry = "https://pypi.org/simple" }
@@ -3320,6 +3339,7 @@ dependencies = [
     { name = "alembic" },
     { name = "datasets" },
     { name = "dbos" },
+    { name = "dr-serialize" },
     { name = "marimo", extra = ["recommended"] },
     { name = "matplotlib" },
     { name = "pandas" },
@@ -3347,6 +3367,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
+    { name = "dr-serialize", editable = "../dr-serialize" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "pandas", specifier = ">=3.0.3" },

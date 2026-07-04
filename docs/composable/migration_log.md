@@ -6,7 +6,7 @@
 |-------|-------|-------|
 | 0 baselines | done | golden fixtures + tests committed; full suite 696 passed; integration 45 passed |
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
-| 2 dr-serialize | pending | repo not yet created |
+| 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | pending | repo exists at ../dr-code |
 | 4 dr-providers v0.2 | pending | repo exists at ../dr-providers |
 | 5 dr-graph | pending | repo not yet created |
@@ -92,4 +92,44 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Verified: `uv run alembic heads` → 20260630_0006 (head); full suite 696
   passed; integration tier 45 passed; goldens 4 passed; ruff + ty clean
   (22 isort fixes after first-party rename).
+- Skips: none.
+
+### 2026-07-04 — stage 2
+
+- Landed (dr-serialize): new private repo
+  `danielle-rothermel/dr-serialize` (`../dr-serialize`), scaffolded to
+  match dr-providers (uv, src layout, py≥3.12, strict ruff set, ty,
+  pytest, pre-commit, py.typed, MIT). `hashing.py` extracted verbatim;
+  engine with `register_handler`/`convert_value` public API,
+  `SerializationLimits` + Postgres preset (`postgres_jsonb_limits`),
+  `ValueTransformError` base. 64 tests including golden hashing fixture
+  copied from Stage 0. Pushed `main` + `composable-migration` (branch ==
+  main; draft PR deferred until the branch diverges).
+- API choices recorded in `serialize.md` open-sections block (module
+  layout, required-limits keyword, handler slot, contextvar depth,
+  frozen `postgres_max_bytes` diagnostics key).
+- Landed (whetstone cutover): `hashing.py` + `serialization.py` deleted;
+  dep via `[tool.uv.sources]` path (editable — must become git/PyPI pin
+  before merge, noted in pyproject and PR); DSPy handlers re-homed to
+  `whetstone/dspy_serialization.py` with `SignatureSummaryError`/
+  `ExampleSerializationError` subclassing `ValueTransformError`,
+  registered in `whetstone/__init__`; `SANITIZE_KEYS` +
+  `sanitize_lm_kwargs` moved to `whetstone/lm/utils.py` (Stage 4 moves
+  them to dr-providers); generic serialization tests moved out, DSPy
+  handler tests stay (`tests/test_dspy_serialization.py`).
+- Layering caught by tests: registering handlers in `__init__` initially
+  imported `whetstone.lm` at package import, breaking
+  `test_graph_imports`; fixed with a lazy `sanitize_lm_kwargs` import
+  inside the BaseLM handler. `test_platform_boundaries` updated (deleted
+  `serialization.py` removed from its scan list).
+- Verified: dr-serialize `ruff`/`ty`/`pytest` all green (64 passed);
+  whetstone full suite 666 passed (30 generic serialization tests moved
+  to dr-serialize); goldens 4 passed (digests now produced through
+  dr-serialize); integration tier 45 passed; `grep` shows no remaining
+  `whetstone.hashing`/`whetstone.serialization` imports.
+- Note: `gh` is authenticated as `drothermel`; the first
+  `gh repo create dr-serialize` call landed an **empty stray repo
+  `drothermel/dr-serialize`** before I created the correct
+  `danielle-rothermel/dr-serialize`. Token lacks `delete_repo` scope and
+  repo deletion is a human call — please delete the stray repo.
 - Skips: none.

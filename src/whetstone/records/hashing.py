@@ -1,7 +1,8 @@
 from typing import Any
 
-from whetstone.hashing import canonical_json as canonical_json
-from whetstone.hashing import sha256_json_digest
+from dr_serialize import canonical_json as canonical_json
+from dr_serialize import sha256_json_digest
+
 from whetstone.records.models import DimensionsPayload
 
 PREDICTION_ID_DIGEST_LENGTH = 24
