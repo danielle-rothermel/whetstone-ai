@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design + 6a + 6b-i done (76 tests incl. Postgres migration/backoff); 6b-ii submission/enqueue/observability/projections/artifacts, 6c cutover, 6d validation pending |
+| 6 platform | in_progress | design + 6a + 6b done (dr-platform complete, 101 tests incl. Postgres claim/lease); 6c whetstone cutover, 6d validation pending |
 | final e2e | pending | |
 
 ## Environment
@@ -469,3 +469,36 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Remaining for stage 6: 6b-ii submission claim/lease + dedup enqueue
   + observability/await_operation + projections + artifacts; 6c
   whetstone cutover; 6d consumer validation.
+
+### 2026-07-04 — stage 6, sub-step 6b-ii (submission/enqueue/observability/projections/artifacts)
+
+- Landed (dr-platform 59c5008): submission.py — claim/lease loop
+  ported de-domained (windows via fair_ordered_windows; per-item
+  PENDING->CLAIMING CAS on enqueue_status, terminal CAS on the claim
+  token; FAILED + stale-CLAIMING reset before each pass; operation
+  summary/status recomputed from rows); submit_batch and
+  submit_batch_jsonl; seed hook (registration-transaction domain
+  inserts, returns newly-inserted ids -> insert_status); injectable
+  classify_error with a structural default (whetstone will inject its
+  summarize_exception-backed classifier at 6c). enqueue.py —
+  dedup_enqueue + EnqueueOutcome/EnqueueItem seam. observability.py —
+  load_operation_snapshot, operation_workflow_ids (from
+  enqueue_metadata), workflow_status_breakdown, await_operation
+  (injectable status_fn/sleep/clock; AwaitOperationTimeoutError
+  carries the breakdown). projections.py — ProjectionSpec[RowT],
+  rebuild (delete+rebuild per version, registry upsert), typed loads,
+  group_key filter, pandas view behind [frames] extra. artifacts.py —
+  ArtifactRef/ArtifactStore/LocalDirArtifactStore (sharded dirs,
+  atomic tmp+rename writes, verify-on-read).
+- Behavior notes pinned in tests: empty operations derive ERROR
+  (failed>=requested at 0/0) — ported whetstone semantics, kept
+  byte-faithful rather than "fixed"; re-submission of a completed
+  operation calls enqueue zero times; only FAILED items retry.
+- Verified: dr-platform 101 tests green (submission/observability/
+  projections against scratch Postgres; enqueue via patched DBOS);
+  ruff format/check + ty clean. Whetstone untouched.
+- Remaining for stage 6: 6c whetstone cutover (adapter over
+  PredictionSpecRecord, seed hook wrapping experiment/spec inserts,
+  enqueue target over dedup_enqueue, backoff call-site updates, stamp
+  0001 + run 0002, delete extracted modules, worker CLI rewire); 6d
+  consumer validation.
