@@ -8,7 +8,7 @@
 | 1 rename | done | src/whetstone; pyproject whetstone-ai; frozen strings intact; 696 unit + 45 integration + goldens green |
 | 2 dr-serialize | done | repo created + cutover; dr-serialize 64 tests; whetstone 666 unit + 45 integration + goldens green |
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
-| 4 dr-providers v0.2 | in_progress | 4a+4b+4c-i done (FailureClass re-homed); next: 4c-ii boundary/SDK cutover + e2e + smokes |
+| 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | pending | repo not yet created |
 | 6 platform | pending | gated on design completion |
 | final e2e | pending | |
@@ -286,3 +286,35 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   end-to-end node execution test; test updates (test_lm_boundary,
   node_execution/graph_workflow mocks); optional live smokes (keys
   present).
+
+### 2026-07-04 — stage 4, sub-step 4c-ii (boundary/SDK cutover) — stage 4 done
+
+- Landed (whetstone 6db16e1): `lm/boundary.py` → thin adapter
+  (`llm_request_for_node`, `provider_result_from_response`,
+  `translate_provider_failure`, `PlainPromptAdapter`); OpenAI SDK
+  removed from `node_execution.py` in favor of kernel `Provider`
+  injection (HttpProvider default); `node_attempt_id` threaded from
+  `run_prediction_graph_workflow`'s node closure into
+  `execute_lm_node_step` (new optional trailing arg — step NAME
+  unchanged; DBOS replays recorded outputs so in-flight workflows are
+  unaffected) and passed as the request idempotency key with the same
+  axes persistence uses; Gemini branch added to
+  `runtime_provider_config`; `eval_failures/policy.py` dropped the
+  openai/httpx heuristic table (kept psycopg/DBOS + generic shapes);
+  kernel enums imported directly everywhere (no re-export layer); copro
+  proposal call rewired to the kernel.
+- Tests: `test_lm_boundary` rewritten for the adapter (old wire tests
+  live in dr-providers' kernel/corpus suites); provider fakes are now
+  Provider objects; 11 dead openai/httpx heuristic tests deleted;
+  acceptance e2e test `test_execute_lm_node_end_to_end_with_fixture_provider`
+  runs the full node path against `FixtureProvider` with no network.
+- Verified: whetstone 576 unit + 45 integration + 4 golden green
+  (count drop from 605 = removed dead heuristic tests + slimmer adapter
+  test file; coverage moved to dr-providers, 83 green); ruff + ty clean.
+- Live smokes (one minimal call each, ~16-token caps):
+  openai/gpt-4o-mini OK (15 tokens), gemini-2.5-flash-lite via
+  OpenAI-compat endpoint OK (9 tokens), openrouter llama-3.2-3b OK
+  (44 tokens). Gemini-via-AI-Studio decision validated end-to-end.
+- Wire-shape note (recorded): extra_body/extra_kwargs flatten inline
+  into the raw-httpx payload — byte-equivalent to what the SDK's
+  extra_body indirection put on the wire.
