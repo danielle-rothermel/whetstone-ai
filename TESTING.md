@@ -32,7 +32,8 @@ Install dev dependencies (including `dspy` for serialization contract tests) wit
 | **4 — Pipeline E2E** | JSONL submit → real DBOS enqueue → in-process queue consumer → generation → scoring (mock LM + HumanEval loader only) | [`tests/integration/test_platform_pipeline_e2e.py`](tests/integration/test_platform_pipeline_e2e.py) |
 
 Design context: [completed design choices](docs/completed-design-and-implementation-choices.md),
-[remaining implementation intentions](docs/remaining-implementation-intentions.md).
+[remaining implementation intentions](docs/remaining-implementation-intentions.md),
+[testing logs](docs/testing_logs.md) (live smoke runs and payload sizing notes).
 Workflow CLI details are in [README.md](../README.md#v1-graph-workflow).
 
 ## Layout
@@ -127,7 +128,7 @@ tests after backfill validation — see
 
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | App Postgres URL (defaults to `postgresql+psycopg:///dr_dspy`) |
+| `DATABASE_URL` | App Postgres URL (defaults to `postgresql+psycopg:///dr_dspy`; bare `postgresql://` is normalized by platform CLI) |
 | `DBOS_SYSTEM_DATABASE_URL` | Optional; integration tests use a per-test SQLite file when unset |
 
 Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
@@ -165,6 +166,14 @@ DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 wiring after the org repo is created.
 
 ## Changelog
+
+### 2026-06-30 — Enc-dec smoke r2 + scoring payload sizing
+
+- Live smoke r2 documented in [`docs/testing_logs.md`](docs/testing_logs.md)
+  (model routing, `rescore` await, URL normalization, 128 MiB byte-only
+  `per_test_results` cap).
+- Post-run sizing note: typical HumanEval/146 score row ≈0.3 MiB JSON;
+  128 MiB cap is ample; truncation deferred.
 
 ### 2026-06-30 — Remove coverage gate
 

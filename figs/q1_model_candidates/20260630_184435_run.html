@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+.r1 {color: #000080; text-decoration-color: #000080}
+.r2 {color: #c0c0c0; text-decoration-color: #c0c0c0; font-weight: bold}
+.r3 {color: #008080; text-decoration-color: #008080}
+.r4 {font-weight: bold}
+.r5 {color: #800080; text-decoration-color: #800080; font-weight: bold}
+.r6 {font-style: italic}
+.r7 {color: #008080; text-decoration-color: #008080; font-weight: bold}
+.r8 {color: #008000; text-decoration-color: #008000}
+.r9 {color: #008000; text-decoration-color: #008000; font-weight: bold}
+.r10 {color: #808000; text-decoration-color: #808000; font-weight: bold}
+.r11 {color: #000080; text-decoration-color: #000080; font-weight: bold}
+body {
+    color: #000000;
+    background-color: #ffffff;
+}
+</style>
+</head>
+<body>
+    <pre style="font-family:Menlo,'DejaVu Sans Mono',consolas,'Courier New',monospace"><code style="font-family:inherit">
+<span class="r1">╭──────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="r1">│</span>                                                                              <span class="r1">│</span>
+<span class="r1">│</span>  <span class="r2">Q1: Model candidates</span>                                                        <span class="r1">│</span>
+<span class="r1">│</span>                                                                              <span class="r1">│</span>
+<span class="r1">╰──────────────────────────── q1_model_candidates ─────────────────────────────╯</span>
+<span class="r3">╭──────────────────────────────── Run context ─────────────────────────────────╮</span>
+<span class="r3">│</span>  <span class="r4">Experiments</span>  v0_encdec_backfill_smoke_20260630                              <span class="r3">│</span>
+<span class="r3">│</span>  <span class="r4">Rows loaded</span>   10                                                            <span class="r3">│</span>
+<span class="r3">│</span>  <span class="r4">Row limit</span>     none                                                          <span class="r3">│</span>
+<span class="r3">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+
+<span class="r5">──────────────────────────────── </span>Model rankings<span class="r5"> ────────────────────────────────</span>
+
+<span class="r6">                               Pass rate by model                               </span>
+┏━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃<span class="r7"> model                 </span>┃<span class="r7"> scoreable_count </span>┃<span class="r7"> pass_rate </span>┃<span class="r7"> generation_success_ra… </span>┃
+┡━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ deepseek/deepseek-ch… │ 2               │ 50.0%     │ 100.0%                 │
+│ deepseek/deepseek-v4… │ 1               │ 100.0%    │ 100.0%                 │
+│ mistralai/codestral-… │ 2               │ 50.0%     │ 100.0%                 │
+│ openai/gpt-5.4-nano   │ 1               │ 0.0%      │ 100.0%                 │
+│ qwen/qwen3-coder-next │ 1               │ 0.0%      │ 100.0%                 │
+│ z-ai/glm-4.7          │ 1               │ 0.0%      │ 100.0%                 │
+│ z-ai/glm-5            │ 2               │ 100.0%    │ 100.0%                 │
+└───────────────────────┴─────────────────┴───────────┴────────────────────────┘
+
+<span class="r8">╭────────────────────────────── Written outputs ───────────────────────────────╮</span>
+<span class="r8">│</span>  <span class="r4">Tabular artifacts</span>                                                           <span class="r8">│</span>
+<span class="r8">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q1_model_  <span class="r8">│</span>
+<span class="r8">│</span>  candidates/20260630_184435_model_candidates.csv                             <span class="r8">│</span>
+<span class="r8">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q1_model_  <span class="r8">│</span>
+<span class="r8">│</span>  candidates/20260630_184435_model_candidates.md                              <span class="r8">│</span>
+<span class="r8">│</span>                                                                              <span class="r8">│</span>
+<span class="r8">│</span>  <span class="r4">Figure files</span>                                                                <span class="r8">│</span>
+<span class="r8">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q1_model_candi  <span class="r8">│</span>
+<span class="r8">│</span>  dates/20260630_184435_pass_rate_by_model.png                                <span class="r8">│</span>
+<span class="r8">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q1_model_candi  <span class="r8">│</span>
+<span class="r8">│</span>  dates/20260630_184435_generation_score_health.png                           <span class="r8">│</span>
+<span class="r8">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+
+<span class="r9">╭───────────────── Artifacts folder — open or copy this path ──────────────────╮</span>
+<span class="r9">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q1_model_ca  <span class="r9">│</span>
+<span class="r9">│</span>  ndidates                                                                    <span class="r9">│</span>
+<span class="r9">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="r10">╭────────────────── Figures folder — open or copy this path ───────────────────╮</span>
+<span class="r10">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q1_model_candida  <span class="r10">│</span>
+<span class="r10">│</span>  tes                                                                         <span class="r10">│</span>
+<span class="r10">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="r11">╭────────────────────── Run log (HTML) — open in browser ──────────────────────╮</span>
+<span class="r11">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q1_model_candida  <span class="r11">│</span>
+<span class="r11">│</span>  tes/20260630_184435_run.html                                                <span class="r11">│</span>
+<span class="r11">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+</code></pre>
+</body>
+</html>

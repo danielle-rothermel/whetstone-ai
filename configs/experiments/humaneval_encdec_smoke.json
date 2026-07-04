@@ -1,0 +1,20 @@
+{
+  "experiment_name": "humaneval_encdec_smoke_v1",
+  "graph_layout": "encdec",
+  "encdec_shape": "humaneval",
+  "split": "splits/tiny.json",
+  "model_configs": [
+    "models/qwen3-coder-flash-openrouter.json",
+    "models/gpt54-nano-openai.json",
+    "models/gpt-oss-120b-openrouter.json"
+  ],
+  "fair_order_seed": "humaneval-encdec-smoke-v1",
+  "humaneval_encdec": {
+    "min_encoder_char_budget": 50
+  },
+  "repetition_seeds": [0, 1, 2, 3],
+  "dimensions_axes": [
+    {"compression_target": 0.25},
+    {"compression_target": 0.5}
+  ]
+}

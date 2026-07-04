@@ -38,6 +38,9 @@ Canonical documentation in [`docs/`](docs/):
 - [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
   — backfill retention and post-migration cleanup.
 - [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
+- [Testing logs](docs/testing_logs.md) — chronological manual / live pipeline
+  runs (smoke E2E, sizing notes).
+- [Limit enforcement points](docs/ref/limit_enforcement_points.md) — payload size tiers, validator map, changelog.
 
 Repository extraction and `dr_dspy` → `whetstone` rename plans live in
 [Remaining implementation intentions](docs/remaining-implementation-intentions.md#repository-extraction-and-rename--not-started).
@@ -69,12 +72,16 @@ Build prediction specs from an experiment JSON config:
 
 ```bash
 uv run python -m dr_dspy.platform.worker build-specs \
-  --config-file experiment.json \
+  --config-file configs/experiments/humaneval_encdec_smoke.json \
+  --configs-root configs \
   --output specs.jsonl
 ```
 
-Example configs live under
-[`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/).
+Composable configs live under [`configs/`](configs/): `models/` (enc-dec provider
+pairs), `splits/` (HumanEval sampling), and `experiments/` (study definition +
+`model_configs` list). Fragment paths in experiment JSON are relative to
+`--configs-root` (default: repo `configs/`). Legacy flat single-file configs
+still work (see [`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/)).
 Generated JSONL is compatible with `submit-jsonl`. Optional `--insert` bulk-loads
 specs and the experiment row into Postgres.
 
@@ -120,6 +127,50 @@ rejected. By default, `rescore` includes both successful and partial runs.
 Unitbench-facing projections and the full v0 backfill job remain
 deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
+## HPM selection analysis
+
+Read-only scripts query v1 enc-dec rows in Postgres and write tabular artifacts,
+figures, and a styled HTML run log. Tabular outputs go to
+`artifacts/{script_name}/{timestamp}_{stem}.csv|md` (gitignored). Figures and
+run logs go to `figs/{script_name}/` (tracked in git).
+
+Replace the experiment name with your backfill or sweep experiment as data
+becomes available. By default only runs with a successful `humaneval@v1` score
+are included (`--require-score`); use `--include-unscored` while rescoring is
+still in progress.
+
+```bash
+uv run python scripts/analysis/q1_model_candidates.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q2_compression_range.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q3_repeat_stability.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+
+uv run python scripts/analysis/q4_task_variation.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630
+```
+
+Each run prints Rich tables to the terminal and saves `{timestamp}_run.html`
+alongside PNGs in the matching `figs/{script_name}/` folder.
+
+### Sample run inspector
+
+Spot-check one enc-dec run end-to-end (ground truth through test failures)
+as a horizontal-scroll HTML report plus a sibling JSON debug bundle for `jq`:
+
+```bash
+uv run python scripts/analysis/sample_run_inspector.py \
+  --experiment-name v0_encdec_backfill_smoke_20260630 \
+  --sample-index 0
+```
+
+Outputs go to `analysis/samples/{experiment_name}/{timestamp}_{index}.html`
+(tracked in git) and `.json` (gitignored, for local `jq`). Prompts are
+reconstructed from the graph snapshot, not stored verbatim on node attempts.
+
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the
@@ -132,7 +183,8 @@ for databases that applied draft schemas during hardening.
 Connection config uses the `DATABASE_URL` env var. When unset, Alembic falls
 back to peer-auth `postgresql+psycopg:///dr_dspy` (your OS Postgres role,
 database `dr_dspy`). Copy `.env.example` to `.env` and adjust the URL if your
-local role or database name differs.
+local role or database name differs. Platform CLI entrypoints normalize bare
+`postgresql://` URLs to `postgresql+psycopg://` automatically (same as Alembic).
 
 ```bash
 # Apply all migrations

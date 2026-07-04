@@ -28,7 +28,6 @@ from dr_dspy.records.limits import (
     METRICS_STAGES_MAX_COUNT,
     NODE_OUTPUT_MAX_BYTES,
     PER_TEST_RESULTS_MAX_BYTES,
-    PER_TEST_RESULTS_MAX_COUNT,
     PROVIDER_TELEMETRY_MAX_BYTES,
     TASK_INPUTS_MAX_BYTES,
     validate_payload_size,
@@ -500,11 +499,6 @@ class ScoreAttemptRecord(BaseModel):
                 raise ValueError(
                     "successful score attempts cannot have failure"
                 )
-        if len(self.per_test_results) > PER_TEST_RESULTS_MAX_COUNT:
-            raise ValueError(
-                f"per_test_results cannot exceed {PER_TEST_RESULTS_MAX_COUNT} "
-                "entries"
-            )
         if self.per_test_results:
             per_test_payload = [
                 case.model_dump(mode="json") for case in self.per_test_results

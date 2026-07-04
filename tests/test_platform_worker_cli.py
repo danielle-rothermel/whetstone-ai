@@ -275,6 +275,7 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
+    lifecycle: list[str] = []
 
     class RuntimeConfig:
         database_url = "postgresql://example/db"
@@ -300,7 +301,16 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     def fake_rescore(engine: FakeEngine, **kwargs: Any) -> SimpleNamespace:
         captured["engine"] = engine
         captured["kwargs"] = kwargs
-        return SimpleNamespace(model_dump=lambda mode: {"scheduled": 1})
+        return SimpleNamespace(
+            result=SimpleNamespace(
+                model_dump=lambda mode: {"scheduled": 1}
+            ),
+            workflow_handles=(),
+        )
+
+    def fake_destroy() -> None:
+        lifecycle.append("destroy")
+        captured["destroyed"] = True
 
     monkeypatch.setattr(worker, "load_env_file", lambda env_file=None: None)
     monkeypatch.setattr(
@@ -314,11 +324,7 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
         lambda database_url: FakeEngine(),
     )
     monkeypatch.setattr(worker, "rescore_generation_runs", fake_rescore)
-    monkeypatch.setattr(
-        worker,
-        "destroy_dbos_runtime",
-        lambda: captured.setdefault("destroyed", True),
-    )
+    monkeypatch.setattr(worker, "destroy_dbos_runtime", fake_destroy)
 
     result = CliRunner().invoke(
         worker.APP,
@@ -330,6 +336,8 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
             "exp",
             "--generation-status",
             "success",
+            "--max-in-flight",
+            "30",
         ],
     )
 
@@ -337,8 +345,10 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     assert captured["configure"]["consume_generation_queue"] is False
     assert captured["kwargs"]["dry_run"] is False
     assert captured["kwargs"]["experiment_name"] == "exp"
+    assert captured["kwargs"]["max_in_flight"] == 30
     assert captured["disposed"] is True
     assert captured["destroyed"] is True
+    assert lifecycle == ["destroy"]
 
 
 def test_rescore_rejects_invalid_generation_status() -> None:
@@ -357,6 +367,65 @@ def test_rescore_rejects_invalid_generation_status() -> None:
     assert "generation-status must be one of" in result.output
 
 
+def test_backfill_v0_encdec_dry_run_calls_backfill_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeEngine:
+        def dispose(self) -> None:
+            captured["disposed"] = True
+
+    class FakeResult:
+        def model_dump(self, mode: str) -> dict[str, Any]:
+            return {"dry_run": True, "selected_v0_rows": 3}
+
+    def fake_run_backfill(engine: FakeEngine, **kwargs: Any) -> FakeResult:
+        captured["engine"] = engine
+        captured["kwargs"] = kwargs
+        return FakeResult()
+
+    monkeypatch.setattr(worker, "load_env_file", lambda env_file=None: None)
+    monkeypatch.setattr(
+        worker,
+        "resolve_database_url",
+        lambda database_url, error_suffix: "postgresql://app/db",
+    )
+    monkeypatch.setattr(
+        worker,
+        "create_engine",
+        lambda database_url: FakeEngine(),
+    )
+    monkeypatch.setattr(worker, "run_v0_encdec_backfill", fake_run_backfill)
+
+    result = CliRunner().invoke(
+        worker.APP,
+        [
+            "backfill-v0-encdec",
+            "--dry-run",
+            "--limit",
+            "3",
+            "--chunk-size",
+            "2",
+            "--reshape-workers",
+            "4",
+            "--target-experiment-name",
+            "v0_encdec_backfill_smoke_20260630",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["kwargs"]["dry_run"] is True
+    assert captured["kwargs"]["limit"] == 3
+    assert captured["kwargs"]["chunk_size"] == 2
+    assert captured["kwargs"]["reshape_workers"] == 4
+    assert (
+        captured["kwargs"]["target_experiment_name"]
+        == "v0_encdec_backfill_smoke_20260630"
+    )
+    assert captured["disposed"] is True
+
+
 def test_build_specs_writes_jsonl_from_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -364,13 +433,23 @@ def test_build_specs_writes_jsonl_from_config(
     from dr_dspy.platform import spec_builder
     from tests.test_platform_spec_builder import FIXTURES_DIR, _fixture_rows
 
-    def fake_iter(config: Any, *, rows: Any = None) -> Any:
+    def fake_iter_from_file(
+        path: Any,
+        *,
+        configs_root: Any = None,
+        rows: Any = None,
+    ) -> Any:
+        config = spec_builder.load_experiment_spec_config(path)
         return spec_builder.iter_experiment_specs(
             config,
             rows=_fixture_rows(),
         )
 
-    monkeypatch.setattr(worker, "iter_experiment_specs", fake_iter)
+    monkeypatch.setattr(
+        worker,
+        "iter_experiment_specs_from_file",
+        fake_iter_from_file,
+    )
 
     output = tmp_path / "specs.jsonl"
     result = CliRunner().invoke(
@@ -388,3 +467,55 @@ def test_build_specs_writes_jsonl_from_config(
     lines = output.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 8
     assert "direct-exp" in lines[0]
+
+
+def test_build_specs_composable_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from tests.test_platform_spec_builder import (
+        _fixture_rows,
+        _write_composable_config_tree,
+    )
+
+    configs_root = tmp_path / "configs"
+    experiment_path = _write_composable_config_tree(configs_root)
+
+    def fake_iter_from_file(
+        path: Any,
+        *,
+        configs_root: Any = None,
+        rows: Any = None,
+    ) -> Any:
+        from dr_dspy.platform import spec_builder
+
+        return spec_builder.iter_experiment_specs_from_file(
+            path,
+            configs_root=configs_root,
+            rows=_fixture_rows(),
+        )
+
+    monkeypatch.setattr(
+        worker,
+        "iter_experiment_specs_from_file",
+        fake_iter_from_file,
+    )
+
+    output = tmp_path / "specs.jsonl"
+    result = CliRunner().invoke(
+        worker.APP,
+        [
+            "build-specs",
+            "--config-file",
+            str(experiment_path),
+            "--configs-root",
+            str(configs_root),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0
+    lines = output.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 24
+    assert "composable_smoke_v1" in lines[0]

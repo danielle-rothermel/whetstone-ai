@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+.r1 {color: #000080; text-decoration-color: #000080}
+.r2 {color: #c0c0c0; text-decoration-color: #c0c0c0; font-weight: bold}
+.r3 {color: #008080; text-decoration-color: #008080}
+.r4 {font-weight: bold}
+.r5 {color: #808000; text-decoration-color: #808000}
+.r6 {color: #800080; text-decoration-color: #800080; font-weight: bold}
+.r7 {color: #008080; text-decoration-color: #008080; font-weight: bold}
+.r8 {font-style: italic}
+.r9 {color: #008000; text-decoration-color: #008000}
+.r10 {color: #008000; text-decoration-color: #008000; font-weight: bold}
+.r11 {color: #808000; text-decoration-color: #808000; font-weight: bold}
+.r12 {color: #000080; text-decoration-color: #000080; font-weight: bold}
+body {
+    color: #000000;
+    background-color: #ffffff;
+}
+</style>
+</head>
+<body>
+    <pre style="font-family:Menlo,'DejaVu Sans Mono',consolas,'Courier New',monospace"><code style="font-family:inherit">
+<span class="r1">╭──────────────────────────────────────────────────────────────────────────────╮</span>
+<span class="r1">│</span>                                                                              <span class="r1">│</span>
+<span class="r1">│</span>  <span class="r2">Q3: Repeat stability</span>                                                        <span class="r1">│</span>
+<span class="r1">│</span>                                                                              <span class="r1">│</span>
+<span class="r1">╰──────────────────────────── q3_repeat_stability ─────────────────────────────╯</span>
+<span class="r3">╭──────────────────────────────── Run context ─────────────────────────────────╮</span>
+<span class="r3">│</span>  <span class="r4">Experiments</span>  v0_encdec_backfill_smoke_20260630                              <span class="r3">│</span>
+<span class="r3">│</span>  <span class="r4">Rows loaded</span>   10                                                            <span class="r3">│</span>
+<span class="r3">│</span>  <span class="r4">Row limit</span>     none                                                          <span class="r3">│</span>
+<span class="r3">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="r5">╭──────────────────────────────────── Note ────────────────────────────────────╮</span>
+<span class="r5">│</span>  Every group has fewer than 2 repeats; coverage table only.                  <span class="r5">│</span>
+<span class="r5">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+
+<span class="r6">─────────────────────── </span>Repeat coverage <span class="r4">(</span>top <span class="r7">10</span> groups<span class="r4">)</span><span class="r6"> ────────────────────────</span>
+
+<span class="r8">                                 Group coverage                                 </span>
+┏━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃<span class="r7"> task_id       </span>┃<span class="r7"> model           </span>┃<span class="r7"> compression_ta… </span>┃<span class="r7"> repeat_count </span>┃<span class="r7"> pass_rate </span>┃
+┡━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ HumanEval/157 │ openai/gpt-5.4… │ 0.5             │ 1            │ 0.0%      │
+│ HumanEval/161 │ deepseek/deeps… │ 2.0             │ 1            │ 0.0%      │
+│ HumanEval/161 │ mistralai/code… │ nan             │ 1            │ 0.0%      │
+│ HumanEval/22  │ z-ai/glm-4.7    │ 0.5             │ 1            │ 0.0%      │
+│ HumanEval/25  │ z-ai/glm-5      │ 0.5             │ 1            │ 100.0%    │
+│ HumanEval/26  │ z-ai/glm-5      │ 2.0             │ 1            │ 100.0%    │
+│ HumanEval/31  │ deepseek/deeps… │ 0.75            │ 1            │ 100.0%    │
+│ HumanEval/35  │ deepseek/deeps… │ 1.5             │ 1            │ 100.0%    │
+│ HumanEval/36  │ qwen/qwen3-cod… │ 0.25            │ 1            │ 0.0%      │
+│ HumanEval/91  │ mistralai/code… │ 0.5             │ 1            │ 100.0%    │
+└───────────────┴─────────────────┴─────────────────┴──────────────┴───────────┘
+
+<span class="r9">╭────────────────────────────── Written outputs ───────────────────────────────╮</span>
+<span class="r9">│</span>  <span class="r4">Tabular artifacts</span>                                                           <span class="r9">│</span>
+<span class="r9">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q3_repeat  <span class="r9">│</span>
+<span class="r9">│</span>  _stability/20260630_184450_repeat_stability.csv                             <span class="r9">│</span>
+<span class="r9">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q3_repeat  <span class="r9">│</span>
+<span class="r9">│</span>  _stability/20260630_184450_repeat_stability.md                              <span class="r9">│</span>
+<span class="r9">│</span>                                                                              <span class="r9">│</span>
+<span class="r9">│</span>  <span class="r4">Figure files</span>                                                                <span class="r9">│</span>
+<span class="r9">│</span>    /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q3_repeat_stab  <span class="r9">│</span>
+<span class="r9">│</span>  ility/20260630_184450_stability_by_sample_size.png                          <span class="r9">│</span>
+<span class="r9">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+
+<span class="r10">╭───────────────── Artifacts folder — open or copy this path ──────────────────╮</span>
+<span class="r10">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/artifacts/q3_repeat_s  <span class="r10">│</span>
+<span class="r10">│</span>  tability                                                                    <span class="r10">│</span>
+<span class="r10">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="r11">╭────────────────── Figures folder — open or copy this path ───────────────────╮</span>
+<span class="r11">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q3_repeat_stabil  <span class="r11">│</span>
+<span class="r11">│</span>  ity                                                                         <span class="r11">│</span>
+<span class="r11">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+<span class="r12">╭────────────────────── Run log (HTML) — open in browser ──────────────────────╮</span>
+<span class="r12">│</span>  /Users/daniellerothermel/drotherm/repos/whetstone-ai/figs/q3_repeat_stabil  <span class="r12">│</span>
+<span class="r12">│</span>  ity/20260630_184450_run.html                                                <span class="r12">│</span>
+<span class="r12">╰──────────────────────────────────────────────────────────────────────────────╯</span>
+</code></pre>
+</body>
+</html>

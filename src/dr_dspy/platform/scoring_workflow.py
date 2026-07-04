@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from functools import cache
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from dr_dspy.humaneval.profiles import (
@@ -58,12 +59,13 @@ class ScoreGenerationWorkflowResult(BaseModel):
 
 
 class ScheduledScoreGenerationWorkflow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     score_attempt_id: str
     workflow_id: str
     scheduled: bool
     recovered: bool = False
+    workflow_handle: Any | None = Field(default=None, exclude=True)
 
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
@@ -215,7 +217,7 @@ def schedule_score_generation_workflow(
         )
     with SetWorkflowID(workflow_id):
         try:
-            DBOS.start_workflow(
+            workflow_handle = DBOS.start_workflow(
                 run_score_generation_workflow,
                 database_url,
                 generation_run_id,
@@ -246,7 +248,13 @@ def schedule_score_generation_workflow(
         score_attempt_id=score_attempt_id,
         workflow_id=workflow_id,
         scheduled=True,
+        workflow_handle=workflow_handle,
     )
+
+
+def await_scheduled_score_workflows(handles: Sequence[Any]) -> None:
+    for handle in handles:
+        handle.get_result()
 
 
 def run_score_generation_workflow_once(

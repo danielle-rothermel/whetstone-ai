@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import (
     BaseModel,
@@ -23,6 +23,7 @@ from dr_dspy.humaneval.profiles import (
 )
 from dr_dspy.platform.scoring_workflow import (
     ScheduledScoreGenerationWorkflow,
+    await_scheduled_score_workflows,
     platform_scoring_workflow_id,
     schedule_score_generation_workflow,
 )
@@ -38,7 +39,11 @@ from dr_dspy.records import (
     stable_score_attempt_id,
 )
 
+if TYPE_CHECKING:
+    from dr_dspy.platform.progress_log import OperationProgress
+
 DEFAULT_RESCORE_CHUNK_SIZE = 500
+DEFAULT_MAX_IN_FLIGHT = 100
 DEFAULT_RESCORE_GENERATION_STATUSES = (
     GenerationRunStatus.SUCCESS,
     GenerationRunStatus.PARTIAL,
@@ -91,6 +96,8 @@ class BatchRescoreResult(BaseModel):
     dataset_name: StrictStr
     dataset_split: StrictStr
     dry_run: StrictBool
+    max_in_flight: StrictInt
+    total_candidates: StrictInt
     selected_count: StrictInt
     already_scored_count: StrictInt
     needs_score_count: StrictInt
@@ -100,6 +107,16 @@ class BatchRescoreResult(BaseModel):
     orphan_count: StrictInt
     failed_count: StrictInt
     items: tuple[BatchRescoreItem, ...] = Field(default_factory=tuple)
+
+
+class BatchRescoreExecution(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    result: BatchRescoreResult
+    workflow_handles: tuple[Any, ...] = Field(
+        default_factory=tuple,
+        exclude=True,
+    )
 
 
 class ScheduleScoreWorkflow(Protocol):
@@ -115,6 +132,80 @@ class ScheduleScoreWorkflow(Protocol):
         dataset_split: str,
         recover_orphans: bool = True,
     ) -> ScheduledScoreGenerationWorkflow: ...
+
+
+def _await_oldest_handle(
+    pending_handles: list[Any],
+    *,
+    await_workflows: Any,
+) -> Any:
+    oldest = pending_handles.pop(0)
+    await_workflows([oldest])
+    return oldest
+
+
+def _wait_for_in_flight_slot(
+    pending_handles: list[Any],
+    *,
+    max_in_flight: int,
+    await_workflows: Any,
+    progress: OperationProgress | None = None,
+    selected: int,
+    items: Sequence[BatchRescoreItem],
+    slots_released: int,
+) -> int:
+    while len(pending_handles) >= max_in_flight:
+        if progress is not None:
+            progress.update(
+                phase="awaiting",
+                selected=selected,
+                pending=len(pending_handles),
+                slots_released=slots_released,
+                **_rescore_count_metrics(items),
+            )
+            progress.event(
+                "awaiting slot",
+                {
+                    "in_flight": len(pending_handles),
+                    "selected": selected,
+                    "slots_released": slots_released + 1,
+                },
+            )
+        _await_oldest_handle(pending_handles, await_workflows=await_workflows)
+        slots_released += 1
+    return slots_released
+
+
+def _await_remaining_handles(
+    pending_handles: list[Any],
+    *,
+    await_workflows: Any,
+    progress: OperationProgress | None = None,
+    selected: int,
+    items: Sequence[BatchRescoreItem],
+    slots_released: int,
+) -> int:
+    if not pending_handles:
+        return slots_released
+    if progress is not None:
+        progress.update(
+            phase="awaiting",
+            selected=selected,
+            pending=len(pending_handles),
+            slots_released=slots_released,
+            **_rescore_count_metrics(items),
+        )
+        progress.event(
+            "awaiting remaining",
+            {
+                "remaining": len(pending_handles),
+                "selected": selected,
+            },
+        )
+    while pending_handles:
+        _await_oldest_handle(pending_handles, await_workflows=await_workflows)
+        slots_released += 1
+    return slots_released
 
 
 def rescore_generation_runs(
@@ -135,23 +226,67 @@ def rescore_generation_runs(
     limit: int | None = None,
     dry_run: bool = False,
     recover_orphans: bool = True,
+    max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
     schedule_workflow: ScheduleScoreWorkflow = (
         schedule_score_generation_workflow
     ),
-) -> BatchRescoreResult:
+    await_workflows: Any = await_scheduled_score_workflows,
+    progress: OperationProgress | None = None,
+) -> BatchRescoreExecution:
     validate_rescore_request(
         chunk_size=chunk_size,
         limit=limit,
         generation_attempt_index=generation_attempt_index,
         score_attempt_index=score_attempt_index,
         generation_statuses=generation_statuses,
+        max_in_flight=max_in_flight,
     )
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
     )
     items: list[BatchRescoreItem] = []
+    pending_handles: list[Any] = []
+    slots_released = 0
     offset = 0
+    with engine.begin() as connection:
+        total_candidates = count_rescore_generation_candidates(
+            connection,
+            experiment_name=experiment_name,
+            generation_statuses=generation_statuses,
+            generation_attempt_index=generation_attempt_index,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=scoring_profile.parser_profile.profile_id,
+            parser_version=scoring_profile.parser_profile.version,
+            score_attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        )
+    if limit is not None:
+        total_candidates = min(total_candidates, limit)
+    if progress is not None:
+        progress.event(
+            "started",
+            {
+                "experiment": experiment_name,
+                "max_in_flight": max_in_flight,
+                "chunk_size": chunk_size,
+                "dry_run": dry_run,
+                "limit": limit,
+                "total_candidates": total_candidates,
+            },
+        )
+        progress.update(
+            phase="selecting",
+            experiment=experiment_name,
+            max_in_flight=max_in_flight,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+            limit=limit,
+            total_candidates=total_candidates,
+            selected=0,
+        )
     while limit is None or offset < limit:
         page_limit = (
             chunk_size if limit is None else min(chunk_size, limit - offset)
@@ -175,27 +310,56 @@ def rescore_generation_runs(
         if not candidates:
             break
         for candidate in candidates:
-            items.append(
-                plan_or_schedule_rescore_item(
-                    candidate,
-                    database_url=database_url,
-                    score_attempt_index=score_attempt_index,
-                    scoring_profile_id=scoring_profile.profile_id,
-                    scoring_profile_version=scoring_profile.version,
-                    parser_profile_id=scoring_profile.parser_profile.profile_id,
-                    parser_version=scoring_profile.parser_profile.version,
-                    dataset_name=dataset_name,
-                    dataset_split=dataset_split,
-                    dry_run=dry_run,
-                    recover_orphans=recover_orphans,
-                    schedule_workflow=schedule_workflow,
-                )
+            item, handle = plan_or_schedule_rescore_item(
+                candidate,
+                database_url=database_url,
+                score_attempt_index=score_attempt_index,
+                scoring_profile_id=scoring_profile.profile_id,
+                scoring_profile_version=scoring_profile.version,
+                parser_profile_id=scoring_profile.parser_profile.profile_id,
+                parser_version=scoring_profile.parser_profile.version,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+                dry_run=dry_run,
+                recover_orphans=recover_orphans,
+                schedule_workflow=schedule_workflow,
             )
+            items.append(item)
+            if handle is not None:
+                if not dry_run:
+                    slots_released = _wait_for_in_flight_slot(
+                        pending_handles,
+                        max_in_flight=max_in_flight,
+                        await_workflows=await_workflows,
+                        progress=progress,
+                        selected=len(items),
+                        items=items,
+                        slots_released=slots_released,
+                    )
+                pending_handles.append(handle)
+            if progress is not None:
+                progress.update(
+                    phase="scheduling",
+                    selected=len(items),
+                    pending=len(pending_handles),
+                    slots_released=slots_released,
+                    **_rescore_count_metrics(items),
+                )
         offset += len(candidates)
         if len(candidates) < page_limit:
             break
 
-    return batch_rescore_result(
+    if not dry_run and pending_handles:
+        slots_released = _await_remaining_handles(
+            pending_handles,
+            await_workflows=await_workflows,
+            progress=progress,
+            selected=len(items),
+            items=items,
+            slots_released=slots_released,
+        )
+
+    result = batch_rescore_result(
         experiment_name=experiment_name,
         generation_statuses=tuple(generation_statuses),
         generation_attempt_index=generation_attempt_index,
@@ -207,7 +371,86 @@ def rescore_generation_runs(
         dataset_name=dataset_name,
         dataset_split=dataset_split,
         dry_run=dry_run,
+        max_in_flight=max_in_flight,
+        total_candidates=total_candidates,
         items=tuple(items),
+    )
+    if progress is not None:
+        progress.complete(
+            {
+                "total_candidates": total_candidates,
+                "selected": result.selected_count,
+                "scheduled": result.scheduled_count,
+                "recovered": result.recovered_count,
+                "failed": result.failed_count,
+                "slots_released": slots_released,
+                "max_in_flight": max_in_flight,
+            }
+        )
+    return BatchRescoreExecution(
+        result=result,
+        workflow_handles=(),
+    )
+
+
+def _rescore_count_metrics(
+    items: Sequence[BatchRescoreItem],
+) -> dict[str, int]:
+    scheduled = sum(
+        item.status
+        in {
+            BatchRescoreItemStatus.SCHEDULED,
+            BatchRescoreItemStatus.RECOVERED,
+        }
+        for item in items
+    )
+    already_scored = sum(
+        item.status is BatchRescoreItemStatus.ALREADY_SCORED for item in items
+    )
+    failed = sum(
+        item.status is BatchRescoreItemStatus.FAILED for item in items
+    )
+    in_flight = sum(
+        item.status is BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT
+        for item in items
+    )
+    return {
+        "scheduled": scheduled,
+        "already_scored": already_scored,
+        "failed": failed,
+        "in_flight": in_flight,
+    }
+
+
+def count_rescore_generation_candidates(
+    connection: Connection,
+    *,
+    experiment_name: str,
+    generation_statuses: Sequence[GenerationRunStatus],
+    generation_attempt_index: int | None,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+) -> int:
+    return int(
+        connection.execute(
+            io.count_rescore_generation_candidates(
+                experiment_name=experiment_name,
+                generation_statuses=tuple(generation_statuses),
+                generation_attempt_index=generation_attempt_index,
+                scoring_profile_id=scoring_profile_id,
+                scoring_profile_version=scoring_profile_version,
+                parser_profile_id=parser_profile_id,
+                parser_version=parser_version,
+                score_attempt_index=score_attempt_index,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+            )
+        ).scalar_one()
     )
 
 
@@ -260,7 +503,7 @@ def plan_or_schedule_rescore_item(
     dry_run: bool,
     recover_orphans: bool,
     schedule_workflow: ScheduleScoreWorkflow,
-) -> BatchRescoreItem:
+) -> tuple[BatchRescoreItem, Any | None]:
     score_attempt_id = stable_score_attempt_id(
         generation_run_id=candidate.generation_run_id,
         scoring_profile_id=scoring_profile_id,
@@ -273,18 +516,24 @@ def plan_or_schedule_rescore_item(
     )
     workflow_id = platform_scoring_workflow_id(score_attempt_id)
     if candidate.existing_score_attempt_id is not None:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.ALREADY_SCORED,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.ALREADY_SCORED,
+            ),
+            None,
         )
     if dry_run:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.WOULD_SCHEDULE,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.WOULD_SCHEDULE,
+            ),
+            None,
         )
     try:
         scheduled = schedule_workflow(
@@ -298,12 +547,15 @@ def plan_or_schedule_rescore_item(
             recover_orphans=recover_orphans,
         )
     except Exception as error:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.FAILED,
-            failure=failure_metadata_from_exception(error),
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.FAILED,
+                failure=failure_metadata_from_exception(error),
+            ),
+            None,
         )
     if scheduled.scheduled:
         status = (
@@ -311,11 +563,14 @@ def plan_or_schedule_rescore_item(
             if scheduled.recovered
             else BatchRescoreItemStatus.SCHEDULED
         )
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=scheduled.score_attempt_id,
-            workflow_id=scheduled.workflow_id,
-            status=status,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=scheduled.score_attempt_id,
+                workflow_id=scheduled.workflow_id,
+                status=status,
+            ),
+            scheduled.workflow_handle,
         )
     presence = classify_scoring_workflow_presence(
         database_url=database_url,
@@ -323,24 +578,33 @@ def plan_or_schedule_rescore_item(
         workflow_id=workflow_id,
     )
     if presence is ScoringWorkflowPresence.COMPLETE:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.ALREADY_SCORED,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.ALREADY_SCORED,
+            ),
+            None,
         )
     if presence is ScoringWorkflowPresence.ORPHAN:
-        return batch_rescore_item(
-            candidate,
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            status=BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+        return (
+            batch_rescore_item(
+                candidate,
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                status=BatchRescoreItemStatus.WORKFLOW_ORPHAN,
+            ),
+            None,
         )
-    return batch_rescore_item(
-        candidate,
-        score_attempt_id=scheduled.score_attempt_id,
-        workflow_id=scheduled.workflow_id,
-        status=BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
+    return (
+        batch_rescore_item(
+            candidate,
+            score_attempt_id=scheduled.score_attempt_id,
+            workflow_id=scheduled.workflow_id,
+            status=BatchRescoreItemStatus.WORKFLOW_IN_FLIGHT,
+        ),
+        None,
     )
 
 
@@ -377,6 +641,8 @@ def batch_rescore_result(
     dataset_name: str,
     dataset_split: str,
     dry_run: bool,
+    max_in_flight: int,
+    total_candidates: int,
     items: tuple[BatchRescoreItem, ...],
 ) -> BatchRescoreResult:
     already_scored_count = sum(
@@ -422,6 +688,8 @@ def batch_rescore_result(
         dataset_name=dataset_name,
         dataset_split=dataset_split,
         dry_run=dry_run,
+        max_in_flight=max_in_flight,
+        total_candidates=total_candidates,
         selected_count=len(items),
         already_scored_count=already_scored_count,
         needs_score_count=needs_score_count,
@@ -467,11 +735,14 @@ def validate_rescore_request(
     generation_attempt_index: int | None,
     score_attempt_index: int,
     generation_statuses: Sequence[GenerationRunStatus],
+    max_in_flight: int,
 ) -> None:
     if not generation_statuses:
         raise ValueError("generation_statuses must not be empty")
     if chunk_size < 1:
         raise ValueError("chunk_size must be positive")
+    if max_in_flight < 1:
+        raise ValueError("max_in_flight must be positive")
     if limit is not None and limit < 1:
         raise ValueError("limit must be positive when provided")
     if generation_attempt_index is not None and generation_attempt_index < 0:

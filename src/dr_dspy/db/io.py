@@ -4,7 +4,7 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import Select, and_, null, select, update
+from sqlalchemy import Select, and_, func, null, select, update
 from sqlalchemy.sql.dml import Insert, Update
 
 from dr_dspy.db import schema
@@ -684,6 +684,37 @@ def select_rescore_generation_candidates(
     if limit is not None:
         statement = statement.limit(limit)
     return statement
+
+
+def count_rescore_generation_candidates(
+    *,
+    experiment_name: str,
+    generation_statuses: tuple[GenerationRunStatus, ...]
+    | list[GenerationRunStatus],
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+    generation_attempt_index: int | None = None,
+) -> Select[tuple[int]]:
+    candidate_query = select_rescore_generation_candidates(
+        experiment_name=experiment_name,
+        generation_statuses=generation_statuses,
+        generation_attempt_index=generation_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        parser_profile_id=parser_profile_id,
+        parser_version=parser_version,
+        score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        limit=None,
+        offset=0,
+    )
+    return select(func.count()).select_from(candidate_query.subquery())
 
 
 def _dump(value: BaseModel) -> dict[str, Any]:

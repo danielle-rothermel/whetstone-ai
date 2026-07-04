@@ -13,6 +13,7 @@ from dr_dspy.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
+from dr_dspy.migration.v0_encdec_backfill import run_v0_encdec_backfill
 from dr_dspy.platform.cli_env import load_env_file, run_typer_app
 from dr_dspy.platform.dbos_bootstrap import (
     DBOS_SYSTEM_DATABASE_URL_ENV,
@@ -26,12 +27,17 @@ from dr_dspy.platform.graph_workflow import (
     platform_generation_workflow_id,
     run_prediction_graph_workflow_once,
 )
+from dr_dspy.platform.progress_log import (
+    DEFAULT_PROGRESS_INTERVAL_SECONDS,
+    operation_progress,
+)
 from dr_dspy.platform.queue_worker import (
     PLATFORM_GENERATION_QUEUE_NAME,
     listen_to_platform_generation_queue,
     register_platform_generation_queue,
 )
 from dr_dspy.platform.rescoring import (
+    DEFAULT_MAX_IN_FLIGHT,
     DEFAULT_RESCORE_CHUNK_SIZE,
     parse_rescore_generation_statuses,
     rescore_generation_runs,
@@ -41,8 +47,8 @@ from dr_dspy.platform.scoring_workflow import (
     run_score_generation_workflow_once,
 )
 from dr_dspy.platform.spec_builder import (
-    iter_experiment_specs,
-    load_experiment_spec_config,
+    DEFAULT_CONFIGS_ROOT,
+    iter_experiment_specs_from_file,
     write_prediction_specs_jsonl,
 )
 from dr_dspy.platform.submission import (
@@ -281,6 +287,18 @@ def rescore(
         int,
         typer.Option("--chunk-size", min=1),
     ] = DEFAULT_RESCORE_CHUNK_SIZE,
+    max_in_flight: Annotated[
+        int,
+        typer.Option(
+            "--max-in-flight",
+            min=1,
+            help=(
+                "Maximum concurrent scoring workflows; when at cap, "
+                "scheduling waits for the oldest to finish before "
+                "starting the next."
+            ),
+        ),
+    ] = DEFAULT_MAX_IN_FLIGHT,
     limit: Annotated[
         int | None,
         typer.Option("--limit", min=1),
@@ -315,6 +333,17 @@ def rescore(
         ),
     ] = None,
     env_file: Annotated[Path | None, typer.Option()] = None,
+    progress_interval: Annotated[
+        float,
+        typer.Option(
+            "--progress-interval",
+            min=0,
+            help=(
+                "Seconds between Rich progress heartbeats on stderr; "
+                "0 disables heartbeats but keeps event lines."
+            ),
+        ),
+    ] = DEFAULT_PROGRESS_INTERVAL_SECONDS,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
     try:
@@ -340,27 +369,117 @@ def rescore(
         launched_dbos = True
     engine = create_engine(resolved_database_url)
     try:
-        result = rescore_generation_runs(
-            engine,
-            database_url=resolved_database_url,
-            experiment_name=experiment_name,
-            generation_statuses=resolved_generation_statuses,
-            generation_attempt_index=generation_attempt_index,
-            scoring_profile_id=scoring_profile_id,
-            scoring_profile_version=scoring_profile_version,
-            score_attempt_index=score_attempt_index,
-            dataset_name=dataset_name,
-            dataset_split=dataset_split,
-            chunk_size=chunk_size,
-            limit=limit,
-            dry_run=dry_run,
-            recover_orphans=recover_orphans,
-        )
-        CONSOLE.print(result.model_dump(mode="json"))
+        with operation_progress(
+            "rescore",
+            interval_seconds=progress_interval,
+        ) as progress:
+            execution = rescore_generation_runs(
+                engine,
+                database_url=resolved_database_url,
+                experiment_name=experiment_name,
+                generation_statuses=resolved_generation_statuses,
+                generation_attempt_index=generation_attempt_index,
+                scoring_profile_id=scoring_profile_id,
+                scoring_profile_version=scoring_profile_version,
+                score_attempt_index=score_attempt_index,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+                chunk_size=chunk_size,
+                limit=limit,
+                dry_run=dry_run,
+                recover_orphans=recover_orphans,
+                max_in_flight=max_in_flight,
+                progress=progress,
+            )
+        CONSOLE.print(execution.result.model_dump(mode="json"))
     finally:
         engine.dispose()
         if launched_dbos:
             destroy_dbos_runtime()
+
+
+@APP.command("backfill-v0-encdec")
+def backfill_v0_encdec(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run"),
+    ] = False,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", min=1),
+    ] = None,
+    target_experiment_name: Annotated[
+        str | None,
+        typer.Option(
+            "--target-experiment-name",
+            help=(
+                "Override experiment_name on reshaped v1 specs. "
+                "When omitted, each v0 row keeps its legacy experiment_name."
+            ),
+        ),
+    ] = None,
+    chunk_size: Annotated[
+        int | None,
+        typer.Option(
+            "--chunk-size",
+            min=1,
+            help=(
+                "Process terminal v0 rows in chunks of this size, committing "
+                "each chunk independently."
+            ),
+        ),
+    ] = None,
+    reshape_workers: Annotated[
+        int,
+        typer.Option(
+            "--reshape-workers",
+            min=1,
+            help="Parallel workers for CPU-bound v0 row reshape.",
+        ),
+    ] = 1,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Postgres URL; defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    env_file: Annotated[Path | None, typer.Option()] = None,
+    progress_interval: Annotated[
+        float,
+        typer.Option(
+            "--progress-interval",
+            min=0,
+            help=(
+                "Seconds between Rich progress heartbeats on stderr; "
+                "0 disables heartbeats but keeps event lines."
+            ),
+        ),
+    ] = DEFAULT_PROGRESS_INTERVAL_SECONDS,
+) -> None:
+    load_env_file(env_file) if env_file is not None else load_env_file()
+    resolved_database_url = resolve_database_url(
+        database_url=database_url,
+        error_suffix="for enc-dec v0 backfill",
+    )
+    engine = create_engine(resolved_database_url)
+    try:
+        with operation_progress(
+            "backfill",
+            interval_seconds=progress_interval,
+        ) as progress:
+            result = run_v0_encdec_backfill(
+                engine,
+                dry_run=dry_run,
+                limit=limit,
+                target_experiment_name=target_experiment_name,
+                chunk_size=chunk_size,
+                reshape_workers=reshape_workers,
+                progress=progress,
+            )
+        CONSOLE.print(result.model_dump(mode="json"))
+    finally:
+        engine.dispose()
 
 
 @APP.command(help="Launch a queue-consuming v1 generation worker.")
@@ -448,11 +567,31 @@ def build_specs(
             help="Postgres URL; required with --insert.",
         ),
     ] = None,
+    configs_root: Annotated[
+        Path,
+        typer.Option(
+            "--configs-root",
+            file_okay=False,
+            dir_okay=True,
+            readable=True,
+            help=(
+                "Root directory for composable config fragments "
+                "(split, model_configs paths)."
+            ),
+        ),
+    ] = DEFAULT_CONFIGS_ROOT,
     env_file: Annotated[Path | None, typer.Option()] = None,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
-    config = load_experiment_spec_config(config_file)
-    specs = tuple(iter_experiment_specs(config))
+    specs = tuple(
+        iter_experiment_specs_from_file(
+            config_file,
+            configs_root=configs_root,
+        )
+    )
+    if not specs:
+        raise typer.BadParameter("config produced no prediction specs")
+    experiment_name = specs[0].experiment_name
     destination = write_prediction_specs_jsonl(specs, output)
     inserted_count = 0
     if insert:
@@ -466,7 +605,7 @@ def build_specs(
                 connection.execute(
                     idempotent_insert_experiment(
                         ExperimentRecord(
-                            experiment_name=config.experiment_name,
+                            experiment_name=experiment_name,
                             config_metadata={"source": str(config_file)},
                         )
                     )
@@ -478,7 +617,7 @@ def build_specs(
             engine.dispose()
     CONSOLE.print(
         {
-            "experiment_name": config.experiment_name,
+            "experiment_name": experiment_name,
             "spec_count": len(specs),
             "output": str(destination),
             "inserted_count": inserted_count if insert else None,

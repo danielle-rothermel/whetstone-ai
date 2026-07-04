@@ -49,6 +49,30 @@ from dr_dspy.records import (
 DEFAULT_FAIR_ORDER_SEED = "seed"
 DEFAULT_DIMENSIONS_AXES: tuple[dict[str, Any], ...] = ({"temperature": 0.2},)
 DEFAULT_REPETITION_SEEDS: tuple[int, ...] = (0,)
+DEFAULT_HUMANEVAL_INSTRUCTIONS_START = (
+    "Provide a concise description of the following code."
+)
+DEFAULT_MIN_ENCODER_CHAR_BUDGET = 50
+DEFAULT_CONFIGS_ROOT = Path(__file__).resolve().parents[3] / "configs"
+
+HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE = (
+    "{instructions_start}\n"
+    "Use at most {budget} characters.\n"
+    "\n"
+    "```python\n"
+    "{gt_code}\n"
+    "```\n"
+    "{instructions_end}"
+)
+HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE = (
+    "Write functional code in Python according to the following description.\n"
+    "Output only the final answer, without any descriptions or surrounding\n"
+    "characters.\n"
+    "\n"
+    "{encoded_desc}"
+)
+
+EncDecShape = Literal["legacy", "humaneval"]
 
 
 class GraphLayout(StrEnum):
@@ -81,6 +105,102 @@ class ProviderSpecConfig(BaseModel):
     parameters: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
+class HumanevalEncDecConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instructions_start: StrictStr = DEFAULT_HUMANEVAL_INSTRUCTIONS_START
+    instructions_end: StrictStr = ""
+    encoder_system_prompt: StrictStr = ""
+    min_encoder_char_budget: StrictInt = DEFAULT_MIN_ENCODER_CHAR_BUDGET
+
+    @model_validator(mode="after")
+    def validate_min_encoder_char_budget(self) -> HumanevalEncDecConfig:
+        if self.min_encoder_char_budget < 1:
+            raise ValueError("min_encoder_char_budget must be positive")
+        return self
+
+
+def _validate_encdec_provider_config_ids(
+    providers: tuple[ProviderSpecConfig, ...],
+) -> None:
+    if len(providers) != 2:
+        raise ValueError("encdec providers require exactly two entries")
+    config_ids = {provider.config_id for provider in providers}
+    if config_ids != {"encoder", "decoder"}:
+        raise ValueError(
+            "encdec providers must use config_id encoder and decoder"
+        )
+
+
+def _validate_humaneval_experiment_axes(
+    *,
+    graph_layout: GraphLayout,
+    encdec_shape: EncDecShape,
+    dimensions_axes: tuple[dict[StrictStr, Any], ...],
+) -> None:
+    if encdec_shape != "humaneval":
+        return
+    if graph_layout is not GraphLayout.ENCDEC:
+        raise ValueError("humaneval encdec_shape requires encdec graph_layout")
+    for axis in dimensions_axes:
+        if "compression_target" not in axis:
+            raise ValueError(
+                "humaneval dimensions_axes require compression_target"
+            )
+
+
+class ModelConfigFragment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: StrictStr
+    providers: tuple[ProviderSpecConfig, ...]
+
+    @model_validator(mode="after")
+    def validate_encdec_providers(self) -> ModelConfigFragment:
+        _validate_encdec_provider_config_ids(self.providers)
+        return self
+
+
+class SplitConfigFragment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: StrictStr
+    dataset: DatasetSpecConfig
+
+
+class ComposableExperimentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    experiment_name: StrictStr
+    graph_layout: GraphLayout
+    split: StrictStr
+    model_configs: tuple[StrictStr, ...]
+    fair_order_seed: StrictStr = DEFAULT_FAIR_ORDER_SEED
+    repetition_seeds: tuple[StrictInt, ...] = DEFAULT_REPETITION_SEEDS
+    dimensions_axes: tuple[dict[StrictStr, Any], ...] = DEFAULT_DIMENSIONS_AXES
+    encdec_shape: EncDecShape = "legacy"
+    humaneval_encdec: HumanevalEncDecConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_composable_experiment(self) -> ComposableExperimentConfig:
+        if not self.model_configs:
+            raise ValueError("model_configs must not be empty")
+        if not self.repetition_seeds:
+            raise ValueError("repetition_seeds must not be empty")
+        if not self.dimensions_axes:
+            raise ValueError("dimensions_axes must not be empty")
+        if self.graph_layout is GraphLayout.DIRECT:
+            raise ValueError(
+                "composable experiments currently require encdec graph_layout"
+            )
+        _validate_humaneval_experiment_axes(
+            graph_layout=self.graph_layout,
+            encdec_shape=self.encdec_shape,
+            dimensions_axes=self.dimensions_axes,
+        )
+        return self
+
+
 class ExperimentSpecConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -91,6 +211,8 @@ class ExperimentSpecConfig(BaseModel):
     repetition_seeds: tuple[StrictInt, ...] = DEFAULT_REPETITION_SEEDS
     dimensions_axes: tuple[dict[StrictStr, Any], ...] = DEFAULT_DIMENSIONS_AXES
     providers: tuple[ProviderSpecConfig, ...]
+    encdec_shape: EncDecShape = "legacy"
+    humaneval_encdec: HumanevalEncDecConfig | None = None
 
     @model_validator(mode="after")
     def validate_layout_providers(self) -> ExperimentSpecConfig:
@@ -108,13 +230,12 @@ class ExperimentSpecConfig(BaseModel):
                 "encdec graph_layout requires exactly two providers"
             )
         else:
-            config_ids = {
-                provider.config_id for provider in self.providers
-            }
-            if config_ids != {"encoder", "decoder"}:
-                raise ValueError(
-                    "encdec providers must use config_id encoder and decoder"
-                )
+            _validate_encdec_provider_config_ids(self.providers)
+        _validate_humaneval_experiment_axes(
+            graph_layout=self.graph_layout,
+            encdec_shape=self.encdec_shape,
+            dimensions_axes=self.dimensions_axes,
+        )
         return self
 
 
@@ -174,6 +295,37 @@ def decoder_node() -> NodeSpec:
     )
 
 
+def humaneval_encoder_node(
+    *,
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> NodeSpec:
+    cfg = humaneval_encdec or HumanevalEncDecConfig()
+    system_prompt = cfg.encoder_system_prompt or None
+    return direct_node(
+        "encoder",
+        bindings={
+            "instructions_start": "task.instructions_start",
+            "budget": "task.budget",
+            "gt_code": "task.gt_code",
+            "instructions_end": "task.instructions_end",
+        },
+        output_field="description",
+        user_prompt_template=HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
+        system_prompt=system_prompt,
+        provider_config_id="encoder",
+    )
+
+
+def humaneval_decoder_node() -> NodeSpec:
+    return direct_node(
+        "decoder",
+        bindings={"encoded_desc": "encoder.description"},
+        output_field="code",
+        user_prompt_template=HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
+        provider_config_id="decoder",
+    )
+
+
 def direct_graph() -> GraphSpec:
     return GraphSpec(
         nodes=(direct_node("direct", output_field="output"),),
@@ -186,6 +338,35 @@ def encdec_graph() -> GraphSpec:
         nodes=(decoder_node(), encoder_node()),
         terminal_node_id="decoder",
     )
+
+
+def humaneval_encdec_graph(
+    *,
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> GraphSpec:
+    return GraphSpec(
+        nodes=(
+            humaneval_decoder_node(),
+            humaneval_encoder_node(humaneval_encdec=humaneval_encdec),
+        ),
+        terminal_node_id="decoder",
+    )
+
+
+def encoder_char_budget(
+    *,
+    compression_target: float,
+    gt_code: str,
+    min_budget: int,
+) -> int:
+    return max(min_budget, round(compression_target * len(gt_code)))
+
+
+def humaneval_gt_code(task: HumanEvalTask) -> str:
+    cleaned = task.ground_truth_code_without_comments
+    if cleaned is not None:
+        return cleaned
+    return task.ground_truth_code
 
 
 def provider_ref(
@@ -230,6 +411,35 @@ def task_snapshot_from_humaneval(task: HumanEvalTask) -> TaskSnapshotPayload:
             "canonical_solution": task.canonical_solution,
             "ground_truth_code": task.ground_truth_code,
         },
+    )
+
+
+def humaneval_encdec_task_snapshot(
+    task: HumanEvalTask,
+    *,
+    compression_target: float,
+    humaneval_encdec: HumanevalEncDecConfig,
+) -> TaskSnapshotPayload:
+    gt_code = humaneval_gt_code(task)
+    budget = encoder_char_budget(
+        compression_target=compression_target,
+        gt_code=gt_code,
+        min_budget=humaneval_encdec.min_encoder_char_budget,
+    )
+    base = task_snapshot_from_humaneval(task)
+    inputs = dict(base.inputs.values)
+    inputs.update(
+        {
+            "gt_code": gt_code,
+            "budget": budget,
+            "instructions_start": humaneval_encdec.instructions_start,
+            "instructions_end": humaneval_encdec.instructions_end,
+        }
+    )
+    return TaskSnapshotPayload(
+        task_id=base.task_id,
+        inputs=TaskInputsPayload(values=inputs),
+        metadata=base.metadata,
     )
 
 
@@ -320,9 +530,16 @@ def encdec_spec(
     )
 
 
-def graph_for_layout(layout: GraphLayout) -> GraphSpec:
+def graph_for_layout(
+    layout: GraphLayout,
+    *,
+    encdec_shape: EncDecShape = "legacy",
+    humaneval_encdec: HumanevalEncDecConfig | None = None,
+) -> GraphSpec:
     if layout is GraphLayout.DIRECT:
         return direct_graph()
+    if encdec_shape == "humaneval":
+        return humaneval_encdec_graph(humaneval_encdec=humaneval_encdec)
     return encdec_graph()
 
 
@@ -362,16 +579,31 @@ def iter_experiment_specs(
     *,
     rows: Sequence[dict[str, Any]] | None = None,
 ) -> Iterator[PredictionSpecRecord]:
-    graph = graph_for_layout(config.graph_layout)
+    humaneval_cfg = config.humaneval_encdec or HumanevalEncDecConfig()
+    graph = graph_for_layout(
+        config.graph_layout,
+        encdec_shape=config.encdec_shape,
+        humaneval_encdec=humaneval_cfg,
+    )
     layout = config.graph_layout.value
     providers = providers_for_config(config)
     provider_axis = providers[0]
     sampled_tasks = sample_tasks_for_config(config, rows=rows)
     for sampled in sampled_tasks:
-        task_snapshot = task_snapshot_from_humaneval(sampled.task)
         for repetition_seed in config.repetition_seeds:
             for axis_values in config.dimensions_axes:
                 dimensions = DimensionsPayload(values=dict(axis_values))
+                if config.encdec_shape == "humaneval":
+                    compression_target = float(
+                        axis_values["compression_target"]
+                    )
+                    task_snapshot = humaneval_encdec_task_snapshot(
+                        sampled.task,
+                        compression_target=compression_target,
+                        humaneval_encdec=humaneval_cfg,
+                    )
+                else:
+                    task_snapshot = task_snapshot_from_humaneval(sampled.task)
                 yield prediction_spec(
                     graph,
                     providers=providers,
@@ -389,6 +621,88 @@ def iter_experiment_specs(
 def load_experiment_spec_config(path: Path) -> ExperimentSpecConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return ExperimentSpecConfig.model_validate(payload)
+
+
+def resolve_config_path(configs_root: Path, ref: str) -> Path:
+    root = configs_root.resolve()
+    resolved = (root / ref).resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(
+            f"config path {ref!r} escapes configs root {root}"
+        )
+    return resolved
+
+
+def load_json_config(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"config file must contain a JSON object: {path}")
+    return payload
+
+
+def load_model_config_fragment(path: Path) -> ModelConfigFragment:
+    return ModelConfigFragment.model_validate(load_json_config(path))
+
+
+def load_split_config_fragment(path: Path) -> SplitConfigFragment:
+    return SplitConfigFragment.model_validate(load_json_config(path))
+
+
+def load_composable_experiment_config(
+    path: Path,
+) -> ComposableExperimentConfig:
+    return ComposableExperimentConfig.model_validate(load_json_config(path))
+
+
+def expand_composable_experiment(
+    config: ComposableExperimentConfig,
+    *,
+    configs_root: Path,
+) -> Iterator[ExperimentSpecConfig]:
+    split = load_split_config_fragment(
+        resolve_config_path(configs_root, config.split)
+    )
+    for model_ref in config.model_configs:
+        model = load_model_config_fragment(
+            resolve_config_path(configs_root, model_ref)
+        )
+        yield ExperimentSpecConfig(
+            experiment_name=config.experiment_name,
+            graph_layout=config.graph_layout,
+            dataset=split.dataset,
+            fair_order_seed=config.fair_order_seed,
+            repetition_seeds=config.repetition_seeds,
+            dimensions_axes=config.dimensions_axes,
+            providers=model.providers,
+            encdec_shape=config.encdec_shape,
+            humaneval_encdec=config.humaneval_encdec,
+        )
+
+
+def load_experiment_configs(
+    path: Path,
+    *,
+    configs_root: Path,
+) -> Iterator[ExperimentSpecConfig]:
+    payload = load_json_config(path)
+    if "model_configs" in payload:
+        composable = ComposableExperimentConfig.model_validate(payload)
+        yield from expand_composable_experiment(
+            composable,
+            configs_root=configs_root,
+        )
+        return
+    yield ExperimentSpecConfig.model_validate(payload)
+
+
+def iter_experiment_specs_from_file(
+    path: Path,
+    *,
+    configs_root: Path = DEFAULT_CONFIGS_ROOT,
+    rows: Sequence[dict[str, Any]] | None = None,
+) -> Iterator[PredictionSpecRecord]:
+    for config in load_experiment_configs(path, configs_root=configs_root):
+        yield from iter_experiment_specs(config, rows=rows)
 
 
 def write_prediction_specs_jsonl(
