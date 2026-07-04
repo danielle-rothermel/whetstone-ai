@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design + 6a + 6b + 6c-i done (dep, lineage adoption, progress/compat/bootstrap/backoff cut over); 6c-ii submission/jsonl/fairness/queue_worker/batch-records/worker-CLI, 6d validation pending |
+| 6 platform | in_progress | design + 6a + 6b + 6c done (whetstone fully on dr-platform; 432 unit+integration + goldens green); 6d consumer validation pending |
 | final e2e | pending | |
 
 ## Environment
@@ -534,3 +534,47 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Remaining for stage 6: 6c-ii submission/jsonl/fairness/queue_worker/
   batch-records/worker-CLI cutover + copro rewire; 6d consumer
   validation.
+
+### 2026-07-04 — stage 6, sub-step 6c-ii (submission layer cutover) — 6c done
+
+- Landed (whetstone 6a0ae16): platform/submission.py is now the app
+  composition over dr_platform.submit_batch/submit_batch_jsonl — seed
+  hook (experiment+spec inserts in the registration transaction,
+  returns inserted ids for insert_status), enqueue target over the
+  generation workflow (4-arg EnqueueWorkflow injection seam kept),
+  summarize_exception-backed classify_error (persisted failure JSONB
+  shape parity: no underlying_exception_type, matching the old
+  failure_metadata_from_exception), PLATFORM_SCHEMA naming.
+  queue_worker.py re-implemented over dedup_enqueue (frozen queue
+  string + register/listen + EnqueuedPredictionWorkflow unchanged).
+  PredictionSpecRecord gained the SubmittableItem property view (wire
+  format untouched — properties only). Deleted: fairness.py,
+  jsonl_specs.py, records/batch_submit.py, batch record models/status
+  enums/claim-key constants from records, db/io batch row helpers;
+  db/schema.py check constraints read dr_platform.batch_status
+  (identical frozen enum values).
+- Two real dr-platform bugs caught by whetstone's integration tier and
+  fixed upstream: (1) 8d756a8 — seed hook must run before operation
+  registration (whetstone's operations table FKs experiments; also
+  runs for empty submissions); (2) 8d4008b — alembic version table now
+  pinned to current_schema(): after the dev DB adopted the lineage in
+  public, scratch-schema fixtures on the same DB silently skipped 0002
+  via search_path fallthrough (hold_until missing at runtime).
+  whetstone's ensure_platform_schema has_table probe pinned the same
+  way. dr-platform 103 tests green.
+- Tests: ported machinery tests removed from
+  test_platform_submission_queue_backoff (claim/CAS/summary/prepare —
+  all covered against real Postgres in dr-platform); queue tests kept
+  unchanged (they patch the shared DBOS class object, which
+  dedup_enqueue sees); integration submit tests adapted to
+  dr_platform.submission functions + PLATFORM_SCHEMA; postgres
+  fixtures seed batch rows via dr_platform records + row builders;
+  db_io/records-contracts batch tests trimmed.
+- Verified: whetstone 432 passed (unit + 45 integration in one run —
+  Postgres reachable; count reflects ~26 removed machinery tests and
+  earlier moves) + 4 goldens; ruff + ty clean. Worker CLI submit path
+  note: result JSON now uses group_key (BatchSubmitResult) instead of
+  experiment_name/queue_name — CLI output, not a frozen contract.
+- Stage 6c complete. Remaining: 6d consumer validation (copro
+  evaluate_specs_queue onto await_operation; sketches re-checked
+  against the real facade).
