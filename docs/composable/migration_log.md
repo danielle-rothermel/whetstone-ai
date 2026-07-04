@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | in_progress | design half done (platform.md + 2 sketches); extraction 6a–6d pending |
+| 6 platform | in_progress | design + 6a done (dr-platform kernel, 48 tests); 6b schema/stateful, 6c cutover, 6d validation pending |
 | final e2e | pending | |
 
 ## Environment
@@ -398,3 +398,39 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   docs/, outside lint includes; they are illustrative, not executable).
 - Next: 6a repo + pure kernel (progress, batch_status, fairness,
   jsonl, dbos_config, items) with ported tests; no whetstone change.
+
+### 2026-07-04 — stage 6, sub-step 6a (dr-platform pure kernel)
+
+- Landed (dr-platform, new private repo danielle-rothermel/dr-platform,
+  ../dr-platform; scaffold on main, kernel on composable-migration,
+  draft PR #1): items.py (SubmittableItem runtime protocol,
+  ItemIdentity digest config, stable_item_id with frozen
+  {namespace, axes} payload, batch_item_id + claim_token), fairness.py
+  ((order_key, item_id) sort + windowing over structural Orderable),
+  jsonl.py (byte-offset index/load, JsonlFieldNames parameterization,
+  caller-owned parse callable), batch_status.py (operation/item status
+  enums with frozen string values, pure counts + operation status
+  derivation, is_terminal_enqueue_status), dbos_config.py (URL
+  normalization/resolution, PlatformDbosConfig without app concurrency
+  knobs, DBOSConfig builder, dbos._error race shim + workflow status
+  vocabulary), progress.py (verbatim port of progress_log).
+- Identity gates pinned in tests: batch_item_id/claim_token reproduce
+  whetstone's persisted bytes under
+  ItemIdentity(item_key_label="prediction_id") (compared against
+  direct dr_serialize digests of the {"operation_key","prediction_id",
+  ...} payloads); status string values asserted frozen; stable_item_id
+  payload shape asserted frozen.
+- De-domaining choices: fairness drops PredictionSpecRecord
+  revalidation (validation is app-side; refs/items arrive typed);
+  jsonl index error messages name the configured field
+  ("duplicate prediction_id ..." under whetstone's field names);
+  concurrency knobs (generation/scoring) stay app-side, dropped from
+  the library DBOS config.
+- Verified: dr-platform 48 tests green; ruff format/check + ty clean.
+  Whetstone untouched this sub-step (502 unit + 45 integration + 4
+  golden unchanged from stage 5).
+- Remaining for stage 6: 6b schema (PlatformSchema prefix param +
+  Alembic lineage 0001/0002) + stateful modules (backoff w/ holds+tags,
+  submission claim/lease, enqueue, await_operation/observability,
+  projections, artifacts); 6c whetstone cutover; 6d consumer
+  validation.
