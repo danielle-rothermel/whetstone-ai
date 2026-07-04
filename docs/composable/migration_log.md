@@ -10,7 +10,7 @@
 | 3 dr-code nucleus | done | dr-code 309 tests + corpus baseline; whetstone humaneval/ deleted; 605 unit + 45 integration + goldens green |
 | 4 dr-providers v0.2 | done | kernel+transport+conformance+corpus (83 tests); whetstone thin adapter, FixtureProvider e2e, live smokes 3/3; 576 unit + 45 integration + goldens green |
 | 5 dr-graph | done | repo created + cutover; dr-graph 111 tests incl. golden digests; whetstone 502 unit + 45 integration + goldens green |
-| 6 platform | pending | gated on design completion |
+| 6 platform | in_progress | design half done (platform.md + 2 sketches); extraction 6a–6d pending |
 | final e2e | pending | |
 
 ## Environment
@@ -366,3 +366,35 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   additive-canonicalization and routing/iteration shapes stay open (not
   needed for the migration).
 - Skips: none.
+
+### 2026-07-04 — stage 6, design half
+
+- Landed: platform.md open sections filled (package name dr-platform,
+  module map, SubmittableItem/ItemIdentity/EnqueueItem/seed-hook
+  protocol definitions, prefix-parameterized schema with own Alembic
+  lineage + stamped baseline for whetstone, projection API, artifact
+  store API, cutover plan 6a-6d with escalation points); consumer
+  sketches committed (docs/composable/sketches/nl_latents_loop.py,
+  optimizer_population_eval.py) — both import only the proposed facade.
+- Key design findings (from a symbol-level map of the generic layer):
+  (1) frozen table names + "library-owned tables with own lineage"
+  jointly force PlatformSchema(prefix=...) with whetstone stamping the
+  library's baseline revision; (2) batch_submit_item_id hashes the
+  literal JSON key "prediction_id", so the facade takes
+  ItemIdentity(item_key_label=...) to keep persisted ID bytes
+  identical; (3) both consumer sketches independently need an
+  await-work-completion primitive -> await_operation over recorded
+  deterministic workflow ids (replaces copro's
+  wait_for_generation_runs and nl_latents' hand-rolled polling).
+- Underdetermination check (the stage's stop condition): each open
+  section resolved to either a forced choice (name, schema strategy)
+  or an obvious conservative one (projection column mapping scalars+
+  JSONB, artifact local-dir backend, dr_dspy_prediction_projection
+  stays app-owned). No guessing required -> extraction proceeds, with
+  escalation points recorded in the cutover plan (item-id byte
+  mismatch, Alembic state touching frozen revisions, passthrough-
+  wrapper smell).
+- Verified: docs-only change; ruff/ty unaffected (sketches live under
+  docs/, outside lint includes; they are illustrative, not executable).
+- Next: 6a repo + pure kernel (progress, batch_status, fairness,
+  jsonl, dbos_config, items) with ported tests; no whetstone change.
