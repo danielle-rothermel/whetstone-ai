@@ -45,8 +45,8 @@ def _mock_lm_success(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         calls.append((node.id, str(node_inputs.get("prompt", ""))))
@@ -467,8 +467,8 @@ def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         call_order.append("lm")

@@ -13,6 +13,7 @@ from dr_code.humaneval.profiles import (
 )
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_code.humaneval.task import EvaluationCaseStatus
+from dr_providers.kernel import PromptMessage
 from sqlalchemy import Select, and_, select
 from sqlalchemy.engine import Connection, Engine
 
@@ -25,7 +26,6 @@ from whetstone.analysis.frames import (
 from whetstone.db import io, schema
 from whetstone.graph import NodeOutcome, NodeOutput
 from whetstone.graph.execution import resolve_node_inputs
-from whetstone.lm.boundary import PromptMessage
 from whetstone.migration.v0_reshape import V0_SOURCE_METADATA_KEY
 from whetstone.platform.persistence import (
     load_generation_run,

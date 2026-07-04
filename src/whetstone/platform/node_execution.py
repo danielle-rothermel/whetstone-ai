@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-import os
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from openai import OpenAI
+from dr_providers.kernel import (
+    EndpointKind,
+    Provider,
+    ProviderConfig,
+    ProviderFailureError,
+    ProviderKind,
+    gemini_chat_config,
+    openai_chat_config,
+    openai_responses_config,
+    openrouter_chat_config,
+)
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from whetstone.eval_failures import (
@@ -16,17 +25,9 @@ from whetstone.eval_failures import (
 )
 from whetstone.graph import NodeOp, NodeOutput, NodeSpec
 from whetstone.lm.boundary import (
-    EndpointKind,
-    ProviderConfig,
-    ProviderKind,
-    ProviderRequest,
-    build_chat_completions_request,
-    build_responses_request,
-    call_provider_request,
-    openai_chat_config,
-    openai_responses_config,
-    openrouter_chat_config,
-    parse_provider_response,
+    llm_request_for_node,
+    provider_result_from_response,
+    translate_provider_failure,
 )
 from whetstone.platform.prompts import build_node_messages, node_prompt_spec
 from whetstone.records import (
@@ -39,17 +40,9 @@ from whetstone.records import (
     UsageCostPayload,
 )
 
-TEMPERATURE_PARAMETER = "temperature"
-TOKEN_LIMIT_PARAMETER = "token_limit"
-REASONING_PARAMETER = "reasoning"
-EXTRA_BODY_PARAMETER = "extra_body"
-EXTRA_KWARGS_PARAMETER = "extra_kwargs"
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 120.0
 NODE_STEP_STARTED_AT_METADATA_KEY = "node_step_started_at"
 NODE_STEP_COMPLETED_AT_METADATA_KEY = "node_step_completed_at"
-
-type ProviderClientFactory = Callable[[ProviderConfig], Any]
-type ProviderCaller = Callable[[Any, ProviderRequest], Any]
 
 
 class NodeStepResult(BaseModel):
@@ -158,13 +151,13 @@ def execute_lm_node(
     spec: PredictionSpecRecord,
     node: NodeSpec,
     node_inputs: Mapping[str, Any],
-    client_factory: ProviderClientFactory | None = None,
-    provider_caller: ProviderCaller = call_provider_request,
+    provider: Provider | None = None,
+    idempotency_key: str | None = None,
     raise_retryable: bool = False,
 ) -> NodeStepResult:
     started_at = datetime.now(UTC)
     provider_ref: ProviderConfigRef | None = None
-    resolved_client_factory = client_factory or create_provider_client
+    resolved_provider = provider or default_http_provider()
     try:
         if node.op is not NodeOp.LLM_CALL:
             raise PermanentFailureError(
@@ -177,21 +170,23 @@ def execute_lm_node(
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
         runtime_config = runtime_provider_config(provider_ref)
         messages = build_node_messages(node=node, node_inputs=node_inputs)
-        request = build_provider_request(
+        request = llm_request_for_node(
             config=runtime_config,
             messages=messages,
             parameters=merged_node_parameters(
                 provider_ref=provider_ref,
                 node=node,
             ),
+            idempotency_key=idempotency_key,
         )
-        response = provider_caller(
-            resolved_client_factory(runtime_config),
-            request,
-        )
-        result = parse_provider_response(
+        try:
+            response = resolved_provider.complete(request)
+        except ProviderFailureError as provider_error:
+            raise translate_provider_failure(
+                provider_error
+            ) from provider_error
+        result = provider_result_from_response(
             response,
-            config=runtime_config,
             output_field=node.config.output_field,
         )
         output = NodeOutput(
@@ -349,6 +344,11 @@ def runtime_provider_config(provider_ref: ProviderConfigRef) -> ProviderConfig:
         and provider_ref.endpoint_kind is EndpointKind.RESPONSES
     ):
         config = openai_responses_config(model=provider_ref.model)
+    elif (
+        provider_ref.provider_kind is ProviderKind.GEMINI
+        and provider_ref.endpoint_kind is EndpointKind.CHAT_COMPLETIONS
+    ):
+        config = gemini_chat_config(model=provider_ref.model)
     else:
         raise PermanentFailureError(
             "unsupported provider endpoint for platform graph workflow",
@@ -374,46 +374,13 @@ def merged_node_parameters(
     }
 
 
-def build_provider_request(
-    *,
-    config: ProviderConfig,
-    messages: Any,
-    parameters: Mapping[str, Any],
-) -> ProviderRequest:
-    request_kwargs = {
-        "config": config,
-        "messages": messages,
-        "temperature": parameters.get(TEMPERATURE_PARAMETER),
-        "token_limit": parameters.get(TOKEN_LIMIT_PARAMETER),
-        "reasoning": parameters.get(REASONING_PARAMETER),
-        "extra_body": parameters.get(EXTRA_BODY_PARAMETER),
-        "extra_kwargs": parameters.get(EXTRA_KWARGS_PARAMETER),
-    }
-    if config.endpoint_kind is EndpointKind.CHAT_COMPLETIONS:
-        return build_chat_completions_request(**request_kwargs)
-    if config.endpoint_kind is EndpointKind.RESPONSES:
-        return build_responses_request(**request_kwargs)
-    raise PermanentFailureError(
-        "unsupported provider endpoint kind",
-        metadata={"endpoint_kind": config.endpoint_kind.value},
-    )
+def default_http_provider() -> Provider:
+    from dr_providers.kernel import HttpProvider, TransportPolicy
 
-
-def create_provider_client(config: ProviderConfig) -> OpenAI:
-    api_key = os.environ.get(config.api_key_env)
-    if not api_key:
-        raise PermanentFailureError(
-            "provider API key environment variable is not set",
-            metadata={
-                "api_key_env": config.api_key_env,
-                "provider_kind": config.provider_kind.value,
-            },
+    return HttpProvider(
+        policy=TransportPolicy(
+            timeout_seconds=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
         )
-    return OpenAI(
-        api_key=api_key,
-        base_url=config.base_url,
-        timeout=DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-        max_retries=0,
     )
 
 

@@ -15,6 +15,7 @@ from dr_code.humaneval.sampling import (
     sample_human_eval_tasks_from_rows,
 )
 from dr_code.humaneval.task import HumanEvalTask
+from dr_providers.kernel import EndpointKind, ProviderKind
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -33,7 +34,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,

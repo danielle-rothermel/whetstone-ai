@@ -43,6 +43,7 @@ from whetstone.records import (
     NodeAttemptStatus,
     PredictionSpecRecord,
     stable_generation_run_id,
+    stable_node_attempt_id,
 )
 
 PLATFORM_GENERATION_WORKFLOW_NAME = "dr_dspy_platform_graph_generation_v1"
@@ -162,6 +163,11 @@ def run_prediction_graph_workflow(
                 spec_payload,
                 node_payload,
                 node_inputs_payload,
+                stable_node_attempt_id(
+                    generation_run_id=generation_run_id,
+                    node_id=node.id,
+                    attempt_index=attempt_index,
+                ),
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
@@ -346,6 +352,7 @@ def execute_lm_node_step(
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
     node_inputs: dict[str, Any],
+    node_attempt_id: str | None = None,
 ) -> dict[str, Any]:
     spec = PredictionSpecRecord.model_validate(spec_payload)
     node = NodeSpec.model_validate(node_payload)
@@ -359,6 +366,7 @@ def execute_lm_node_step(
             spec=spec,
             node=node,
             node_inputs=node_inputs,
+            idempotency_key=node_attempt_id,
             raise_retryable=True,
         )
     except Exception as error:

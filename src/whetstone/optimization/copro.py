@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from dr_providers.kernel import EndpointKind, ProviderKind
 from dr_serialize import sha256_json_digest
 from pydantic import (
     BaseModel,
@@ -34,18 +35,15 @@ from whetstone.analysis.frames import (
 )
 from whetstone.db import schema
 from whetstone.lm.boundary import (
-    EndpointKind,
     PlainPromptAdapter,
-    ProviderKind,
-    call_provider_request,
-    parse_provider_response,
+    llm_request_for_node,
+    provider_result_from_response,
 )
 from whetstone.platform.graph_workflow import (
     run_prediction_graph_workflow_once,
 )
 from whetstone.platform.node_execution import (
-    build_provider_request,
-    create_provider_client,
+    default_http_provider,
     runtime_provider_config,
 )
 from whetstone.platform.rescoring import rescore_generation_runs
@@ -478,16 +476,14 @@ def propose_lm_candidates(
     )
     adapter = PlainPromptAdapter()
     messages = adapter.messages(user_content=prompt)
-    request = build_provider_request(
+    request = llm_request_for_node(
         config=provider_config,
         messages=messages,
         parameters={"temperature": 1.0},
     )
-    client = create_provider_client(provider_config)
-    response = call_provider_request(client, request)
-    result = parse_provider_response(
+    response = default_http_provider().complete(request)
+    result = provider_result_from_response(
         response,
-        config=provider_config,
         output_field=adapter.output_field,
     )
     proposals = parse_lm_proposal_response(result.text)

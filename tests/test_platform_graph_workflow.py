@@ -2,11 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
+from dr_providers.kernel import (
+    EndpointKind,
+    LlmRequest,
+    LlmResponse,
+    ProviderKind,
+    build_payload,
+    parse_responses_body,
+)
 from sqlalchemy.dialects import postgresql
 
 from whetstone.db import io as db_io
@@ -26,11 +34,6 @@ from whetstone.graph import (
     NodeOutput,
     NodeSpec,
     graph_digest,
-)
-from whetstone.lm.boundary import (
-    EndpointKind,
-    ProviderConfig,
-    ProviderKind,
 )
 from whetstone.platform import backoff, graph_workflow
 from whetstone.platform.graph_workflow import (
@@ -403,6 +406,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         spec_payload: dict[str, Any],
         node_payload: dict[str, Any],
         node_inputs: dict[str, Any],
+        node_attempt_id: str | None = None,
     ) -> dict[str, Any]:
         step_spec = PredictionSpecRecord.model_validate(spec_payload)
         node = NodeSpec.model_validate(node_payload)
@@ -414,6 +418,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
                     step_spec.prediction_id,
                     node.id,
                     node_inputs,
+                    node_attempt_id,
                 ),
             )
         )
@@ -524,6 +529,11 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
                 spec.prediction_id,
                 "direct",
                 {"prompt": "write add"},
+                stable_node_attempt_id(
+                    generation_run_id=generation_run_id,
+                    node_id="direct",
+                    attempt_index=attempt_index,
+                ),
             ),
         ),
         ("completed", generation_run_id),
@@ -589,13 +599,8 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
     spec = _spec(graph)
     captured: dict[str, Any] = {}
 
-    def client_factory(config: ProviderConfig) -> object:
-        captured["config"] = config
-        return object()
-
-    def provider_caller(client: Any, request: Any) -> dict[str, Any]:
-        captured["request"] = request
-        return {
+    class ParsingFakeProvider:
+        body: ClassVar[dict[str, Any]] = {
             "id": "resp-1",
             "model": "gpt-test",
             "status": "completed",
@@ -608,17 +613,24 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
             },
         }
 
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            captured["config"] = request.provider_config
+            captured["payload"] = build_payload(request)
+            return parse_responses_body(
+                self.body,
+                config=request.provider_config,
+                payload=captured["payload"],
+            )
+
     result = execute_lm_node(
         spec=spec,
         node=node,
         node_inputs={"prompt": "write add"},
-        client_factory=client_factory,
-        provider_caller=provider_caller,
+        provider=ParsingFakeProvider(),
     )
 
     assert result.status is NodeAttemptStatus.SUCCESS
-    request = captured["request"]
-    assert request.kwargs == {
+    assert captured["payload"] == {
         "model": "gpt-test",
         "instructions": "Write Python.",
         "input": [{"role": "user", "content": "Solve: write add"}],
@@ -637,16 +649,16 @@ def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
     spec = _spec(graph)
 
-    def provider_caller(client: Any, request: Any) -> None:
-        raise TransientFailureError("temporary provider failure")
+    class RaisingProvider:
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            raise TransientFailureError("temporary provider failure")
 
     with pytest.raises(TransientFailureError):
         execute_lm_node(
             spec=spec,
             node=node,
             node_inputs={"prompt": "write add"},
-            client_factory=lambda config: object(),
-            provider_caller=provider_caller,
+            provider=RaisingProvider(),
             raise_retryable=True,
         )
 
@@ -683,15 +695,17 @@ def test_lm_node_executor_rejects_unsupported_node_op() -> None:
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
     spec = _spec(graph)
 
-    def provider_caller(client: Any, request: Any) -> Any:
-        raise AssertionError("unsupported node op should not call provider")
+    class RefusingProvider:
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            raise AssertionError(
+                "unsupported node op should not call provider"
+            )
 
     result = execute_lm_node(
         spec=spec,
         node=unsupported_node,
         node_inputs={"prompt": "write add"},
-        client_factory=lambda config: object(),
-        provider_caller=provider_caller,
+        provider=RefusingProvider(),
     )
 
     assert result.status is NodeAttemptStatus.ERROR

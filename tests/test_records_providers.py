@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from dr_providers.kernel import EndpointKind, ProviderKind
 from pydantic import ValidationError
 
 from whetstone.graph import (
@@ -14,7 +15,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,

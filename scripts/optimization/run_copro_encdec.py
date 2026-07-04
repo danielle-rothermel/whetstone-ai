@@ -9,10 +9,10 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dr_providers.kernel import EndpointKind, ProviderKind
 from rich.console import Console
 from sqlalchemy import create_engine
 
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.optimization.copro import (
     CoproExecutionMode,
     CoproProposalMode,

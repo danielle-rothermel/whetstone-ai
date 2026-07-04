@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from dr_providers.kernel import EndpointKind, ProviderKind
 
 from whetstone.eval_failures import (
     PermanentFailureError,
     TransientFailureError,
 )
 from whetstone.graph import NodeOutput
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.platform.node_execution import (
     NodeStepFailure,
     NodeStepResult,
@@ -105,3 +105,53 @@ def test_node_step_result_graph_output_returns_output_on_success() -> None:
     )
 
     assert result.graph_output().values == {"code": "def f(): pass"}
+
+
+def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
+    """Acceptance: full node execution against FixtureProvider, no network.
+
+    Exercises spec → runtime config → LlmRequest (with idempotency key)
+    → FixtureProvider.complete → ProviderResult → NodeStepResult.
+    """
+    from dr_providers.kernel import (
+        CostInfo,
+        FixtureOutcome,
+        FixtureProvider,
+        TokenUsage,
+    )
+
+    from tests.test_platform_graph_workflow import _node, _spec
+    from whetstone.graph import GraphSpec
+    from whetstone.platform.node_execution import execute_lm_node
+
+    node = _node("direct", bindings={"prompt": "task.prompt"})
+    spec = _spec(GraphSpec(nodes=(node,), terminal_node_id="direct"))
+    provider = FixtureProvider(
+        [
+            FixtureOutcome(
+                text="def add(a, b):\n    return a + b\n",
+                usage=TokenUsage(total_tokens=7),
+                cost=CostInfo(total_cost=0.003),
+                provider_metadata={"usage": {"total_tokens": 7}},
+            )
+        ]
+    )
+
+    result = execute_lm_node(
+        spec=spec,
+        node=node,
+        node_inputs={"prompt": "write add"},
+        provider=provider,
+        idempotency_key="node-attempt-42",
+    )
+
+    assert result.status is NodeAttemptStatus.SUCCESS
+    assert result.output is not None
+    assert result.output.values == {
+        node.config.output_field: "def add(a, b):\n    return a + b\n"
+    }
+    assert result.usage_cost.provider_cost == 0.003
+    assert result.usage_cost.usage_metadata == {"total_tokens": 7}
+    served = provider.requests[0]
+    assert served.idempotency_key == "node-attempt-42"
+    assert provider.payloads[0]["model"] == served.provider_config.model

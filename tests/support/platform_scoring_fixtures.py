@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dr_code.humaneval.task import HumanEvalTask
+from dr_providers.kernel import EndpointKind, ProviderKind
 
 from whetstone.graph import (
     BindingRef,
@@ -18,7 +19,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,
     GenerationRunRecord,

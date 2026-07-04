@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import errno
 import sys
-from typing import Any, cast
+from typing import Any
 
 from dr_providers.kernel.failures import (
     RECOVERABLE_FAILURE_CLASSES,
@@ -18,8 +18,6 @@ from whetstone.eval_failures.exceptions import (
 )
 
 DBOS_ERROR_MODULE = "dbos._error"
-OPENAI_MODULE = "openai"
-HTTPX_MODULE = "httpx"
 PSYCOPG_MODULE = "psycopg"
 
 __all__ = [
@@ -150,57 +148,14 @@ def is_open_file_exhaustion(error: BaseException) -> bool:
 
 
 def _classify_third_party_exception(error: BaseException) -> FailureClass:
+    """Classify non-provider third-party exceptions.
+
+    Provider transport/status classification lives in dr-providers
+    (raw httpx, one place); only psycopg/DBOS-adjacent heuristics and
+    generic Python failure shapes remain here.
+    """
     if is_open_file_exhaustion(error):
         return FailureClass.RESOURCE_EXHAUSTION
-    if _is_optional_exception_type(
-        error,
-        module_name=OPENAI_MODULE,
-        type_names=("RateLimitError",),
-    ):
-        return FailureClass.RATE_LIMITED
-    if _is_optional_exception_type(
-        error,
-        module_name=OPENAI_MODULE,
-        type_names=("APIConnectionError", "APITimeoutError"),
-    ):
-        return FailureClass.TRANSIENT
-    if _is_optional_exception_type(
-        error,
-        module_name=OPENAI_MODULE,
-        type_names=("APIStatusError",),
-    ):
-        status_code = getattr(error, "status_code", None)
-        if status_code == 429:
-            return FailureClass.RATE_LIMITED
-        if status_code is not None and (
-            status_code >= 500 or status_code in {408, 409, 425}
-        ):
-            return FailureClass.TRANSIENT
-        return FailureClass.PERMANENT
-    if _is_optional_exception_type(
-        error,
-        module_name=HTTPX_MODULE,
-        type_names=("HTTPStatusError",),
-    ):
-        response = cast(Any, error).response
-        status_code = response.status_code
-        if status_code == 429:
-            return FailureClass.RATE_LIMITED
-        if status_code >= 500 or status_code in {408, 409, 425}:
-            return FailureClass.TRANSIENT
-        return FailureClass.PERMANENT
-    if _is_optional_exception_type(
-        error,
-        module_name=OPENAI_MODULE,
-        type_names=(
-            "AuthenticationError",
-            "BadRequestError",
-            "NotFoundError",
-            "PermissionDeniedError",
-            "UnprocessableEntityError",
-        ),
-    ):
-        return FailureClass.PERMANENT
     if isinstance(error, ValueError):
         return FailureClass.PERMANENT
     if _is_optional_exception_type(

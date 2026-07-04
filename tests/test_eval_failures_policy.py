@@ -3,7 +3,7 @@ from __future__ import annotations
 import errno
 import subprocess
 import sys
-from types import ModuleType, SimpleNamespace
+from types import ModuleType
 
 import pytest
 
@@ -87,96 +87,6 @@ def test_unclassified_error_is_unknown_and_not_retryable() -> None:
     assert summary.failure_class is FailureClass.UNKNOWN
     assert summary.is_recoverable is False
     assert should_retry_step(error) is False
-
-
-def test_lazy_openai_rate_limit_classification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeRateLimitError(Exception):
-        pass
-
-    module_name = "tests.fake_openai_rate_limit"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(module_name, RateLimitError=FakeRateLimitError),
-    )
-    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
-
-    error = FakeRateLimitError("slow down")
-
-    assert policy.classify_exception(error) is FailureClass.RATE_LIMITED
-    assert policy.should_retry_step(error) is True
-
-
-@pytest.mark.parametrize(
-    ("status_code", "expected_class", "expected_retry"),
-    [
-        (429, FailureClass.RATE_LIMITED, True),
-        (500, FailureClass.TRANSIENT, True),
-        (409, FailureClass.TRANSIENT, True),
-        (400, FailureClass.PERMANENT, False),
-    ],
-)
-def test_lazy_openai_status_classification(
-    monkeypatch: pytest.MonkeyPatch,
-    status_code: int,
-    expected_class: FailureClass,
-    expected_retry: bool,
-) -> None:
-    class FakeAPIStatusError(Exception):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"status {status_code}")
-            self.status_code = status_code
-
-    module_name = "tests.fake_openai_status"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(module_name, APIStatusError=FakeAPIStatusError),
-    )
-    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
-
-    error = FakeAPIStatusError(status_code)
-
-    assert policy.classify_exception(error) is expected_class
-    assert policy.should_retry_step(error) is expected_retry
-
-
-@pytest.mark.parametrize(
-    ("status_code", "expected_class", "expected_retry"),
-    [
-        (429, FailureClass.RATE_LIMITED, True),
-        (503, FailureClass.TRANSIENT, True),
-        (425, FailureClass.TRANSIENT, True),
-        (404, FailureClass.PERMANENT, False),
-    ],
-)
-def test_lazy_httpx_status_classification(
-    monkeypatch: pytest.MonkeyPatch,
-    status_code: int,
-    expected_class: FailureClass,
-    expected_retry: bool,
-) -> None:
-    class FakeHTTPStatusError(Exception):
-        def __init__(self, status_code: int) -> None:
-            super().__init__(f"status {status_code}")
-            self.response = SimpleNamespace(status_code=status_code)
-
-    module_name = "tests.fake_httpx"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(module_name, HTTPStatusError=FakeHTTPStatusError),
-    )
-    monkeypatch.setattr(policy, "HTTPX_MODULE", module_name)
-
-    error = FakeHTTPStatusError(status_code)
-
-    assert policy.classify_exception(error) is expected_class
-    assert policy.should_retry_step(error) is expected_retry
-
-
 def test_lazy_psycopg_operational_error_classification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -246,23 +156,6 @@ def test_real_psycopg_operational_error_is_transient() -> None:
 
     assert policy.classify_exception(error) is FailureClass.TRANSIENT
     assert policy.should_retry_step(error) is True
-
-
-def test_optional_exception_type_skips_unloaded_modules(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeRateLimitError(Exception):
-        pass
-
-    module_name = "tests.not_loaded_optional_module"
-    monkeypatch.delitem(sys.modules, module_name, raising=False)
-    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
-    error = FakeRateLimitError("slow down")
-
-    assert policy.classify_exception(error) is FailureClass.UNKNOWN
-    assert module_name not in sys.modules
-
-
 def test_is_open_file_exhaustion_detects_emfile_errno() -> None:
     error = OSError(errno.EMFILE, "Too many open files")
 
@@ -298,31 +191,6 @@ def test_find_classified_exception_walks_cause_chain() -> None:
     wrapped.__cause__ = root
 
     assert policy.find_classified_exception(wrapped) is root
-
-
-def test_lazy_openai_connection_error_classification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeAPIConnectionError(Exception):
-        pass
-
-    module_name = "tests.fake_openai_connection"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(
-            module_name,
-            APIConnectionError=FakeAPIConnectionError,
-        ),
-    )
-    monkeypatch.setattr(policy, "OPENAI_MODULE", module_name)
-
-    error = FakeAPIConnectionError("connection reset")
-
-    assert policy.classify_exception(error) is FailureClass.TRANSIENT
-    assert policy.should_retry_step(error) is True
-
-
 def test_policy_import_does_not_load_runtime_exception_modules() -> None:
     completed = subprocess.run(
         [

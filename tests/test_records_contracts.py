@@ -13,6 +13,11 @@ from dr_code.humaneval.task import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
 )
+from dr_providers.kernel import (
+    EndpointKind,
+    ProviderKind,
+    openai_responses_config,
+)
 from dr_serialize import canonical_json
 from pydantic import ValidationError
 
@@ -25,11 +30,6 @@ from whetstone.graph import (
     NodeConfig,
     NodeSpec,
     graph_digest,
-)
-from whetstone.lm.boundary import (
-    EndpointKind,
-    ProviderKind,
-    openai_responses_config,
 )
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,

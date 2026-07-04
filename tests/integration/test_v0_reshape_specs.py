@@ -46,8 +46,8 @@ def _mock_lm_for_reshaped_specs(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         if node.id == "encoder":

@@ -42,6 +42,7 @@ from dr_code.humaneval.task import (
     EvaluationTaskResult,
     HumanEvalTask,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
 from sqlalchemy.dialects import postgresql
 
 from whetstone.db import io as db_io
@@ -55,7 +56,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.platform import rescoring, scoring_workflow
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from dr_providers.kernel import EndpointKind, ProviderKind
 from dr_providers.kernel.failures import FailureClass
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -18,7 +19,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.records import (
     DimensionsPayload,
     FailureMetadataPayload,

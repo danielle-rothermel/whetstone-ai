@@ -29,21 +29,20 @@ def test_lm_boundary_import_does_not_load_provider_or_dspy_modules() -> None:
     assert result.returncode == 0, result.stderr or result.stdout
 
 
-def test_parse_provider_response_does_not_load_recording_or_psycopg() -> None:
+def test_provider_result_conversion_defers_recording_and_psycopg() -> None:
     script = textwrap.dedent(
         """
         import sys
 
+        from dr_providers.kernel import LlmResponse
+
         import whetstone.lm.boundary as boundary
 
-        boundary.parse_provider_response(
-            {
-                "choices": [
-                    {"message": {"content": "ok"}, "finish_reason": "stop"}
-                ],
-                "usage": {"total_tokens": 3},
-            },
-            config=boundary.openrouter_chat_config(model="model/test"),
+        boundary.provider_result_from_response(
+            LlmResponse(
+                text="ok",
+                provider_metadata={"usage": {"total_tokens": 3}},
+            )
         )
 
         blocked = ("psycopg", "whetstone.eval_failures.recording")

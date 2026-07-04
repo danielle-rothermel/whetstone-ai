@@ -11,6 +11,7 @@ from dbos._error import (
     DBOSQueueDeduplicatedError,
     DBOSWorkflowConflictIDError,
 )
+from dr_providers.kernel import EndpointKind, ProviderKind
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Connection
 from typer.testing import CliRunner
@@ -25,7 +26,6 @@ from whetstone.graph import (
     NodeSpec,
     graph_digest,
 )
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.platform import (
     backoff,
     fairness,

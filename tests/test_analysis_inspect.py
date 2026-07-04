@@ -7,6 +7,7 @@ import pytest
 from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_code.humaneval.task import EvaluationCaseStatus
+from dr_providers.kernel import EndpointKind, ProviderKind
 
 from whetstone.analysis.inspect import (
     RunBundle,
@@ -18,7 +19,6 @@ from whetstone.analysis.inspect import (
 )
 from whetstone.analysis.sample_html import _code_block, render_sample_html
 from whetstone.graph import graph_digest
-from whetstone.lm.boundary import EndpointKind, ProviderKind
 from whetstone.platform.spec_builder import humaneval_encdec_graph
 from whetstone.records import (
     DimensionsPayload,
