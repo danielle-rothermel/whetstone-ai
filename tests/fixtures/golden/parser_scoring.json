@@ -1,0 +1,531 @@
+{
+  "task": {
+    "task_id": "HumanEval/golden",
+    "prompt": "def add_one(x):\n",
+    "canonical_solution": "    return x + 1\n",
+    "entry_point": "add_one",
+    "test": "def check(candidate):\n    inputs = [(1,), (2,)]\n    results = [2, 3]\n    for inp, expected in zip(inputs, results):\n        assertion(candidate(*inp), expected)\n"
+  },
+  "scoring_profile": {
+    "profile_id": "humaneval",
+    "version": "v1",
+    "parser_profile": {
+      "profile_id": "humaneval-best-effort",
+      "version": "v1",
+      "code_field": "code"
+    },
+    "timeout_seconds": 2.0,
+    "metrics_profile_id": "humaneval-metrics",
+    "metrics_profile_version": "v1"
+  },
+  "extraction": {
+    "bare_python": {
+      "raw_generation": "def add_one(x):\n    return x + 1\n",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "def add_one(x):\n    return x + 1\n",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "bare_python",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "def add_one(x):\n    return x + 1\n",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "fenced_block": {
+      "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "fenced_code",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "field_marker": {
+      "raw_generation": "[[ ## code ## ]]\ndef add_one(x):\n    return x + 1\n\n[[ ## completed ## ]]",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "[[ ## code ## ]]\ndef add_one(x):\n    return x + 1\n\n[[ ## completed ## ]]",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "cleaned_candidate",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "[[ ## code ## ]]\ndef add_one(x):\n    return x + 1\n\n[[ ## completed ## ]]",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "field_marker",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0,
+            "field_name": "code"
+          }
+        }
+      }
+    },
+    "json_code_field": {
+      "raw_generation": "{\"code\": \"def add_one(x):\\n    return x + 1\\n\"}",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "def add_one(x):\n    return x + 1\n",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "json_code_field",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "code_field": "code",
+            "json_unwrapped": true,
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "{\"code\": \"def add_one(x):\\n    return x + 1\\n\"}",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "code_repr_assignment": {
+      "raw_generation": "code = 'def add_one(x):\\n    return x + 1\\n'",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "code = 'def add_one(x):\\n    return x + 1\\n'",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 1,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": "code repr assignments are not valid HumanEval code",
+          "extraction_error": "no compilable extracted candidate",
+          "metadata": {
+            "candidate_count": 1
+          }
+        },
+        "field_marker": {
+          "raw_generation": "code = 'def add_one(x):\\n    return x + 1\\n'",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "empty": {
+      "raw_generation": "",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "empty raw generation",
+          "metadata": {
+            "candidate_count": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "prose_only": {
+      "raw_generation": "I cannot solve this task, sorry.",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "I cannot solve this task, sorry.",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "no code candidates extracted",
+          "metadata": {
+            "candidate_count": 0
+          }
+        },
+        "field_marker": {
+          "raw_generation": "I cannot solve this task, sorry.",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    },
+    "broken_syntax": {
+      "raw_generation": "def add_one(x:\n    return x + 1",
+      "profiles": {
+        "best_effort": {
+          "raw_generation": "def add_one(x:\n    return x + 1",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 1,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": "SyntaxError: '(' was never closed (<candidate>, line 1)",
+          "extraction_error": "no compilable extracted candidate",
+          "metadata": {
+            "candidate_count": 1
+          }
+        },
+        "field_marker": {
+          "raw_generation": "def add_one(x:\n    return x + 1",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "missing field marker for 'code'",
+          "metadata": {
+            "candidate_count": 0
+          }
+        }
+      }
+    }
+  },
+  "scoring": {
+    "passing": {
+      "raw_generation": "def add_one(x):\n    return x + 1\n",
+      "score": {
+        "raw_generation": "def add_one(x):\n    return x + 1\n",
+        "extraction": {
+          "raw_generation": "def add_one(x):\n    return x + 1\n",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "bare_python",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "outcome": "passed",
+        "score": 1.0,
+        "evaluation": {
+          "task_id": "HumanEval/golden",
+          "entry_point": "add_one",
+          "function_names": [
+            "add_one"
+          ],
+          "total_cases": 2,
+          "results": [
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_0",
+              "function_name": "add_one",
+              "status": "passed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[1]",
+              "expected_output_repr": "2",
+              "actual_output_repr": ""
+            },
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_1",
+              "function_name": "add_one",
+              "status": "passed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[2]",
+              "expected_output_repr": "3",
+              "actual_output_repr": ""
+            }
+          ],
+          "best_function_name": "add_one",
+          "failures": [],
+          "coverage_complete": true,
+          "passed": true,
+          "status_counts": {
+            "passed": 2
+          }
+        }
+      }
+    },
+    "tests_failed": {
+      "raw_generation": "def add_one(x):\n    return x - 1\n",
+      "score": {
+        "raw_generation": "def add_one(x):\n    return x - 1\n",
+        "extraction": {
+          "raw_generation": "def add_one(x):\n    return x - 1\n",
+          "extracted_code": "def add_one(x):\n    return x - 1",
+          "extraction_method": "bare_python",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "outcome": "tests_failed",
+        "score": 0.0,
+        "evaluation": {
+          "task_id": "HumanEval/golden",
+          "entry_point": "add_one",
+          "function_names": [
+            "add_one"
+          ],
+          "total_cases": 2,
+          "results": [
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_0",
+              "function_name": "add_one",
+              "status": "failed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[1]",
+              "expected_output_repr": "2",
+              "actual_output_repr": "0"
+            },
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_1",
+              "function_name": "add_one",
+              "status": "failed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[2]",
+              "expected_output_repr": "3",
+              "actual_output_repr": "1"
+            }
+          ],
+          "best_function_name": "add_one",
+          "failures": [
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_0",
+              "function_name": "add_one",
+              "status": "failed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[1]",
+              "expected_output_repr": "2",
+              "actual_output_repr": "0"
+            },
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_1",
+              "function_name": "add_one",
+              "status": "failed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[2]",
+              "expected_output_repr": "3",
+              "actual_output_repr": "1"
+            }
+          ],
+          "coverage_complete": true,
+          "passed": false,
+          "status_counts": {
+            "failed": 2
+          }
+        }
+      }
+    },
+    "fenced_passing": {
+      "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+      "score": {
+        "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+        "extraction": {
+          "raw_generation": "Here is the solution:\n```python\ndef add_one(x):\n    return x + 1\n```\nHope this helps!",
+          "extracted_code": "def add_one(x):\n    return x + 1",
+          "extraction_method": "fenced_code",
+          "candidate_count": 1,
+          "selected_candidate_index": 0,
+          "compile_ok": true,
+          "compile_error": null,
+          "extraction_error": null,
+          "metadata": {
+            "candidate_count": 1,
+            "selected_candidate_index": 0
+          }
+        },
+        "outcome": "passed",
+        "score": 1.0,
+        "evaluation": {
+          "task_id": "HumanEval/golden",
+          "entry_point": "add_one",
+          "function_names": [
+            "add_one"
+          ],
+          "total_cases": 2,
+          "results": [
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_0",
+              "function_name": "add_one",
+              "status": "passed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[1]",
+              "expected_output_repr": "2",
+              "actual_output_repr": ""
+            },
+            {
+              "task_id": "HumanEval/golden",
+              "case_id": "case_1",
+              "function_name": "add_one",
+              "status": "passed",
+              "message": "",
+              "test_type": "input_result",
+              "input_repr": "[2]",
+              "expected_output_repr": "3",
+              "actual_output_repr": ""
+            }
+          ],
+          "best_function_name": "add_one",
+          "failures": [],
+          "coverage_complete": true,
+          "passed": true,
+          "status_counts": {
+            "passed": 2
+          }
+        }
+      }
+    },
+    "extraction_failed": {
+      "raw_generation": "I cannot solve this task, sorry.",
+      "score": {
+        "raw_generation": "I cannot solve this task, sorry.",
+        "extraction": {
+          "raw_generation": "I cannot solve this task, sorry.",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "no code candidates extracted",
+          "metadata": {
+            "candidate_count": 0
+          }
+        },
+        "outcome": "extraction_failed",
+        "score": 0.0,
+        "evaluation": null
+      }
+    },
+    "empty_generation": {
+      "raw_generation": "",
+      "score": {
+        "raw_generation": "",
+        "extraction": {
+          "raw_generation": "",
+          "extracted_code": null,
+          "extraction_method": null,
+          "candidate_count": 0,
+          "selected_candidate_index": null,
+          "compile_ok": false,
+          "compile_error": null,
+          "extraction_error": "empty raw generation",
+          "metadata": {
+            "candidate_count": 0
+          }
+        },
+        "outcome": "empty_generation",
+        "score": 0.0,
+        "evaluation": null
+      }
+    }
+  }
+}

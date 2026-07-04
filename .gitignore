@@ -8,3 +8,4 @@ analysis/samples/**/*.json
 .env
 .coverage
 .DS_STORE
+.claude/ralph-loop.local.md

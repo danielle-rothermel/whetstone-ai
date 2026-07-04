@@ -116,6 +116,19 @@ committed JSON. CI does not require live v0 tables. Delete fixtures and Tier 3.5
 tests after backfill validation — see
 [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
+### Golden identity fixtures (composable migration)
+
+Committed identity baselines live in
+[`tests/fixtures/golden/`](tests/fixtures/golden/): canonical-JSON strings and
+digests, graph digests, record ID axes, and parser/scoring outputs under the
+v1 profiles. `uv run pytest -k golden` must stay green through every
+migration stage (success: 4 passed). Regenerate only before Stage 0 lands —
+never to paper over a migration-caused mismatch — with
+`uv run python scripts/golden/generate_golden_fixtures.py` (success: prints
+one `wrote …` line per file and `generated 4 fixture files: OK`, and a
+subsequent `uv run pytest -k golden` passes). See
+[`docs/composable/prompt.md`](docs/composable/prompt.md).
+
 ### Adding new tests
 
 1. Pick the tier (unit vs integration vs migration smoke).
@@ -166,6 +179,12 @@ DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 wiring after the org repo is created.
 
 ## Changelog
+
+### 2026-07-04 — Golden identity fixtures for the composable migration
+
+- Added `tests/fixtures/golden/` + `tests/test_golden_fixtures.py`
+  (generator: `scripts/golden/generate_golden_fixtures.py`); `uv run pytest
+  -k golden` is the identity acceptance gate for every migration stage.
 
 ### 2026-06-30 — Enc-dec smoke r2 + scoring payload sizing
 

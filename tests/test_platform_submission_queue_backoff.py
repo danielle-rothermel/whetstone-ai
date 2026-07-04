@@ -1914,9 +1914,10 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
 
     assert result.exit_code == 0
     assert captured["disposed"] is True
-    progress = captured["kwargs"].pop("progress")
+    captured_kwargs = dict(captured["kwargs"])
+    progress = captured_kwargs.pop("progress")
     assert isinstance(progress, OperationProgress)
-    assert captured["kwargs"] == {
+    assert captured_kwargs == {
         "database_url": "postgresql+psycopg://example/db",
         "experiment_name": "exp",
         "generation_statuses": (GenerationRunStatus.SUCCESS,),
