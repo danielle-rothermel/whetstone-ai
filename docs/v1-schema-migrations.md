@@ -1,10 +1,8 @@
 # v1 schema migrations (frozen)
 
-**Current status:** Frozen schema reference. During the June 30 eval push, do
-not change migration history or pursue schema cleanup unless it directly blocks
-backfill, rescoring, model selection, the enc-dec budget sweep, or the minimal
-COPRO-style experiment loop. Use [`../AGENTS.md`](../AGENTS.md) for active
-priorities.
+**Current status:** Frozen schema reference. Existing revision files must not
+be rewritten; schema changes land as new forward revisions only. Active
+priorities live in Linear (see [`../AGENTS.md`](../AGENTS.md)).
 
 **Purpose:** Single source of truth for the v1 Alembic revision chain, fresh-database setup, and reset procedure for databases that applied draft schemas during hardening.
 
@@ -18,9 +16,9 @@ priorities.
 
 | Constant | Value |
 |---|---|
-| `V1_MIGRATION_HEAD` | `20260630_0005` |
+| `V1_MIGRATION_HEAD` | `20260630_0006` |
 | `V1_MIGRATION_BASE` | `20260629_0001` |
-| `V1_MIGRATION_REVISION_COUNT` | 9 |
+| `V1_MIGRATION_REVISION_COUNT` | 10 |
 
 The chain is **linear** (no branches). Future schema changes require **new forward revisions** only.
 
@@ -39,6 +37,7 @@ The chain is **linear** (no branches). Future schema changes require **new forwa
 | `20260630_0003` | `claiming` enqueue status; heal stale pending metadata |
 | `20260630_0004` | Remove `prepared` operation status (backfill rows to `enqueuing`) |
 | `20260630_0005` | `dataset_name` / `dataset_split` on score attempts; profile uniqueness |
+| `20260630_0006` | Widen score-attempt `generated_code_outcome` check constraint to allow `evaluation_incomplete` |
 
 ---
 
@@ -48,7 +47,7 @@ On a database with no v1 platform tables applied yet:
 
 ```bash
 uv run alembic upgrade head
-uv run alembic current   # expect 20260630_0005
+uv run alembic current   # expect 20260630_0006
 ```
 
 Connection config, driver normalization, and offline SQL rendering are documented in [README § Database migrations](../README.md#database-migrations).
@@ -108,14 +107,14 @@ DELETE FROM alembic_version;
 
 ```bash
 uv run alembic upgrade head
-uv run alembic current   # expect 20260630_0005
+uv run alembic current   # expect 20260630_0006
 ```
 
 ---
 
 ## Post-freeze policy
 
-1. **Head revision is canonical** — `20260630_0005` until a new forward revision lands.
+1. **Head revision is canonical** — `20260630_0006` until a new forward revision lands.
 2. **Do not edit existing revision files** after freeze, except unavoidable typo fixes that would invalidate already-applied databases (avoid if possible).
 3. **Future schema changes** — add new revisions only; never rewrite history.
 4. **Single linear chain** — one head, one base; tests assert this in `test_alembic_v1_migration_chain_is_linear`.

@@ -20,7 +20,9 @@ remains under `migration/` for backfill — see
 - `db/io.py` — typed row builders, row parsers, and insert/select helpers
 - `db/migrations/` — Alembic migrations for the v1 schema
 - `platform/` — v1 DBOS graph workflow, plain-prompt node execution, append-only persistence, CLI entrypoints
-- `migration/` — v0 row → v1 record reshape (backfill only; delete after migration validated)
+- `migration/` — v0 row → v1 record reshape and the enc-dec backfill job behind `backfill-v0-encdec` (delete after migration validated)
+- `analysis/` — read-only enc-dec analysis helpers: Pandas frame loading from v1 rows, figure/plot output paths, Rich terminal reporting, single-run HTML inspection (backs `scripts/analysis/`)
+- `optimization/` — minimal COPRO-style encoder prompt optimizer (`copro.py`; driven by `scripts/optimization/run_copro_encdec.py`, see [`docs/running_copro.md`](docs/running_copro.md))
 - `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
 - `serialization.py` — JSON-safe encoding for telemetry and DB payloads (optional DSPy type handlers when `dspy` is installed)
 
@@ -32,9 +34,14 @@ Canonical documentation in [`docs/`](docs/):
   — settled architecture, platform workflow behavior, integration tiers, and
   schema freeze policy.
 - [Remaining implementation intentions](docs/remaining-implementation-intentions.md)
-  — deferred work (Unitbench, v0 backfill, projections) and follow-ups.
-- [v1 schema migrations](docs/v1-schema-migrations.md) — frozen Alembic head
-  `20260630_0005`, reset procedure for draft databases.
+  — deferred work (Unitbench, projections, remaining v0 backfill validation)
+  and follow-ups.
+- [v1 schema migrations](docs/v1-schema-migrations.md) — Alembic head
+  `20260630_0006`, reset procedure for draft databases.
+- [Running the COPRO optimizer](docs/running_copro.md) — minimal COPRO-style
+  encoder prompt optimization loop.
+- [Inspecting backfill rows](docs/inspecting_backfill.md) — provenance markers
+  and queries for rows migrated by `backfill-v0-encdec`.
 - [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
   — backfill retention and post-migration cleanup.
 - [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
@@ -124,8 +131,11 @@ Scoring workflows and batch rescoring are available via `score-one` and
 `rescore`. `PARTIAL` generation runs are scoreable when terminal output is
 present (same scoring path as `SUCCESS`); runs without terminal output are
 rejected. By default, `rescore` includes both successful and partial runs.
-Unitbench-facing projections and the full v0 backfill job remain
-deferred — see [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
+Enc-dec v0 rows are backfilled into v1 append-only tables via
+`backfill-v0-encdec` (chunked commits, parallel reshape, dry-run mode) — see
+[`docs/inspecting_backfill.md`](docs/inspecting_backfill.md) for provenance
+markers on migrated rows. Unitbench-facing projections remain deferred — see
+[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
 
 ## HPM selection analysis
 
@@ -174,8 +184,9 @@ reconstructed from the graph snapshot, not stored verbatim on node attempts.
 ## Database migrations
 
 The v1 eval schema lives under `db/` and is applied with Alembic from the
-repository root. Migration history is **frozen** at head revision
-`20260630_0005` (nine revisions from `20260629_0001`). See
+repository root. Migration history is **append-only** — existing revision
+files are frozen and schema changes add forward revisions only. Current head
+is `20260630_0006` (ten revisions from `20260629_0001`). See
 [`docs/v1-schema-migrations.md`](docs/v1-schema-migrations.md) for the
 revision changelog, post-freeze policy, and **reset-not-upgrade** procedure
 for databases that applied draft schemas during hardening.

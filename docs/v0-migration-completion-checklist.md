@@ -1,10 +1,10 @@
 # v0 migration completion checklist
 
-**Current status:** Active only for the backfill, validation, and rescoring
-steps needed by the June 30 eval push. Keep legacy v0 Postgres tables as
-read-only backup for now. The post-backfill deletion checklist is future work
-unless the user explicitly asks for cleanup. See [`../AGENTS.md`](../AGENTS.md)
-for active priorities.
+**Current status:** Reference for the remaining backfill, validation, and
+rescoring steps. Keep legacy v0 Postgres tables as read-only backup for now.
+The post-backfill deletion checklist is future work unless the user explicitly
+asks for cleanup. Active priorities live in Linear (see
+[`../AGENTS.md`](../AGENTS.md)).
 
 **Purpose:** Define what was removed when v0 runtime code was archived, what remains for backfill, and the exact cleanup required after live migration is validated.
 
@@ -48,7 +48,14 @@ v1 platform code now bootstraps DBOS through:
 
 These modules import **only v1 packages** (`graph/`, `records/`, `lm/boundary.py`, etc.) — no deleted v0 orchestration code.
 
-**Still TODO (separate from this checklist):** a full backfill **job/CLI** that reads live v0 tables, calls `reshape_v0_*`, and inserts v1 append-only rows. Tier 3.5 tests prove reshape correctness on frozen samples only.
+**Landed since this checklist was written:** the enc-dec backfill job/CLI —
+`backfill-v0-encdec` on the platform worker, backed by
+[`src/dr_dspy/migration/v0_encdec_backfill.py`](../src/dr_dspy/migration/v0_encdec_backfill.py)
+(chunked commits, parallel reshape, dry-run, idempotent re-runs); see
+[`inspecting_backfill.md`](inspecting_backfill.md) for inspecting migrated
+rows. **Still TODO:** a direct-table backfill job (`reshape_v0_direct_row`
+exists but is unwired) and formal validation sign-off. Tier 3.5 tests prove
+reshape correctness on frozen samples only.
 
 ---
 
