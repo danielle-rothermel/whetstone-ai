@@ -1,3 +1,5 @@
+> **RETIRES AT D3 MERGE** — this documents the in-flight composable migration (draft PR #4) and becomes historical when it merges. Tracked in Linear S17/DEV-21.
+
 # Code Parsing + Testing Extraction
 
 Status: draft — high-level plan only; sections will be expanded as design
