@@ -1,3 +1,5 @@
+> **RETIRES AT D3 MERGE** — this documents the in-flight composable migration (draft PR #4) and becomes historical when it merges. Tracked in Linear S17/DEV-21.
+
 # Migration Execution Brief
 
 You are executing the composable extraction of whetstone-ai into five
