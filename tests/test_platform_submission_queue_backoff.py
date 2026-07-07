@@ -34,6 +34,7 @@ from dr_dspy.platform import (
     submission,
     worker,
 )
+from dr_dspy.platform.progress_log import OperationProgress
 from dr_dspy.records import (
     ENQUEUE_CLAIM_ID_METADATA_KEY,
     BatchSubmitItemEnqueueStatus,
@@ -1913,6 +1914,8 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
 
     assert result.exit_code == 0
     assert captured["disposed"] is True
+    progress = captured["kwargs"].pop("progress")
+    assert isinstance(progress, OperationProgress)
     assert captured["kwargs"] == {
         "database_url": "postgresql+psycopg://example/db",
         "experiment_name": "exp",
