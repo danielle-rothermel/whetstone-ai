@@ -76,7 +76,28 @@ over serialized forms, and the name should keep it that way.
 ## Open sections (to fill in)
 
 - Exact public API (module layout; free functions vs a configured encoder
-  object).
+  object). **Resolved at extraction (Stage 2, 2026-07-04)** — smallest
+  conservative choice preserving whetstone behavior:
+  - Module layout mirrors lineage: `dr_serialize.hashing` (verbatim),
+    `dr_serialize.serialization` (engine), `dr_serialize.limits`,
+    `dr_serialize.errors`; everything re-exported at package root.
+  - Free functions, no encoder object: `to_jsonable(x, *, limits)` with
+    a required `SerializationLimits` keyword (limits injected at call
+    site per the Decisions section); `to_metadata_dict` keeps its
+    zero-config signature (depth guard only, default 100).
+  - Handler API: handlers keep the lineage signature
+    `(value, depth, path) -> (handled, result)`. `register_handler`
+    appends after the built-in scalar/container/bytes handlers and
+    before the fallbacks (type, pydantic, generator, `__dict__` walk) —
+    the slot whetstone's DSPy handlers occupied. `convert_value` is the
+    public recursion entry; the active depth limit travels via a
+    contextvar so handler signatures stay simple.
+  - Consumer handler errors subclass public `ValueTransformError`
+    (`message_prefix` ClassVar); `preview_repr`/`detail_repr` exported.
+    Diagnostics dict shapes are byte-identical to whetstone lineage,
+    including the `postgres_max_bytes` key on `PayloadTooLargeError`
+    (kept to avoid changing persisted failure-record shapes; a rename
+    is a future dr-serialize breaking change if ever worth it).
 - Version/stability policy — everything depends on this package, so
   breaking changes are the most expensive in the family.
 - Whether `canonical_json`'s guarantees need a written cross-language spec

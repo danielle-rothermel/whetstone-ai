@@ -2,21 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
-from sqlalchemy.dialects import postgresql
-
-from dr_dspy.db import io as db_io
-from dr_dspy.eval_failures import (
-    FailureClass,
-    PermanentFailureError,
-    RateLimitedFailureError,
-    TransientFailureError,
-)
-from dr_dspy.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -27,30 +18,43 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import (
+from dr_platform import backoff
+from dr_providers.kernel import (
     EndpointKind,
-    ProviderConfig,
+    LlmRequest,
+    LlmResponse,
     ProviderKind,
+    build_payload,
+    parse_responses_body,
 )
-from dr_dspy.platform import backoff, graph_workflow
-from dr_dspy.platform.graph_workflow import (
+from sqlalchemy.dialects import postgresql
+
+from whetstone.db import io as db_io
+from whetstone.eval_failures import (
+    FailureClass,
+    PermanentFailureError,
+    RateLimitedFailureError,
+    TransientFailureError,
+)
+from whetstone.platform import graph_workflow
+from whetstone.platform.graph_workflow import (
     _start_prediction_graph_workflow_handle,
     execute_prediction_graph,
     platform_generation_workflow_id,
 )
-from dr_dspy.platform.node_execution import (
+from whetstone.platform.node_execution import (
     NodeStepResult,
     execute_lm_node,
     failure_metadata_from_exception,
     provider_config_ref_for_node,
 )
-from dr_dspy.platform.persistence import (
+from whetstone.platform.persistence import (
     idempotent_insert_generation_run,
     idempotent_insert_node_attempt,
     persist_generation_result,
     prediction_spec_from_row,
 )
-from dr_dspy.records import (
+from whetstone.records import (
     DimensionsPayload,
     FailureMetadataPayload,
     GenerationRunStatus,
@@ -97,6 +101,7 @@ def _node(
         metadata["provider_config_id"] = provider_config_id
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,
@@ -403,6 +408,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
         spec_payload: dict[str, Any],
         node_payload: dict[str, Any],
         node_inputs: dict[str, Any],
+        node_attempt_id: str | None = None,
     ) -> dict[str, Any]:
         step_spec = PredictionSpecRecord.model_validate(spec_payload)
         node = NodeSpec.model_validate(node_payload)
@@ -414,6 +420,7 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
                     step_spec.prediction_id,
                     node.id,
                     node_inputs,
+                    node_attempt_id,
                 ),
             )
         )
@@ -524,6 +531,11 @@ def test_run_prediction_graph_workflow_uses_dbos_step_boundaries(
                 spec.prediction_id,
                 "direct",
                 {"prompt": "write add"},
+                stable_node_attempt_id(
+                    generation_run_id=generation_run_id,
+                    node_id="direct",
+                    attempt_index=attempt_index,
+                ),
             ),
         ),
         ("completed", generation_run_id),
@@ -589,13 +601,8 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
     spec = _spec(graph)
     captured: dict[str, Any] = {}
 
-    def client_factory(config: ProviderConfig) -> object:
-        captured["config"] = config
-        return object()
-
-    def provider_caller(client: Any, request: Any) -> dict[str, Any]:
-        captured["request"] = request
-        return {
+    class ParsingFakeProvider:
+        body: ClassVar[dict[str, Any]] = {
             "id": "resp-1",
             "model": "gpt-test",
             "status": "completed",
@@ -608,17 +615,24 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
             },
         }
 
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            captured["config"] = request.provider_config
+            captured["payload"] = build_payload(request)
+            return parse_responses_body(
+                self.body,
+                config=request.provider_config,
+                payload=captured["payload"],
+            )
+
     result = execute_lm_node(
         spec=spec,
         node=node,
         node_inputs={"prompt": "write add"},
-        client_factory=client_factory,
-        provider_caller=provider_caller,
+        provider=ParsingFakeProvider(),
     )
 
     assert result.status is NodeAttemptStatus.SUCCESS
-    request = captured["request"]
-    assert request.kwargs == {
+    assert captured["payload"] == {
         "model": "gpt-test",
         "instructions": "Write Python.",
         "input": [{"role": "user", "content": "Solve: write add"}],
@@ -637,16 +651,16 @@ def test_lm_node_executor_reraises_retryable_failures_for_dbos_retry() -> None:
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
     spec = _spec(graph)
 
-    def provider_caller(client: Any, request: Any) -> None:
-        raise TransientFailureError("temporary provider failure")
+    class RaisingProvider:
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            raise TransientFailureError("temporary provider failure")
 
     with pytest.raises(TransientFailureError):
         execute_lm_node(
             spec=spec,
             node=node,
             node_inputs={"prompt": "write add"},
-            client_factory=lambda config: object(),
-            provider_caller=provider_caller,
+            provider=RaisingProvider(),
             raise_retryable=True,
         )
 
@@ -683,15 +697,17 @@ def test_lm_node_executor_rejects_unsupported_node_op() -> None:
     graph = GraphSpec(nodes=(node,), terminal_node_id="direct")
     spec = _spec(graph)
 
-    def provider_caller(client: Any, request: Any) -> Any:
-        raise AssertionError("unsupported node op should not call provider")
+    class RefusingProvider:
+        def complete(self, request: LlmRequest) -> LlmResponse:
+            raise AssertionError(
+                "unsupported node op should not call provider"
+            )
 
     result = execute_lm_node(
         spec=spec,
         node=unsupported_node,
         node_inputs={"prompt": "write add"},
-        client_factory=lambda config: object(),
-        provider_caller=provider_caller,
+        provider=RefusingProvider(),
     )
 
     assert result.status is NodeAttemptStatus.ERROR
@@ -810,17 +826,21 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
         connection: object,
         *,
         throttle_key: str,
-        failure: Any,
+        failure_class: Any,
+        error_type: str | None = None,
+        message: str | None = None,
+        metadata: dict[str, Any] | None = None,
         now: datetime,
+        schema: Any,
     ) -> backoff.ThrottleBackoffState:
         state = backoff.ThrottleBackoffState(
             throttle_key=throttle_key,
             blocked_until=now + timedelta(seconds=12),
             consecutive_failures=1,
-            failure_class=failure.failure_class,
-            last_error_type=failure.failure_exception_type,
-            last_message=failure.message,
-            metadata=failure.failure_metadata,
+            failure_class=failure_class,
+            last_error_type=error_type,
+            last_message=message,
+            metadata=dict(metadata or {}),
             updated_at=now,
         )
         state_by_key[throttle_key] = state
@@ -847,7 +867,7 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
     monkeypatch.setattr(
         graph_workflow,
         "throttle_delay_seconds",
-        lambda connection, *, throttle_key, now: (
+        lambda connection, *, throttle_key, now, schema: (
             backoff.delay_until_unblocked_seconds(
                 state_by_key.get(throttle_key),
                 now=now,
@@ -857,14 +877,16 @@ def test_throttle_backoff_lifecycle_records_delays_and_clears(
     monkeypatch.setattr(
         graph_workflow,
         "clear_throttle_backoff",
-        lambda connection, *, throttle_key, now: state_by_key.__setitem__(
-            throttle_key,
-            backoff.ThrottleBackoffState(
-                throttle_key=throttle_key,
-                consecutive_failures=0,
-                metadata={},
-                updated_at=now,
-            ),
+        lambda connection, *, throttle_key, now, schema: (
+            state_by_key.__setitem__(
+                throttle_key,
+                backoff.ThrottleBackoffState(
+                    throttle_key=throttle_key,
+                    consecutive_failures=0,
+                    metadata={},
+                    updated_at=now,
+                ),
+            )
         ),
     )
     monkeypatch.setattr(graph_workflow, "execute_lm_node", run_node)
@@ -1126,7 +1148,7 @@ def test_start_workflow_handle_retrieves_on_generic_race() -> None:
 
 
 def test_platform_worker_import_registers_entrypoint() -> None:
-    from dr_dspy.platform import worker
+    from whetstone.platform import worker
 
     assert worker.APP is not None
 
@@ -1134,7 +1156,7 @@ def test_platform_worker_import_registers_entrypoint() -> None:
 def test_platform_worker_run_one_uses_shared_workflow_runner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import worker
+    from whetstone.platform import worker
 
     class RuntimeConfig:
         database_url = "postgresql://example/db"

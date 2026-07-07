@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine, text
-
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import queue_worker, submission
-from dr_dspy.records import (
+from dr_graph import GraphSpec
+from dr_platform import (
     ENQUEUE_CLAIM_ID_METADATA_KEY,
     ENQUEUE_CLAIMED_AT_METADATA_KEY,
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
-    PredictionSpecRecord,
-    stable_generation_run_id,
+    BatchItemEnqueueStatus,
+    BatchItemInsertStatus,
+    BatchItemRecord,
+    BatchOperationRecord,
+    BatchOperationStatus,
+    batch_item_id,
 )
+from dr_platform.submission import (
+    prepare_enqueue_retries,
+    prepare_submission_records,
+    update_operation_summary,
+)
+from sqlalchemy import create_engine, text
+
 from tests.support.platform_workflow_fixtures import (
     NOW,
     direct_node,
@@ -27,6 +30,12 @@ from tests.support.postgres_fixtures import (
     seed_experiment,
     seed_prediction_spec,
 )
+from whetstone.platform import queue_worker, submission
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
+from whetstone.records import (
+    PredictionSpecRecord,
+    stable_generation_run_id,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -36,19 +45,20 @@ def _batch_item(
     operation_key: str,
     spec: PredictionSpecRecord,
     item_index: int,
-    enqueue_status: BatchSubmitItemEnqueueStatus,
+    enqueue_status: BatchItemEnqueueStatus,
     enqueue_metadata: dict[str, str] | None = None,
-) -> BatchSubmitItemRecord:
-    return BatchSubmitItemRecord(
-        batch_submit_item_id=submission.batch_submit_item_id(
+) -> BatchItemRecord:
+    return BatchItemRecord(
+        batch_submit_item_id=batch_item_id(
             operation_key=operation_key,
-            prediction_id=spec.prediction_id,
+            item_id=spec.prediction_id,
+            identity=PLATFORM_SCHEMA.naming.identity,
         ),
         operation_key=operation_key,
         item_index=item_index,
-        prediction_id=spec.prediction_id,
-        fair_order_key=spec.fair_order_key,
-        insert_status=BatchSubmitItemInsertStatus.INSERTED,
+        item_id=spec.prediction_id,
+        order_key=spec.fair_order_key,
+        insert_status=BatchItemInsertStatus.INSERTED,
         enqueue_status=enqueue_status,
         enqueue_metadata=enqueue_metadata or {},
         created_at=NOW,
@@ -76,10 +86,10 @@ def test_update_operation_summary_completes_when_all_already_scheduled(
                 )
             seed_batch_submit_operation(
                 connection,
-                BatchSubmitOperationRecord(
+                BatchOperationRecord(
                     operation_key=operation_key,
-                    experiment_name="exp",
-                    status=BatchSubmitOperationStatus.ENQUEUING,
+                    group_key="exp",
+                    status=BatchOperationStatus.ENQUEUING,
                     requested_count=2,
                     created_at=NOW,
                 ),
@@ -92,7 +102,7 @@ def test_update_operation_summary_completes_when_all_already_scheduled(
                         spec=spec,
                         item_index=index,
                         enqueue_status=(
-                            BatchSubmitItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT
+                            BatchItemEnqueueStatus.WORKFLOW_ALREADY_PRESENT
                         ),
                         enqueue_metadata={
                             "workflow_id": f"workflow:{spec.prediction_id}",
@@ -105,11 +115,11 @@ def test_update_operation_summary_completes_when_all_already_scheduled(
                 )
 
         with engine.begin() as connection:
-            result = submission.update_operation_summary(
+            result = update_operation_summary(
                 connection,
                 operation_key=operation_key,
-                experiment_name="exp",
-                queue_name="dr-dspy-platform-generation-v1",
+                group_key="exp",
+                schema=PLATFORM_SCHEMA,
             )
 
         assert result.requested_count == 2
@@ -126,7 +136,7 @@ def test_update_operation_summary_completes_when_all_already_scheduled(
                 ),
                 {"operation_key": operation_key},
             ).one()
-        assert row[0] == BatchSubmitOperationStatus.COMPLETED.value
+        assert row[0] == BatchOperationStatus.COMPLETED.value
         assert row[1] == 2
         assert row[2] is not None
     finally:
@@ -145,10 +155,10 @@ def test_prepare_enqueue_retries_resets_claiming_to_pending(
             seed_prediction_spec(connection, spec)
             seed_batch_submit_operation(
                 connection,
-                BatchSubmitOperationRecord(
+                BatchOperationRecord(
                     operation_key=operation_key,
-                    experiment_name="exp",
-                    status=BatchSubmitOperationStatus.ENQUEUING,
+                    group_key="exp",
+                    status=BatchOperationStatus.ENQUEUING,
                     requested_count=1,
                     created_at=NOW,
                 ),
@@ -159,7 +169,7 @@ def test_prepare_enqueue_retries_resets_claiming_to_pending(
                     operation_key=operation_key,
                     spec=spec,
                     item_index=0,
-                    enqueue_status=BatchSubmitItemEnqueueStatus.CLAIMING,
+                    enqueue_status=BatchItemEnqueueStatus.CLAIMING,
                     enqueue_metadata={
                         ENQUEUE_CLAIM_ID_METADATA_KEY: "stale-claim",
                         ENQUEUE_CLAIMED_AT_METADATA_KEY: NOW.isoformat(),
@@ -168,9 +178,10 @@ def test_prepare_enqueue_retries_resets_claiming_to_pending(
             )
 
         with engine.begin() as connection:
-            submission.prepare_enqueue_retries(
+            prepare_enqueue_retries(
                 connection,
                 operation_key=operation_key,
+                schema=PLATFORM_SCHEMA,
             )
 
         with engine.connect() as connection:
@@ -182,7 +193,7 @@ def test_prepare_enqueue_retries_resets_claiming_to_pending(
                 ),
                 {"operation_key": operation_key},
             ).one()
-        assert row[0] == BatchSubmitItemEnqueueStatus.PENDING.value
+        assert row[0] == BatchItemEnqueueStatus.PENDING.value
         assert row[1] == {}
     finally:
         engine.dispose()
@@ -243,7 +254,7 @@ def test_submit_prediction_specs_round_trips_summary(
                 ),
                 {"operation_key": operation_key},
             ).one()
-        assert row[0] == BatchSubmitOperationStatus.COMPLETED.value
+        assert row[0] == BatchOperationStatus.COMPLETED.value
         assert row[1] == 2
         assert row[2] is not None
     finally:
@@ -389,23 +400,23 @@ def test_submit_batch_item_conflict_is_silent(
     try:
         with engine.begin() as connection:
             seed_prediction_spec(connection, spec)
-            submission.prepare_submission_records(
+            prepare_submission_records(
                 connection,
                 operation_key=operation_key,
-                experiment_name="exp",
-                ordered_specs=(spec,),
+                group_key="exp",
+                ordered_items=(spec,),
+                schema=PLATFORM_SCHEMA,
                 submit_spec={},
                 metadata={},
-                chunk_size=1,
             )
-            submission.prepare_submission_records(
+            prepare_submission_records(
                 connection,
                 operation_key=operation_key,
-                experiment_name="exp",
-                ordered_specs=(spec,),
+                group_key="exp",
+                ordered_items=(spec,),
+                schema=PLATFORM_SCHEMA,
                 submit_spec={},
                 metadata={},
-                chunk_size=1,
             )
 
         with engine.connect() as connection:

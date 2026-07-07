@@ -6,21 +6,23 @@ import time
 from datetime import datetime
 
 from dbos import DBOS
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Connection, Row
-
-from dr_dspy.platform.dbos_compat import (
+from dr_platform import (
     DBOS_ACTIVE_WORKFLOW_STATUSES,
     DBOS_FAILED_WORKFLOW_STATUSES,
     DbosWorkflowStatus,
 )
-from dr_dspy.platform.scoring_workflow_state import dbos_workflow_status_value
-from dr_dspy.records import (
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection, Row
+
+from tests.support.postgres_fixtures import seed_prediction_spec
+from whetstone.platform.scoring_workflow_state import (
+    dbos_workflow_status_value,
+)
+from whetstone.records import (
     GenerationRunRecord,
     NodeAttemptRecord,
     PredictionSpecRecord,
 )
-from tests.support.postgres_fixtures import seed_prediction_spec
 
 
 def seed_spec(database_url: str, spec: PredictionSpecRecord) -> None:
@@ -179,7 +181,7 @@ def seed_generation_run_with_nodes(
     generation_run: GenerationRunRecord,
     node_attempts: tuple[NodeAttemptRecord, ...] = (),
 ) -> None:
-    from dr_dspy.platform.persistence import persist_generation_result
+    from whetstone.platform.persistence import persist_generation_result
 
     persist_generation_result(
         connection,

@@ -4,8 +4,13 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import EvaluationCaseStatus
+from dr_graph import graph_digest
+from dr_providers.kernel import EndpointKind, ProviderKind
 
-from dr_dspy.analysis.inspect import (
+from whetstone.analysis.inspect import (
     RunBundle,
     SampleIndexError,
     build_debug_metadata,
@@ -13,14 +18,9 @@ from dr_dspy.analysis.inspect import (
     resolve_sample_index,
     summarize_test_results,
 )
-from dr_dspy.analysis.sample_html import _code_block, render_sample_html
-from dr_dspy.graph import graph_digest
-from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import EvaluationCaseStatus
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform.spec_builder import humaneval_encdec_graph
-from dr_dspy.records import (
+from whetstone.analysis.sample_html import _code_block, render_sample_html
+from whetstone.platform.spec_builder import humaneval_encdec_graph
+from whetstone.records import (
     DimensionsPayload,
     ExtractedCodePayload,
     GenerationRunRecord,
@@ -357,7 +357,7 @@ def test_ground_truth_falls_back_to_metadata() -> None:
 
 
 def test_resolve_sample_index_out_of_range_lists_available_count() -> None:
-    from dr_dspy.analysis.inspect import RunIndexRow
+    from whetstone.analysis.inspect import RunIndexRow
 
     rows = [
         RunIndexRow(

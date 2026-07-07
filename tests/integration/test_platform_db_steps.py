@@ -4,11 +4,9 @@ import uuid
 from datetime import UTC, timedelta
 
 import pytest
+from dr_graph import GraphSpec
 from sqlalchemy import create_engine, text
 
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform.graph_workflow import execute_prediction_graph
-from dr_dspy.records import PredictionSpecRecord
 from tests.integration.dbos_test_workflows import (
     integration_load_spec_workflow,
     integration_persist_result_workflow,
@@ -23,6 +21,8 @@ from tests.support.postgres_fixtures import (
     seed_prediction_spec,
     start_test_workflow,
 )
+from whetstone.platform.graph_workflow import execute_prediction_graph
+from whetstone.records import PredictionSpecRecord
 
 pytestmark = pytest.mark.integration
 

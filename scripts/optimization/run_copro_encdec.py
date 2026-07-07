@@ -9,11 +9,12 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from dr_platform import destroy_dbos_runtime
+from dr_providers.kernel import EndpointKind, ProviderKind
 from rich.console import Console
 from sqlalchemy import create_engine
 
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.optimization.copro import (
+from whetstone.optimization.copro import (
     CoproExecutionMode,
     CoproProposalMode,
     CoproRunConfig,
@@ -21,10 +22,9 @@ from dr_dspy.optimization.copro import (
     run_copro_loop,
     write_copro_artifacts,
 )
-from dr_dspy.platform.cli_env import load_env_file, run_typer_app
-from dr_dspy.platform.dbos_bootstrap import destroy_dbos_runtime
-from dr_dspy.platform.spec_builder import DEFAULT_CONFIGS_ROOT
-from dr_dspy.platform.worker import configure_platform_dbos_runtime
+from whetstone.platform.cli_env import load_env_file, run_typer_app
+from whetstone.platform.spec_builder import DEFAULT_CONFIGS_ROOT
+from whetstone.platform.worker import configure_platform_dbos_runtime
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 console = Console()
@@ -195,7 +195,7 @@ def main(
             if execution_mode is CoproExecutionMode.QUEUE:
                 commands.append(
                     "# queue mode requires: "
-                    "uv run python -m dr_dspy.platform.worker worker"
+                    "uv run python -m whetstone.platform.worker worker"
                 )
             console.print(
                 {

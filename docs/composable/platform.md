@@ -2,8 +2,13 @@
 
 # Platform Extraction: High-Level Design
 
-Status: draft — high-level plan only. Sections will be filled in as design
-discussion continues.
+Status: extracted (Stage 6 complete, 2026-07-04). The library lives at
+`danielle-rothermel/dr-platform`; whetstone consumes it via
+`platform/platform_db.py` (frozen physical naming + lineage adoption),
+`platform/submission.py` (the app composition), and `queue_worker.py`.
+The former open sections are filled in at the bottom; consumer sketches
+live in `sketches/` and were re-checked against the shipped facade
+(6d).
 
 This doc covers the **platform library** extraction: the durable
 experiment-running machinery currently embedded in `dr_dspy.platform` (plus
@@ -154,6 +159,23 @@ Before freezing the API, sketch nl_latents' seed → run → read loop written
 against the facade. The API is right when that sketch is small and imports
 no internals.
 
+*(Done — `sketches/nl_latents_loop.py` and
+`sketches/optimizer_population_eval.py`. Both import only the
+`dr_platform` facade; each hand-rolled piece of the lineage systems
+maps to exactly one facade call. The one facade addition they forced
+is `await_operation` — both consumers otherwise re-implement
+work-completion polling.)*
+
+*(6d re-check against the shipped library: the altitude held — no
+passthrough wrappers accreted. Drift folded back into the sketches:
+facade calls take an explicit `schema` handle (`PlatformSchema`) and
+`group_key`; the seed hook runs inside the registration transaction
+and returns inserted ids; no adapter class is needed for whetstone
+(`PredictionSpecRecord` satisfies `SubmittableItem` directly). The
+optimizer loop is no longer hypothetical: whetstone's
+`evaluate_specs_queue` now runs submit_batch → await_operation →
+rescore in production code.)*
+
 Second consumer sketch: **optimizer population evaluation**. An outer-loop
 optimizer (COPRO today; GEPA/RL later) manufactures a population of graph
 specs and needs "submit population under one operation key → await batch
@@ -162,11 +184,276 @@ optimizers are ordinary durable code that searches over spec data (see
 `graph_runner.md`). `optimization/copro.py` is the existing prototype of
 this shape.
 
-## Open sections (to fill in)
+## Package name and repo layout (resolved)
 
-- Package name and repo layout.
-- Exact protocol definitions (`SubmittableItem`, enqueue seam).
-- Library-owned schema and migration story.
-- Projection API sketch.
-- Artifact store API sketch.
-- Cutover plan from `dr_dspy.platform`.
+**`dr-platform`** (package `dr_platform`), private repo
+`danielle-rothermel/dr-platform`, scaffolded like the siblings (uv, src
+layout, py≥3.12, strict ruff + ty + pytest + pre-commit, py.typed).
+
+Dependencies: `pydantic`, `sqlalchemy`, `dbos`, `alembic` (the library
+ships migrations its adopters run), `dr-serialize` (canonical digests
+for item/claim IDs and deterministic jitter), `dr-providers`
+(`FailureClass` only — the taxonomy home per overall.md). `pandas` is an
+optional extra (`dr-platform[frames]`): the projection core returns
+typed rows; the DataFrame helper needs the extra.
+
+Module map (whetstone source → library module):
+
+| dr_platform module | extracted from | notes |
+|---|---|---|
+| `items.py` | (new) | `SubmittableItem`, `ItemIdentity`, `stable_item_id` |
+| `fairness.py` | `platform/fairness.py` | key extractor = protocol fields |
+| `jsonl.py` | `platform/jsonl_specs.py` | field names parameterized |
+| `submission.py` | `platform/submission.py` | claim/lease loop, `submit_batch` |
+| `enqueue.py` | `platform/queue_worker.py` | dedup enqueue + race detection, de-domained |
+| `backoff.py` | `platform/backoff.py` | + tags/holds columns |
+| `progress.py` | `platform/progress_log.py` | verbatim (already generic) |
+| `observability.py` | (new + `dbos_compat` status vocab) | `load_operation_progress`, attempt history, `await_operation` |
+| `projections.py` | (new; pattern from `analysis/frames.py`) | rebuildable versioned projections |
+| `artifacts.py` | (new; PayloadRef lineage) | content-addressed local-dir store |
+| `dbos_config.py` | `dbos_bootstrap.py` + `dbos_compat.py` | URL/config resolution; the single `dbos._error` shim |
+| `db/` | `db/schema.py` (platform tables) | prefix-parameterized schema + own Alembic lineage |
+| `batch_status.py` | `records/batch_submit.py` | status/count state machine (pure) |
+
+Stays in whetstone: `graph_workflow.py`, `node_execution.py`,
+`persistence.py`, scoring workflows, `spec_builder.py`, worker CLI,
+`records/` (all of it — the batch operation/item *record models* move
+into the library since they describe library-owned tables; the frozen
+ID-axis functions in `records/hashing.py` stay), `db/` outcome schema
+and its migrations, `analysis/` plotting/reporting.
+
+## Protocol definitions (resolved)
+
+```python
+@runtime_checkable
+class SubmittableItem(Protocol):
+    """What the library needs to know about a work item — nothing else.
+    Whetstone adapts PredictionSpecRecord: prediction_id /
+    fair_order_key / experiment_name."""
+
+    @property
+    def item_id(self) -> str: ...     # stable identity (PK-ish)
+    @property
+    def order_key(self) -> str: ...   # fair-ordering sort key
+    @property
+    def group_key(self) -> str: ...   # sweep/experiment grouping
+```
+
+**Identity compatibility (`ItemIdentity`).** Persisted digest recipes
+currently hash JSON payloads whose *key names* are domain words:
+`batch_submit_item_id = sha256_json_digest({"operation_key": ...,
+"prediction_id": ...}, length=32)`. Those IDs are primary keys in
+existing rows and an ID axis under the frozen-contracts rule, so the
+facade takes an identity config:
+
+```python
+class ItemIdentity(BaseModel):
+    item_key_label: str = "item_id"   # whetstone passes "prediction_id"
+    id_length: int = 32
+```
+
+The claim-token recipe (`{"operation_key", <label>, "claimed_at"}`)
+parameterizes the same way. New adopters use the neutral default;
+whetstone reproduces today's bytes exactly.
+
+**Enqueue seam.** The library never sees a workflow function; it sees a
+callable that starts (or finds) durable work for one item and reports
+what happened:
+
+```python
+class EnqueueOutcome(BaseModel):
+    workflow_id: str
+    enqueued: bool                      # False -> already scheduled
+    metadata: dict[str, Any] = {}       # e.g. generation_run_id
+
+type EnqueueItem = Callable[[str], EnqueueOutcome]   # item_id ->
+```
+
+The library separately exposes the mechanism apps build enqueue targets
+from (today's queue_worker internals, de-domained):
+`dedup_enqueue(queue_name, workflow_id, workflow, *args) ->
+EnqueueOutcome` wrapping `SetWorkflowID` + `SetEnqueueOptions(
+deduplication_id=...)` + `DBOS.get_workflow_status` pre-check +
+`WORKFLOW_START_RACE_ERRORS` handling. Whetstone's enqueue target stays
+app-side (it derives `generation_run_id` and names the frozen queue
+`dr-dspy-platform-generation-v1`; queue registration and names remain
+app-owned frozen strings).
+
+**Seed hook.** Today `prepare_submission_records` inserts domain rows
+(experiment, prediction specs) in the same transaction as operation and
+item registration. The library keeps the atomicity without the domain
+knowledge:
+
+```python
+def submit_batch(
+    engine, *,
+    operation_key: str,
+    items: Sequence[SubmittableItem],
+    enqueue: EnqueueItem,
+    seed: Callable[[Connection, Sequence[SubmittableItem]], None] | None = None,
+    identity: ItemIdentity = ItemIdentity(),
+    chunk_size: int = 500,
+    metadata: dict[str, Any] | None = None,
+) -> BatchSubmitResult: ...
+```
+
+`seed` runs inside the registration transaction per window; whetstone
+passes its experiment/spec inserts. The claim/lease state machine
+(PENDING → CLAIMING → ENQUEUED / WORKFLOW_ALREADY_PRESENT / FAILED,
+CAS claims on `enqueue_status='pending'`, claim-token CAS on outcome
+commit, stale-claim and failed-item resets before each pass) moves
+verbatim. Enqueue failures are recorded as a library-owned
+`EnqueueFailure` model (`error_type`, `message`, `failure_class:
+FailureClass | None`, `metadata`) — same JSONB shape as today's
+`FailureMetadataPayload` so existing rows read back cleanly.
+
+**Backoff/throttle.** `record_throttle_failure` drops its dependency on
+whetstone's `FailureSummary`: it takes `failure_class: FailureClass`,
+`error_type: str`, `message: str | None`, `metadata` explicitly.
+Retryable set stays `{TRANSIENT, RATE_LIMITED}` keyed on the canonical
+`FailureClass`. Tags and holds land on the same table (below):
+`set_hold(connection, *, throttle_key, duration | until, reason)`,
+`clear_hold`, `set_tags`, `list_throttle_state(connection, *,
+tag_filter=None)`; `delay_until_unblocked_seconds` becomes
+`max(blocked_until, hold_until)` so operator holds and automatic
+backoff compose.
+
+**Await primitive.** Both consumer sketches need "wait until this
+operation's work is done" and hand-roll it today (copro's
+`wait_for_generation_runs`; nl_latents' bespoke polling). Workflow IDs
+are deterministic and recorded in `enqueue_metadata`, so the library
+can watch DBOS workflow statuses with no domain knowledge:
+`await_operation(engine, *, operation_key, poll_interval_seconds,
+timeout_seconds)` polls the recorded workflow IDs until none are in
+`{ENQUEUED, PENDING, DELAYED}`, returning a status breakdown; timeout
+raises with the breakdown attached.
+
+## Library-owned schema and migration story (resolved)
+
+Two constraints jointly force the design: the library owns its tables
+with its own Alembic lineage (this doc / prompt), and whetstone's
+existing physical names (`dr_dspy_batch_submit_operations`,
+`dr_dspy_batch_submit_items`, `dr_dspy_throttle_backoff`) are frozen
+byte-for-byte. Therefore:
+
+- **Prefix-parameterized schema.** `PlatformSchema(prefix="dr_platform")`
+  builds the SQLAlchemy `MetaData` with names
+  `{prefix}_batch_submit_operations`, `{prefix}_batch_submit_items`,
+  `{prefix}_throttle_backoff`, `{prefix}_projections` (registry),
+  plus per-projection tables `{prefix}_projection_{name}`. Whetstone
+  configures `prefix="dr_dspy"` — physical names unchanged.
+- **Own Alembic lineage, stamped baseline for whetstone.** dr-platform
+  ships `alembic/` with version table `{prefix}_platform_alembic_version`
+  and revision 0001 = create-platform-tables (reading the prefix from
+  Alembic `-x prefix=...` / env config). Fresh adopters run
+  `upgrade head`. Whetstone's tables already exist from its frozen
+  historical migrations, so whetstone **stamps** revision 0001 instead
+  of running it. Whetstone's own lineage keeps its history byte-frozen
+  and simply never touches platform tables again; all future platform
+  DDL (e.g. the holds/tags columns) arrives as dr-platform revisions.
+- **New columns at extraction** (dr-platform revision 0002, run — not
+  stamped — by whetstone too): `hold_until timestamptz NULL`,
+  `hold_reason text NULL`, `tags jsonb NOT NULL DEFAULT '{}'` on the
+  throttle table; the `{prefix}_projections` registry table
+  (`projection_name`, `projection_version`, `built_at`, `row_count`,
+  PK `(projection_name, projection_version)`).
+
+Risk recorded: two Alembic version tables in one database is standard
+but unusual here; the guard is that the whetstone lineage's platform-
+table history is additive-frozen and dr-platform 0001 is a no-op-if-
+stamped baseline. The integration tier (which migrates a scratch DB)
+must exercise both paths: fresh `upgrade head` and stamp-then-0002.
+
+## Projection API sketch (resolved)
+
+The *pattern* is platform; queries and plotting stay app-side.
+
+```python
+class ProjectionSpec[RowT: BaseModel](BaseModel):
+    name: str                    # e.g. "copro_candidate_scores"
+    version: str                 # projection_version; bump -> rebuild
+    row_model: type[RowT]        # typed rows, never dict grab-bags
+    build: Callable[[Connection], Iterable[RowT]]   # app-side query
+
+def rebuild_projection(engine, spec) -> ProjectionBuildResult
+    # delete rows for (name, version), re-insert from build(),
+    # upsert the registry row; never migrated, always rebuilt.
+def load_projection_rows(engine, spec, *, group_key=None) -> list[RowT]
+def load_projection_frame(engine, spec, *, group_key=None) -> DataFrame
+    # requires dr-platform[frames]
+```
+
+Projection tables are `{prefix}_projection_{name}` with columns derived
+from `row_model` (scalar pydantic fields → native columns via a small
+fixed mapping: str/int/float/bool/datetime; everything else JSONB),
+plus `projection_version`. A `group_key` column is materialized when
+the row model declares one, giving cheap per-experiment reads.
+Whetstone's `dr_dspy_prediction_projection` table predates this API and
+stays app-owned as-is; whetstone adopts the library pattern for new
+projections rather than migrating that table (conservative choice).
+
+## Artifact store API sketch (resolved)
+
+```python
+class ArtifactRef(BaseModel):
+    sha256: str
+    size_bytes: int
+    content_type: str
+
+class ArtifactStore(Protocol):
+    def put_bytes(self, data: bytes, *, content_type: str = "application/octet-stream") -> ArtifactRef: ...
+    def get_bytes(self, ref: ArtifactRef | str) -> bytes: ...   # verify-on-read
+    def exists(self, sha256: str) -> bool: ...
+
+class LocalDirArtifactStore:                 # the only backend now
+    def __init__(self, root: Path | str) -> None: ...
+    # layout: <root>/<sha[:2]>/<sha[2:4]>/<sha>; atomic write via
+    # tmpfile + rename; get_bytes recomputes the digest and raises
+    # ArtifactIntegrityError on mismatch.
+```
+
+Rows keep pointers (the three `ArtifactRef` fields) wherever the app
+wants them; the library does not own an artifacts table in v1 (the
+content-addressed directory is self-describing; a registry table can
+arrive with the S3 backend when demand exists).
+
+## Cutover plan from `whetstone.platform` (resolved)
+
+Sequenced like every other stage — library lands green first, then one
+whetstone cutover commit per surface, full suite + integration tier +
+goldens after each:
+
+1. **6a — repo + pure kernel.** Scaffold dr-platform; move the pure
+   modules (`progress.py`, `batch_status.py`, `fairness.py`,
+   `jsonl.py`, `dbos_config.py`, `items.py`) with their tests,
+   de-domained (protocol fields / parameterized field names). No
+   whetstone change yet.
+2. **6b — schema + stateful modules.** `PlatformSchema`, Alembic
+   lineage (0001 baseline + 0002 holds/tags/projections),
+   `backoff.py`, `submission.py`, `enqueue.py`, `observability.py`
+   (`await_operation`), `projections.py`, `artifacts.py`; suite green
+   against a scratch Postgres (fresh-upgrade path).
+3. **6c — whetstone cutover.** Path dep; `SubmittableItem` adapter on
+   `PredictionSpecRecord` (property aliases — records models are
+   frozen); seed hook wraps today's experiment/spec inserts; enqueue
+   target stays app-side over `dedup_enqueue`; backoff call sites in
+   `graph_workflow.py` pass explicit failure fields; batch
+   operation/item record models re-home to the library (whetstone
+   re-exports nothing — imports move); whetstone stamps dr-platform
+   0001 and runs 0002; delete the extracted modules; worker CLI and
+   `rescoring.py` re-wire onto the facade. Frozen strings verified
+   unchanged: queue/workflow/step names, all `dr_dspy_*` table names,
+   `enqueue_metadata` keys (`enqueue_claim_id`, `claimed_at`,
+   `workflow_id`, `generation_run_id`), `batch_submit_item_id` digest
+   bytes (via `ItemIdentity(item_key_label="prediction_id")`).
+4. **6d — consumer validation.** copro's `evaluate_specs_queue` +
+   `wait_for_generation_runs` collapse onto `submit_batch` +
+   `await_operation`; the integration tier exercises stamp-then-0002
+   migration; the two sketches are re-checked against the real facade
+   (they must not have drifted).
+
+Escalation points (stop and write up rather than improvise): any
+mismatch in `batch_submit_item_id` bytes; any Alembic state where
+stamp/upgrade would touch a frozen whetstone revision; any place the
+whetstone adapter wants a passthrough wrapper (altitude smell per the
+house rules).

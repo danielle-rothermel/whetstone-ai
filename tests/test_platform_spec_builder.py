@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 
 import pytest
+from dr_code.humaneval.sampling import SampledHumanEvalTask
+from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_platform import index_jsonl_items
 
-from dr_dspy.humaneval.sampling import SampledHumanEvalTask
-from dr_dspy.humaneval.task import HumanEvalTask, parse_human_eval_dataset
-from dr_dspy.platform import jsonl_specs, spec_builder
-from dr_dspy.platform.spec_builder import (
+from whetstone.platform import spec_builder
+from whetstone.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
     HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
     ComposableExperimentConfig,
@@ -25,7 +26,8 @@ from dr_dspy.platform.spec_builder import (
     resolve_config_path,
     task_snapshot_from_humaneval,
 )
-from dr_dspy.records import PredictionSpecRecord
+from whetstone.platform.submission import WHETSTONE_JSONL_FIELDS
+from whetstone.records import PredictionSpecRecord
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "experiment_configs"
 
@@ -114,9 +116,10 @@ def test_generated_jsonl_indexes_for_submit(tmp_path: Path) -> None:
     specs_file = tmp_path / "specs.jsonl"
     spec_builder.write_prediction_specs_jsonl(specs, specs_file)
 
-    refs = jsonl_specs.index_jsonl_prediction_specs(
+    refs = index_jsonl_items(
         specs_file,
-        experiment_name="direct-exp",
+        group_key="direct-exp",
+        fields=WHETSTONE_JSONL_FIELDS,
     )
 
     assert len(refs) == len(specs)

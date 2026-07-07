@@ -4,19 +4,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from dr_graph import GraphSpec
+from dr_platform import backoff
 from sqlalchemy import create_engine
 
-from dr_dspy.eval_failures import (
-    FailureClass,
-    FailureSummary,
-    PermanentFailureError,
-    TransientFailureError,
-)
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import backoff, graph_workflow
-from dr_dspy.platform.graph_workflow import run_prediction_graph_workflow_once
-from dr_dspy.platform.node_execution import NodeStepResult
-from dr_dspy.records import GenerationRunStatus, stable_generation_run_id
 from tests.support.platform_integration_helpers import (
     count_generation_runs,
     fetch_node_attempts,
@@ -29,6 +20,18 @@ from tests.support.platform_workflow_fixtures import (
     prediction_spec,
     step_success,
 )
+from whetstone.eval_failures import (
+    FailureClass,
+    PermanentFailureError,
+    TransientFailureError,
+)
+from whetstone.platform import graph_workflow
+from whetstone.platform.graph_workflow import (
+    run_prediction_graph_workflow_once,
+)
+from whetstone.platform.node_execution import NodeStepResult
+from whetstone.platform.platform_db import PLATFORM_SCHEMA
+from whetstone.records import GenerationRunStatus, stable_generation_run_id
 
 pytestmark = pytest.mark.integration
 
@@ -43,8 +46,8 @@ def _mock_lm_success(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         calls.append((node.id, str(node_inputs.get("prompt", ""))))
@@ -430,17 +433,13 @@ def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
             backoff.record_throttle_failure(
                 connection,
                 throttle_key=throttle_key,
-                failure=FailureSummary(
-                    failure_class=FailureClass.RATE_LIMITED,
-                    failure_exception_type=(
-                        "dr_dspy.eval_failures.RateLimitedFailureError"
-                    ),
-                    underlying_exception_type=(
-                        "dr_dspy.eval_failures.RateLimitedFailureError"
-                    ),
-                    message="rate limited",
+                failure_class=FailureClass.RATE_LIMITED,
+                error_type=(
+                    "whetstone.eval_failures.RateLimitedFailureError"
                 ),
+                message="rate limited",
                 now=datetime.now(UTC),
+                schema=PLATFORM_SCHEMA,
             )
     finally:
         engine.dispose()
@@ -465,8 +464,8 @@ def test_workflow_throttle_preflight_reads_postgres_before_lm_step(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         call_order.append("lm")

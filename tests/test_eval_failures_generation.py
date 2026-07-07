@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from dr_dspy.eval_failures import (
+from whetstone.eval_failures import (
     EmptyGenerationError,
     FailureClass,
     PredictionParseError,

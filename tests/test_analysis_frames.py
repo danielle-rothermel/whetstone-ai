@@ -6,17 +6,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
 
-from dr_dspy.analysis.figures import FigureRun
-from dr_dspy.analysis.frames import (
+from whetstone.analysis.figures import FigureRun
+from whetstone.analysis.frames import (
     extract_encoder_decoder_models,
     is_pass_row,
     normalize_compression_target,
     parse_score_metrics,
     select_encdec_analysis_rows,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.records import ScoreAttemptStatus
+from whetstone.records import ScoreAttemptStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts" / "analysis"
@@ -78,7 +78,7 @@ def test_normalize_compression_target_falls_back_to_budget_ratio() -> None:
 
 
 def test_normalize_compression_target_unwraps_dimensions_values() -> None:
-    from dr_dspy.analysis.frames import _dimension_values
+    from whetstone.analysis.frames import _dimension_values
 
     wrapped = {"values": {"budget_ratio": 0.25}}
     assert normalize_compression_target(wrapped) is None

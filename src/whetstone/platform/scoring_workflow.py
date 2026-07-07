@@ -1,0 +1,490 @@
+from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from functools import cache
+from typing import Any
+
+from dbos import DBOS, SetWorkflowID
+from dr_code.humaneval.profiles import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    HumanEvalScoringProfile,
+    resolve_humaneval_scoring_profile,
+)
+from dr_code.humaneval.sampling import load_human_eval_rows
+from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_platform import WORKFLOW_START_RACE_ERRORS
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import create_engine
+
+from whetstone.platform.persistence import (
+    ScoreAttemptInsertResult,
+    ScoreAttemptInsertStatus,
+    load_generation_run,
+    load_node_attempts_for_generation_run,
+    load_prediction_spec,
+    persist_score_attempt,
+)
+from whetstone.platform.scoring import score_generation_run
+from whetstone.platform.scoring_workflow_state import (
+    ScoringWorkflowPresence,
+    classify_scoring_workflow_presence,
+    recover_orphan_scoring_workflow,
+)
+from whetstone.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
+    GenerationRunRecord,
+    NodeAttemptRecord,
+    PredictionSpecRecord,
+    ScoreAttemptRecord,
+    stable_score_attempt_id,
+)
+
+PLATFORM_SCORING_WORKFLOW_NAME = "dr_dspy_platform_humaneval_scoring_v1"
+LOAD_SCORING_TARGET_STEP_NAME = "dr_dspy_platform_load_scoring_target_v1"
+LOAD_HUMANEVAL_TASK_STEP_NAME = "dr_dspy_platform_load_humaneval_task_v1"
+SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
+SCORE_GENERATION_STEP_NAME = "dr_dspy_platform_score_generation_v1"
+PERSIST_SCORE_ATTEMPT_STEP_NAME = "dr_dspy_platform_persist_score_attempt_v1"
+WORKFLOW_ID_PREFIX = "platform-score-v1"
+
+
+class ScoreGenerationWorkflowResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_attempt_id: str
+    insert_status: ScoreAttemptInsertStatus
+
+
+class ScheduledScoreGenerationWorkflow(BaseModel):
+    model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    score_attempt_id: str
+    workflow_id: str
+    scheduled: bool
+    recovered: bool = False
+    workflow_handle: Any | None = Field(default=None, exclude=True)
+
+
+@DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
+def run_score_generation_workflow(
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int = 0,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+) -> dict[str, Any]:
+    target = load_scoring_target_step(database_url, generation_run_id)
+    spec = PredictionSpecRecord.model_validate(target["spec"])
+    generation_run = GenerationRunRecord.model_validate(
+        target["generation_run"]
+    )
+    node_attempts = tuple(
+        NodeAttemptRecord.model_validate(payload)
+        for payload in target["node_attempts"]
+    )
+    task = humaneval_task_from_payload(
+        load_humaneval_task_step(
+            dataset_name,
+            dataset_split,
+            spec.task_id,
+        )
+    )
+    scoring_profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    score_attempt_id = stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
+        attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    started_at = datetime.fromisoformat(
+        scoring_started_at_step(score_attempt_id)
+    )
+    score_attempt_payload = score_generation_step(
+        spec.model_dump(mode="json"),
+        generation_run.model_dump(mode="json"),
+        [attempt.model_dump(mode="json") for attempt in node_attempts],
+        task.model_dump(mode="json"),
+        scoring_profile.model_dump(mode="json"),
+        score_attempt_index,
+        dataset_name,
+        dataset_split,
+        started_at.isoformat(),
+    )
+    insert_result = ScoreAttemptInsertResult.model_validate(
+        persist_score_attempt_step(database_url, score_attempt_payload)
+    )
+    return ScoreGenerationWorkflowResult(
+        score_attempt_id=score_attempt_id,
+        insert_status=insert_result.status,
+    ).model_dump(mode="json")
+
+
+def start_score_generation_workflow(
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int = 0,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+) -> str:
+    score_attempt_id, _handle = _start_score_generation_workflow_handle(
+        database_url=database_url,
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    return score_attempt_id
+
+
+def schedule_score_generation_workflow(
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int = 0,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    recover_orphans: bool = True,
+) -> ScheduledScoreGenerationWorkflow:
+    score_attempt_id = score_attempt_id_for_workflow(
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    workflow_id = platform_scoring_workflow_id(score_attempt_id)
+    presence = classify_scoring_workflow_presence(
+        database_url=database_url,
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+    )
+    if presence is ScoringWorkflowPresence.COMPLETE:
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    if presence is ScoringWorkflowPresence.IN_FLIGHT:
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    if presence is ScoringWorkflowPresence.ORPHAN:
+        if recover_orphans and recover_orphan_scoring_workflow(
+            database_url=database_url,
+            workflow_id=workflow_id,
+            score_attempt_id=score_attempt_id,
+            replay_workflow=run_score_generation_workflow,
+            replay_args=(
+                database_url,
+                generation_run_id,
+                score_attempt_index,
+                scoring_profile_id,
+                scoring_profile_version,
+                dataset_name,
+                dataset_split,
+            ),
+        ):
+            return ScheduledScoreGenerationWorkflow(
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                scheduled=True,
+                recovered=True,
+            )
+        return ScheduledScoreGenerationWorkflow(
+            score_attempt_id=score_attempt_id,
+            workflow_id=workflow_id,
+            scheduled=False,
+        )
+    with SetWorkflowID(workflow_id):
+        try:
+            workflow_handle = DBOS.start_workflow(
+                run_score_generation_workflow,
+                database_url,
+                generation_run_id,
+                score_attempt_index,
+                scoring_profile_id,
+                scoring_profile_version,
+                dataset_name,
+                dataset_split,
+            )
+        except WORKFLOW_START_RACE_ERRORS:
+            return ScheduledScoreGenerationWorkflow(
+                score_attempt_id=score_attempt_id,
+                workflow_id=workflow_id,
+                scheduled=False,
+            )
+        except Exception as error:
+            if _scoring_workflow_start_raced(
+                workflow_id=workflow_id,
+                error=error,
+            ):
+                return ScheduledScoreGenerationWorkflow(
+                    score_attempt_id=score_attempt_id,
+                    workflow_id=workflow_id,
+                    scheduled=False,
+                )
+            raise
+    return ScheduledScoreGenerationWorkflow(
+        score_attempt_id=score_attempt_id,
+        workflow_id=workflow_id,
+        scheduled=True,
+        workflow_handle=workflow_handle,
+    )
+
+
+def await_scheduled_score_workflows(handles: Sequence[Any]) -> None:
+    for handle in handles:
+        handle.get_result()
+
+
+def run_score_generation_workflow_once(
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int = 0,
+    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
+    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+) -> ScoreGenerationWorkflowResult:
+    _score_attempt_id, handle = _start_score_generation_workflow_handle(
+        database_url=database_url,
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    result = handle.get_result()
+    if not isinstance(result, dict):
+        raise TypeError("platform scoring workflow returned a non-dict result")
+    return ScoreGenerationWorkflowResult.model_validate(result)
+
+
+def platform_scoring_workflow_id(score_attempt_id: str) -> str:
+    return f"{WORKFLOW_ID_PREFIX}:{score_attempt_id}"
+
+
+def score_attempt_id_for_workflow(
+    *,
+    generation_run_id: str,
+    score_attempt_index: int,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
+    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+) -> str:
+    scoring_profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    return stable_score_attempt_id(
+        generation_run_id=generation_run_id,
+        scoring_profile_id=scoring_profile.profile_id,
+        scoring_profile_version=scoring_profile.version,
+        parser_profile_id=scoring_profile.parser_profile.profile_id,
+        parser_version=scoring_profile.parser_profile.version,
+        attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+
+
+def _scoring_workflow_start_raced(
+    *,
+    workflow_id: str,
+    error: BaseException,
+) -> bool:
+    _ = workflow_id
+    return isinstance(error, WORKFLOW_START_RACE_ERRORS)
+
+
+def _start_score_generation_workflow_handle(
+    *,
+    database_url: str,
+    generation_run_id: str,
+    score_attempt_index: int,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    dataset_name: str,
+    dataset_split: str,
+) -> tuple[str, Any]:
+    score_attempt_id = score_attempt_id_for_workflow(
+        generation_run_id=generation_run_id,
+        score_attempt_index=score_attempt_index,
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
+        handle = DBOS.start_workflow(
+            run_score_generation_workflow,
+            database_url,
+            generation_run_id,
+            score_attempt_index,
+            scoring_profile_id,
+            scoring_profile_version,
+            dataset_name,
+            dataset_split,
+        )
+    return score_attempt_id, handle
+
+
+@DBOS.step(name=LOAD_SCORING_TARGET_STEP_NAME)
+def load_scoring_target_step(
+    database_url: str,
+    generation_run_id: str,
+) -> dict[str, Any]:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            generation_run = load_generation_run(
+                connection,
+                generation_run_id=generation_run_id,
+            )
+            spec = load_prediction_spec(
+                connection,
+                prediction_id=generation_run.prediction_id,
+            )
+            node_attempts = load_node_attempts_for_generation_run(
+                connection,
+                generation_run_id=generation_run_id,
+            )
+        return {
+            "spec": spec.model_dump(mode="json"),
+            "generation_run": generation_run.model_dump(mode="json"),
+            "node_attempts": [
+                attempt.model_dump(mode="json") for attempt in node_attempts
+            ],
+        }
+    finally:
+        engine.dispose()
+
+
+@DBOS.step(name=LOAD_HUMANEVAL_TASK_STEP_NAME)
+def load_humaneval_task_step(
+    dataset_name: str,
+    dataset_split: str,
+    task_id: str,
+) -> dict[str, Any]:
+    task = load_humaneval_task_map(
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    ).get(task_id)
+    if task is None:
+        raise ValueError(f"HumanEval task not found: {task_id}")
+    return humaneval_task_payload(task)
+
+
+@cache
+def load_humaneval_task_map(
+    *,
+    dataset_name: str,
+    dataset_split: str,
+) -> dict[str, HumanEvalTask]:
+    tasks = parse_human_eval_dataset(
+        load_human_eval_rows(
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+        )
+    )
+    return {task.task_id: task for task in tasks}
+
+
+@DBOS.step(name=SCORING_STARTED_AT_STEP_NAME)
+def scoring_started_at_step(score_attempt_id: str) -> str:
+    return timestamp_now_iso()
+
+
+def timestamp_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+@DBOS.step(name=SCORE_GENERATION_STEP_NAME)
+def score_generation_step(
+    spec_payload: dict[str, Any],
+    generation_run_payload: dict[str, Any],
+    node_attempt_payloads: list[dict[str, Any]],
+    task_payload: dict[str, Any],
+    scoring_profile_payload: dict[str, Any],
+    score_attempt_index: int,
+    dataset_name: str,
+    dataset_split: str,
+    started_at: str,
+) -> dict[str, Any]:
+    scoring_profile = HumanEvalScoringProfile.model_validate(
+        scoring_profile_payload
+    )
+    record = score_generation_run(
+        spec=PredictionSpecRecord.model_validate(spec_payload),
+        generation_run=GenerationRunRecord.model_validate(
+            generation_run_payload
+        ),
+        node_attempts=tuple(
+            NodeAttemptRecord.model_validate(payload)
+            for payload in node_attempt_payloads
+        ),
+        task=humaneval_task_from_payload(task_payload),
+        scoring_profile=scoring_profile,
+        score_attempt_index=score_attempt_index,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        started_at=datetime.fromisoformat(started_at),
+    )
+    return record.model_dump(mode="json")
+
+
+@DBOS.step(name=PERSIST_SCORE_ATTEMPT_STEP_NAME)
+def persist_score_attempt_step(
+    database_url: str,
+    score_attempt_payload: dict[str, Any],
+) -> dict[str, Any]:
+    score_attempt = ScoreAttemptRecord.model_validate(score_attempt_payload)
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            result = persist_score_attempt(
+                connection,
+                score_attempt=score_attempt,
+            )
+        return result.model_dump(mode="json")
+    finally:
+        engine.dispose()
+
+
+def humaneval_task_payload(task: HumanEvalTask) -> dict[str, Any]:
+    return task.model_dump(
+        mode="json",
+        exclude={
+            "ground_truth_code",
+            "ground_truth_code_without_comments",
+        },
+    )
+
+
+def humaneval_task_from_payload(payload: dict[str, Any]) -> HumanEvalTask:
+    cleaned = dict(payload)
+    cleaned.pop("ground_truth_code", None)
+    cleaned.pop("ground_truth_code_without_comments", None)
+    return HumanEvalTask.model_validate(cleaned)

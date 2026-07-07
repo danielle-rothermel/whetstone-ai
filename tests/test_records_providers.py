@@ -3,9 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
-
-from dr_dspy.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -14,8 +12,10 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.records import (
+from dr_providers.kernel import EndpointKind, ProviderKind
+from pydantic import ValidationError
+
+from whetstone.records import (
     DimensionsPayload,
     GraphSnapshotPayload,
     NodeAttemptRecord,
@@ -29,7 +29,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records.providers import find_provider_config_ref
+from whetstone.records.providers import find_provider_config_ref
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -37,6 +37,7 @@ NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 def _node(node_id: str) -> NodeSpec:
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=(
                 FieldSpec(name="prompt", role=FieldRole.INPUT),

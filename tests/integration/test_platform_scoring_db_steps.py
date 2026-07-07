@@ -3,20 +3,17 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
-
-from dr_dspy.humaneval.code_parsing import (
+from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
 )
-from dr_dspy.humaneval.profiles import (
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
-from dr_dspy.platform.persistence import persist_score_attempt
-from dr_dspy.platform.scoring import score_generation_run
-from dr_dspy.records import stable_score_attempt_id
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
+
 from tests.integration.dbos_test_workflows import (
     integration_load_scoring_target_workflow,
     integration_persist_score_workflow,
@@ -30,6 +27,9 @@ from tests.support.platform_scoring_fixtures import (
     seeded_scoring_target,
 )
 from tests.support.postgres_fixtures import start_test_workflow
+from whetstone.platform.persistence import persist_score_attempt
+from whetstone.platform.scoring import score_generation_run
+from whetstone.records import stable_score_attempt_id
 
 pytestmark = pytest.mark.integration
 

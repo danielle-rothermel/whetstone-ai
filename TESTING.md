@@ -62,7 +62,7 @@ scripts/ci/                   # portable CI entrypoints (package-root cwd)
   unit.sh
   integration.sh
   lint.sh
-src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
+src/whetstone/migration/        # v0 → v1 reshape logic (not inline in tests)
 ```
 
 ## Shared fixtures
@@ -70,8 +70,15 @@ src/dr_dspy/migration/        # v0 → v1 reshape logic (not inline in tests)
 Defined in [`tests/conftest.py`](tests/conftest.py):
 
 - **`app_postgres_schema`** — creates an isolated schema, applies v1 migrations +
-  append-only triggers, exposes `database_url` with `search_path` set for steps
-  that open their own SQLAlchemy engines.
+  append-only triggers, then adopts the dr-platform lineage
+  (`ensure_platform_schema`: stamp the library baseline — the tables already
+  exist from whetstone's own history — and apply post-baseline platform
+  migrations such as throttle holds/tags). Exposes `database_url` with
+  `search_path` set for steps that open their own SQLAlchemy engines.
+  For a real database, run the same adoption once:
+  `uv run python -c "from whetstone.platform.platform_db import
+  ensure_platform_schema; import os;
+  ensure_platform_schema(os.environ['DATABASE_URL'])"`.
 - **`reset_dbos`** — destroys/reconfigures DBOS, resets the system database
   (SQLite file under `tmp_path` by default), and launches the platform runtime.
 - **`reset_dbos_generation_consumer`** — like `reset_dbos`, but listens to the
@@ -107,7 +114,7 @@ Integration polling helpers live in
   DBOS memoization, replay, or step registration.
 - Using `_RecordingConnection` when the goal is a real Postgres round-trip.
 - Putting migration reshape logic inline in test files (belongs in
-  `src/dr_dspy/migration/`).
+  `src/whetstone/migration/`).
 
 ### v0 sample fixtures
 
@@ -115,6 +122,19 @@ Legacy rows live in [`tests/fixtures/v0_samples/`](tests/fixtures/v0_samples/) a
 committed JSON. CI does not require live v0 tables. Delete fixtures and Tier 3.5
 tests after backfill validation — see
 [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
+
+### Golden identity fixtures (composable migration)
+
+Committed identity baselines live in
+[`tests/fixtures/golden/`](tests/fixtures/golden/): canonical-JSON strings and
+digests, graph digests, record ID axes, and parser/scoring outputs under the
+v1 profiles. `uv run pytest -k golden` must stay green through every
+migration stage (success: 4 passed). Regenerate only before Stage 0 lands —
+never to paper over a migration-caused mismatch — with
+`uv run python scripts/golden/generate_golden_fixtures.py` (success: prints
+one `wrote …` line per file and `generated 4 fixture files: OK`, and a
+subsequent `uv run pytest -k golden` passes). See
+[`docs/composable/prompt.md`](docs/composable/prompt.md).
 
 ### Adding new tests
 
@@ -166,6 +186,12 @@ DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
 wiring after the org repo is created.
 
 ## Changelog
+
+### 2026-07-04 — Golden identity fixtures for the composable migration
+
+- Added `tests/fixtures/golden/` + `tests/test_golden_fixtures.py`
+  (generator: `scripts/golden/generate_golden_fixtures.py`); `uv run pytest
+  -k golden` is the identity acceptance gate for every migration stage.
 
 ### 2026-06-30 — Enc-dec smoke r2 + scoring payload sizing
 

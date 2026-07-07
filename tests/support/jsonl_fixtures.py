@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dr_dspy.records import PredictionSpecRecord
+from whetstone.records import PredictionSpecRecord
 
 
 def write_prediction_specs_jsonl(

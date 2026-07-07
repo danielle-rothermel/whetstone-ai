@@ -1,614 +1,163 @@
+"""Contract tests for the thin lm boundary adapter.
+
+Wire mechanics (payload building, parsing, transport, classification)
+are tested in dr-providers; these cover whetstone's adapter surface:
+node parameters → LlmRequest, LlmResponse → ProviderResult, and kernel
+failure translation.
+"""
+
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
-
-import dspy
-from dr_dspy.eval_failures import (
-    EmptyGenerationError,
+from dr_providers.kernel import (
+    CostInfo,
     FailureClass,
-    PermanentFailureError,
-    ProviderResponseParseError,
-    RateLimitedFailureError,
-    RecordingFailureError,
-    TransientFailureError,
-    ensure_recordable,
-    summarize_exception,
-)
-from dr_dspy.lm.boundary import (
-    EndpointKind,
-    PlainPromptAdapter,
-    ProviderConfig,
-    ProviderKind,
-    ReasoningRequestShape,
-    TokenLimitParameter,
-    build_chat_completions_request,
-    build_responses_request,
-    call_provider_request,
-    message_dicts,
-    openai_chat_config,
+    LlmResponse,
+    LlmWarning,
+    MessageRole,
+    PromptMessage,
+    RateLimitedProviderError,
+    build_payload,
+    failure_record,
     openai_responses_config,
     openrouter_chat_config,
-    parse_provider_response,
-    translate_provider_error,
+    raise_failure,
 )
-from dr_dspy.serialization import PAYLOAD_MAX_BYTES
+
+from whetstone.eval_failures import (
+    EmptyGenerationError,
+    PermanentFailureError,
+    RateLimitedFailureError,
+)
+from whetstone.lm.boundary import (
+    PlainPromptAdapter,
+    llm_request_for_node,
+    provider_result_from_response,
+    translate_provider_failure,
+)
 
 
-class _PlainComparisonSignature(dspy.Signature):
-    question: str = dspy.InputField()
-    answer: str = dspy.OutputField()
+class TestPlainPromptAdapter:
+    def test_messages_with_system(self) -> None:
+        adapter = PlainPromptAdapter()
+        messages = adapter.messages(
+            user_content="write add", system_content="be brief"
+        )
+        assert [m.role for m in messages] == [
+            MessageRole.SYSTEM,
+            MessageRole.USER,
+        ]
+
+    def test_messages_without_system(self) -> None:
+        messages = PlainPromptAdapter().messages(user_content="write add")
+        assert len(messages) == 1
+        assert messages[0].role is MessageRole.USER
 
 
-def test_plain_prompt_adapter_builds_exact_user_message() -> None:
-    adapter = PlainPromptAdapter(output_field="code")
-
-    messages = adapter.messages(user_content="solve this")
-
-    assert [message.provider_dict() for message in messages] == [
-        {"role": "user", "content": "solve this"}
-    ]
-
-
-def test_plain_prompt_adapter_builds_exact_system_and_user_messages() -> None:
-    adapter = PlainPromptAdapter(output_field="code")
-    user_content = "What is 2+2?"
-
-    messages = adapter.messages(
-        system_content="You write Python.",
-        user_content=user_content,
-    )
-    plain_content = "\n".join(message.content for message in messages)
-    dspy_messages = dspy.ChatAdapter().format(
-        _PlainComparisonSignature,
-        [],
-        {"question": user_content},
-    )
-    dspy_content = "\n".join(message["content"] for message in dspy_messages)
-
-    assert [message.provider_dict() for message in messages] == [
-        {"role": "system", "content": "You write Python."},
-        {"role": "user", "content": user_content},
-    ]
-    assert "[[ ##" in dspy_content
-    assert "[[ ##" not in plain_content
-
-
-def test_plain_prompt_adapter_returns_configured_output_field() -> None:
-    adapter = PlainPromptAdapter(output_field="code")
-    result = parse_provider_response(
-        {
-            "id": "cmpl-1",
-            "model": "model/test",
-            "choices": [
-                {
-                    "message": {"content": "def f(): pass"},
-                    "finish_reason": "stop",
-                }
-            ],
-        },
-        config=openrouter_chat_config(model="model/test"),
-    )
-
-    assert adapter.output_from_result(result) == {"code": "def f(): pass"}
-
-
-def test_openrouter_request_places_reasoning_in_extra_body() -> None:
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-        temperature=0.2,
-        token_limit=12,
-        reasoning={"effort": "low"},
-        extra_body={"provider": {"order": ["OpenAI"]}},
-        extra_kwargs={"seed": 7},
-    )
-
-    assert request.kwargs == {
-        "model": "model/test",
-        "messages": [{"role": "user", "content": "hello"}],
-        "seed": 7,
-        "temperature": 0.2,
-        "max_completion_tokens": 12,
-        "extra_body": {
-            "provider": {"order": ["OpenAI"]},
-            "reasoning": {"effort": "low"},
-        },
-    }
-
-
-def test_chat_request_merges_config_and_per_request_extra_body() -> None:
-    config = openrouter_chat_config(model="model/test").model_copy(
-        update={
-            "extra_body": {
-                "provider": {"order": ["Anthropic"]},
-                "route": "fallback",
+class TestLlmRequestForNode:
+    def test_maps_parameters_and_merges_extra_kwargs(self) -> None:
+        request = llm_request_for_node(
+            config=openrouter_chat_config(model="m"),
+            messages=(
+                PromptMessage(role=MessageRole.USER, content="hi"),
+            ),
+            parameters={
+                "temperature": 0.2,
+                "token_limit": 10,
+                "reasoning": {"effort": "low"},
+                "extra_body": {"a": 1},
+                "extra_kwargs": {"b": 2},
             },
-        },
-    )
+            idempotency_key="attempt-1",
+        )
+        assert request.temperature == 0.2
+        assert request.token_limit == 10
+        assert request.reasoning == {"effort": "low"}
+        assert request.extra_body == {"a": 1, "b": 2}
+        assert request.idempotency_key == "attempt-1"
+        payload = build_payload(request)
+        assert payload["max_completion_tokens"] == 10
+        assert payload["a"] == 1
+        assert payload["b"] == 2
 
-    request = build_chat_completions_request(
-        config=config,
-        messages=[{"role": "user", "content": "hello"}],
-        extra_body={"provider": {"order": ["OpenAI"]}},
-    )
-
-    assert request.kwargs["extra_body"] == {
-        "provider": {"order": ["OpenAI"]},
-        "route": "fallback",
-    }
-
-
-def test_provider_request_uses_custom_throttle_key() -> None:
-    config = openrouter_chat_config(model="model/test").model_copy(
-        update={"throttle_key": "openrouter:custom"},
-    )
-
-    request = build_chat_completions_request(
-        config=config,
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    assert request.throttle_key == "openrouter:custom"
-
-
-def test_chat_request_suppresses_unsupported_temperature() -> None:
-    config = ProviderConfig(
-        provider_kind=ProviderKind.OPENAI,
-        endpoint_kind=EndpointKind.CHAT_COMPLETIONS,
-        model="o-test",
-        api_key_env="OPENAI_API_KEY",
-        temperature_supported=False,
-        reasoning_shape=ReasoningRequestShape.TOP_LEVEL,
-        token_limit_parameter=TokenLimitParameter.MAX_COMPLETION_TOKENS,
-    )
-
-    request = build_chat_completions_request(
-        config=config,
-        messages=[{"role": "user", "content": "hello"}],
-        temperature=0.7,
-        token_limit=10,
-        reasoning={"effort": "low"},
-    )
-
-    assert "temperature" not in request.kwargs
-    assert request.kwargs["reasoning"] == {"effort": "low"}
-    assert request.kwargs["max_completion_tokens"] == 10
+    def test_absent_parameters_stay_unset(self) -> None:
+        request = llm_request_for_node(
+            config=openai_responses_config(model="m"),
+            messages=(
+                PromptMessage(role=MessageRole.USER, content="hi"),
+            ),
+            parameters={},
+        )
+        assert request.temperature is None
+        assert request.token_limit is None
+        assert request.reasoning == {}
+        payload = build_payload(request)
+        assert "temperature" not in payload
+        assert "max_output_tokens" not in payload
 
 
-def test_openai_chat_request_uses_boundary_config() -> None:
-    request = build_chat_completions_request(
-        config=openai_chat_config(model="gpt-test"),
-        messages=[{"role": "user", "content": "hello"}],
-        token_limit=10,
-    )
-
-    assert request.provider_kind is ProviderKind.OPENAI
-    assert request.endpoint_kind is EndpointKind.CHAT_COMPLETIONS
-    assert request.kwargs["model"] == "gpt-test"
-    assert request.kwargs["max_completion_tokens"] == 10
-
-
-def test_openai_responses_request_maps_system_to_instructions() -> None:
-    request = build_responses_request(
-        config=openai_responses_config(model="gpt-test"),
-        messages=[
-            {"role": "system", "content": "Be brief."},
-            {"role": "user", "content": "hello"},
-        ],
-        temperature=0.3,
-        token_limit=10,
-        reasoning={"effort": "low"},
-    )
-
-    assert request.kwargs == {
-        "model": "gpt-test",
-        "instructions": "Be brief.",
-        "input": [{"role": "user", "content": "hello"}],
-        "temperature": 0.3,
-        "max_output_tokens": 10,
-        "reasoning": {"effort": "low"},
-    }
-
-
-def test_parse_chat_completion_extracts_text_usage_and_cost() -> None:
-    result = parse_provider_response(
-        {
-            "id": "cmpl-1",
-            "model": "provider-model",
-            "choices": [
-                {
-                    "message": {"content": [{"text": "ok"}]},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {
-                "prompt_tokens": 1,
-                "completion_tokens": 2,
-                "total_tokens": 3,
-                "cost": 0.01,
+class TestProviderResultFromResponse:
+    def test_maps_parts_to_record_fields(self) -> None:
+        response = LlmResponse(
+            text="hello",
+            cost=CostInfo(total_cost=0.02),
+            finish_reason="stop",
+            response_id="resp-1",
+            model="m-actual",
+            provider_metadata={
+                "id": "resp-1",
+                "usage": {"total_tokens": 3},
             },
-        },
-        config=openrouter_chat_config(model="model/test"),
-    )
+        )
+        result = provider_result_from_response(response)
+        assert result.text == "hello"
+        assert result.usage_metadata == {"total_tokens": 3}
+        assert result.provider_cost == 0.02
+        assert result.response_id == "resp-1"
+        assert result.model == "m-actual"
+        assert result.finish_reason == "stop"
+        assert result.response_metadata["id"] == "resp-1"
 
-    assert result.text == "ok"
-    assert result.usage_metadata["total_tokens"] == 3
-    assert result.provider_cost == 0.01
-    assert result.response_id == "cmpl-1"
-    assert result.model == "provider-model"
-    assert result.finish_reason == "stop"
+    def test_conformance_warnings_ride_in_metadata(self) -> None:
+        response = LlmResponse(
+            text="hello",
+            warnings=(
+                LlmWarning(code="model_substitution", message="swapped"),
+            ),
+        )
+        result = provider_result_from_response(response)
+        recorded = result.response_metadata["conformance_warnings"]
+        assert recorded[0]["code"] == "model_substitution"
+
+    def test_blank_text_raises_empty_generation(self) -> None:
+        response = LlmResponse(text="   ")
+        with pytest.raises(EmptyGenerationError):
+            provider_result_from_response(response, output_field="code")
 
 
-def test_parse_chat_completion_allows_absent_cost() -> None:
-    result = parse_provider_response(
-        {
-            "choices": [
-                {"message": {"content": "ok"}, "finish_reason": "stop"}
-            ],
-            "usage": {"total_tokens": 3},
-        },
-        config=openrouter_chat_config(model="model/test"),
-    )
-
-    assert result.provider_cost is None
-    assert result.usage_metadata == {"total_tokens": 3}
-
-
-def test_parse_empty_chat_completion_text_raises_empty_generation() -> None:
-    with pytest.raises(EmptyGenerationError):
-        parse_provider_response(
-            {"choices": [{"message": {"content": ""}}]},
-            config=openrouter_chat_config(model="model/test"),
-            output_field="code",
+class TestTranslateProviderFailure:
+    def test_rate_limited_maps_to_rate_limited_eval_failure(self) -> None:
+        failure = failure_record(
+            failure_class=FailureClass.RATE_LIMITED,
+            code="http_status_429",
+            message="slow down",
+        )
+        carrier = raise_failure(failure)
+        assert isinstance(carrier, RateLimitedProviderError)
+        translated = translate_provider_failure(carrier)
+        assert isinstance(translated, RateLimitedFailureError)
+        assert translated.underlying is carrier
+        assert (
+            translated.metadata["provider_failure"]["code"]
+            == "http_status_429"
         )
 
-
-def test_parse_malformed_chat_completion_raises_parse_failure() -> None:
-    with pytest.raises(ProviderResponseParseError):
-        parse_provider_response(
-            {"model": "model/test"},
-            config=openrouter_chat_config(model="model/test"),
+    def test_permanent_maps_to_permanent_eval_failure(self) -> None:
+        carrier = raise_failure(
+            failure_record(
+                failure_class=FailureClass.PERMANENT,
+                message="bad request",
+            )
         )
-
-
-def test_parse_succeeds_when_response_metadata_is_unrecordable() -> None:
-    class UnrecordableResponse:
-        def __init__(self) -> None:
-            self.bad = object()
-            self.choices = [
-                {"message": {"content": "ok"}, "finish_reason": "stop"}
-            ]
-
-    result = parse_provider_response(
-        UnrecordableResponse(),
-        config=openrouter_chat_config(model="model/test"),
-    )
-
-    assert result.text == "ok"
-    assert result.response_metadata["choices"] == [
-        {"message": {"content": "ok"}, "finish_reason": "stop"}
-    ]
-    with pytest.raises(RecordingFailureError):
-        ensure_recordable(result.response_metadata)
-
-
-def test_parse_metadata_exceeds_recordable_size_but_parse_succeeds() -> None:
-    huge = "x" * (PAYLOAD_MAX_BYTES + 1)
-    choice = {"message": {"content": "ok"}, "finish_reason": "stop"}
-    result = parse_provider_response(
-        {
-            "choices": [choice],
-            "blob": huge,
-        },
-        config=openrouter_chat_config(model="model/test"),
-    )
-
-    assert result.text == "ok"
-    assert len(result.response_metadata["blob"]) > PAYLOAD_MAX_BYTES
-    with pytest.raises(RecordingFailureError):
-        ensure_recordable(result.response_metadata)
-
-
-def test_openrouter_chat_boundary_round_trip() -> None:
-    """Production v0 path: build request, call provider, parse response."""
-    client = _FakeClient()
-    config = openrouter_chat_config(model="model/test")
-    request = build_chat_completions_request(
-        config=config,
-        messages=[{"role": "user", "content": "hello"}],
-        token_limit=12,
-    )
-
-    response = call_provider_request(client, request)
-    result = parse_provider_response(response, config=config)
-
-    assert result.text == "ok"
-    assert client.completions.kwargs == request.kwargs
-
-
-def test_plain_prompt_adapter_round_trip_through_provider_boundary() -> None:
-    adapter = PlainPromptAdapter(output_field="code")
-    config = openrouter_chat_config(model="model/test")
-    client = _FakeClient()
-    request = build_chat_completions_request(
-        config=config,
-        messages=adapter.messages(user_content="solve this"),
-        token_limit=12,
-    )
-
-    response = call_provider_request(client, request)
-    result = parse_provider_response(response, config=config)
-
-    assert message_dicts(adapter.messages(user_content="solve this")) == (
-        request.kwargs["messages"]
-    )
-    assert adapter.output_from_result(result) == {"code": "ok"}
-
-
-def test_parse_responses_response_extracts_output_text() -> None:
-    result = parse_provider_response(
-        {
-            "id": "resp-1",
-            "model": "gpt-test",
-            "status": "completed",
-            "output_text": "ok",
-            "usage": {"input_tokens": 1, "output_tokens": 2},
-        },
-        config=openai_responses_config(model="gpt-test"),
-    )
-
-    assert result.text == "ok"
-    assert result.finish_reason == "stop"
-    assert result.usage_metadata == {"input_tokens": 1, "output_tokens": 2}
-
-
-def test_parse_responses_incomplete_max_output_tokens_maps_to_length() -> None:
-    result = parse_provider_response(
-        {
-            "id": "resp-2",
-            "model": "gpt-test",
-            "status": "incomplete",
-            "incomplete_details": {"reason": "max_output_tokens"},
-            "output_text": "partial",
-        },
-        config=openai_responses_config(model="gpt-test"),
-    )
-
-    assert result.text == "partial"
-    assert result.finish_reason == "length"
-
-
-def test_parse_responses_response_extracts_nested_output_text() -> None:
-    result = parse_provider_response(
-        {
-            "id": "resp-3",
-            "model": "gpt-test",
-            "status": "completed",
-            "output": [
-                {
-                    "type": "message",
-                    "content": [
-                        {"type": "output_text", "text": "hello "},
-                        {"type": "output_text", "text": "world"},
-                    ],
-                }
-            ],
-        },
-        config=openai_responses_config(model="gpt-test"),
-    )
-
-    assert result.text == "hello world"
-    assert result.finish_reason == "stop"
-
-
-def test_parse_empty_choices_raises_parse_failure() -> None:
-    with pytest.raises(ProviderResponseParseError):
-        parse_provider_response(
-            {"choices": []},
-            config=openrouter_chat_config(model="model/test"),
-        )
-
-
-class _FakeCompletions:
-    def __init__(self) -> None:
-        self.kwargs: dict[str, Any] | None = None
-
-    def create(self, **kwargs: Any) -> dict[str, Any]:
-        self.kwargs = kwargs
-        return {"choices": [{"message": {"content": "ok"}}]}
-
-
-class _FakeResponses:
-    def __init__(self) -> None:
-        self.kwargs: dict[str, Any] | None = None
-
-    def create(self, **kwargs: Any) -> dict[str, Any]:
-        self.kwargs = kwargs
-        return {"output_text": "ok"}
-
-
-class _FakeClient:
-    def __init__(self) -> None:
-        self.completions = _FakeCompletions()
-        self.responses = _FakeResponses()
-        self.chat: Any = type(
-            "FakeChat",
-            (),
-            {"completions": self.completions},
-        )()
-
-
-def test_call_provider_request_uses_chat_client() -> None:
-    client = _FakeClient()
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    response = call_provider_request(client, request)
-
-    assert response == {"choices": [{"message": {"content": "ok"}}]}
-    assert client.completions.kwargs == request.kwargs
-
-
-def test_call_provider_request_uses_responses_client() -> None:
-    client = _FakeClient()
-    request = build_responses_request(
-        config=openai_responses_config(model="gpt-test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    response = call_provider_request(client, request)
-
-    assert response == {"output_text": "ok"}
-    assert client.responses.kwargs == request.kwargs
-
-
-def test_translate_provider_error_preserves_original_message() -> None:
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    translated = translate_provider_error(
-        RuntimeError("provider said no"),
-        request=request,
-    )
-
-    assert str(translated) == "provider said no"
-    assert isinstance(translated.underlying, RuntimeError)
-    assert translated.metadata == {
-        "provider_kind": "openrouter",
-        "endpoint_kind": "chat_completions",
-        "method": "chat.completions.create",
-    }
-
-
-def test_provider_error_translation_preserves_rate_limit_cause() -> None:
-    import httpx
-    import openai
-
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    class RateLimitedCompletions:
-        def create(self, **kwargs: Any) -> None:
-            response = httpx.Response(
-                429,
-                request=httpx.Request("POST", "https://example.test"),
-            )
-            raise openai.RateLimitError(
-                "limited",
-                response=response,
-                body=None,
-            )
-
-    client = _FakeClient()
-    client.chat = type(
-        "FakeChat",
-        (),
-        {"completions": RateLimitedCompletions()},
-    )()
-
-    with pytest.raises(RateLimitedFailureError) as exc_info:
-        call_provider_request(client, request)
-
-    assert isinstance(exc_info.value.underlying, openai.RateLimitError)
-    summary = summarize_exception(exc_info.value)
-    assert summary.failure_class is FailureClass.RATE_LIMITED
-
-
-def test_provider_error_translation_preserves_permanent_auth_cause() -> None:
-    import httpx
-    import openai
-
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    class AuthFailureCompletions:
-        def create(self, **kwargs: Any) -> None:
-            response = httpx.Response(
-                401,
-                request=httpx.Request("POST", "https://example.test"),
-            )
-            raise openai.AuthenticationError(
-                "bad key",
-                response=response,
-                body=None,
-            )
-
-    client = _FakeClient()
-    client.chat = type(
-        "FakeChat",
-        (),
-        {"completions": AuthFailureCompletions()},
-    )()
-
-    with pytest.raises(PermanentFailureError) as exc_info:
-        call_provider_request(client, request)
-
-    assert isinstance(exc_info.value.underlying, openai.AuthenticationError)
-    summary = summarize_exception(exc_info.value)
-    assert summary.failure_class is FailureClass.PERMANENT
-    assert summary.message == "bad key"
-    assert summary.underlying_exception_type.endswith("AuthenticationError")
-
-
-def test_provider_error_translation_preserves_transient_cause() -> None:
-    import httpx
-    import openai
-
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-
-    class ConnectionFailureCompletions:
-        def create(self, **kwargs: Any) -> None:
-            raise openai.APIConnectionError(
-                request=httpx.Request("POST", "https://example.test")
-            )
-
-    client = _FakeClient()
-    client.chat = type(
-        "FakeChat",
-        (),
-        {"completions": ConnectionFailureCompletions()},
-    )()
-
-    with pytest.raises(TransientFailureError) as exc_info:
-        call_provider_request(client, request)
-
-    assert isinstance(exc_info.value.underlying, openai.APIConnectionError)
-    summary = summarize_exception(exc_info.value)
-    assert summary.failure_class is FailureClass.TRANSIENT
-
-
-def test_provider_error_translation_passes_eval_failure_through() -> None:
-    request = build_chat_completions_request(
-        config=openrouter_chat_config(model="model/test"),
-        messages=[{"role": "user", "content": "hello"}],
-    )
-    expected_error = PermanentFailureError("already classified")
-
-    class ClassifiedFailureCompletions:
-        def create(self, **kwargs: Any) -> None:
-            raise expected_error
-
-    client = _FakeClient()
-    client.chat = type(
-        "FakeChat",
-        (),
-        {"completions": ClassifiedFailureCompletions()},
-    )()
-
-    with pytest.raises(PermanentFailureError) as exc_info:
-        call_provider_request(client, request)
-
-    assert exc_info.value is expected_error
+        translated = translate_provider_failure(carrier)
+        assert isinstance(translated, PermanentFailureError)

@@ -5,15 +5,15 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from dr_graph import GraphSpec
 from typer.testing import CliRunner
 
-from dr_dspy.graph import GraphSpec
-from dr_dspy.platform import worker
 from tests.support.jsonl_fixtures import write_prediction_specs_jsonl
 from tests.support.platform_workflow_fixtures import (
     direct_node,
     prediction_spec,
 )
+from whetstone.platform import worker
 
 
 def test_score_one_wires_scoring_workflow_runner(
@@ -430,8 +430,8 @@ def test_build_specs_writes_jsonl_from_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from dr_dspy.platform import spec_builder
     from tests.test_platform_spec_builder import FIXTURES_DIR, _fixture_rows
+    from whetstone.platform import spec_builder
 
     def fake_iter_from_file(
         path: Any,
@@ -487,7 +487,7 @@ def test_build_specs_composable_config(
         configs_root: Any = None,
         rows: Any = None,
     ) -> Any:
-        from dr_dspy.platform import spec_builder
+        from whetstone.platform import spec_builder
 
         return spec_builder.iter_experiment_specs_from_file(
             path,

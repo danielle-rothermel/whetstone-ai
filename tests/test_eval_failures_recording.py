@@ -3,8 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dr_serialize import (
+    JsonEncodeError,
+    MaxDepthExceededError,
+    ModelDumpError,
+    PayloadTooLargeError,
+)
 
-from dr_dspy.eval_failures import (
+from whetstone.eval_failures import (
     FailureClass,
     RecordingFailureError,
     ensure_recordable,
@@ -14,13 +20,7 @@ from dr_dspy.eval_failures import (
     should_retry_step,
     summarize_exception,
 )
-from dr_dspy.eval_failures.exceptions import TransientFailureError
-from dr_dspy.serialization import (
-    JsonEncodeError,
-    MaxDepthExceededError,
-    ModelDumpError,
-    PayloadTooLargeError,
-)
+from whetstone.eval_failures.exceptions import TransientFailureError
 
 
 def test_recordable_text_passthrough_str() -> None:

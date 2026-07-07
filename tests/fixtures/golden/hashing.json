@@ -1,0 +1,132 @@
+{
+  "cases": {
+    "empty_dict": {
+      "value": {},
+      "canonical_json": "{}",
+      "digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "truncated_digest": "44136fa355b3678a"
+    },
+    "empty_list": {
+      "value": [],
+      "canonical_json": "[]",
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "truncated_digest": "4f53cda18c2baa0c"
+    },
+    "empty_string": {
+      "value": "",
+      "canonical_json": "\"\"",
+      "digest": "12ae32cb1ec02d01eda3581b127c1fee3b0dc53572ed6baf239721a03d82e126",
+      "truncated_digest": "12ae32cb1ec02d01"
+    },
+    "null": {
+      "value": null,
+      "canonical_json": "null",
+      "digest": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "truncated_digest": "74234e98afe7498f"
+    },
+    "booleans": {
+      "value": [
+        true,
+        false
+      ],
+      "canonical_json": "[true,false]",
+      "digest": "153c9dbcc7025ecd7e50ce6d83f1995233dfc636bc869098e3a8d84288fd938a",
+      "truncated_digest": "153c9dbcc7025ecd"
+    },
+    "integers": {
+      "value": [
+        0,
+        -1,
+        42,
+        9007199254740992
+      ],
+      "canonical_json": "[0,-1,42,9007199254740992]",
+      "digest": "914358d94c38d0702eaa28817401991116d72a71b8d849c33146f4bb2d558e65",
+      "truncated_digest": "914358d94c38d070"
+    },
+    "floats": {
+      "value": [
+        0.1,
+        2.5,
+        -0.001,
+        1e+300,
+        1.0
+      ],
+      "canonical_json": "[0.1,2.5,-0.001,1e+300,1.0]",
+      "digest": "efcf49b64755fbf4caade6e70d43e01d5213101e9e482f82469e7f68b73c7194",
+      "truncated_digest": "efcf49b64755fbf4"
+    },
+    "unicode_text": {
+      "value": "h\u00e9llo w\u00f6rld \u2014 \u65e5\u672c\u8a9e \ud83c\udfaf",
+      "canonical_json": "\"h\\u00e9llo w\\u00f6rld \\u2014 \\u65e5\\u672c\\u8a9e \\ud83c\\udfaf\"",
+      "digest": "496c70c5b1831ea12e0a364304aa0d4022f118124d467dfabb1604d543dcb3fb",
+      "truncated_digest": "496c70c5b1831ea1"
+    },
+    "escapes": {
+      "value": "line one\nline two\t\"quoted\" \\backslash",
+      "canonical_json": "\"line one\\nline two\\t\\\"quoted\\\" \\\\backslash\"",
+      "digest": "5370e1a86102e27d54c60952d4de329302c7a749145e78c586a7a58e2ce31961",
+      "truncated_digest": "5370e1a86102e27d"
+    },
+    "unsorted_keys": {
+      "value": {
+        "zebra": 1,
+        "alpha": 2,
+        "Mango": 3,
+        "_under": 4
+      },
+      "canonical_json": "{\"Mango\":3,\"_under\":4,\"alpha\":2,\"zebra\":1}",
+      "digest": "12e69f8dbcb1698475ec9063c5161170f4725bcbb967086657dbb075684daf6c",
+      "truncated_digest": "12e69f8dbcb16984"
+    },
+    "nested": {
+      "value": {
+        "outer": {
+          "inner": [
+            {
+              "k": "v"
+            },
+            [
+              1,
+              2,
+              [
+                3
+              ]
+            ],
+            null
+          ],
+          "flag": false
+        },
+        "sibling": "value"
+      },
+      "canonical_json": "{\"outer\":{\"flag\":false,\"inner\":[{\"k\":\"v\"},[1,2,[3]],null]},\"sibling\":\"value\"}",
+      "digest": "fc9bc105b04605a19f0a010f7216c4b3597aebbb8c5139ebe07775937c2ae3a7",
+      "truncated_digest": "fc9bc105b04605a1"
+    },
+    "mixed_list": {
+      "value": [
+        "text",
+        7,
+        1.5,
+        null,
+        true,
+        {
+          "key": []
+        }
+      ],
+      "canonical_json": "[\"text\",7,1.5,null,true,{\"key\":[]}]",
+      "digest": "54d0c0a52e912ddb59d1f2cd4d2323f97e5aee41e763eb106d74626049089dfe",
+      "truncated_digest": "54d0c0a52e912ddb"
+    },
+    "numeric_string_keys": {
+      "value": {
+        "10": "ten",
+        "2": "two",
+        "1": "one"
+      },
+      "canonical_json": "{\"1\":\"one\",\"10\":\"ten\",\"2\":\"two\"}",
+      "digest": "88f1d5d864d29ee7e34bed097931cc725766463ad2b97c08685f0c20dbc66b21",
+      "truncated_digest": "88f1d5d864d29ee7"
+    }
+  }
+}

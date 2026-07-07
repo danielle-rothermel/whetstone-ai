@@ -6,20 +6,8 @@ from typing import Any, cast
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
-from sqlalchemy.dialects import postgresql
-
-from dr_dspy.db import io as db_io
-from dr_dspy.graph import (
-    BindingRef,
-    FieldRole,
-    FieldSpec,
-    GraphSpec,
-    NodeConfig,
-    NodeSpec,
-    graph_digest,
-)
-from dr_dspy.humaneval import scoring as humaneval_scoring
-from dr_dspy.humaneval.code_parsing import (
+from dr_code.humaneval import scoring as humaneval_scoring
+from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
@@ -31,7 +19,7 @@ from dr_dspy.humaneval.code_parsing import (
     extract_strict_field_marker_code,
     resolve_parser_profile,
 )
-from dr_dspy.humaneval.metrics import (
+from dr_code.humaneval.metrics import (
     HUMANEVAL_METRICS_PROFILE_ID,
     NodeOutputMetricsSource,
     ast_metrics,
@@ -40,34 +28,47 @@ from dr_dspy.humaneval.metrics import (
     task_test_metrics,
     text_metrics,
 )
-from dr_dspy.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_dspy.humaneval.profiles import (
+from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     resolve_humaneval_scoring_profile,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.humaneval.task import (
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval.task import (
     EvaluationCaseResult,
     EvaluationCaseStatus,
     EvaluationTaskResult,
     HumanEvalTask,
 )
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.platform import rescoring, scoring_workflow
-from dr_dspy.platform.persistence import (
+from dr_graph import (
+    BindingRef,
+    FieldRole,
+    FieldSpec,
+    GraphSpec,
+    NodeConfig,
+    NodeSpec,
+    graph_digest,
+)
+from dr_providers.kernel import EndpointKind, ProviderKind
+from sqlalchemy.dialects import postgresql
+
+from whetstone.db import io as db_io
+from whetstone.eval_failures.recording import recordable_text
+from whetstone.platform import rescoring, scoring_workflow
+from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
     idempotent_insert_score_attempt,
     persist_score_attempt,
 )
-from dr_dspy.platform.scoring import (
+from whetstone.platform.scoring import (
     score_generation_run,
     score_metrics_payload,
 )
-from dr_dspy.platform.scoring_workflow_state import ScoringWorkflowPresence
-from dr_dspy.records import (
+from whetstone.platform.scoring_workflow_state import ScoringWorkflowPresence
+from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
     DimensionsPayload,
@@ -92,7 +93,7 @@ from dr_dspy.records import (
     stable_prediction_id,
     stable_score_attempt_id,
 )
-from dr_dspy.records.limits import METRICS_STAGES_MAX_COUNT
+from whetstone.records.limits import METRICS_STAGES_MAX_COUNT
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
@@ -161,6 +162,7 @@ def _node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,
@@ -723,6 +725,7 @@ def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
         task=_task(),
         parser_profile=scoring_profile.parser_profile,
         timeout_seconds=scoring_profile.timeout_seconds,
+        recordable_text=recordable_text,
     )
 
     with pytest.raises(
@@ -2216,7 +2219,7 @@ def _rescore_candidate(
 def test_classify_scoring_workflow_presence_matrix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import scoring_workflow_state
+    from whetstone.platform import scoring_workflow_state
 
     monkeypatch.setattr(
         scoring_workflow_state,
@@ -2339,7 +2342,7 @@ def test_classify_scoring_workflow_presence_matrix(
 def test_recover_orphan_scoring_workflow_replays_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import scoring_workflow_state
+    from whetstone.platform import scoring_workflow_state
 
     replay_calls: list[tuple[Any, ...]] = []
     persist_state = {"exists": False}
@@ -2385,7 +2388,7 @@ def test_recover_orphan_scoring_workflow_replays_workflow(
 def test_recover_orphan_scoring_workflow_skips_replay_when_row_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import scoring_workflow_state
+    from whetstone.platform import scoring_workflow_state
 
     replay_calls: list[tuple[Any, ...]] = []
 
@@ -2430,7 +2433,7 @@ def test_recover_orphan_scoring_workflow_skips_replay_when_row_exists(
 def test_recover_orphan_scoring_workflow_returns_false_when_replay_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dr_dspy.platform import scoring_workflow_state
+    from whetstone.platform import scoring_workflow_state
 
     monkeypatch.setattr(
         scoring_workflow_state,

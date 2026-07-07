@@ -1,53 +1,11 @@
-from __future__ import annotations
+"""App-side EvalDbosConfig wiring (URL resolution tests live in
+dr-platform)."""
 
-from typing import Any
+from __future__ import annotations
 
 import pytest
 
-from dr_dspy.platform import dbos_bootstrap
-
-
-def test_resolve_database_url_prefers_explicit_arg(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://env/db")
-
-    assert (
-        dbos_bootstrap.resolve_database_url("postgresql://explicit/db")
-        == "postgresql+psycopg://explicit/db"
-    )
-
-
-def test_resolve_database_url_reads_env_when_arg_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DATABASE_URL", "postgresql://env/db")
-
-    assert dbos_bootstrap.resolve_database_url(None) == "postgresql+psycopg://env/db"
-
-
-def test_resolve_database_url_raises_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-
-    with pytest.raises(
-        ValueError,
-        match="--database-url or DATABASE_URL is required",
-    ):
-        dbos_bootstrap.resolve_database_url(None)
-
-    with pytest.raises(
-        ValueError,
-        match=(
-            "--database-url or DATABASE_URL is required "
-            "for platform graph workflow"
-        ),
-    ):
-        dbos_bootstrap.resolve_database_url(
-            None,
-            error_suffix="for platform graph workflow",
-        )
+from whetstone.platform import dbos_bootstrap
 
 
 def test_build_eval_dbos_config_system_url_fallbacks(
@@ -69,6 +27,8 @@ def test_build_eval_dbos_config_system_url_fallbacks(
         explicit.dbos_system_database_url
         == "postgresql+psycopg://system-explicit/db"
     )
+    assert explicit.generation_concurrency == 2
+    assert explicit.scoring_concurrency == 1
 
     from_env = dbos_bootstrap.build_eval_dbos_config(
         database_url="postgresql://app/db",
@@ -76,7 +36,10 @@ def test_build_eval_dbos_config_system_url_fallbacks(
         generation_concurrency=2,
         scoring_concurrency=1,
     )
-    assert from_env.dbos_system_database_url == "postgresql+psycopg://system-env/db"
+    assert (
+        from_env.dbos_system_database_url
+        == "postgresql+psycopg://system-env/db"
+    )
 
     monkeypatch.delenv("DBOS_SYSTEM_DATABASE_URL", raising=False)
     from_app = dbos_bootstrap.build_eval_dbos_config(
@@ -85,32 +48,19 @@ def test_build_eval_dbos_config_system_url_fallbacks(
         generation_concurrency=2,
         scoring_concurrency=1,
     )
-    assert from_app.dbos_system_database_url == "postgresql+psycopg://app/db"
-
-
-def test_resolve_database_url_leaves_non_postgresql_urls_unchanged() -> None:
     assert (
-        dbos_bootstrap.resolve_database_url("sqlite:///tmp.db")
-        == "sqlite:///tmp.db"
+        from_app.dbos_system_database_url == "postgresql+psycopg://app/db"
     )
 
 
-def test_resolve_database_url_leaves_psycopg_driver_suffix_unchanged() -> None:
-    url = "postgresql+psycopg://user:pass@localhost/db"
-    assert dbos_bootstrap.resolve_database_url(url) == url
-
-
-def test_destroy_dbos_runtime_calls_dbos_destroy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[Any] = []
-
-    monkeypatch.setattr(
-        dbos_bootstrap.DBOS,
-        "destroy",
-        lambda: calls.append("destroy"),
+def test_build_dbos_config_uses_system_database_url() -> None:
+    config = dbos_bootstrap.EvalDbosConfig(
+        database_url="postgresql+psycopg://app/db",
+        dbos_system_database_url="postgresql+psycopg://system/db",
+        generation_concurrency=2,
+        scoring_concurrency=1,
     )
-
-    dbos_bootstrap.destroy_dbos_runtime()
-
-    assert calls == ["destroy"]
+    assert dbos_bootstrap.build_dbos_config(config, app_name="app") == {
+        "name": "app",
+        "system_database_url": "postgresql+psycopg://system/db",
+    }

@@ -6,14 +6,6 @@ from typing import Any
 import pytest
 from sqlalchemy import create_engine, text
 
-from dr_dspy.migration.v0_reshape import (
-    reshape_v0_direct_row,
-    reshape_v0_encdec_row,
-)
-from dr_dspy.platform import graph_workflow
-from dr_dspy.platform.graph_workflow import run_prediction_graph_workflow_once
-from dr_dspy.platform.node_execution import NodeStepResult
-from dr_dspy.records import GenerationRunStatus, PredictionSpecRecord
 from tests.integration.dbos_test_workflows import (
     integration_load_spec_workflow,
 )
@@ -23,6 +15,16 @@ from tests.support.postgres_fixtures import (
     seed_prediction_spec,
     start_test_workflow,
 )
+from whetstone.migration.v0_reshape import (
+    reshape_v0_direct_row,
+    reshape_v0_encdec_row,
+)
+from whetstone.platform import graph_workflow
+from whetstone.platform.graph_workflow import (
+    run_prediction_graph_workflow_once,
+)
+from whetstone.platform.node_execution import NodeStepResult
+from whetstone.records import GenerationRunStatus, PredictionSpecRecord
 
 pytestmark = pytest.mark.integration
 
@@ -44,8 +46,8 @@ def _mock_lm_for_reshaped_specs(
         spec: Any,
         node: Any,
         node_inputs: dict[str, Any],
-        client_factory: Any = None,
-        provider_caller: Any = None,
+        provider: Any = None,
+        idempotency_key: str | None = None,
         raise_retryable: bool = False,
     ) -> NodeStepResult:
         if node.id == "encoder":

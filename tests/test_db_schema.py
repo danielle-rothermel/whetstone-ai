@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.schema import CreateIndex, CreateTable
 
-from dr_dspy.db import schema
+from whetstone.db import schema
 
 
 def test_schema_contains_expected_v1_table_names() -> None:

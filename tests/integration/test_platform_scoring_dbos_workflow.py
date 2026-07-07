@@ -3,29 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from dr_dspy.humaneval.code_parsing import (
+from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
 )
-from dr_dspy.humaneval.profiles import (
+from dr_code.humaneval.profiles import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
-from dr_dspy.platform import scoring_workflow
-from dr_dspy.platform.scoring_workflow import (
-    run_score_generation_workflow,
-    run_score_generation_workflow_once,
-)
-from dr_dspy.platform.scoring_workflow_state import (
-    ScoringWorkflowPresence,
-    classify_scoring_workflow_presence,
-)
-from dr_dspy.records import (
-    DEFAULT_SCORE_DATASET_NAME,
-    DEFAULT_SCORE_DATASET_SPLIT,
-    stable_score_attempt_id,
-)
+
 from tests.support.platform_integration_helpers import (
     count_score_attempts,
     fetch_score_attempt_snapshot,
@@ -36,6 +22,20 @@ from tests.support.platform_scoring_fixtures import (
     seeded_scoring_target,
 )
 from tests.support.postgres_fixtures import start_test_workflow
+from whetstone.platform import scoring_workflow
+from whetstone.platform.scoring_workflow import (
+    run_score_generation_workflow,
+    run_score_generation_workflow_once,
+)
+from whetstone.platform.scoring_workflow_state import (
+    ScoringWorkflowPresence,
+    classify_scoring_workflow_presence,
+)
+from whetstone.records import (
+    DEFAULT_SCORE_DATASET_NAME,
+    DEFAULT_SCORE_DATASET_SPLIT,
+    stable_score_attempt_id,
+)
 
 pytestmark = pytest.mark.integration
 

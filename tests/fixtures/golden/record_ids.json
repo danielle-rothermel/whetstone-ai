@@ -1,0 +1,91 @@
+{
+  "dimensions_digest": {
+    "empty": {
+      "values": {},
+      "digest": "ff2b2a5c0736ac70"
+    },
+    "mixed": {
+      "values": {
+        "compression_target": 0.25,
+        "encoder_model": "gpt-test",
+        "flags": {
+          "strict": true
+        },
+        "seeds": [
+          1,
+          2,
+          3
+        ]
+      },
+      "digest": "3ce75605617e4176"
+    }
+  },
+  "stable_prediction_id": {
+    "inputs": {
+      "experiment_name": "golden_experiment",
+      "task_id": "HumanEval/0",
+      "graph_digest": "0123456789abcdef",
+      "dimensions_digest": "fedcba9876543210",
+      "repetition_seed": 3,
+      "provider_kind": "openai",
+      "endpoint_kind": "responses",
+      "model": "gpt-test",
+      "throttle_key": "openai:gpt-test"
+    },
+    "expected": "7ecd5ece5b439c728f41e36c"
+  },
+  "fair_order_key": {
+    "inputs": {
+      "experiment_seed": "golden-seed",
+      "prediction_id": "abc123def456abc123def456",
+      "provider": "openai",
+      "endpoint_kind": "responses",
+      "model": "gpt-test",
+      "throttle_key": "openai:gpt-test",
+      "graph_layout": "encdec",
+      "task_id": "HumanEval/0",
+      "repetition_seed": 3,
+      "config_axis": "temperature=0.2"
+    },
+    "expected": "a79da07130ce362c01c222c1f742144d"
+  },
+  "stable_generation_run_id": {
+    "inputs": {
+      "prediction_id": "abc123def456abc123def456",
+      "attempt_index": 2
+    },
+    "expected": "ebc396a50ad73a7ac71bd92e"
+  },
+  "stable_node_attempt_id": {
+    "inputs": {
+      "generation_run_id": "run0123456789abcdef01234",
+      "node_id": "decoder",
+      "attempt_index": 1
+    },
+    "expected": "98d83ddcac0ed2e112a6b0947418e66f"
+  },
+  "stable_score_attempt_id_default_dataset": {
+    "inputs": {
+      "generation_run_id": "run0123456789abcdef01234",
+      "scoring_profile_id": "humaneval",
+      "scoring_profile_version": "v1",
+      "parser_profile_id": "humaneval-best-effort",
+      "parser_version": "v1",
+      "attempt_index": 0
+    },
+    "expected": "0d035a13c1099625c9e738c5e8b5df58"
+  },
+  "stable_score_attempt_id_explicit_dataset": {
+    "inputs": {
+      "generation_run_id": "run0123456789abcdef01234",
+      "scoring_profile_id": "humaneval",
+      "scoring_profile_version": "v1",
+      "parser_profile_id": "humaneval-best-effort",
+      "parser_version": "v1",
+      "attempt_index": 4,
+      "dataset_name": "openai/humaneval",
+      "dataset_split": "validation"
+    },
+    "expected": "588c73d0357398c1b8ee40f9cef03deb"
+  }
+}

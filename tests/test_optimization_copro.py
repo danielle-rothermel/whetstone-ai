@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from dr_dspy.optimization.copro import (
+from whetstone.optimization.copro import (
     CoproAttempt,
     CoproCandidate,
     CoproProposalMode,
@@ -23,8 +23,10 @@ from dr_dspy.optimization.copro import (
     select_best_candidate,
     summarize_attempts,
 )
-from dr_dspy.platform.spec_builder import DEFAULT_HUMANEVAL_INSTRUCTIONS_START
-from dr_dspy.records import DimensionsPayload
+from whetstone.platform.spec_builder import (
+    DEFAULT_HUMANEVAL_INSTRUCTIONS_START,
+)
+from whetstone.records import DimensionsPayload
 
 
 def test_manual_candidates_include_baseline_and_match_breadth() -> None:

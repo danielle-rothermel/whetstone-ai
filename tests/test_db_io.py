@@ -3,10 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
-
-from dr_dspy.db import io
-from dr_dspy.graph import (
+from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
@@ -18,16 +16,13 @@ from dr_dspy.graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_dspy.humaneval.scoring import GeneratedCodeOutcome
-from dr_dspy.lm.boundary import EndpointKind, ProviderKind
-from dr_dspy.records import (
+from dr_providers.kernel import EndpointKind, ProviderKind
+from pydantic import ValidationError
+
+from whetstone.db import io
+from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
-    BatchSubmitItemEnqueueStatus,
-    BatchSubmitItemInsertStatus,
-    BatchSubmitItemRecord,
-    BatchSubmitOperationRecord,
-    BatchSubmitOperationStatus,
     DimensionsPayload,
     ExperimentRecord,
     GenerationRunRecord,
@@ -52,7 +47,7 @@ from dr_dspy.records import (
     fair_order_key,
     stable_prediction_id,
 )
-from dr_dspy.records import models as records_models
+from whetstone.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 
@@ -74,6 +69,7 @@ def _node(
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
     return NodeSpec(
         id=node_id,
+        op="llm_call",
         config=NodeConfig(
             fields=tuple(fields),
             input_bindings=input_bindings,
@@ -315,7 +311,7 @@ def test_failure_payload_from_node_error_is_persistable() -> None:
 
 def test_failure_payload_promotes_underlying_exception_type() -> None:
     error = NodeError(
-        error_type="dr_dspy.eval_failures.TransientFailureError",
+        error_type="whetstone.eval_failures.TransientFailureError",
         message="provider failed",
         failure_class="transient",
         metadata={
@@ -559,7 +555,7 @@ def test_generation_run_row_round_trips_through_record_from_row() -> None:
     assert round_tripped == record
 
 
-def test_batch_and_projection_rows_round_trip() -> None:
+def test_projection_rows_round_trip() -> None:
     projection = PredictionProjectionRecord(
         prediction_id="prediction-1",
         generation_run_id="run-1",
@@ -568,29 +564,6 @@ def test_batch_and_projection_rows_round_trip() -> None:
         projection_version="v1",
         selected_at=NOW,
         selection_reason="latest validated score",
-    )
-    operation = BatchSubmitOperationRecord(
-        operation_key="op-1",
-        experiment_name="exp",
-        status=BatchSubmitOperationStatus.PARTIAL,
-        requested_count=2,
-        inserted_count=1,
-        failed_count=1,
-        spec={"batch_size": 2},
-        metadata={"source": "test"},
-        created_at=NOW,
-        completed_at=NOW,
-    )
-    item = BatchSubmitItemRecord(
-        batch_submit_item_id="item-1",
-        operation_key="op-1",
-        item_index=1,
-        prediction_id="prediction-1",
-        fair_order_key="abc",
-        insert_status=BatchSubmitItemInsertStatus.INSERTED,
-        enqueue_status=BatchSubmitItemEnqueueStatus.ENQUEUED,
-        enqueue_metadata={"queue": "generation"},
-        created_at=NOW,
     )
     experiment = ExperimentRecord(
         experiment_name="exp",
@@ -602,12 +575,6 @@ def test_batch_and_projection_rows_round_trip() -> None:
     assert io.prediction_projection_record_from_row(
         io.prediction_projection_row(projection)
     ) == projection
-    assert io.batch_submit_operation_record_from_row(
-        io.batch_submit_operation_row(operation)
-    ) == operation
-    assert io.batch_submit_item_record_from_row(
-        io.batch_submit_item_row(item)
-    ) == item
     assert io.experiment_record_from_row(io.experiment_row(experiment)) == (
         experiment
     )

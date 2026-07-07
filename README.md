@@ -1,8 +1,8 @@
-# dr-dspy
+# whetstone-ai
 
 Graph-based HumanEval evaluation platform workbench. Generation and scoring run
 through graph-shaped specs, explicit LM/prompt boundaries, and append-only
-terminal outcomes under `dr_dspy.platform`.
+terminal outcomes under `whetstone.platform`.
 
 Legacy v0 runtime code (mutable prediction-table workflows, repair CLIs, DSPy
 `Predict` experiment backends) has been **removed**. Frozen v0 row reshape logic
@@ -67,7 +67,7 @@ execution and queued batch submission.
 Run one existing prediction spec:
 
 ```bash
-uv run python -m dr_dspy.platform.worker run-one \
+uv run python -m whetstone.platform.worker run-one \
   --database-url "$DATABASE_URL" \
   --prediction-id "<prediction-id>"
 ```
@@ -78,7 +78,7 @@ database.
 Build prediction specs from an experiment JSON config:
 
 ```bash
-uv run python -m dr_dspy.platform.worker build-specs \
+uv run python -m whetstone.platform.worker build-specs \
   --config-file configs/experiments/humaneval_encdec_smoke.json \
   --configs-root configs \
   --output specs.jsonl
@@ -95,7 +95,7 @@ specs and the experiment row into Postgres.
 Start the platform DBOS generation worker:
 
 ```bash
-uv run python -m dr_dspy.platform.worker worker \
+uv run python -m whetstone.platform.worker worker \
   --database-url "$DATABASE_URL" \
   --worker-concurrency 1
 ```
@@ -108,7 +108,7 @@ concurrency changes are picked up reliably.
 Submit a JSONL file of `PredictionSpecRecord` payloads:
 
 ```bash
-uv run python -m dr_dspy.platform.worker submit-jsonl \
+uv run python -m whetstone.platform.worker submit-jsonl \
   --database-url "$DATABASE_URL" \
   --operation-key "<stable-submit-key>" \
   --experiment-name "<experiment-name>" \

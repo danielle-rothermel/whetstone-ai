@@ -1,15 +1,20 @@
 [project]
-name = "dr-dspy"
+name = "whetstone-ai"
 version = "0.1.0"
 description = "Add your description here"
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
-requires-python = ">=3.12, <3.15"
+requires-python = ">=3.13, <3.15"
 dependencies = [
     "alembic>=1.16.2",
     "datasets>=3.6.0",
     "dbos>=2.25.0",
+    "dr-code",
+    "dr-graph",
+    "dr-platform",
+    "dr-providers",
+    "dr-serialize",
     "marimo[recommended]>=0.23.11",
     "matplotlib>=3.11.0",
     "pandas>=3.0.3",
@@ -32,9 +37,21 @@ dev = [
     "dspy==3.3.0b1",
 ]
 
+# NOTE(composable-migration): path dependency must become a git/PyPI pin
+# before this branch merges.
+[tool.uv.sources]
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f451eeba5fb4dc69e8a29464d67571c62a125cd6" }
+dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "30de90c57103e6b3139a2e5b87b809ada7ae1d45" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "f71a2ee34ef3566dbf965f9b7f615cad60711c4e" }
+dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "8b098b02ca87111e69b8f727503184a2f0fbdea9" }
+dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "19abbc707820efde16b599801a5eba1dd6953cbf" }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whetstone"]
 
 [tool.ruff]
 include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
@@ -51,7 +68,7 @@ markers = [
 select = ["E", "F", "I", "UP", "B", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["dr_dspy", "dspy"]
+known-first-party = ["whetstone", "dspy"]
 
 [tool.ty.environment]
 extra-paths = ["..", "tests"]

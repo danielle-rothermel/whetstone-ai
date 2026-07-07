@@ -3,22 +3,22 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-
-from dr_dspy.eval_failures import PermanentFailureError
-from dr_dspy.graph import (
+from dr_graph import (
     BindingRef,
     FieldRole,
     FieldSpec,
     NodeConfig,
     NodeSpec,
 )
-from dr_dspy.platform.prompts import (
+
+from whetstone.eval_failures import PermanentFailureError
+from whetstone.platform.prompts import (
     USER_PROMPT_TEMPLATE_KEY,
     NodePromptSpec,
     build_node_messages,
     node_prompt_spec,
 )
-from dr_dspy.platform.spec_builder import (
+from whetstone.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
     HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
     humaneval_encdec_graph,
@@ -38,6 +38,7 @@ def _node(
         )
     return NodeSpec(
         id="direct",
+        op="llm_call",
         config=NodeConfig(
             fields=(
                 FieldSpec(name="prompt", role=FieldRole.INPUT),

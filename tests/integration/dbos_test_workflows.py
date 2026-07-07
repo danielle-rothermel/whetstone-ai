@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dbos import DBOS
 
-from dr_dspy.platform.graph_workflow import (
+from whetstone.platform.graph_workflow import (
     load_prediction_spec_step,
     persist_generation_result_step,
 )
-from dr_dspy.platform.scoring_workflow import (
+from whetstone.platform.scoring_workflow import (
     load_scoring_target_step,
     persist_score_attempt_step,
 )
