@@ -1,16 +1,15 @@
 # Future work and deprioritized implementation intentions
 
-**Current status:** This document is the future-work and deprioritized-backlog
-parking lot during the June 30 eval push. Do not treat it as the active task
-list. The active priority is in [`../AGENTS.md`](../AGENTS.md): backfill and
-rescore, choose today's models, run the enc-dec budget sweep baseline, and get
-a minimal COPRO-style loop producing numbers.
+**Current status:** Historical backlog reference. Active plans and priorities
+live in Linear (DevInfra team, Code Compression Paper project) — record new
+follow-ups there, not here. Do not treat this document as the active task
+list.
 
 **Canonical docs:** [`completed-design-and-implementation-choices.md`](completed-design-and-implementation-choices.md) (settled decisions), this file (backlog and deferred work), [`v1-schema-migrations.md`](v1-schema-migrations.md) (frozen Alembic history), [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) (backfill cleanup).
 
 **Date:** 2026-06-30  
 **Purpose:** Consolidated backlog of unfinished implementation, deferred
-decisions, follow-ups, and future work to revisit after the current eval push.
+decisions, and follow-ups as of the June 30 eval push.
 
 ---
 
@@ -26,11 +25,11 @@ The stacked-PR sequence from the platform design doc. Items marked **partial** h
 | 4 | Pure graph execution core | **Done** (reusable runner, no DB/DBOS knowledge) |
 | 5 | Archive v0 surfaces (old CLIs, manifests, repair, reporting, `experiments/`) | **Done** — runtime removed; see [`v0-migration-completion-checklist.md`](v0-migration-completion-checklist.md) |
 | 6 | Domain contracts (graph specs, provider configs, outcomes, metrics, stable ids) | **Partial** — records exist; several contracts still string/metadata-based |
-| 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — migration history frozen at `20260630_0005`; see [`v1-schema-migrations.md`](v1-schema-migrations.md) |
+| 7 | Schema and migrations (SQLAlchemy Core + Alembic) | **Partial** — linear history at head `20260630_0006`, forward revisions only; see [`v1-schema-migrations.md`](v1-schema-migrations.md) |
 | 8 | Platform graph workflow (DBOS + append-only persistence) | **Done** (first path under `dr_dspy.platform`) |
 | 9 | Batch submission, fairness, backoff | **Done** (chunked submit, fair-order enqueue, throttle table) |
 | 10 | HumanEval scoring and metrics | **Partial** — scoring workflow + `humaneval@v1` landed; profile record tables deferred |
-| 11 | Migration and validation (v0 backfill) | **Partial** — `migration/v0_reshape.py` + Tier 3.5 tests kept; backfill job and validation tooling **deferred** |
+| 11 | Migration and validation (v0 backfill) | **Partial** — enc-dec backfill CLI landed (`backfill-v0-encdec`, `migration/v0_encdec_backfill.py`) with inspection docs ([`inspecting_backfill.md`](inspecting_backfill.md)); direct-run backfill job and formal validation sign-off still open |
 | 12 | Rescoring (workflow/CLI + projection movement) | **Partial** — `score-one` / `rescore` exist; projection movement **deferred** |
 | 13 | Unitbench/export (Neon projections, generated TS types) | **Deferred** |
 
@@ -44,10 +43,16 @@ before.
 
 ### v0 migration operations (step 11)
 
-- **v0 backfill job/CLI** — read legacy prediction tables, call `reshape_v0_*`,
-  bulk-insert v1 append-only rows.
+- ~~**v0 backfill job/CLI**~~ — **Landed for enc-dec**: `backfill-v0-encdec`
+  worker command backed by
+  [`migration/v0_encdec_backfill.py`](../src/dr_dspy/migration/v0_encdec_backfill.py)
+  (chunked commits, parallel reshape, dry-run, idempotent re-runs). A
+  direct-table backfill job does not exist yet (`reshape_v0_direct_row` is
+  implemented but unwired).
 - **Migration validation tooling** — row counts, artifacts, costs, legacy v0
-  scores vs migrated/rescored outcomes.
+  scores vs migrated/rescored outcomes. Manual inspection queries exist
+  ([`inspecting_backfill.md`](inspecting_backfill.md), sample run inspector);
+  formal validation sign-off tooling does not.
 - **Reshape hardening** (when backfill starts) — deterministic timestamps,
   enc-dec `PARTIAL` coverage, v0 score preservation for diffing, provider-axis
   fidelity.
@@ -194,12 +199,18 @@ PyPI **`whetstone-ai`** and GitHub **`<personal-org>/whetstone-ai`** are the cho
 
 ## COPRO and next experiments
 
-Explicit next use of the platform after cutover:
+The minimal COPRO-style optimizer **landed**:
+[`optimization/copro.py`](../src/dr_dspy/optimization/copro.py), driven by
+[`scripts/optimization/run_copro_encdec.py`](../scripts/optimization/run_copro_encdec.py)
+— see [`running_copro.md`](running_copro.md). It mutates encoder instruction
+variables and evaluates candidates through the standard generate-and-score
+pipeline.
 
-- **COPRO-oriented experiments** on the new graph/spec/outcome path with instruction mutation over encoder nodes.
-- Optimizer reads from **projection** after score-attempt batches are validated and projection movement is implemented.
+Still open:
 
-No implementation work for COPRO itself is documented in these three source files — only that the platform design targets it as the immediate post-migration consumer.
+- **Optimizer reads from projection** after score-attempt batches are
+  validated and projection movement is implemented (the optimizer currently
+  queries score attempts directly).
 
 ---
 

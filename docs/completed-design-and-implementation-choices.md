@@ -1,10 +1,8 @@
 # Completed design and implementation choices
 
-**Current status:** Architecture reference only. During the June 30 eval push,
-use [`../AGENTS.md`](../AGENTS.md) for active priorities and do not turn this
-reference into new platform-polish work unless it directly blocks backfill,
-rescoring, model selection, the enc-dec budget sweep, or the minimal
-COPRO-style experiment loop.
+**Current status:** Architecture reference only. Active priorities live in
+Linear (see [`../AGENTS.md`](../AGENTS.md)); do not treat this reference as a
+task list or turn it into new platform-polish work.
 
 **Canonical companion:** [`remaining-implementation-intentions.md`](remaining-implementation-intentions.md) (backlog and deferred work).
 
@@ -421,4 +419,4 @@ Rename `dr_dspy` → `whetstone` is a **separate commit after extraction settles
 
 ## Migration status (schema)
 
-v1 platform schema migration history is **frozen** at revision `20260630_0005` (nine linear revisions from `20260629_0001`). Existing revision files must not be rewritten; future schema changes add forward revisions only. Databases that applied unlisted draft v1 schemas during hardening must **reset v1 platform tables and replay** Alembic from base — there is no supported upgrade path from draft shapes. See [`v1-schema-migrations.md`](v1-schema-migrations.md).
+v1 platform schema migration history is **frozen** — existing revision files must not be rewritten; future schema changes add forward revisions only. Current head is `20260630_0006` (ten linear revisions from `20260629_0001`). Databases that applied unlisted draft v1 schemas during hardening must **reset v1 platform tables and replay** Alembic from base — there is no supported upgrade path from draft shapes. See [`v1-schema-migrations.md`](v1-schema-migrations.md).

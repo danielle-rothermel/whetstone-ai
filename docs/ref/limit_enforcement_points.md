@@ -1,6 +1,6 @@
 # Limit enforcement points
 
-Reference map of payload-size and related limits in the codebase. Tier-1 domain caps are aligned with the serialization ceiling (~768 MiB) for the June 30 eval push — catastrophe guards only, not experiment policy.
+Reference map of payload-size and related limits in the codebase. Tier-1 domain caps are aligned with the serialization ceiling (~768 MiB), raised during the June 30 eval push — catastrophe guards only, not experiment policy.
 
 ---
 
