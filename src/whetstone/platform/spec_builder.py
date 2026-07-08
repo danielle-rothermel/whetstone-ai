@@ -12,7 +12,6 @@ from typing import Any, Literal
 from dr_code.humaneval import (
     HumanEvalTask,
     SampledHumanEvalTask,
-    sample_human_eval_tasks,
     sample_human_eval_tasks_from_rows,
 )
 from dr_graph import (
@@ -35,7 +34,9 @@ from pydantic import (
 )
 
 from whetstone.node_ops import LLM_CALL_OP
+from whetstone.platform.dataset_snapshot import load_humaneval_snapshot
 from whetstone.records import (
+    DatasetSnapshotIdentityPayload,
     DimensionsPayload,
     GraphSnapshotPayload,
     PredictionSpecRecord,
@@ -86,6 +87,7 @@ class DatasetSpecConfig(BaseModel):
 
     name: StrictStr
     split: StrictStr
+    snapshot_path: StrictStr
     sample_seed: StrictInt = 0
     sample_count: StrictInt = 1
 
@@ -93,6 +95,8 @@ class DatasetSpecConfig(BaseModel):
     def validate_sample_count(self) -> DatasetSpecConfig:
         if self.sample_count < 1:
             raise ValueError("sample_count must be positive")
+        if not self.snapshot_path:
+            raise ValueError("snapshot_path must not be empty")
         return self
 
 
@@ -399,7 +403,21 @@ def provider_ref_from_config(config: ProviderSpecConfig) -> ProviderConfigRef:
     )
 
 
-def task_snapshot_from_humaneval(task: HumanEvalTask) -> TaskSnapshotPayload:
+def task_snapshot_from_humaneval(
+    task: HumanEvalTask,
+    *,
+    snapshot_identity: DatasetSnapshotIdentityPayload | None = None,
+) -> TaskSnapshotPayload:
+    metadata: dict[str, Any] = {
+        "canonical_solution": task.canonical_solution,
+        "ground_truth_code": task.ground_truth_code,
+    }
+    source = None
+    if snapshot_identity is not None:
+        source = f"sha256:{snapshot_identity.sha256}"
+        metadata["dataset_snapshot"] = snapshot_identity.model_dump(
+            mode="json"
+        )
     return TaskSnapshotPayload(
         task_id=task.task_id,
         inputs=TaskInputsPayload(
@@ -409,10 +427,8 @@ def task_snapshot_from_humaneval(task: HumanEvalTask) -> TaskSnapshotPayload:
                 "entry_point": task.entry_point,
             }
         ),
-        metadata={
-            "canonical_solution": task.canonical_solution,
-            "ground_truth_code": task.ground_truth_code,
-        },
+        source=source,
+        metadata=metadata,
     )
 
 
@@ -421,6 +437,7 @@ def humaneval_encdec_task_snapshot(
     *,
     compression_target: float,
     humaneval_encdec: HumanevalEncDecConfig,
+    snapshot_identity: DatasetSnapshotIdentityPayload | None = None,
 ) -> TaskSnapshotPayload:
     gt_code = humaneval_gt_code(task)
     budget = encoder_char_budget(
@@ -428,7 +445,10 @@ def humaneval_encdec_task_snapshot(
         gt_code=gt_code,
         min_budget=humaneval_encdec.min_encoder_char_budget,
     )
-    base = task_snapshot_from_humaneval(task)
+    base = task_snapshot_from_humaneval(
+        task,
+        snapshot_identity=snapshot_identity,
+    )
     inputs = dict(base.inputs.values)
     inputs.update(
         {
@@ -559,14 +579,12 @@ def sample_tasks_for_config(
     rows: Sequence[dict[str, Any]] | None = None,
 ) -> tuple[SampledHumanEvalTask, ...]:
     if rows is None:
-        return tuple(
-            sample_human_eval_tasks(
-                seed=config.dataset.sample_seed,
-                sample_count=config.dataset.sample_count,
-                dataset_name=config.dataset.name,
-                dataset_split=config.dataset.split,
-            )
+        snapshot = load_humaneval_snapshot(
+            dataset_name=config.dataset.name,
+            dataset_split=config.dataset.split,
+            snapshot_path=config.dataset.snapshot_path,
         )
+        rows = snapshot.rows
     return tuple(
         sample_human_eval_tasks_from_rows(
             rows,
@@ -581,6 +599,15 @@ def iter_experiment_specs(
     *,
     rows: Sequence[dict[str, Any]] | None = None,
 ) -> Iterator[PredictionSpecRecord]:
+    snapshot_identity = None
+    if rows is None:
+        snapshot = load_humaneval_snapshot(
+            dataset_name=config.dataset.name,
+            dataset_split=config.dataset.split,
+            snapshot_path=config.dataset.snapshot_path,
+        )
+        rows = snapshot.rows
+        snapshot_identity = snapshot.identity
     humaneval_cfg = config.humaneval_encdec or HumanevalEncDecConfig()
     graph = graph_for_layout(
         config.graph_layout,
@@ -603,9 +630,13 @@ def iter_experiment_specs(
                         sampled.task,
                         compression_target=compression_target,
                         humaneval_encdec=humaneval_cfg,
+                        snapshot_identity=snapshot_identity,
                     )
                 else:
-                    task_snapshot = task_snapshot_from_humaneval(sampled.task)
+                    task_snapshot = task_snapshot_from_humaneval(
+                        sampled.task,
+                        snapshot_identity=snapshot_identity,
+                    )
                 yield prediction_spec(
                     graph,
                     providers=providers,

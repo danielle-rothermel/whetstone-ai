@@ -789,6 +789,7 @@ def evaluate_specs_sync(
     *,
     database_url: str,
     specs: Sequence[PredictionSpecRecord],
+    dataset_snapshot_path: str,
 ) -> list[str]:
     generation_run_ids: list[str] = []
     for spec in specs:
@@ -805,6 +806,7 @@ def evaluate_specs_sync(
         run_score_submission_workflow_once(
             database_url=database_url,
             generation_run_id=generation_run_id,
+            dataset_snapshot_path=dataset_snapshot_path,
         )
     return generation_run_ids
 
@@ -818,6 +820,7 @@ def evaluate_specs_queue(
     database_url: str,
     experiment_name: str,
     specs: Sequence[PredictionSpecRecord],
+    dataset_snapshot_path: str,
     operation_key: str,
     max_in_flight: int,
     poll_interval_seconds: float,
@@ -850,6 +853,7 @@ def evaluate_specs_queue(
         database_url=database_url,
         experiment_name=experiment_name,
         max_in_flight=max_in_flight,
+        dataset_snapshot_path=dataset_snapshot_path,
     )
 
 
@@ -858,6 +862,7 @@ def evaluate_candidate_specs(
     *,
     database_url: str,
     config: CoproRunConfig,
+    split: SplitConfigFragment,
     experiment_name: str,
     copro_run_id: str,
     specs: Sequence[PredictionSpecRecord],
@@ -872,7 +877,11 @@ def evaluate_candidate_specs(
         copro_run_id=copro_run_id,
     )
     if config.execution_mode is CoproExecutionMode.SYNC:
-        evaluate_specs_sync(database_url=database_url, specs=specs)
+        evaluate_specs_sync(
+            database_url=database_url,
+            specs=specs,
+            dataset_snapshot_path=split.dataset.snapshot_path,
+        )
         return
     operation_key = f"copro-{copro_run_id}-d{depth}"
     evaluate_specs_queue(
@@ -880,6 +889,7 @@ def evaluate_candidate_specs(
         database_url=database_url,
         experiment_name=experiment_name,
         specs=specs,
+        dataset_snapshot_path=split.dataset.snapshot_path,
         operation_key=operation_key,
         max_in_flight=config.rescore_max_in_flight,
         poll_interval_seconds=config.generation_poll_interval_seconds,
@@ -957,6 +967,7 @@ def run_copro_loop(
             engine,
             database_url=database_url,
             config=config,
+            split=split,
             experiment_name=experiment_name,
             copro_run_id=resolved_run_id,
             specs=specs,

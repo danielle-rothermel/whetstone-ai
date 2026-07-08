@@ -20,6 +20,8 @@ from dr_graph import (
 from dr_providers import EndpointKind, ProviderKind
 
 from whetstone.records import (
+    DatasetSnapshotHeaderPayload,
+    DatasetSnapshotIdentityPayload,
     DimensionsPayload,
     GenerationRunRecord,
     GenerationRunStatus,
@@ -40,6 +42,19 @@ from whetstone.records import (
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
+
+
+def dataset_snapshot_identity() -> DatasetSnapshotIdentityPayload:
+    return DatasetSnapshotIdentityPayload(
+        source_path="/tmp/humanevalplus_snapshot.json",
+        sha256="0" * 64,
+        header=DatasetSnapshotHeaderPayload(
+            schema_version=1,
+            dataset_id="evalplus/humanevalplus",
+            hf_revision="d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
+            overrides_digest="1" * 64,
+        ),
+    )
 
 
 def scoring_task(*, test: str | None = None) -> HumanEvalTask:

@@ -497,13 +497,10 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?rev=f7090724e8303c70eb9c723b4c3660a550a1e3bd#f7090724e8303c70eb9c723b4c3660a550a1e3bd" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?rev=927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8#927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8" }
 dependencies = [
     { name = "datasets" },
-    { name = "marimo", extra = ["recommended"] },
-    { name = "pyarrow" },
     { name = "pydantic" },
-    { name = "pyyaml" },
     { name = "typer" },
     { name = "zstandard" },
 ]
@@ -543,7 +540,7 @@ dependencies = [
 [[package]]
 name = "dr-serialize"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-serialize?branch=main#cfdf4496f1a5510d1788dba70f554300b39a3bca" }
+source = { git = "https://github.com/danielle-rothermel/dr-serialize?rev=cfdf4496f1a5510d1788dba70f554300b39a3bca#cfdf4496f1a5510d1788dba70f554300b39a3bca" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -3013,7 +3010,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=f7090724e8303c70eb9c723b4c3660a550a1e3bd" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=drprov-v02-migration" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },

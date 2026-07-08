@@ -12,6 +12,7 @@ from dr_code.humaneval import (
 from dr_graph import graph_digest
 from dr_providers import EndpointKind, ProviderKind
 
+from tests.support.platform_scoring_fixtures import dataset_snapshot_identity
 from whetstone.analysis.inspect import (
     RunBundle,
     SampleIndexError,
@@ -212,6 +213,7 @@ def _encdec_bundle(
         parser_version="v1",
         dataset_name="humaneval",
         dataset_split="test",
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,

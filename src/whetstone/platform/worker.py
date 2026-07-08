@@ -44,6 +44,7 @@ from whetstone.platform.rescoring import (
 )
 from whetstone.platform.scoring_workflow import (
     platform_scoring_workflow_id,
+    require_dataset_snapshot_path,
     run_score_submission_workflow_once,
 )
 from whetstone.platform.spec_builder import (
@@ -193,6 +194,17 @@ def score_one(
         str,
         typer.Option("--dataset-split"),
     ] = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--dataset-snapshot-path",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Explicit dr-code raw-row snapshot JSON path.",
+        ),
+    ] = None,
     database_url: Annotated[
         str | None,
         typer.Option(
@@ -217,6 +229,11 @@ def score_one(
         database_url_error_suffix="for platform scoring workflow",
     )
     try:
+        resolved_dataset_snapshot_path = require_dataset_snapshot_path(
+            str(dataset_snapshot_path)
+            if dataset_snapshot_path is not None
+            else None
+        )
         score_result = run_score_submission_workflow_once(
             database_url=config.database_url,
             generation_run_id=generation_run_id,
@@ -225,6 +242,7 @@ def score_one(
             scoring_profile_version=scoring_profile_version,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
+            dataset_snapshot_path=str(resolved_dataset_snapshot_path),
         )
         CONSOLE.print(
             {
@@ -283,6 +301,17 @@ def rescore(
         str,
         typer.Option("--dataset-split"),
     ] = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--dataset-snapshot-path",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            resolve_path=True,
+            help="Explicit dr-code raw-row snapshot JSON path.",
+        ),
+    ] = None,
     chunk_size: Annotated[
         int,
         typer.Option("--chunk-size", min=1),
@@ -346,6 +375,11 @@ def rescore(
     ] = DEFAULT_PROGRESS_INTERVAL_SECONDS,
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
+    resolved_dataset_snapshot_path = require_dataset_snapshot_path(
+        str(dataset_snapshot_path)
+        if dataset_snapshot_path is not None
+        else None
+    )
     try:
         resolved_generation_statuses = parse_rescore_producer_statuses(
             generation_status
@@ -384,6 +418,7 @@ def rescore(
                 score_attempt_index=score_attempt_index,
                 dataset_name=dataset_name,
                 dataset_split=dataset_split,
+                dataset_snapshot_path=str(resolved_dataset_snapshot_path),
                 chunk_size=chunk_size,
                 limit=limit,
                 dry_run=dry_run,

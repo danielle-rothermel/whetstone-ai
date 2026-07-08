@@ -5,6 +5,7 @@
   "dataset": {
     "name": "local/fixture",
     "split": "test",
+    "snapshot_path": "../dr-code/tests/corpus/humanevalplus_snapshot.json",
     "sample_seed": 7,
     "sample_count": 2
   },

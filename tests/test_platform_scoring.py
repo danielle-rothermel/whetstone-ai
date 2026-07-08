@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -57,6 +58,7 @@ from dr_graph import (
 from dr_providers import EndpointKind, ProviderKind
 from sqlalchemy.dialects import postgresql
 
+from tests.support.platform_scoring_fixtures import dataset_snapshot_identity
 from whetstone.db import io as db_io
 from whetstone.platform import rescoring, scoring_workflow
 from whetstone.platform.persistence import (
@@ -107,6 +109,7 @@ class DummyConnection:
 
 
 def _completed_score_submission_run(**kwargs: Any) -> ScoreAttemptRecord:
+    kwargs.setdefault("dataset_snapshot", dataset_snapshot_identity())
     record = score_submission_run(**kwargs)
     assert isinstance(record, ScoreAttemptRecord)
     return record
@@ -501,7 +504,7 @@ def test_metrics_payload_includes_full_stage_metrics() -> None:
     assert metrics.python_leakage.fenced_code_block_count == 1
     assert metrics.ast is not None
     assert metrics.ast.top_level_function_count == 1
-    assert "raw" in metrics.compression
+    assert set(metrics.compression) == {"gzip", "zstd"}
     assert [stage.stage_id for stage in metrics.stages] == [
         "terminal",
         "extracted_code",
@@ -789,6 +792,7 @@ def test_score_submission_run_persists_evaluation_incomplete(
         task: HumanEvalTask,
         candidate_code: str,
         timeout_seconds: float,
+        candidate_ast: object | None = None,
     ) -> EvaluationTaskResult:
         assert candidate_code == "def add_one(x):\n    return x + 1"
         return EvaluationTaskResult(
@@ -1242,13 +1246,14 @@ def test_load_humaneval_task_step_uses_cached_task_map(
     calls: list[tuple[str, Any]] = []
     rows = [{"task_id": "HumanEval/fixture"}]
 
-    def load_rows(
+    def load_snapshot(
         *,
         dataset_name: str,
         dataset_split: str,
-    ) -> list[dict[str, str]]:
-        calls.append(("load", (dataset_name, dataset_split)))
-        return rows
+        snapshot_path: str,
+    ) -> SimpleNamespace:
+        calls.append(("load", (dataset_name, dataset_split, snapshot_path)))
+        return SimpleNamespace(rows=rows)
 
     def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
         calls.append(("parse", payload))
@@ -1256,8 +1261,8 @@ def test_load_humaneval_task_step_uses_cached_task_map(
 
     monkeypatch.setattr(
         scoring_workflow,
-        "load_human_eval_rows",
-        load_rows,
+        "load_humaneval_snapshot",
+        load_snapshot,
     )
     monkeypatch.setattr(
         scoring_workflow,
@@ -1271,11 +1276,13 @@ def test_load_humaneval_task_step_uses_cached_task_map(
         first = load_step.__wrapped__(
             "dataset",
             "split",
+            "snapshot.json",
             "HumanEval/fixture",
         )
         second = load_step.__wrapped__(
             "dataset",
             "split",
+            "snapshot.json",
             "HumanEval/fixture",
         )
     finally:
@@ -1283,7 +1290,7 @@ def test_load_humaneval_task_step_uses_cached_task_map(
 
     assert first == second
     assert calls == [
-        ("load", ("dataset", "split")),
+        ("load", ("dataset", "split", "snapshot.json")),
         ("parse", rows),
     ]
 
@@ -1291,20 +1298,21 @@ def test_load_humaneval_task_step_uses_cached_task_map(
 def test_load_humaneval_task_step_raises_for_missing_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def load_rows(
+    def load_snapshot(
         *,
         dataset_name: str,
         dataset_split: str,
-    ) -> list[dict[str, str]]:
-        return [{"task_id": "HumanEval/fixture"}]
+        snapshot_path: str,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(rows=[{"task_id": "HumanEval/fixture"}])
 
     def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
         return (_task(),)
 
     monkeypatch.setattr(
         scoring_workflow,
-        "load_human_eval_rows",
-        load_rows,
+        "load_humaneval_snapshot",
+        load_snapshot,
     )
     monkeypatch.setattr(
         scoring_workflow,
@@ -1322,6 +1330,7 @@ def test_load_humaneval_task_step_raises_for_missing_task(
             load_step.__wrapped__(
                 "dataset",
                 "split",
+                "snapshot.json",
                 "HumanEval/missing",
             )
     finally:
@@ -1349,9 +1358,15 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
     def load_task(
         dataset_name: str,
         dataset_split: str,
+        dataset_snapshot_path: str,
         task_id: str,
     ) -> dict[str, Any]:
-        calls.append(("task", (dataset_name, dataset_split, task_id)))
+        calls.append(
+            (
+                "task",
+                (dataset_name, dataset_split, dataset_snapshot_path, task_id),
+            )
+        )
         return _task().model_dump(mode="json")
 
     def started(score_attempt_id: str) -> str:
@@ -1373,6 +1388,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                     args[6],
                     args[7],
                     args[8],
+                    args[9],
                 ),
             )
         )
@@ -1385,6 +1401,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             score_attempt_index=args[5],
             dataset_name=args[6],
             dataset_split=args[7],
+            dataset_snapshot=dataset_snapshot_identity(),
             started_at=NOW,
             completed_at=LATER,
         ).model_dump(mode="json")
@@ -1414,6 +1431,11 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
     monkeypatch.setattr(scoring_workflow, "score_submission_step", score_step)
     monkeypatch.setattr(
         scoring_workflow,
+        "read_snapshot_identity",
+        lambda path: dataset_snapshot_identity(),
+    )
+    monkeypatch.setattr(
+        scoring_workflow,
         "persist_score_result_step",
         persist,
     )
@@ -1422,6 +1444,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
     result = workflow.__wrapped__(
         "postgresql://example/db",
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     expected_score_id = stable_score_attempt_id(
@@ -1443,6 +1466,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             (
                 DEFAULT_SCORE_DATASET_NAME,
                 DEFAULT_SCORE_DATASET_SPLIT,
+                "snapshot.json",
                 spec.task_id,
             ),
         ),
@@ -1458,6 +1482,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 0,
                 DEFAULT_SCORE_DATASET_NAME,
                 DEFAULT_SCORE_DATASET_SPLIT,
+                dataset_snapshot_identity().model_dump(mode="json"),
                 NOW.isoformat(),
             ),
         ),
@@ -2018,6 +2043,7 @@ def test_schedule_score_submission_workflow_reports_existing_dbos_workflow(
     result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     assert result == scoring_workflow.ScheduledScoreSubmissionWorkflow(
@@ -2050,6 +2076,7 @@ def test_schedule_score_submission_workflow_surfaces_unrelated_start_failure(
         scoring_workflow.schedule_score_submission_workflow(
             database_url="postgresql://example/db",
             generation_run_id="generation-run-1",
+            dataset_snapshot_path="snapshot.json",
         )
 
 
@@ -2137,6 +2164,7 @@ def test_schedule_score_submission_workflow_presence_matrix(
     result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=generation_run_id,
+        dataset_snapshot_path="snapshot.json",
         recover_orphans=recover_orphans,
     )
 
@@ -2173,6 +2201,7 @@ def test_schedule_score_submission_workflow_treats_start_race_as_unscheduled(
     result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     assert result == scoring_workflow.ScheduledScoreSubmissionWorkflow(
@@ -2475,6 +2504,7 @@ def test_scoring_profile_controls_parser_timeout_and_metrics(
         task: HumanEvalTask,
         candidate_code: str,
         timeout_seconds: float,
+        candidate_ast: object | None = None,
     ) -> EvaluationTaskResult:
         assert candidate_code == "def add_one(x):\n    return x + 1"
         observed_timeouts.append(timeout_seconds)

@@ -29,6 +29,8 @@ from whetstone.records.limits import (
 )
 from whetstone.records.models import (
     AstMetricsPayload,
+    DatasetSnapshotHeaderPayload,
+    DatasetSnapshotIdentityPayload,
     DimensionsPayload,
     ExperimentRecord,
     ExtractedSubmissionPayload,
@@ -79,6 +81,8 @@ __all__ = [
     "SCORE_ATTEMPT_ID_DIGEST_LENGTH",
     "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
+    "DatasetSnapshotHeaderPayload",
+    "DatasetSnapshotIdentityPayload",
     "DimensionsPayload",
     "ExperimentRecord",
     "ExtractedSubmissionPayload",

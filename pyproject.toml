@@ -39,11 +39,11 @@ dev = [
 
 # dr-* libs are not on PyPI; sources track main and uv.lock pins the exact
 # commit. Refresh with `uv lock --upgrade-package <name>`.
-# TODO(repin): move dr-code back to main after hardening/20-contracts lands.
+# TODO(repin): move dr-code back to main after dr-code#22 merges.
 # dr-platform tracks its drprov-v02-migration branch until dr-platform PR #6
 # merges; flip it to main then.
 [tool.uv.sources]
-dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f7090724e8303c70eb9c723b4c3660a550a1e3bd" }
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
 dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "drprov-v02-migration" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }

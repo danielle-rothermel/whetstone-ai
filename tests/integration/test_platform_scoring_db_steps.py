@@ -24,6 +24,7 @@ from tests.support.platform_integration_helpers import (
     seed_scoring_target,
 )
 from tests.support.platform_scoring_fixtures import (
+    dataset_snapshot_identity,
     scoring_task,
     seeded_scoring_target,
 )
@@ -36,6 +37,7 @@ pytestmark = pytest.mark.integration
 
 
 def _completed_score_submission_run(**kwargs: Any) -> ScoreAttemptRecord:
+    kwargs.setdefault("dataset_snapshot", dataset_snapshot_identity())
     record = score_submission_run(**kwargs)
     assert isinstance(record, ScoreAttemptRecord)
     return record

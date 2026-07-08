@@ -102,6 +102,9 @@ def main(
         )
     )
     experiment_name = specs[0].experiment_name
+    dataset_snapshot_path = str(
+        specs[0].task.metadata["dataset_snapshot"]["source_path"]
+    )
     workdir = Path(tempfile.mkdtemp(prefix="e2e-fixture-smoke-"))
     specs_file = workdir / "specs.jsonl"
     write_prediction_specs_jsonl(specs, specs_file)
@@ -152,6 +155,7 @@ def main(
             engine,
             database_url=config.database_url,
             experiment_name=experiment_name,
+            dataset_snapshot_path=dataset_snapshot_path,
         )
         typer.echo(f"      rescore: {rescore.model_dump(mode='json')}")
 
