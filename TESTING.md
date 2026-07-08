@@ -1,7 +1,7 @@
 # Testing
 
-This document describes how to run tests, the tier model for platform integration
-coverage, shared fixtures, and conventions for adding new tests.
+This document describes how to run tests, the platform integration tiers, shared
+fixtures, and conventions for adding coverage.
 
 ## Overview
 
@@ -11,154 +11,113 @@ and skip gracefully when PostgreSQL is unavailable.
 
 | Command | What runs |
 |---------|-----------|
-| `./scripts/ci/unit.sh` | Unit tests (excludes integration marker) |
-| `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs (generation + scoring) |
+| `./scripts/ci/unit.sh` | Unit tests excluding the integration marker |
+| `./scripts/ci/integration.sh` | Postgres + DBOS integration proofs |
 | `./scripts/ci/lint.sh` | `ruff check` + `ty check` |
-| `uv run pytest tests/test_v0_reshape.py` | v0 reshape unit smoke (no database) |
 
-Install dev dependencies (including `dspy` for serialization contract tests) with
-`uv sync --group dev`. CI scripts assume the dev group is synced.
+Install dev dependencies, including `dspy` for serialization contract tests,
+with `uv sync --group dev`. CI scripts assume the dev group is synced.
 
-## Test tiers
+## Test Tiers
 
 | Tier | Purpose | Location |
 |------|---------|----------|
-| **Unit** | Pure graph orchestration, record contracts, SQL compilation, reshape logic | `tests/test_*.py` (except `tests/integration/`) |
-| **0 — Fixtures** | Shared Postgres schema + DBOS reset helpers | [`tests/conftest.py`](tests/conftest.py) |
-| **1 — DB steps** | Generation: `load_prediction_spec_step` / `persist_generation_result_step` Postgres round-trip. Scoring: `load_scoring_target_step` / `persist_score_attempt_step` idempotency and profile uniqueness | [`tests/integration/test_platform_db_steps.py`](tests/integration/test_platform_db_steps.py), [`tests/integration/test_platform_scoring_db_steps.py`](tests/integration/test_platform_scoring_db_steps.py) |
-| **2 — Workflow** | Generation: `run_prediction_graph_workflow_once` happy path with mocked LM. Scoring: `run_score_generation_workflow_once` with mocked HumanEval task load | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
-| **3 — Recovery** | Generation: retry-exhaustion step/timestamp assertions, upstream `BLOCKED` runs, error-path idempotent replay, duplicate-start recovery, persist idempotency, persist failure surfacing. Scoring: workflow replay idempotency, task-loader memoization, orphan workflow recovery | [`tests/integration/test_platform_dbos_workflow.py`](tests/integration/test_platform_dbos_workflow.py), [`tests/integration/test_platform_scoring_dbos_workflow.py`](tests/integration/test_platform_scoring_dbos_workflow.py) |
-| **3.5 — Migration smoke** | Frozen v0 samples → v1 reshape → import / workflow pass-through (only remaining v0-related tier until backfill completes) | [`tests/integration/test_v0_reshape_*.py`](tests/integration/), [`tests/test_v0_reshape.py`](tests/test_v0_reshape.py) |
-| **4 — Pipeline E2E** | JSONL submit → real DBOS enqueue → in-process queue consumer → generation → scoring (mock LM + HumanEval loader only) | [`tests/integration/test_platform_pipeline_e2e.py`](tests/integration/test_platform_pipeline_e2e.py) |
+| Unit | Pure orchestration, record contracts, SQL compilation, helper logic | `tests/test_*.py` except `tests/integration/` |
+| 0 - Fixtures | Shared Postgres schema and DBOS reset helpers | `tests/conftest.py` |
+| 1 - DB steps | Generation and scoring DB round-trips, idempotency, and uniqueness checks | `tests/integration/test_platform_db_steps.py`, `tests/integration/test_platform_scoring_db_steps.py` |
+| 2 - Workflow | Generation and scoring workflow happy paths with mocked external boundaries | `tests/integration/test_platform_dbos_workflow.py`, `tests/integration/test_platform_scoring_dbos_workflow.py` |
+| 3 - Recovery | Retry exhaustion, replay idempotency, duplicate-start recovery, and orphan workflow recovery | `tests/integration/test_platform_dbos_workflow.py`, `tests/integration/test_platform_scoring_dbos_workflow.py` |
+| 4 - Pipeline E2E | JSONL submit to DBOS enqueue to generation to scoring | `tests/integration/test_platform_pipeline_e2e.py` |
 
-Design context: [completed design choices](docs/completed-design-and-implementation-choices.md),
-[remaining implementation intentions](docs/remaining-implementation-intentions.md),
-[testing logs](docs/testing_logs.md) (live smoke runs and payload sizing notes).
-Workflow CLI details are in [README.md](../README.md#v1-graph-workflow).
+Workflow CLI details are in [README.md](README.md#platform-workflow).
 
 ## Layout
 
-```
+```text
 tests/
-  conftest.py                 # integration fixtures (Postgres schema, reset_dbos)
-  serialization_support.py    # helpers for serialization contract tests
-  support/                    # shared spec/node helpers for unit + integration
+  conftest.py
+  serialization_support.py
+  support/
+    jsonl_fixtures.py
     platform_integration_helpers.py
     platform_scoring_fixtures.py
     platform_workflow_fixtures.py
-    jsonl_fixtures.py
     postgres_fixtures.py
-  fixtures/v0_samples/        # committed JSON rows from legacy v0 tables
-  integration/                # @pytest.mark.integration tests
-    dbos_test_workflows.py    # minimal workflows for step-level DBOS proofs
+  integration/
+    dbos_test_workflows.py
     test_platform_db_steps.py
     test_platform_dbos_workflow.py
+    test_platform_pipeline_e2e.py
     test_platform_scoring_db_steps.py
     test_platform_scoring_dbos_workflow.py
-    test_platform_pipeline_e2e.py
-    test_v0_reshape_outcomes.py
-    test_v0_reshape_specs.py
-scripts/ci/                   # portable CI entrypoints (package-root cwd)
-  unit.sh
+scripts/ci/
   integration.sh
   lint.sh
-src/whetstone/migration/        # v0 → v1 reshape logic (not inline in tests)
+  unit.sh
 ```
 
-## Shared fixtures
+## Shared Fixtures
 
-Defined in [`tests/conftest.py`](tests/conftest.py):
+Defined in `tests/conftest.py`:
 
-- **`app_postgres_schema`** — creates an isolated schema, applies v1 migrations +
-  append-only triggers, then adopts the dr-platform lineage
-  (`ensure_platform_schema`: stamp the library baseline — the tables already
-  exist from whetstone's own history — and apply post-baseline platform
-  migrations such as throttle holds/tags). Exposes `database_url` with
-  `search_path` set for steps that open their own SQLAlchemy engines.
-  For a real database, run the same adoption once:
-  `uv run python -c "from whetstone.platform.platform_db import
-  ensure_platform_schema; import os;
-  ensure_platform_schema(os.environ['DATABASE_URL'])"`.
-- **`reset_dbos`** — destroys/reconfigures DBOS, resets the system database
-  (SQLite file under `tmp_path` by default), and launches the platform runtime.
-- **`reset_dbos_generation_consumer`** — like `reset_dbos`, but listens to the
-  platform generation queue and registers a worker before yielding (for Tier 4
-  pipeline tests).
+- `app_postgres_schema` creates an isolated schema, applies the application
+  schema, adopts the dr-platform lineage, and exposes a `database_url` with
+  `search_path` set.
+- `reset_dbos` destroys and reconfigures DBOS, resets the system database, and
+  launches the platform runtime.
+- `reset_dbos_generation_consumer` starts the platform runtime, registers a
+  generation worker, and listens to the platform queue for pipeline tests.
 
-Seed helpers live in [`tests/support/postgres_fixtures.py`](tests/support/postgres_fixtures.py):
+Seed helpers live in `tests/support/postgres_fixtures.py`:
 
-- **`seed_prediction_spec(connection, spec)`** — inserts experiment + spec rows.
-- **`start_test_workflow(workflow, workflow_id, *args)`** — DBOS workflow helper.
+- `seed_prediction_spec(connection, spec)` inserts experiment and spec rows.
+- `start_test_workflow(workflow, workflow_id, *args)` starts a DBOS workflow.
 
 Integration polling helpers live in
-[`tests/support/platform_integration_helpers.py`](tests/support/platform_integration_helpers.py):
+`tests/support/platform_integration_helpers.py`:
 
-- **`wait_for_workflow_result(workflow_id)`** — poll DBOS until a workflow
-  reaches a terminal status.
+- `wait_for_workflow_result(workflow_id)` polls DBOS until a workflow reaches a
+  terminal status.
 
 ## Conventions
 
-### Mock boundaries
+### Mock Boundaries
 
-- **Workflow integration tests:** mock only the LM boundary (`execute_lm_node` or
-  provider caller). Do not mock DB steps under test.
-- **Pipeline E2E (Tier 4):** mock LM and HumanEval task load only; use real
-  JSONL submit, enqueue, queue consumption, Postgres persistence, and scoring
+- Workflow integration tests mock only the LM boundary or HumanEval task load.
+  Do not mock DB steps under test.
+- Pipeline E2E tests mock LM and HumanEval task load only; use real JSONL
+  submit, enqueue, queue consumption, Postgres persistence, and scoring
   workflow steps.
-- **Unit orchestration tests:** may mock all steps and use `.__wrapped__` to
-  verify call order without DBOS overhead.
+- Unit orchestration tests may mock all steps and use `.__wrapped__` to verify
+  call order without DBOS overhead.
 
-### Anti-patterns for contract tests
+### Anti-Patterns
 
 - Using `run_prediction_graph_workflow.__wrapped__` when the goal is to prove
   DBOS memoization, replay, or step registration.
 - Using `_RecordingConnection` when the goal is a real Postgres round-trip.
-- Putting migration reshape logic inline in test files (belongs in
-  `src/whetstone/migration/`).
+- Adding one-off factories when an existing helper in `tests/support/` fits the
+  scenario.
 
-### v0 sample fixtures
+### Adding New Tests
 
-Legacy rows live in [`tests/fixtures/v0_samples/`](tests/fixtures/v0_samples/) as
-committed JSON. CI does not require live v0 tables. Delete fixtures and Tier 3.5
-tests after backfill validation — see
-[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
-
-### Golden identity fixtures (composable migration)
-
-Committed identity baselines live in
-[`tests/fixtures/golden/`](tests/fixtures/golden/): canonical-JSON strings and
-digests, graph digests, record ID axes, and parser/scoring outputs under the
-v1 profiles. `uv run pytest -k golden` must stay green through every
-migration stage (success: 4 passed). Regenerate only before Stage 0 lands —
-never to paper over a migration-caused mismatch — with
-`uv run python scripts/golden/generate_golden_fixtures.py` (success: prints
-one `wrote …` line per file and `generated 4 fixture files: OK`, and a
-subsequent `uv run pytest -k golden` passes). See
-[`docs/composable/prompt.md`](docs/composable/prompt.md).
-
-### Adding new tests
-
-1. Pick the tier (unit vs integration vs migration smoke).
+1. Pick the tier: unit, workflow integration, recovery integration, or pipeline
+   E2E.
 2. Reuse helpers in `tests/support/` before adding new factories.
 3. Integration tests must skip cleanly when Postgres is unavailable.
-4. Append a dated entry to the changelog below when test infrastructure, tiers,
-   fixtures, markers, or CI invocation changes materially.
+4. Keep each test focused on one behavior or contract.
 
-## Environment variables
+## Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `DATABASE_URL` | App Postgres URL (defaults to `postgresql+psycopg:///dr_dspy`; bare `postgresql://` is normalized by platform CLI) |
-| `DBOS_SYSTEM_DATABASE_URL` | Optional; integration tests use a per-test SQLite file when unset |
-
-Integration tests compose `app_postgres_schema` with `reset_dbos` when DBOS
-workflows are under test. Tier 4 pipeline tests use `reset_dbos_generation_consumer`
-instead.
+| `DATABASE_URL` | App Postgres URL; defaults to `postgresql+psycopg:///dr_dspy` |
+| `DBOS_SYSTEM_DATABASE_URL` | Optional DBOS system database URL; integration tests use a per-test SQLite file when unset |
 
 ## CI
 
-GitHub Actions workflow: [`.github/workflows/whetstone_tests.yml`](.github/workflows/whetstone_tests.yml).
-Jobs run from the standalone repository root.
+GitHub Actions workflow: `.github/workflows/whetstone_tests.yml`. Jobs run from
+the standalone repository root.
 
 | Job | Script | Notes |
 |-----|--------|-------|
@@ -166,7 +125,7 @@ Jobs run from the standalone repository root.
 | unit | `./scripts/ci/unit.sh` | unit tests |
 | integration | `./scripts/ci/integration.sh` | Postgres 16 service; integration tests |
 
-Local equivalents (from the package root):
+Local equivalents:
 
 ```bash
 ./scripts/ci/lint.sh
@@ -174,90 +133,8 @@ Local equivalents (from the package root):
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
-Install git hooks (runs the same lint script on commit and push):
+Install git hooks:
 
 ```bash
 uv run pre-commit install
 ```
-
-DSPy resolves from the pinned PyPI dependency in `pyproject.toml` and `uv.lock`.
-
-[`Dockerfile.ci`](Dockerfile.ci) builds a unit-test image for future Depot
-wiring after the org repo is created.
-
-## Changelog
-
-### 2026-07-04 — Golden identity fixtures for the composable migration
-
-- Added `tests/fixtures/golden/` + `tests/test_golden_fixtures.py`
-  (generator: `scripts/golden/generate_golden_fixtures.py`); `uv run pytest
-  -k golden` is the identity acceptance gate for every migration stage.
-
-### 2026-06-30 — Enc-dec smoke r2 + scoring payload sizing
-
-- Live smoke r2 documented in [`docs/testing_logs.md`](docs/testing_logs.md)
-  (model routing, `rescore` await, URL normalization, 128 MiB byte-only
-  `per_test_results` cap).
-- Post-run sizing note: typical HumanEval/146 score row ≈0.3 MiB JSON;
-  128 MiB cap is ample; truncation deferred.
-
-### 2026-06-30 — Remove coverage gate
-
-- Removed `./scripts/ci/coverage.sh` and the **Coverage** CI job.
-- CI now runs lint, unit, and integration jobs only.
-
-### 2026-06-30 — Remove unused `lm.utils` symbols
-
-- Deleted v0-only helpers (`LmEventBuffer`, `response_text`, `stable_json`,
-  `usage_metadata_from_response`, `ModelConfig`); boundary uses
-  `content_to_text` and `provider_cost_from_response` only.
-- Cleared outstanding testing backlog from planning docs; Tier 4 E2E marked done.
-
-### 2026-06-30 — Coverage gap closure
-
-- Added `./scripts/ci/coverage.sh` and a **Coverage** CI job with an 88%
-  combined threshold (`coverage` + `pytest-cov` dev dependencies).
-- Removed unused `db/io.py` `insert_*_on_conflict_do_nothing` helpers; added
-  Postgres submit idempotency integration tests.
-- Added validator, humaneval, serialization, migration backfill/downgrade, and
-  Alembic env offline SQL smoke tests.
-
-### 2026-06-30 — High-risk coverage: prompts, import inference, worker CLI, pipeline E2E
-
-- Added unit tests for `platform/prompts.py` error paths, `humaneval/import_inference.py`,
-  and `platform/worker.py` CLI wiring (`score-one`, `submit-jsonl`, `worker`, `rescore`).
-- Added Tier 4 pipeline integration test:
-  JSONL submit → DBOS enqueue → queue consumer → generation → scoring.
-- Added `reset_dbos_generation_consumer` fixture, `wait_for_workflow_result` helper,
-  and `tests/support/jsonl_fixtures.py`.
-
-### 2026-06-30 — Standalone repository CI
-
-- Added `.github/workflows/whetstone_tests.yml` for root-based lint, unit, and
-  integration jobs.
-- Updated `Dockerfile.ci` for the standalone root layout.
-- Removed the fork-only `ensure_pypi_dspy.sh` workflow step.
-
-### 2026-06-30 — CI scripts and GitHub workflow
-
-- Added `scripts/ci/{unit,integration,lint}.sh`.
-- Added the original fork-scoped GitHub workflow before extraction.
-- Pinned `dspy==3.3.0b1`.
-- Fixed `tests/test_serialization.py` import path.
-- Added `Dockerfile.ci` for future Depot wiring.
-
-### 2026-06-30 — v0 runtime archive
-
-- Removed v0 experiment/harness/legacy LM runtime code; platform DBOS bootstrap
-  now lives under `src/dr_dspy/platform/`.
-- Kept `migration/v0_reshape.py` and Tier 3.5 fixtures for backfill.
-- Added [`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
-
-### 2026-06-30 — Platform integration + v0 migration smoke tiers
-
-- Added tiered integration test model (Tiers 0–3 and 3.5).
-- Added `tests/conftest.py` shared fixtures and `@pytest.mark.integration`.
-- Added `src/dr_dspy/migration/v0_reshape.py` and frozen v0 JSON fixtures.
-- Fixed optional JSONB columns in `persist_generation_result` to insert SQL
-  `NULL` instead of JSON `null` for Postgres check constraints.
-- Added `TESTING.md` as canonical testing documentation.
