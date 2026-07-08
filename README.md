@@ -1,79 +1,76 @@
 # whetstone-ai
 
-Graph-based HumanEval evaluation platform workbench. Generation and scoring run
-through graph-shaped specs, explicit LM/prompt boundaries, and append-only
-terminal outcomes under `whetstone.platform`.
+Experiment orchestration for HumanEval compression studies. Whetstone builds
+graph-shaped prediction specs, runs generation and scoring through DBOS, stores
+append-only results in Postgres, and includes a compact COPRO-style DSPy prompt
+optimizer.
 
-Legacy v0 runtime code (mutable prediction-table workflows, repair CLIs, DSPy
-`Predict` experiment backends) has been **removed**. Frozen v0 row reshape logic
-remains under `migration/` for backfill — see
-[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
+This repo's role: experiment orchestration: DBOS workflows, Postgres persistence, DSPy optimization.
+Neighbors: dr-serialize, dr-providers, dr-graph, dr-platform, dr-code, unitbench.
+Dependency direction: consumes dr-code's evaluator library; unitbench reads our Postgres.
 
-## Package layout
+## Package Layout
 
-- `humaneval/` — task parsing, code extraction, scoring, compression metrics
-- `lm/boundary.py` — forward prompt/provider request and response boundary
-- `lm/utils.py` — shared JSON/text helpers used by the forward boundary
-- `graph/` — pure graph execution and graph-spec hashing
-- `records/` — Pydantic domain contracts, stable ids, and fair-order keys
-- `db/schema.py` — SQLAlchemy Core table definitions for v1 eval records
-- `db/io.py` — typed row builders, row parsers, and insert/select helpers
-- `db/migrations/` — Alembic migrations for the v1 schema
-- `platform/` — v1 DBOS graph workflow, plain-prompt node execution, append-only persistence, CLI entrypoints
-- `migration/` — v0 row → v1 record reshape and the enc-dec backfill job behind `backfill-v0-encdec` (delete after migration validated)
-- `analysis/` — read-only enc-dec analysis helpers: Pandas frame loading from v1 rows, figure/plot output paths, Rich terminal reporting, single-run HTML inspection (backs `scripts/analysis/`)
-- `optimization/` — minimal COPRO-style encoder prompt optimizer (`copro.py`; driven by `scripts/optimization/run_copro_encdec.py`, see [`docs/running_copro.md`](docs/running_copro.md))
-- `eval_failures/` — worker failure taxonomy, retry policy, recording/generation boundaries
-- `serialization.py` — JSON-safe encoding for telemetry and DB payloads (optional DSPy type handlers when `dspy` is installed)
+- `records/` - Pydantic domain contracts, stable IDs, fair-order keys, and
+  payload-size guards.
+- `db/schema.py` - SQLAlchemy Core tables for experiment, prediction,
+  generation, node-attempt, scoring, and batch-submit records.
+- `db/io.py` - typed row builders, row parsers, JSONB validation, and
+  insert/select helpers.
+- `platform/` - DBOS runtime setup, graph generation workflows, scoring
+  workflows, batch submission, queue registration, and CLI entrypoints.
+- `lm/` - prompt/provider request and response boundaries.
+- `analysis/` - read-only frame loading, plots, reports, and sample inspection
+  helpers.
+- `optimization/` - COPRO-style encoder prompt search and artifact writers.
+- `eval_failures/` - worker failure taxonomy, retry policy, and recordability
+  checks.
+- `dspy_serialization.py` - JSON-safe DSPy value handling for telemetry and DB
+  payloads.
 
-## Design notes
+## Documentation
 
-Canonical documentation in [`docs/`](docs/):
+- [TESTING.md](TESTING.md) - test tiers, CI scripts, fixtures, and conventions.
+- [Running the COPRO optimizer](docs/running_copro.md) - prompt-optimization
+  commands and output artifacts.
+- [Limit enforcement points](docs/ref/limit_enforcement_points.md) - payload
+  caps and JSONB safety checks.
+- [docs/testing_logs.md](docs/testing_logs.md) - operator notes appended by
+  optimizer runs.
+- [CHANGELOG.md](CHANGELOG.md) - dated project history.
 
-- [Completed design and implementation choices](docs/completed-design-and-implementation-choices.md)
-  — settled architecture, platform workflow behavior, integration tiers, and
-  schema freeze policy.
-- [Remaining implementation intentions](docs/remaining-implementation-intentions.md)
-  — deferred work (Unitbench, projections, remaining v0 backfill validation)
-  and follow-ups.
-- [v1 schema migrations](docs/v1-schema-migrations.md) — Alembic head
-  `20260630_0006`, reset procedure for draft databases.
-- [Running the COPRO optimizer](docs/running_copro.md) — minimal COPRO-style
-  encoder prompt optimization loop.
-- [Inspecting backfill rows](docs/inspecting_backfill.md) — provenance markers
-  and queries for rows migrated by `backfill-v0-encdec`.
-- [v0 migration completion checklist](docs/v0-migration-completion-checklist.md)
-  — backfill retention and post-migration cleanup.
-- [TESTING.md](TESTING.md) — unit vs integration tests, tier model, CI scripts.
-- [Testing logs](docs/testing_logs.md) — chronological manual / live pipeline
-  runs (smoke E2E, sizing notes).
-- [Limit enforcement points](docs/ref/limit_enforcement_points.md) — payload size tiers, validator map, changelog.
+Plans, priorities, and backlog live in Linear, not repository docs.
 
-Repository extraction and `dr_dspy` → `whetstone` rename plans live in
-[Remaining implementation intentions](docs/remaining-implementation-intentions.md#repository-extraction-and-rename--not-started).
+## Setup
+
+Install dependencies with `uv`:
+
+```bash
+uv sync --group dev
+```
+
+`DATABASE_URL` points at the application Postgres database. When unset, the
+platform uses `postgresql+psycopg:///dr_dspy`. Bare `postgresql://` URLs are
+normalized to `postgresql+psycopg://` by the platform CLIs and Alembic env.
+
+Apply the schema from the repository root:
+
+```bash
+uv run alembic upgrade head
+uv run alembic current
+```
 
 ## Testing
 
-See [TESTING.md](TESTING.md) for how to run unit vs integration tests, the tier
-model, shared fixtures, and conventions for adding new coverage.
-
-## V1 graph workflow
-
-The v1 execution path runs `PredictionSpecRecord` rows through the pure graph
-runner, calls the LM provider boundary through DBOS steps, and persists
-append-only generation/node outcomes. It supports both direct single-spec
-execution and queued batch submission.
-
-Run one existing prediction spec:
+See [TESTING.md](TESTING.md) for details.
 
 ```bash
-uv run python -m whetstone.platform.worker run-one \
-  --database-url "$DATABASE_URL" \
-  --prediction-id "<prediction-id>"
+./scripts/ci/lint.sh
+./scripts/ci/unit.sh
+DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
 
-This command assumes the `PredictionSpecRecord` already exists in the
-database.
+## Platform Workflow
 
 Build prediction specs from an experiment JSON config:
 
@@ -84,26 +81,25 @@ uv run python -m whetstone.platform.worker build-specs \
   --output specs.jsonl
 ```
 
-Composable configs live under [`configs/`](configs/): `models/` (enc-dec provider
-pairs), `splits/` (HumanEval sampling), and `experiments/` (study definition +
-`model_configs` list). Fragment paths in experiment JSON are relative to
-`--configs-root` (default: repo `configs/`). Legacy flat single-file configs
-still work (see [`tests/fixtures/experiment_configs/`](tests/fixtures/experiment_configs/)).
-Generated JSONL is compatible with `submit-jsonl`. Optional `--insert` bulk-loads
-specs and the experiment row into Postgres.
+Config fragments live under `configs/`: `models/`, `splits/`, and
+`experiments/`. Fragment paths in experiment JSON are relative to
+`--configs-root` unless an absolute path is provided.
 
-Start the platform DBOS generation worker:
+Run one existing prediction spec:
+
+```bash
+uv run python -m whetstone.platform.worker run-one \
+  --database-url "$DATABASE_URL" \
+  --prediction-id "<prediction-id>"
+```
+
+Start the generation worker:
 
 ```bash
 uv run python -m whetstone.platform.worker worker \
   --database-url "$DATABASE_URL" \
   --worker-concurrency 1
 ```
-
-The `worker` command registers and listens to
-`dr-dspy-platform-generation-v1`. Queue registration uses the configured
-`--worker-concurrency` and updates the DBOS queue record on restart so operator
-concurrency changes are picked up reliably.
 
 Submit a JSONL file of `PredictionSpecRecord` payloads:
 
@@ -115,138 +111,58 @@ uv run python -m whetstone.platform.worker submit-jsonl \
   --specs-file specs.jsonl
 ```
 
-`submit-jsonl` indexes specs in a lightweight first pass, globally orders by
-fair-order key, loads and persists `--chunk-size` windows, then enqueues
-generation workflows on `dr-dspy-platform-generation-v1` in matching pages.
-Re-running the same `--operation-key` resumes from durable batch items:
-terminal enqueue outcomes (`enqueued`, `workflow_already_present`) are skipped
-and pending or failed items are retried.
+`submit-jsonl` indexes specs, orders them by fair-order key, persists
+`--chunk-size` windows, and enqueues generation workflows in matching pages.
+Re-running the same `--operation-key` resumes from durable batch-item state.
 
-Queued graph workflow execution runs a DBOS throttle preflight step before each
-LM node call. Rate-limited and transient provider failures update the throttle
-state; later workflows with the same key durably sleep before calling the
-provider.
+Score a generation run:
 
-Scoring workflows and batch rescoring are available via `score-one` and
-`rescore`. `PARTIAL` generation runs are scoreable when terminal output is
-present (same scoring path as `SUCCESS`); runs without terminal output are
-rejected. By default, `rescore` includes both successful and partial runs.
-Enc-dec v0 rows are backfilled into v1 append-only tables via
-`backfill-v0-encdec` (chunked commits, parallel reshape, dry-run mode) — see
-[`docs/inspecting_backfill.md`](docs/inspecting_backfill.md) for provenance
-markers on migrated rows. Unitbench-facing projections remain deferred — see
-[`docs/v0-migration-completion-checklist.md`](docs/v0-migration-completion-checklist.md).
+```bash
+uv run python -m whetstone.platform.worker score-one \
+  --database-url "$DATABASE_URL" \
+  --generation-run-id "<generation-run-id>"
+```
 
-## HPM selection analysis
+Batch scoring is available through `rescore`. Successful and partial generation
+runs with terminal output are scoreable; runs without terminal output are
+rejected by the scoring target loader.
 
-Read-only scripts query v1 enc-dec rows in Postgres and write tabular artifacts,
-figures, and a styled HTML run log. Tabular outputs go to
+## Analysis
+
+Read-only scripts query enc-dec experiment rows in Postgres and write tabular
+artifacts, figures, and HTML run logs. Tabular outputs go to
 `artifacts/{script_name}/{timestamp}_{stem}.csv|md` (gitignored). Figures and
-run logs go to `figs/{script_name}/` (tracked in git).
-
-Replace the experiment name with your backfill or sweep experiment as data
-becomes available. By default only runs with a successful `humaneval@v1` score
-are included (`--require-score`); use `--include-unscored` while rescoring is
-still in progress.
+run logs go to `figs/{script_name}/`.
 
 ```bash
 uv run python scripts/analysis/q1_model_candidates.py \
-  --experiment-name v0_encdec_backfill_smoke_20260630
+  --experiment-name "<experiment-name>"
 
 uv run python scripts/analysis/q2_compression_range.py \
-  --experiment-name v0_encdec_backfill_smoke_20260630
+  --experiment-name "<experiment-name>"
 
 uv run python scripts/analysis/q3_repeat_stability.py \
-  --experiment-name v0_encdec_backfill_smoke_20260630
+  --experiment-name "<experiment-name>"
 
 uv run python scripts/analysis/q4_task_variation.py \
-  --experiment-name v0_encdec_backfill_smoke_20260630
+  --experiment-name "<experiment-name>"
 ```
 
-Each run prints Rich tables to the terminal and saves `{timestamp}_run.html`
-alongside PNGs in the matching `figs/{script_name}/` folder.
-
-### Sample run inspector
-
-Spot-check one enc-dec run end-to-end (ground truth through test failures)
-as a horizontal-scroll HTML report plus a sibling JSON debug bundle for `jq`:
+Inspect one run as a horizontal-scroll HTML report plus a JSON debug bundle:
 
 ```bash
 uv run python scripts/analysis/sample_run_inspector.py \
-  --experiment-name v0_encdec_backfill_smoke_20260630 \
+  --experiment-name "<experiment-name>" \
   --sample-index 0
 ```
 
-Outputs go to `analysis/samples/{experiment_name}/{timestamp}_{index}.html`
-(tracked in git) and `.json` (gitignored, for local `jq`). Prompts are
-reconstructed from the graph snapshot, not stored verbatim on node attempts.
-
-## Database migrations
-
-The v1 eval schema lives under `db/` and is applied with Alembic from the
-repository root. Migration history is **append-only** — existing revision
-files are frozen and schema changes add forward revisions only. Current head
-is `20260630_0006` (ten revisions from `20260629_0001`). See
-[`docs/v1-schema-migrations.md`](docs/v1-schema-migrations.md) for the
-revision changelog, post-freeze policy, and **reset-not-upgrade** procedure
-for databases that applied draft schemas during hardening.
-
-Connection config uses the `DATABASE_URL` env var. When unset, Alembic falls
-back to peer-auth `postgresql+psycopg:///dr_dspy` (your OS Postgres role,
-database `dr_dspy`). Copy `.env.example` to `.env` and adjust the URL if your
-local role or database name differs. Platform CLI entrypoints normalize bare
-`postgresql://` URLs to `postgresql+psycopg://` automatically (same as Alembic).
-
-```bash
-# Apply all migrations
-uv run alembic upgrade head
-
-# Inspect current revision
-uv run alembic current
-
-# Render SQL without connecting (offline mode)
-uv run alembic upgrade head --sql
-```
-
-Alembic reads `DATABASE_URL` in `db/migrations/env.py` and normalizes
-`postgresql://` URLs to the project's `postgresql+psycopg://` driver form.
-The `sqlalchemy.url` value in `alembic.ini` is only a fallback when
-`DATABASE_URL` is not set.
-
-## Failure handling (`eval_failures`)
-
-Eval worker step failures are classified, summarized for DB/logs, and persisted
-with structured metadata. This package is **not** a global exception registry.
-
-### Module roles
-
-| Module | Responsibility |
-|--------|----------------|
-| `serialization.py` | Typed `SerializationError` hierarchy for unencodable values |
-| `eval_failures/recording.py` | `ensure_recordable` / `recordable_jsonb` bridge → `RecordingFailureError` |
-| `eval_failures/generation.py` | `require_generation_text`, enc-dec/direct validators |
-| `eval_failures/exceptions.py` | `EvalFailureError` hierarchy with `failure_class` |
-| `eval_failures/policy.py` | Third-party heuristics, `summarize_exception`, `should_retry_step` |
-
-### Recording boundary
+## Failure Handling
 
 All storable JSON/JSONB values pass through `ensure_recordable` or
 `recordable_jsonb`. Unencodable LM telemetry or persistence payloads raise
-`RecordingFailureError` (permanent, no step retry) instead of being silently
-dropped or stored as empty objects.
-
-### Generation boundary
-
-Typed generation failures (`EmptyGenerationError`, `PredictionParseError`) are
-raised from `eval_failures.generation.require_generation_text` on the forward
-LM boundary path.
-
-### Worker workflow pattern
+`RecordingFailureError` instead of being silently dropped or stored as empty
+objects.
 
 Platform DBOS workflows catch step exceptions, call `summarize_exception`, and
 persist structured failure metadata on terminal outcome rows. Retryable failures
-(`transient`, `rate_limited`) may step-retry per policy; permanent failures do
-not.
-
-Scoring test failures are domain semantics: a wrong answer records a failed test
-outcome in score-attempt metrics. That is not a worker failure.
+may step-retry per policy; permanent failures do not.
