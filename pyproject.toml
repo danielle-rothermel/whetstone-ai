@@ -41,7 +41,7 @@ dev = [
 # before this branch merges.
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f451eeba5fb4dc69e8a29464d67571c62a125cd6" }
-dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "7a46bb5bbb35be3e86fe6b7feab2a929ed9315ca" }
+dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "654d9249228ae8564b4b63151313b15b25f19d67" }
 dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "0121091049373e17e076b26de5d5504fb6d5cf72" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "8b098b02ca87111e69b8f727503184a2f0fbdea9" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "ab17928c3b6f570996416454f0cc5d619add780d" }
@@ -63,6 +63,10 @@ testpaths = ["tests"]
 markers = [
     "integration: Postgres and DBOS integration tests (opt-in)",
 ]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
