@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from dr_graph import NodeSpec
-from dr_providers.kernel import PromptMessage
+from dr_providers import PromptMessage
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from whetstone.eval_failures import PermanentFailureError

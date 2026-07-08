@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from dr_providers.kernel.failures import FailureClass
+from dr_providers import FailureClass
 
 
 class EvalFailureError(Exception):

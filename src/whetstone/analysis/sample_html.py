@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from dr_code.humaneval.task import EvaluationCaseStatus
-from dr_providers.kernel import PromptMessage
+from dr_providers import PromptMessage
 from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
 from pygments.lexers.python import PythonLexer

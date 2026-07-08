@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from dr_graph import NodeOutput, NodeSpec
-from dr_providers.kernel import (
+from dr_providers import (
     EndpointKind,
     Provider,
     ProviderConfig,
@@ -394,7 +394,7 @@ def merged_node_parameters(
 
 
 def default_http_provider() -> Provider:
-    from dr_providers.kernel import HttpProvider, TransportPolicy
+    from dr_providers import HttpProvider, TransportPolicy
 
     return HttpProvider(
         policy=TransportPolicy(

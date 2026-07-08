@@ -5,7 +5,7 @@ from typing import Any
 
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_graph import GraphRunStatus, NodeError, NodeOutput
-from dr_providers.kernel.failures import FailureClass
+from dr_providers import FailureClass
 from pydantic import BaseModel
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.sql.dml import Insert

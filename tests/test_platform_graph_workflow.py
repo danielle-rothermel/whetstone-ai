@@ -19,7 +19,7 @@ from dr_graph import (
     graph_digest,
 )
 from dr_platform import backoff
-from dr_providers.kernel import (
+from dr_providers import (
     EndpointKind,
     LlmRequest,
     LlmResponse,
@@ -621,7 +621,6 @@ def test_lm_node_executor_sends_exact_messages_and_metadata() -> None:
             return parse_responses_body(
                 self.body,
                 config=request.provider_config,
-                payload=captured["payload"],
             )
 
     result = execute_lm_node(

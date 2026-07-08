@@ -12,7 +12,7 @@ from dr_graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 from pydantic import ValidationError
 
 from whetstone.records import (

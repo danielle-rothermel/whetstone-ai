@@ -9,7 +9,7 @@ failure translation.
 from __future__ import annotations
 
 import pytest
-from dr_providers.kernel import (
+from dr_providers import (
     CostInfo,
     FailureClass,
     LlmResponse,
@@ -17,6 +17,7 @@ from dr_providers.kernel import (
     MessageRole,
     PromptMessage,
     RateLimitedProviderError,
+    ReasoningEffort,
     build_payload,
     failure_record,
     openai_responses_config,
@@ -72,7 +73,7 @@ class TestLlmRequestForNode:
         )
         assert request.temperature == 0.2
         assert request.token_limit == 10
-        assert request.reasoning == {"effort": "low"}
+        assert request.reasoning is ReasoningEffort.LOW
         assert request.extra_body == {"a": 1, "b": 2}
         assert request.idempotency_key == "attempt-1"
         payload = build_payload(request)
@@ -90,7 +91,7 @@ class TestLlmRequestForNode:
         )
         assert request.temperature is None
         assert request.token_limit is None
-        assert request.reasoning == {}
+        assert request.reasoning is None
         payload = build_payload(request)
         assert "temperature" not in payload
         assert "max_output_tokens" not in payload

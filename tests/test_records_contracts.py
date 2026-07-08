@@ -23,7 +23,7 @@ from dr_graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_providers.kernel import (
+from dr_providers import (
     EndpointKind,
     ProviderKind,
     openai_responses_config,

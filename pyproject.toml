@@ -37,14 +37,16 @@ dev = [
     "dspy==3.3.0b1",
 ]
 
-# NOTE(composable-migration): path dependency must become a git/PyPI pin
-# before this branch merges.
+# dr-* libs are not on PyPI; sources track main and uv.lock pins the exact
+# commit. Refresh with `uv lock --upgrade-package <name>`.
+# dr-platform tracks its drprov-v02-migration branch until dr-platform PR #6
+# merges; flip it to main then.
 [tool.uv.sources]
-dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f451eeba5fb4dc69e8a29464d67571c62a125cd6" }
-dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "e4a123ed43a0af32b53bc539fcaa8a9e41355749" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "9af2e35aee588a810395a265f8a179625b6cf491" }
-dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "8b098b02ca87111e69b8f727503184a2f0fbdea9" }
-dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "cfdf4496f1a5510d1788dba70f554300b39a3bca" }
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
+dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "drprov-v02-migration" }
+dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }
+dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 
 [build-system]
 requires = ["hatchling"]

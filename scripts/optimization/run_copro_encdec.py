@@ -10,7 +10,7 @@ from typing import Annotated
 
 import typer
 from dr_platform import destroy_dbos_runtime
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 from rich.console import Console
 from sqlalchemy import create_engine
 
