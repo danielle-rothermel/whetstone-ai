@@ -148,22 +148,17 @@ population-evaluation use case (see `platform.md`).
 ## Resolved at extraction (Stage 5, 2026-07-04)
 
 - **Neutral builder surface**: `node(node_id, *, op, output_field,
-  bindings=None, fields=None, parameters=None, metadata=None,
-  external_namespace="task")` derives str-typed input fields from
-  bindings plus one output field when `fields` is omitted;
-  `graph(nodes, *, terminal, external_namespace="task")`;
-  `as_binding_ref(ref, *, external_namespace)` for string→ref parsing.
+  bindings=None, fields=None, parameters=None)` derives str-typed
+  input fields from bindings plus one output field when `fields` is
+  omitted; `graph(nodes, *, terminal)`.
 - **`op` is required** (non-empty open string, no default). A neutral
   spec library defaulting to `"llm_call"` would bake an LM notion into
   an explicitly non-LM package; whetstone stamps its own
   `LLM_CALL_OP = "llm_call"` constant (`whetstone/node_ops.py`).
   `type_name` keeps the neutral default `"str"`.
-- **Namespace mechanism**: reserved external-input namespace resolves
-  from pydantic validation context
-  (`context={"external_namespace": ...}`, default `"task"`); external
-  refs record their namespace; graphs reject mixed namespaces and
-  node-id/namespace collisions. `BindingSource.TASK` renamed to
-  `EXTERNAL`; `validate_task_bindings` → `validate_external_bindings`.
+- **Namespace mechanism**: external input refs use the fixed `"task"`
+  namespace. `BindingSource.TASK` renamed to `EXTERNAL`;
+  `validate_task_bindings` → `validate_external_bindings`.
 - **Subgraph composition is inline flattening**: `inline_subgraph`
   returns prefixed, rewired `NodeSpec`s (default separator `":"`);
   the composed graph is an ordinary `GraphSpec` and its digest is the

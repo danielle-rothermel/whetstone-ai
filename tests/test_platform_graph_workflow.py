@@ -94,11 +94,12 @@ def _node(
         for name in input_bindings
     ]
     fields.append(FieldSpec(name=output_field, role=FieldRole.OUTPUT))
-    metadata: dict[str, Any] = {"user_prompt_template": user_prompt_template}
+    resolved_parameters: dict[str, Any] = dict(parameters or {})
+    resolved_parameters["user_prompt_template"] = user_prompt_template
     if system_prompt is not None:
-        metadata["system_prompt"] = system_prompt
+        resolved_parameters["system_prompt"] = system_prompt
     if provider_config_id is not None:
-        metadata["provider_config_id"] = provider_config_id
+        resolved_parameters["provider_config_id"] = provider_config_id
     return NodeSpec(
         id=node_id,
         op="llm_call",
@@ -106,8 +107,7 @@ def _node(
             fields=tuple(fields),
             input_bindings=input_bindings,
             output_field=output_field,
-            parameters=parameters or {},
-            metadata=metadata,
+            parameters=resolved_parameters,
         ),
     )
 

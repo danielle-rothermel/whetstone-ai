@@ -24,8 +24,8 @@ class NodePromptSpec(BaseModel):
 
 
 def node_prompt_spec(node: NodeSpec) -> NodePromptSpec:
-    metadata = node.config.metadata
-    user_prompt_template = metadata.get(USER_PROMPT_TEMPLATE_KEY)
+    parameters = node.config.parameters
+    user_prompt_template = parameters.get(USER_PROMPT_TEMPLATE_KEY)
     if not isinstance(user_prompt_template, str):
         raise PermanentFailureError(
             "node prompt metadata missing user_prompt_template",
@@ -35,14 +35,14 @@ def node_prompt_spec(node: NodeSpec) -> NodePromptSpec:
             },
         )
 
-    system_prompt = metadata.get(SYSTEM_PROMPT_KEY)
+    system_prompt = parameters.get(SYSTEM_PROMPT_KEY)
     if system_prompt is not None and not isinstance(system_prompt, str):
         raise PermanentFailureError(
             "node prompt metadata system_prompt must be a string",
             metadata={"node_id": node.id, "metadata_key": SYSTEM_PROMPT_KEY},
         )
 
-    provider_config_id = metadata.get(PROVIDER_CONFIG_ID_KEY)
+    provider_config_id = parameters.get(PROVIDER_CONFIG_ID_KEY)
     if provider_config_id is not None and not isinstance(
         provider_config_id, str
     ):
