@@ -14,7 +14,7 @@ from typing import Any
 
 import pandas as pd
 from dr_platform import AwaitOperationTimeoutError, await_operation
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 from dr_serialize import sha256_json_digest
 from pydantic import (
     BaseModel,

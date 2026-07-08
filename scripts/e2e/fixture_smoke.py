@@ -25,7 +25,7 @@ from typing import Annotated
 
 import typer
 from dr_platform import await_operation, destroy_dbos_runtime
-from dr_providers.kernel import FixtureOutcome, FixtureProvider, Provider
+from dr_providers import FixtureOutcome, FixtureProvider, Provider
 from sqlalchemy import create_engine, text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 
 from whetstone.records.models import ProviderConfigRef
 

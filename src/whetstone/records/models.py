@@ -12,8 +12,12 @@ from dr_code.humaneval.task import (
     EvaluationCaseSummary,
 )
 from dr_graph import GraphSpec, validate_external_bindings
-from dr_providers.kernel import EndpointKind, ProviderConfig, ProviderKind
-from dr_providers.kernel.failures import FailureClass
+from dr_providers import (
+    EndpointKind,
+    FailureClass,
+    ProviderConfig,
+    ProviderKind,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,

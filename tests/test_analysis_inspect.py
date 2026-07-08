@@ -8,7 +8,7 @@ from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_code.humaneval.task import EvaluationCaseStatus
 from dr_graph import graph_digest
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 
 from whetstone.analysis.inspect import (
     RunBundle,

@@ -15,8 +15,7 @@ from dr_graph import (
     NodeSpec,
     graph_digest,
 )
-from dr_providers.kernel import EndpointKind, ProviderKind
-from dr_providers.kernel.failures import FailureClass
+from dr_providers import EndpointKind, FailureClass, ProviderKind
 from pydantic import BaseModel, ConfigDict, Field
 
 from whetstone.node_ops import LLM_CALL_OP

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 from dr_graph import NodeOutput
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 
 from whetstone.eval_failures import (
     PermanentFailureError,
@@ -114,7 +114,7 @@ def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
     → FixtureProvider.complete → ProviderResult → NodeStepResult.
     """
     from dr_graph import GraphSpec
-    from dr_providers.kernel import (
+    from dr_providers import (
         CostInfo,
         FixtureOutcome,
         FixtureProvider,

@@ -4,7 +4,7 @@ import errno
 import sys
 from typing import Any
 
-from dr_providers.kernel.failures import (
+from dr_providers import (
     RECOVERABLE_FAILURE_CLASSES,
     RETRYABLE_FAILURE_CLASSES,
     FailureClass,

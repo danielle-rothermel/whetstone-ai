@@ -13,14 +13,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from dr_providers.kernel import (
+from dr_providers import (
     LlmRequest,
     LlmResponse,
     MessageRole,
     PromptMessage,
     ProviderConfig,
+    ProviderFailureError,
+    ReasoningEffort,
 )
-from dr_providers.kernel.failures import ProviderFailureError
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from whetstone.eval_failures.exceptions import (
@@ -43,6 +44,7 @@ __all__ = [
     "ProviderResult",
     "llm_request_for_node",
     "provider_result_from_response",
+    "reasoning_effort_from_parameter",
     "translate_provider_failure",
 ]
 
@@ -91,6 +93,38 @@ class PlainPromptAdapter(BaseModel):
         return {self.output_field: result.text}
 
 
+def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
+    """Coerce a node's ``reasoning`` parameter into a typed effort level.
+
+    dr-providers 0.2 made ``LlmRequest.reasoning`` a ``ReasoningEffort``
+    enum (was a free-form dict). Whetstone's node parameter surface still
+    supplies the effort either as the legacy ``{"effort": "low"}`` mapping
+    or as a bare effort string; both map to the enum here. Absent or empty
+    values mean "no reasoning override" (``None``); an unrecognized effort
+    fails loudly, consistent with the kernel's no-silent-defaults stance.
+    """
+    if value is None:
+        return None
+    if isinstance(value, ReasoningEffort):
+        return value
+    if isinstance(value, Mapping):
+        if not value:
+            return None
+        effort = value.get("effort")
+    else:
+        effort = value
+    if effort is None or effort == "":
+        return None
+    try:
+        return ReasoningEffort(effort)
+    except ValueError as exc:
+        valid = ", ".join(level.value for level in ReasoningEffort)
+        raise ValueError(
+            f"invalid reasoning effort {effort!r}; "
+            f"expected one of: {valid}"
+        ) from exc
+
+
 def llm_request_for_node(
     *,
     config: ProviderConfig,
@@ -113,7 +147,9 @@ def llm_request_for_node(
         messages=messages,
         temperature=parameters.get(TEMPERATURE_PARAMETER),
         token_limit=parameters.get(TOKEN_LIMIT_PARAMETER),
-        reasoning=dict(parameters.get(REASONING_PARAMETER) or {}),
+        reasoning=reasoning_effort_from_parameter(
+            parameters.get(REASONING_PARAMETER)
+        ),
         extra_body=extra_body,
         idempotency_key=idempotency_key,
     )

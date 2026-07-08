@@ -34,7 +34,7 @@ def test_provider_result_conversion_defers_recording_and_psycopg() -> None:
         """
         import sys
 
-        from dr_providers.kernel import LlmResponse
+        from dr_providers import LlmResponse
 
         import whetstone.lm.boundary as boundary
 

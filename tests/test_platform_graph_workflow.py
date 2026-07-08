@@ -19,7 +19,7 @@ from dr_graph import (
     graph_digest,
 )
 from dr_platform import backoff
-from dr_providers.kernel import (
+from dr_providers import (
     EndpointKind,
     LlmRequest,
     LlmResponse,

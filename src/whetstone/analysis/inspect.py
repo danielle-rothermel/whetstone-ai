@@ -14,7 +14,7 @@ from dr_code.humaneval.profiles import (
 from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_code.humaneval.task import EvaluationCaseStatus
 from dr_graph import NodeOutcome, NodeOutput, resolve_node_inputs
-from dr_providers.kernel import PromptMessage
+from dr_providers import PromptMessage
 from sqlalchemy import Select, and_, select
 from sqlalchemy.engine import Connection, Engine
 

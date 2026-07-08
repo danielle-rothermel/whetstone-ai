@@ -20,7 +20,7 @@ from dr_graph import (
     graph_digest,
 )
 from dr_platform import OperationProgress
-from dr_providers.kernel import EndpointKind, ProviderKind
+from dr_providers import EndpointKind, ProviderKind
 from typer.testing import CliRunner
 
 from whetstone.platform import (
