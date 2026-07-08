@@ -511,7 +511,7 @@ dependencies = [
 [[package]]
 name = "dr-graph"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-graph?rev=654d9249228ae8564b4b63151313b15b25f19d67#654d9249228ae8564b4b63151313b15b25f19d67" }
+source = { git = "https://github.com/danielle-rothermel/dr-graph?rev=6bc09773af003c13ace1d14b0a00f9416b431efb#6bc09773af003c13ace1d14b0a00f9416b431efb" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "pydantic" },
@@ -520,7 +520,7 @@ dependencies = [
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=0121091049373e17e076b26de5d5504fb6d5cf72#0121091049373e17e076b26de5d5504fb6d5cf72" }
+source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=ad9dab9e861a9a8133d18309054f9ad4bcece4be#ad9dab9e861a9a8133d18309054f9ad4bcece4be" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos" },
@@ -3014,8 +3014,8 @@ requires-dist = [
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=f451eeba5fb4dc69e8a29464d67571c62a125cd6" },
-    { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?rev=654d9249228ae8564b4b63151313b15b25f19d67" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=0121091049373e17e076b26de5d5504fb6d5cf72" },
+    { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?rev=6bc09773af003c13ace1d14b0a00f9416b431efb" },
+    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=ad9dab9e861a9a8133d18309054f9ad4bcece4be" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=8b098b02ca87111e69b8f727503184a2f0fbdea9" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?rev=ab17928c3b6f570996416454f0cc5d619add780d" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
