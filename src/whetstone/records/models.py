@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from dr_code.humaneval import metric_models
-from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
-from dr_code.humaneval.task import (
+from dr_code.humaneval import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
+    HumanEvalTestCaseKind,
+    SubmissionOutcome,
+    metric_models,
 )
 from dr_graph import GraphSpec, validate_external_bindings
 from dr_providers import (
@@ -54,7 +54,6 @@ class NodeAttemptStatus(StrEnum):
 
 class ScoreAttemptStatus(StrEnum):
     SUCCESS = "success"
-    ERROR = "error"
 
 
 class GenerationRunStatus(StrEnum):
@@ -215,14 +214,15 @@ class GenerationRunSummaryPayload(BaseModel):
     execution_order: tuple[StrictStr, ...]
     terminal_node_id: StrictStr
     terminal_output: Any | None = None
+    terminal_submission_text: StrictStr
     terminal_error: GenerationTerminalErrorPayload | None = None
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
-class ExtractedCodePayload(BaseModel):
+class ExtractedSubmissionPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    raw_generation: StrictStr | None = None
+    raw_submission: StrictStr | None = None
     extracted_code: StrictStr | None = None
     extraction_method: StrictStr | None = None
     parser_profile_id: StrictStr
@@ -461,12 +461,11 @@ class ScoreAttemptRecord(BaseModel):
     dataset_name: StrictStr
     dataset_split: StrictStr
     status: ScoreAttemptStatus
-    generated_code_outcome: GeneratedCodeOutcome | None = None
+    submission_outcome: SubmissionOutcome
     score: StrictFloat | None = None
-    extracted_code: ExtractedCodePayload | None = None
+    extracted_submission: ExtractedSubmissionPayload
     metrics: MetricsPayload | None = None
     per_test_results: tuple[PerTestResultPayload, ...] = ()
-    failure: FailureMetadataPayload | None = None
     started_at: datetime
     completed_at: datetime
 
@@ -481,10 +480,6 @@ class ScoreAttemptRecord(BaseModel):
         if self.status is ScoreAttemptStatus.SUCCESS:
             if self.score is None:
                 raise ValueError("successful score attempts require score")
-            if self.failure is not None:
-                raise ValueError(
-                    "successful score attempts cannot have failure"
-                )
         if self.per_test_results:
             per_test_payload = [
                 case.model_dump(mode="json") for case in self.per_test_results
@@ -505,28 +500,73 @@ class ScoreAttemptRecord(BaseModel):
                 max_bytes=METRICS_MAX_BYTES,
                 label="metrics",
             )
-        if self.status is ScoreAttemptStatus.ERROR:
-            if self.failure is None:
-                raise ValueError("error score attempts require failure")
-            if self.score is not None:
-                raise ValueError("error score attempts cannot have score")
-            if self.per_test_results:
-                raise ValueError(
-                    "error score attempts cannot have per_test_results"
-                )
-        if self.extracted_code is not None:
-            if (
-                self.extracted_code.parser_profile_id
-                != self.parser_profile_id
-            ):
-                raise ValueError(
-                    "extracted_code parser_profile_id must match "
-                    "parser_profile_id"
-                )
-            if self.extracted_code.parser_version != self.parser_version:
-                raise ValueError(
-                    "extracted_code parser_version must match parser_version"
-                )
+        if (
+            self.extracted_submission.parser_profile_id
+            != self.parser_profile_id
+        ):
+            raise ValueError(
+                "extracted_submission parser_profile_id must match "
+                "parser_profile_id"
+            )
+        if self.extracted_submission.parser_version != self.parser_version:
+            raise ValueError(
+                "extracted_submission parser_version must match parser_version"
+            )
+        return self
+
+
+class HarnessFailureCausePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exception_type: StrictStr
+    message: StrictStr
+
+
+class ScoreHarnessFailureRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score_attempt_id: StrictStr
+    prediction_id: StrictStr
+    generation_run_id: StrictStr
+    attempt_index: StrictInt
+    scoring_profile_id: StrictStr
+    scoring_profile_version: StrictStr
+    parser_profile_id: StrictStr
+    parser_version: StrictStr
+    dataset_name: StrictStr
+    dataset_split: StrictStr
+    kind: StrictStr
+    raw_submission: StrictStr
+    extracted_submission: ExtractedSubmissionPayload | None = None
+    cause: HarnessFailureCausePayload
+    failure_class: FailureClass
+    started_at: datetime
+    completed_at: datetime
+
+    @model_validator(mode="after")
+    def validate_failure_shape(self) -> ScoreHarnessFailureRecord:
+        if self.attempt_index < 0:
+            raise ValueError("attempt_index must be non-negative")
+        if self.completed_at < self.started_at:
+            raise ValueError("completed_at must not precede started_at")
+        if self.kind != "harness_failure":
+            raise ValueError("kind must be harness_failure")
+        if (
+            self.extracted_submission is not None
+            and self.extracted_submission.parser_profile_id
+            != self.parser_profile_id
+        ):
+            raise ValueError(
+                "extracted_submission parser_profile_id must match failure"
+            )
+        if (
+            self.extracted_submission is not None
+            and self.extracted_submission.parser_version
+            != self.parser_version
+        ):
+            raise ValueError(
+                "extracted_submission parser_version must match failure"
+            )
         return self
 
 

@@ -7,11 +7,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pandas as pd
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
+    SubmissionOutcome,
 )
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from sqlalchemy import Float, Select, and_, cast, func, select
 from sqlalchemy.engine import Engine
 
@@ -31,7 +31,7 @@ BASE_FRAME_COLUMNS = (
     "generation_status",
     "score_status",
     "score",
-    "generated_code_outcome",
+    "submission_outcome",
     "repetition_seed",
     "dimensions",
     "compression_target",
@@ -102,8 +102,8 @@ def parse_score_metrics(metrics: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def is_pass_row(row: Mapping[str, Any]) -> bool:
-    outcome = row.get("generated_code_outcome")
-    if outcome == GeneratedCodeOutcome.PASSED.value:
+    outcome = row.get("submission_outcome")
+    if outcome == SubmissionOutcome.PASSED.value:
         return True
     score = row.get("score")
     if score is not None and float(score) == 1.0:
@@ -236,7 +236,7 @@ def select_encdec_analysis_rows(
             schema.generation_runs.c.status.label("generation_status"),
             schema.score_attempts.c.status.label("score_status"),
             schema.score_attempts.c.score,
-            schema.score_attempts.c.generated_code_outcome,
+            schema.score_attempts.c.submission_outcome,
             schema.prediction_specs.c.repetition_seed,
             schema.prediction_specs.c.dimensions,
             schema.prediction_specs.c.provider_configs,

@@ -27,7 +27,7 @@
   "generation_failure_metadata": {"node": "decoder"},
   "encoded_description": "add two numbers together",
   "decoded_generation": null,
-  "raw_generation": null,
+  "raw_submission": null,
   "encoder_response_metadata": {"id": "enc-resp-dec-fail"},
   "decoder_response_metadata": {"id": "dec-resp-dec-fail"},
   "encoder_usage_metadata": {"total_tokens": 10},

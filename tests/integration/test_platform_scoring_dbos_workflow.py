@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from dr_code.humaneval import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
-)
-from dr_code.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 
 from tests.support.platform_integration_helpers import (
@@ -24,8 +24,8 @@ from tests.support.platform_scoring_fixtures import (
 from tests.support.postgres_fixtures import start_test_workflow
 from whetstone.platform import scoring_workflow
 from whetstone.platform.scoring_workflow import (
-    run_score_generation_workflow,
-    run_score_generation_workflow_once,
+    run_score_submission_workflow,
+    run_score_submission_workflow_once,
 )
 from whetstone.platform.scoring_workflow_state import (
     ScoringWorkflowPresence,
@@ -64,7 +64,7 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_run_score_generation_workflow_once_persists_success(
+def test_run_score_submission_workflow_once_persists_success(
     app_postgres_schema,
     reset_dbos,
     monkeypatch: pytest.MonkeyPatch,
@@ -78,7 +78,7 @@ def test_run_score_generation_workflow_once_persists_success(
     _mock_humaneval_task_step(monkeypatch)
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
-    result = run_score_generation_workflow_once(
+    result = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
     )
@@ -103,7 +103,7 @@ def test_run_score_generation_workflow_once_persists_success(
     assert snapshot.insert_count == 1
 
 
-def test_run_score_generation_workflow_once_is_idempotent_on_replay(
+def test_run_score_submission_workflow_once_is_idempotent_on_replay(
     app_postgres_schema,
     reset_dbos,
     monkeypatch: pytest.MonkeyPatch,
@@ -117,11 +117,11 @@ def test_run_score_generation_workflow_once_is_idempotent_on_replay(
     _mock_humaneval_task_step(monkeypatch)
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
-    first = run_score_generation_workflow_once(
+    first = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
     )
-    second = run_score_generation_workflow_once(
+    second = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
     )
@@ -173,11 +173,11 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
     )
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
-    run_score_generation_workflow_once(
+    run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
     )
-    run_score_generation_workflow_once(
+    run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
     )
@@ -206,9 +206,9 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
     persist_impl = getattr(
-        scoring_workflow.persist_score_attempt_step,
+        scoring_workflow.persist_score_result_step,
         "__wrapped__",
-        scoring_workflow.persist_score_attempt_step,
+        scoring_workflow.persist_score_result_step,
     )
     persist_state = {"fail": True}
 
@@ -222,7 +222,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
 
     monkeypatch.setattr(
         scoring_workflow,
-        "persist_score_attempt_step",
+        "persist_score_result_step",
         persist_stub,
     )
 
@@ -243,7 +243,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
         match="simulated crash before score persist",
     ):
         start_test_workflow(
-            run_score_generation_workflow,
+            run_score_submission_workflow,
             workflow_id,
             app_postgres_schema.database_url,
             run.generation_run_id,
@@ -265,7 +265,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     )
     assert presence is ScoringWorkflowPresence.ORPHAN
 
-    scheduled = scoring_workflow.schedule_score_generation_workflow(
+    scheduled = scoring_workflow.schedule_score_submission_workflow(
         app_postgres_schema.database_url,
         run.generation_run_id,
         recover_orphans=False,
@@ -273,7 +273,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     assert scheduled.scheduled is False
     assert scheduled.recovered is False
 
-    recovered = scoring_workflow.schedule_score_generation_workflow(
+    recovered = scoring_workflow.schedule_score_submission_workflow(
         app_postgres_schema.database_url,
         run.generation_run_id,
         recover_orphans=True,

@@ -6,7 +6,20 @@ from typing import Any, cast
 
 import pytest
 from dbos._error import DBOSWorkflowConflictIDError
-from dr_code.humaneval import scoring as humaneval_scoring
+from dr_code.humaneval import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+    CompletedScore,
+    EvaluationCaseStatus,
+    HumanEvalScoringProfile,
+    HumanEvalTask,
+    HumanEvalTestCaseKind,
+    SubmissionOutcome,
+    resolve_humaneval_scoring_profile,
+)
+from dr_code.humaneval import (
+    scoring as humaneval_scoring,
+)
 from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
@@ -28,19 +41,9 @@ from dr_code.humaneval.metrics import (
     task_test_metrics,
     text_metrics,
 )
-from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_code.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
-    HumanEvalScoringProfile,
-    resolve_humaneval_scoring_profile,
-)
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
 from dr_code.humaneval.task import (
     EvaluationCaseResult,
-    EvaluationCaseStatus,
     EvaluationTaskResult,
-    HumanEvalTask,
 )
 from dr_graph import (
     BindingRef,
@@ -55,7 +58,6 @@ from dr_providers import EndpointKind, ProviderKind
 from sqlalchemy.dialects import postgresql
 
 from whetstone.db import io as db_io
-from whetstone.eval_failures.recording import recordable_text
 from whetstone.platform import rescoring, scoring_workflow
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
@@ -64,8 +66,8 @@ from whetstone.platform.persistence import (
     persist_score_attempt,
 )
 from whetstone.platform.scoring import (
-    score_generation_run,
     score_metrics_payload,
+    score_submission_run,
 )
 from whetstone.platform.scoring_workflow_state import ScoringWorkflowPresence
 from whetstone.records import (
@@ -84,6 +86,7 @@ from whetstone.records import (
     NodeOutputPayload,
     PredictionSpecRecord,
     ProviderConfigRef,
+    ScoreAttemptRecord,
     ScoreAttemptStatus,
     TaskInputsPayload,
     TaskSnapshotPayload,
@@ -101,6 +104,12 @@ LATER = NOW + timedelta(seconds=1)
 
 class DummyConnection:
     pass
+
+
+def _completed_score_submission_run(**kwargs: Any) -> ScoreAttemptRecord:
+    record = score_submission_run(**kwargs)
+    assert isinstance(record, ScoreAttemptRecord)
+    return record
 
 
 class DummyTransaction:
@@ -257,7 +266,7 @@ def _spec(layout: str = "direct") -> PredictionSpecRecord:
 
 def _generation_run(
     spec: PredictionSpecRecord,
-    raw_generation: Any,
+    raw_submission: Any,
 ) -> GenerationRunRecord:
     return GenerationRunRecord(
         generation_run_id=stable_generation_run_id(
@@ -272,7 +281,10 @@ def _generation_run(
         summary=GenerationRunSummaryPayload(
             execution_order=tuple(node.id for node in spec.graph.graph.nodes),
             terminal_node_id=spec.graph.graph.terminal_node_id,
-            terminal_output=raw_generation,
+            terminal_output=raw_submission,
+            terminal_submission_text=raw_submission
+            if isinstance(raw_submission, str)
+            else "",
         ),
         started_at=NOW,
         completed_at=LATER,
@@ -302,6 +314,7 @@ def _failed_generation_run(spec: PredictionSpecRecord) -> GenerationRunRecord:
                     message="provider failed",
                 ),
             ),
+            terminal_submission_text="",
         ),
         started_at=NOW,
         completed_at=LATER,
@@ -331,14 +344,13 @@ def _node_attempt(
     )
 
 
-def test_best_effort_parser_unwraps_json_code_and_cleans_fence() -> None:
+def test_best_effort_parser_rejects_json_code_literal() -> None:
     result = extract_best_effort_code(
         '{"code": "```python\\ndef add_one(x):\\n    return x + 1\\n```"}'
     )
 
-    assert result.extracted_code == "def add_one(x):\n    return x + 1"
-    assert result.extraction_method is ExtractionMethod.JSON_CODE_FIELD
-    assert result.selected_candidate_index == 0
+    assert result.succeeded is False
+    assert result.extraction_error == "no code candidates extracted"
 
 
 def test_best_effort_parser_unwraps_code_like_object_without_repr() -> None:
@@ -351,10 +363,8 @@ def test_best_effort_parser_unwraps_code_like_object_without_repr() -> None:
     class Prediction:
         code = CodeValue()
 
-    result = extract_best_effort_code(Prediction())
-
-    assert result.extracted_code == "def add_one(x):\n    return x + 1"
-    assert result.extraction_method is ExtractionMethod.DSPY_CODE_FIELD
+    with pytest.raises(TypeError, match="raw_submission must be str"):
+        extract_best_effort_code(cast(Any, Prediction()))
 
 
 def test_best_effort_parser_rejects_code_repr_assignment() -> None:
@@ -369,11 +379,11 @@ def test_best_effort_parser_rejects_code_repr_assignment() -> None:
     )
 
 
-@pytest.mark.parametrize("raw_generation", ["{'code': 'bad'}", "[1, 2, 3]"])
+@pytest.mark.parametrize("raw_submission", ["{'code': 'bad'}", "[1, 2, 3]"])
 def test_best_effort_parser_rejects_plain_literals(
-    raw_generation: str,
+    raw_submission: str,
 ) -> None:
-    result = extract_best_effort_code(raw_generation)
+    result = extract_best_effort_code(raw_submission)
 
     assert result.succeeded is False
     assert result.extraction_error is not None
@@ -420,20 +430,13 @@ def test_extract_code_with_profile_dispatches_best_effort() -> None:
 
 
 def test_best_effort_parser_rejects_unsupported_raw_type() -> None:
-    result = extract_best_effort_code(123)
-
-    assert result.succeeded is False
-    assert result.extraction_error == (
-        "generation is not a supported code-bearing value"
-    )
-    assert result.metadata["raw_type"] == "int"
+    with pytest.raises(TypeError, match="raw_submission must be str"):
+        extract_best_effort_code(cast(Any, 123))
 
 
 def test_best_effort_parser_reports_missing_code_field_in_mapping() -> None:
-    result = extract_best_effort_code({"other": "value"})
-
-    assert result.succeeded is False
-    assert result.metadata["available_fields"] == ["other"]
+    with pytest.raises(TypeError, match="raw_submission must be str"):
+        extract_best_effort_code(cast(Any, {"other": "value"}))
 
 
 def test_best_effort_parser_reports_no_candidates() -> None:
@@ -452,13 +455,10 @@ def test_best_effort_parser_reports_no_compilable_candidate() -> None:
 
 
 def test_strict_parser_rejects_non_string_generation() -> None:
-    result = extract_strict_field_marker_code({"code": "def f(): pass"})
-
-    assert result.succeeded is False
-    assert (
-        result.extraction_error
-        == "strict parser requires string generation"
-    )
+    with pytest.raises(TypeError, match="raw_submission must be str"):
+        extract_strict_field_marker_code(
+            cast(Any, {"code": "def f(): pass"})
+        )
 
 
 def test_strict_parser_rejects_empty_field_marker_body() -> None:
@@ -479,7 +479,7 @@ def test_strict_parser_rejects_syntax_error_in_marker_body() -> None:
 
 def test_metrics_payload_includes_full_stage_metrics() -> None:
     metrics = build_metrics_payload(
-        raw_generation="```python\ndef add_one(x):\n    return x + 1\n```",
+        raw_submission="```python\ndef add_one(x):\n    return x + 1\n```",
         extracted_code="def add_one(x):\n    return x + 1",
         task=_task(),
         node_output_sources=(
@@ -663,11 +663,11 @@ def test_metric_primitives_are_deterministic() -> None:
     assert ast_error.parse_ok is False
 
 
-def test_score_generation_run_persists_passing_score_attempt() -> None:
+def test_score_submission_run_persists_passing_score_attempt() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -678,9 +678,9 @@ def test_score_generation_run_persists_passing_score_attempt() -> None:
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 1.0
-    assert score.generated_code_outcome is GeneratedCodeOutcome.PASSED
-    assert score.extracted_code is not None
-    assert score.extracted_code.extraction_method == "bare_python"
+    assert score.submission_outcome is SubmissionOutcome.PASSED
+    assert score.extracted_submission is not None
+    assert score.extracted_submission.extraction_method == "bare_python"
     assert [result.status for result in score.per_test_results] == [
         "passed",
         "passed",
@@ -720,13 +720,13 @@ def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
         scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
         scoring_profile_version=HUMANEVAL_SCORING_PROFILE_VERSION,
     )
-    domain_score = humaneval_scoring.score_humaneval_generation(
-        raw_generation=run.summary.terminal_output,
+    domain_score = humaneval_scoring.score_humaneval_submission(
+        raw_submission=run.summary.terminal_submission_text,
         task=_task(),
         parser_profile=scoring_profile.parser_profile,
         timeout_seconds=scoring_profile.timeout_seconds,
-        recordable_text=recordable_text,
     )
+    assert isinstance(domain_score, CompletedScore)
 
     with pytest.raises(
         ValueError,
@@ -736,15 +736,15 @@ def test_score_metrics_payload_rejects_stage_budget_overflow() -> None:
             task=_task(),
             node_attempts=node_attempts,
             scoring_profile=scoring_profile,
-            domain_score=domain_score,
+            completed_score=domain_score,
         )
 
 
-def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
+def test_score_submission_run_defaults_completed_at_after_scoring() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -755,11 +755,11 @@ def test_score_generation_run_defaults_completed_at_after_scoring() -> None:
     assert score.completed_at > NOW
 
 
-def test_score_generation_run_persists_tests_failed_as_success() -> None:
+def test_score_submission_run_persists_tests_failed_as_success() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x\n")
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -770,14 +770,14 @@ def test_score_generation_run_persists_tests_failed_as_success() -> None:
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 0.0
-    assert score.generated_code_outcome is GeneratedCodeOutcome.TESTS_FAILED
+    assert score.submission_outcome is SubmissionOutcome.TESTS_FAILED
     assert score.per_test_results
     assert score.metrics is not None
     assert score.metrics.custom["evaluation"]["failed_count"] == 2
     assert score.metrics.custom["evaluation"]["failure_count"] == 2
 
 
-def test_score_generation_run_persists_evaluation_incomplete(
+def test_score_submission_run_persists_evaluation_incomplete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = _spec()
@@ -813,7 +813,7 @@ def test_score_generation_run_persists_evaluation_incomplete(
         evaluate,
     )
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -824,8 +824,8 @@ def test_score_generation_run_persists_evaluation_incomplete(
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 0.0
-    assert score.generated_code_outcome is (
-        GeneratedCodeOutcome.EVALUATION_INCOMPLETE
+    assert score.submission_outcome is (
+        SubmissionOutcome.EVALUATION_INCOMPLETE
     )
     assert [result.test_id for result in score.per_test_results] == ["case_0"]
     assert score.metrics is not None
@@ -835,11 +835,11 @@ def test_score_generation_run_persists_evaluation_incomplete(
     assert evaluation_metrics["failure_count"] == 0
 
 
-def test_score_generation_run_persists_no_top_level_functions() -> None:
+def test_score_submission_run_persists_no_top_level_functions() -> None:
     spec = _spec()
     run = _generation_run(spec, "ANSWER = 2\n")
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -850,8 +850,8 @@ def test_score_generation_run_persists_no_top_level_functions() -> None:
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 0.0
-    assert score.generated_code_outcome is (
-        GeneratedCodeOutcome.NO_TOP_LEVEL_FUNCTIONS
+    assert score.submission_outcome is (
+        SubmissionOutcome.NO_TOP_LEVEL_FUNCTIONS
     )
     assert score.per_test_results == ()
     assert score.metrics is not None
@@ -875,7 +875,7 @@ def test_score_generation_run_persists_no_top_level_functions() -> None:
 
 def test_metrics_payload_round_trips_through_record_model() -> None:
     metrics = build_metrics_payload(
-        raw_generation="def add_one(x):\n    return x + 1\n",
+        raw_submission="def add_one(x):\n    return x + 1\n",
         extracted_code="def add_one(x):\n    return x + 1\n",
         task=_task(),
     )
@@ -892,7 +892,7 @@ def test_metrics_payload_round_trips_through_record_model() -> None:
 
 def test_metrics_payload_preserves_extracted_code_parse_error() -> None:
     metrics = build_metrics_payload(
-        raw_generation="def add_one(x)\n    return x + 1\n",
+        raw_submission="def add_one(x)\n    return x + 1\n",
         extracted_code="def add_one(x)\n    return x + 1\n",
         task=_task(),
     )
@@ -910,24 +910,23 @@ def test_metrics_payload_preserves_extracted_code_parse_error() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw_generation", "outcome"),
+    ("raw_submission", "outcome"),
     [
-        ("   ", GeneratedCodeOutcome.EMPTY_GENERATION),
+        ("   ", SubmissionOutcome.EMPTY_SUBMISSION),
         (
             "def add_one(x)\n    return x",
-            GeneratedCodeOutcome.EXTRACTION_FAILED,
+            SubmissionOutcome.EXTRACTION_FAILED,
         ),
-        (["not", "scoreable"], GeneratedCodeOutcome.EXTRACTION_FAILED),
     ],
 )
-def test_score_generation_run_persists_extraction_failures_as_success(
-    raw_generation: Any,
-    outcome: GeneratedCodeOutcome,
+def test_score_submission_run_persists_extraction_failures_as_success(
+    raw_submission: Any,
+    outcome: SubmissionOutcome,
 ) -> None:
     spec = _spec()
-    run = _generation_run(spec, raw_generation)
+    run = _generation_run(spec, raw_submission)
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -938,7 +937,7 @@ def test_score_generation_run_persists_extraction_failures_as_success(
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 0.0
-    assert score.generated_code_outcome is outcome
+    assert score.submission_outcome is outcome
     assert score.per_test_results == ()
     assert score.metrics is not None
     assert score.metrics.task_tests is not None
@@ -946,36 +945,34 @@ def test_score_generation_run_persists_extraction_failures_as_success(
     assert score.metrics.ast is None
 
 
-def test_score_generation_run_persists_infrastructure_error() -> None:
+def test_score_submission_run_persists_infrastructure_error() -> None:
     spec = _spec()
     other_spec = _spec(layout="encdec")
     run = _generation_run(other_spec, "def add_one(x):\n    return x + 1\n")
 
-    score = score_generation_run(
-        spec=spec,
-        generation_run=run,
-        node_attempts=(),
-        task=_task(),
-        started_at=NOW,
-        completed_at=LATER,
-    )
-
-    assert score.status is ScoreAttemptStatus.ERROR
-    assert score.score is None
-    assert score.metrics is None
-    assert score.failure is not None
-    assert score.failure.metadata["generation_run_id"] == run.generation_run_id
+    with pytest.raises(
+        ValueError,
+        match="generation run prediction_id does not match spec",
+    ):
+        _completed_score_submission_run(
+            spec=spec,
+            generation_run=run,
+            node_attempts=(),
+            task=_task(),
+            started_at=NOW,
+            completed_at=LATER,
+        )
 
 
-def test_score_generation_run_scores_encdec_terminal_output() -> None:
+def test_score_submission_run_scores_encdec_terminal_output() -> None:
     spec = _spec(layout="encdec")
-    raw_terminal_output = {"code": "def add_one(x):\n    return x + 1\n"}
+    raw_terminal_output = "def add_one(x):\n    return x + 1\n"
     run = _generation_run(
         spec,
         raw_terminal_output,
     )
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(
@@ -1003,11 +1000,9 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
 
     assert score.status is ScoreAttemptStatus.SUCCESS
     assert score.score == 1.0
-    assert score.extracted_code is not None
-    assert score.extracted_code.extraction_method == "json_code_field"
-    assert score.extracted_code.raw_generation == (
-        '{"code":"def add_one(x):\\n    return x + 1\\n"}'
-    )
+    assert score.extracted_submission is not None
+    assert score.extracted_submission.extraction_method == "bare_python"
+    assert score.extracted_submission.raw_submission == raw_terminal_output
     assert score.metrics is not None
     assert {stage.stage_id for stage in score.metrics.stages} >= {
         "node:encoder:description",
@@ -1016,9 +1011,7 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
         "node:decoder:code",
     }
     stages = {stage.stage_id: stage for stage in score.metrics.stages}
-    assert stages["terminal"].text.character_count == len(
-        '{"code":"def add_one(x):\\n    return x + 1\\n"}'
-    )
+    assert stages["terminal"].text.character_count == len(raw_terminal_output)
     assert stages["node:encoder:plan"].text.character_count == len(
         '{"ok":true,"steps":["read","write"]}'
     )
@@ -1027,7 +1020,7 @@ def test_score_generation_run_scores_encdec_terminal_output() -> None:
     )
 
 
-def test_score_generation_run_rejects_task_id_mismatch() -> None:
+def test_score_submission_run_rejects_task_id_mismatch() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
     mismatched_task = _task()
@@ -1035,22 +1028,21 @@ def test_score_generation_run_rejects_task_id_mismatch() -> None:
         update={"task_id": "HumanEval/other"}
     )
 
-    score = score_generation_run(
-        spec=spec,
-        generation_run=run,
-        node_attempts=(),
-        task=mismatched_task,
-        started_at=NOW,
-        completed_at=LATER,
-    )
-
-    assert score.status is ScoreAttemptStatus.ERROR
-    assert score.failure is not None
-    assert (
-        score.failure.message
-        == "HumanEval task_id does not match spec: 'HumanEval/other' != "
-        "'HumanEval/fixture'"
-    )
+    with pytest.raises(
+        ValueError,
+        match=(
+            "HumanEval task_id does not match spec: "
+            "'HumanEval/other' != 'HumanEval/fixture'"
+        ),
+    ):
+        _completed_score_submission_run(
+            spec=spec,
+            generation_run=run,
+            node_attempts=(),
+            task=mismatched_task,
+            started_at=NOW,
+            completed_at=LATER,
+        )
 
 
 def test_score_attempt_id_differs_by_dataset_selection() -> None:
@@ -1087,7 +1079,7 @@ def test_score_attempt_id_differs_by_dataset_selection() -> None:
     assert default_id != other_split_id
     assert other_dataset_id != other_split_id
 
-    default_score = score_generation_run(
+    default_score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -1095,7 +1087,7 @@ def test_score_attempt_id_differs_by_dataset_selection() -> None:
         started_at=NOW,
         completed_at=LATER,
     )
-    other_dataset_score = score_generation_run(
+    other_dataset_score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -1125,7 +1117,7 @@ def test_task_name_leakage_ignores_numeric_task_suffix() -> None:
 def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -1154,7 +1146,7 @@ def test_score_attempt_id_and_insert_are_idempotent_by_profile() -> None:
 def test_persist_score_attempt_reports_conflict_status() -> None:
     spec = _spec()
     run = _generation_run(spec, "def add_one(x):\n    return x + 1\n")
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -1180,31 +1172,22 @@ def test_persist_score_attempt_reports_conflict_status() -> None:
     assert result.status is ScoreAttemptInsertStatus.ALREADY_PRESENT
 
 
-def test_score_generation_run_persists_failed_generation_as_error() -> None:
+def test_score_submission_run_persists_failed_generation_as_error() -> None:
     spec = _spec()
     run = _failed_generation_run(spec)
 
-    score = score_generation_run(
-        spec=spec,
-        generation_run=run,
-        node_attempts=(),
-        task=_task(),
-        started_at=NOW,
-        completed_at=LATER,
-    )
-
-    assert score.status is ScoreAttemptStatus.ERROR
-    assert score.score is None
-    assert score.generated_code_outcome is None
-    assert score.metrics is None
-    assert score.failure is not None
-    assert (
-        score.failure.message
-        == "generation run is not scoreable: error"
-    )
+    with pytest.raises(ValueError, match="generation run is not scoreable"):
+        _completed_score_submission_run(
+            spec=spec,
+            generation_run=run,
+            node_attempts=(),
+            task=_task(),
+            started_at=NOW,
+            completed_at=LATER,
+        )
 
 
-def test_score_generation_run_scores_partial_with_terminal_output() -> None:
+def test_score_submission_run_scores_partial_with_terminal_output() -> None:
     spec = _spec()
     run = _generation_run(
         spec,
@@ -1212,7 +1195,7 @@ def test_score_generation_run_scores_partial_with_terminal_output() -> None:
     )
     run = run.model_copy(update={"status": GenerationRunStatus.PARTIAL})
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -1225,32 +1208,32 @@ def test_score_generation_run_scores_partial_with_terminal_output() -> None:
     assert score.score == 1.0
 
 
-def test_score_generation_rejects_partial_without_output() -> None:
+def test_score_submission_rejects_partial_without_output() -> None:
     spec = _spec()
     run = _generation_run(spec, "unused").model_copy(
         update={
             "status": GenerationRunStatus.PARTIAL,
             "summary": _generation_run(spec, "unused").summary.model_copy(
-                update={"terminal_output": None}
+                update={
+                    "terminal_output": None,
+                    "terminal_submission_text": "",
+                }
             ),
         }
     )
 
-    score = score_generation_run(
-        spec=spec,
-        generation_run=run,
-        node_attempts=(),
-        task=_task(),
-        started_at=NOW,
-        completed_at=LATER,
-    )
-
-    assert score.status is ScoreAttemptStatus.ERROR
-    assert score.failure is not None
-    assert (
-        score.failure.message
-        == "partial generation run missing terminal_output"
-    )
+    with pytest.raises(
+        ValueError,
+        match="partial generation run missing terminal_submission_text",
+    ):
+        _completed_score_submission_run(
+            spec=spec,
+            generation_run=run,
+            node_attempts=(),
+            task=_task(),
+            started_at=NOW,
+            completed_at=LATER,
+        )
 
 
 def test_load_humaneval_task_step_uses_cached_task_map(
@@ -1393,7 +1376,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 ),
             )
         )
-        return score_generation_run(
+        return _completed_score_submission_run(
             spec=spec,
             generation_run=run,
             node_attempts=(),
@@ -1428,14 +1411,14 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         "scoring_started_at_step",
         started,
     )
-    monkeypatch.setattr(scoring_workflow, "score_generation_step", score_step)
+    monkeypatch.setattr(scoring_workflow, "score_submission_step", score_step)
     monkeypatch.setattr(
         scoring_workflow,
-        "persist_score_attempt_step",
+        "persist_score_result_step",
         persist,
     )
 
-    workflow = cast(Any, scoring_workflow.run_score_generation_workflow)
+    workflow = cast(Any, scoring_workflow.run_score_submission_workflow)
     result = workflow.__wrapped__(
         "postgresql://example/db",
         run.generation_run_id,
@@ -1483,7 +1466,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
 
 
 def test_rescore_selector_filters_and_orders_candidates() -> None:
-    statement = db_io.select_rescore_generation_candidates(
+    statement = db_io.select_rescore_submission_candidates(
         experiment_name="exp",
         generation_statuses=(GenerationRunStatus.SUCCESS,),
         generation_attempt_index=0,
@@ -1531,7 +1514,7 @@ def test_rescore_selector_filters_and_orders_candidates() -> None:
 
 
 def test_rescore_selector_accepts_multiple_generation_statuses() -> None:
-    statement = db_io.select_rescore_generation_candidates(
+    statement = db_io.select_rescore_submission_candidates(
         experiment_name="exp",
         generation_statuses=(
             GenerationRunStatus.SUCCESS,
@@ -1557,7 +1540,7 @@ def test_rescore_selector_accepts_multiple_generation_statuses() -> None:
     assert "dr_dspy_generation_runs.status IN ('success', 'partial')" in (
         compiled
     )
-    statement = db_io.select_rescore_generation_candidates(
+    statement = db_io.select_rescore_submission_candidates(
         experiment_name="exp",
         generation_statuses=(GenerationRunStatus.SUCCESS,),
         scoring_profile_id=HUMANEVAL_SCORING_PROFILE_ID,
@@ -1591,28 +1574,28 @@ def test_batch_rescore_alternate_dataset_dry_run_schedules_candidates(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         lambda connection, **kwargs: candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(1),
     )
 
     def schedule(
         **kwargs: Any,
-    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+    ) -> scoring_workflow.ScheduledScoreSubmissionWorkflow:
         scheduler_calls.append(
             (kwargs["dataset_name"], kwargs["dataset_split"])
         )
-        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+        return scoring_workflow.ScheduledScoreSubmissionWorkflow(
             score_attempt_id="unused",
             workflow_id="unused",
             scheduled=True,
         )
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1644,26 +1627,26 @@ def test_batch_rescore_dry_run_counts_needed_scores(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         lambda connection, **kwargs: candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(1),
     )
 
     def schedule(
         **kwargs: Any,
-    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+    ) -> scoring_workflow.ScheduledScoreSubmissionWorkflow:
         scheduler_calls.append(kwargs["generation_run_id"])
-        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+        return scoring_workflow.ScheduledScoreSubmissionWorkflow(
             score_attempt_id="unused",
             workflow_id="unused",
             scheduled=True,
         )
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1705,12 +1688,12 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         load_candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(3),
     )
     monkeypatch.setattr(
@@ -1721,7 +1704,7 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
 
     def schedule(
         **kwargs: Any,
-    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+    ) -> scoring_workflow.ScheduledScoreSubmissionWorkflow:
         generation_run_id = kwargs["generation_run_id"]
         scheduler_calls.append(generation_run_id)
         score_attempt_id = stable_score_attempt_id(
@@ -1733,21 +1716,21 @@ def test_batch_rescore_chunks_and_counts_scheduler_outcomes(
             attempt_index=0,
         )
         if generation_run_id == "generation-run-1":
-            return scoring_workflow.ScheduledScoreGenerationWorkflow(
+            return scoring_workflow.ScheduledScoreSubmissionWorkflow(
                 score_attempt_id=score_attempt_id,
                 workflow_id=f"platform-score-v1:{score_attempt_id}",
                 scheduled=False,
             )
         if generation_run_id == "generation-run-2":
             raise RuntimeError("dbos unavailable")
-        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+        return scoring_workflow.ScheduledScoreSubmissionWorkflow(
             score_attempt_id=score_attempt_id,
             workflow_id=f"platform-score-v1:{score_attempt_id}",
             scheduled=True,
             workflow_handle=f"handle-{generation_run_id}",
         )
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1794,16 +1777,16 @@ def test_batch_rescore_limit_caps_selected_candidates(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         load_candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(5),
     )
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1831,20 +1814,20 @@ def test_batch_rescore_max_in_flight_uses_sliding_window(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         lambda connection, **kwargs: candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(5),
     )
 
     def schedule(
         **kwargs: Any,
-    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+    ) -> scoring_workflow.ScheduledScoreSubmissionWorkflow:
         generation_run_id = kwargs["generation_run_id"]
-        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+        return scoring_workflow.ScheduledScoreSubmissionWorkflow(
             score_attempt_id=f"score-{generation_run_id}",
             workflow_id=f"workflow-{generation_run_id}",
             scheduled=True,
@@ -1854,7 +1837,7 @@ def test_batch_rescore_max_in_flight_uses_sliding_window(
     def await_workflows(handles: list[Any]) -> None:
         await_batches.append(tuple(handles))
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1890,18 +1873,18 @@ def test_batch_rescore_sliding_window_keeps_scheduling_under_cap(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         lambda connection, **kwargs: candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(4),
     )
 
     def schedule(
         **kwargs: Any,
-    ) -> scoring_workflow.ScheduledScoreGenerationWorkflow:
+    ) -> scoring_workflow.ScheduledScoreSubmissionWorkflow:
         generation_run_id = kwargs["generation_run_id"]
         handle_label = f"handle-{generation_run_id}"
         schedule_order.append(handle_label)
@@ -1916,7 +1899,7 @@ def test_batch_rescore_sliding_window_keeps_scheduling_under_cap(
                         f"{self.label} should not complete before slot release"
                     )
 
-        return scoring_workflow.ScheduledScoreGenerationWorkflow(
+        return scoring_workflow.ScheduledScoreSubmissionWorkflow(
             score_attempt_id=f"score-{generation_run_id}",
             workflow_id=f"workflow-{generation_run_id}",
             scheduled=True,
@@ -1930,7 +1913,7 @@ def test_batch_rescore_sliding_window_keeps_scheduling_under_cap(
         blocked.pop(handle.label, None)
         handle.get_result()
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -1961,19 +1944,19 @@ def test_batch_rescore_dry_run_does_not_await_workflows(
 
     monkeypatch.setattr(
         rescoring,
-        "load_rescore_generation_candidates",
+        "load_rescore_submission_candidates",
         lambda connection, **kwargs: candidates,
     )
     monkeypatch.setattr(
         rescoring,
-        "count_rescore_generation_candidates",
+        "count_rescore_submission_candidates",
         _mock_rescore_candidate_count(1),
     )
 
     def fail_await(handles: list[Any]) -> None:
         raise AssertionError("dry-run should not await workflows")
 
-    execution = rescoring.rescore_generation_runs(
+    execution = rescoring.rescore_submission_runs(
         cast(Any, DummyEngine()),
         database_url="postgresql://example/db",
         experiment_name="exp",
@@ -2002,7 +1985,7 @@ def test_await_scheduled_score_workflows_waits_for_each_handle() -> None:
     assert completed == ["first", "second"]
 
 
-def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
+def test_schedule_score_submission_workflow_reports_existing_dbos_workflow(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     spec = _spec()
@@ -2032,12 +2015,12 @@ def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
 
     monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
 
-    result = scoring_workflow.schedule_score_generation_workflow(
+    result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=run.generation_run_id,
     )
 
-    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+    assert result == scoring_workflow.ScheduledScoreSubmissionWorkflow(
         score_attempt_id=expected_score_id,
         workflow_id=expected_workflow_id,
         scheduled=False,
@@ -2045,7 +2028,7 @@ def test_schedule_score_generation_workflow_reports_existing_dbos_workflow(
     assert starts == []
 
 
-def test_schedule_score_generation_workflow_surfaces_unrelated_start_failure(
+def test_schedule_score_submission_workflow_surfaces_unrelated_start_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     starts: list[Any] = []
@@ -2064,7 +2047,7 @@ def test_schedule_score_generation_workflow_surfaces_unrelated_start_failure(
     monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
 
     with pytest.raises(RuntimeError, match="dbos unavailable"):
-        scoring_workflow.schedule_score_generation_workflow(
+        scoring_workflow.schedule_score_submission_workflow(
             database_url="postgresql://example/db",
             generation_run_id="generation-run-1",
         )
@@ -2122,7 +2105,7 @@ def _schedule_score_ids(
         ),
     ],
 )
-def test_schedule_score_generation_workflow_presence_matrix(
+def test_schedule_score_submission_workflow_presence_matrix(
     monkeypatch: pytest.MonkeyPatch,
     presence: ScoringWorkflowPresence,
     recover_orphans: bool,
@@ -2151,13 +2134,13 @@ def test_schedule_score_generation_workflow_presence_matrix(
 
     monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
 
-    result = scoring_workflow.schedule_score_generation_workflow(
+    result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=generation_run_id,
         recover_orphans=recover_orphans,
     )
 
-    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+    assert result == scoring_workflow.ScheduledScoreSubmissionWorkflow(
         score_attempt_id=score_attempt_id,
         workflow_id=workflow_id,
         scheduled=expected["scheduled"],
@@ -2169,7 +2152,7 @@ def test_schedule_score_generation_workflow_presence_matrix(
         assert starts == []
 
 
-def test_schedule_score_generation_workflow_treats_start_race_as_unscheduled(
+def test_schedule_score_submission_workflow_treats_start_race_as_unscheduled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     generation_run_id = "generation-run-race"
@@ -2187,12 +2170,12 @@ def test_schedule_score_generation_workflow_treats_start_race_as_unscheduled(
 
     monkeypatch.setattr(scoring_workflow, "DBOS", FakeDbos())
 
-    result = scoring_workflow.schedule_score_generation_workflow(
+    result = scoring_workflow.schedule_score_submission_workflow(
         database_url="postgresql://example/db",
         generation_run_id=generation_run_id,
     )
 
-    assert result == scoring_workflow.ScheduledScoreGenerationWorkflow(
+    assert result == scoring_workflow.ScheduledScoreSubmissionWorkflow(
         score_attempt_id=score_attempt_id,
         workflow_id=workflow_id,
         scheduled=False,
@@ -2212,6 +2195,7 @@ def _rescore_candidate(
         prediction_id=f"prediction-{index}",
         fair_order_key=f"{index:04}",
         generation_run_id=f"generation-run-{index}",
+        score_attempt_index=0,
         existing_score_attempt_id=existing_score_attempt_id,
     )
 
@@ -2508,7 +2492,7 @@ def test_scoring_profile_controls_parser_timeout_and_metrics(
         evaluate,
     )
 
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),

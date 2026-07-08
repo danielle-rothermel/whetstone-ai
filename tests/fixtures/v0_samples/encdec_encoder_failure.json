@@ -27,7 +27,7 @@
   "generation_failure_metadata": {"node": "encoder"},
   "encoded_description": null,
   "decoded_generation": null,
-  "raw_generation": null,
+  "raw_submission": null,
   "encoder_response_metadata": {},
   "decoder_response_metadata": {},
   "encoder_usage_metadata": {},

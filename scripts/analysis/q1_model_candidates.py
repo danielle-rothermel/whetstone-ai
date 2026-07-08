@@ -28,7 +28,7 @@ from whetstone.analysis.frames import (
 from whetstone.analysis.plotting import apply_light_plot_style, save_figure
 from whetstone.analysis.report import AnalysisReporter
 from whetstone.platform.cli_env import load_env_file, run_typer_app
-from whetstone.records import GenerationRunStatus, ScoreAttemptStatus
+from whetstone.records import GenerationRunStatus
 
 app = typer.Typer(add_completion=False)
 SCRIPT_NAME = "q1_model_candidates"
@@ -50,9 +50,7 @@ def build_model_candidate_summary(frame: pd.DataFrame) -> pd.DataFrame:
         gen_blocked = (
             group["generation_status"] == GenerationRunStatus.BLOCKED.value
         ).sum()
-        score_errors = (
-            group["score_status"] == ScoreAttemptStatus.ERROR.value
-        ).sum()
+        score_errors = 0
         return {
             "rollup": rollup,
             "model": group["model"].iloc[0],
@@ -171,9 +169,7 @@ def plot_generation_score_health(
         gen_success = int(generation_success_mask(group).sum())
         gen_other = int((~generation_success_mask(group)).sum())
         score_success = int(score_success_mask(group).sum())
-        score_error = int(
-            (group["score_status"] == ScoreAttemptStatus.ERROR.value).sum()
-        )
+        score_error = 0
         score_missing = int(group["score_status"].isna().sum())
         rows.append(
             {

@@ -6,12 +6,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from dr_code.humaneval import metrics as humaneval_metrics
-from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
-from dr_code.humaneval.task import (
+from dr_code.humaneval import (
     EvaluationCaseStatus,
     EvaluationCaseSummary,
+    HumanEvalTestCaseKind,
+    SubmissionOutcome,
+)
+from dr_code.humaneval import (
+    metrics as humaneval_metrics,
 )
 from dr_graph import (
     BindingRef,
@@ -36,7 +38,7 @@ from whetstone.records import (
     DEFAULT_SCORE_DATASET_SPLIT,
     AstMetricsPayload,
     DimensionsPayload,
-    ExtractedCodePayload,
+    ExtractedSubmissionPayload,
     FailureMetadataPayload,
     GenerationRunRecord,
     GenerationRunStatus,
@@ -195,6 +197,15 @@ def _failure() -> FailureMetadataPayload:
         error_type="builtins.RuntimeError",
         message="boom",
         metadata={"node": "direct"},
+    )
+
+
+def _extracted_submission() -> ExtractedSubmissionPayload:
+    return ExtractedSubmissionPayload(
+        raw_submission="def add_one(x):\n    return x + 1\n",
+        extracted_code="def add_one(x):\n    return x + 1\n",
+        parser_profile_id="best-effort",
+        parser_version="v1",
     )
 
 
@@ -468,6 +479,7 @@ def test_generation_run_can_store_terminal_blocked_result() -> None:
                 status=GenerationRunStatus.BLOCKED,
                 blocked_by=("encoder",),
             ),
+            terminal_submission_text="",
         ),
         started_at=NOW,
         completed_at=NOW,
@@ -490,6 +502,7 @@ def test_partial_generation_run_rejects_terminal_error() -> None:
                 execution_order=("direct", "bad"),
                 terminal_node_id="direct",
                 terminal_output="ok",
+                terminal_submission_text="ok",
                 terminal_error=GenerationTerminalErrorPayload(
                     node_id="bad",
                     status=GenerationRunStatus.ERROR,
@@ -512,6 +525,7 @@ def test_partial_generation_run_accepts_terminal_output() -> None:
             execution_order=("direct", "bad"),
             terminal_node_id="direct",
             terminal_output="ok",
+            terminal_submission_text="ok",
         ),
         started_at=NOW,
         completed_at=NOW,
@@ -591,8 +605,9 @@ def test_score_attempt_success_and_error_shapes() -> None:
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
-        generated_code_outcome=GeneratedCodeOutcome.PASSED,
+        submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
+        extracted_submission=_extracted_submission(),
         metrics=MetricsPayload(
             profile_id="humaneval",
             profile_version="v1",
@@ -618,22 +633,24 @@ def test_score_attempt_success_and_error_shapes() -> None:
     )
 
     assert success.model_dump(mode="json")["status"] == "success"
-    assert success.generated_code_outcome is GeneratedCodeOutcome.PASSED
-    with pytest.raises(ValidationError, match="require failure"):
-        ScoreAttemptRecord(
-            score_attempt_id="score-2",
-            prediction_id="prediction-1",
-            generation_run_id="run-1",
-            attempt_index=0,
-            scoring_profile_id="humaneval",
-            scoring_profile_version="v1",
-            parser_profile_id="best-effort",
-            parser_version="v1",
-            dataset_name=DEFAULT_SCORE_DATASET_NAME,
-            dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
-            status=ScoreAttemptStatus.ERROR,
-            started_at=NOW,
-            completed_at=NOW,
+    assert success.submission_outcome is SubmissionOutcome.PASSED
+    with pytest.raises(ValidationError, match="Field required"):
+        ScoreAttemptRecord.model_validate(
+            {
+                "score_attempt_id": "score-2",
+                "prediction_id": "prediction-1",
+                "generation_run_id": "run-1",
+                "attempt_index": 0,
+                "scoring_profile_id": "humaneval",
+                "scoring_profile_version": "v1",
+                "parser_profile_id": "best-effort",
+                "parser_version": "v1",
+                "dataset_name": DEFAULT_SCORE_DATASET_NAME,
+                "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
+                "status": ScoreAttemptStatus.SUCCESS,
+                "started_at": NOW,
+                "completed_at": NOW,
+            }
         )
 
 
@@ -663,7 +680,7 @@ def test_metrics_payload_rejects_malformed_hardened_metrics() -> None:
         )
 
 
-def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
+def test_score_attempt_rejects_failure_payload() -> None:
     success = {
         "score_attempt_id": "score-1",
         "prediction_id": "prediction-1",
@@ -676,24 +693,21 @@ def test_score_attempt_success_and_error_payloads_are_exclusive() -> None:
         "dataset_name": DEFAULT_SCORE_DATASET_NAME,
         "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
         "status": "success",
+        "submission_outcome": "passed",
         "score": 1.0,
+        "extracted_submission": _extracted_submission().model_dump(
+            mode="json"
+        ),
         "failure": _failure().model_dump(mode="json"),
         "started_at": NOW,
         "completed_at": NOW,
     }
-    error = {
-        **success,
-        "status": "error",
-        "failure": _failure().model_dump(mode="json"),
-    }
 
-    with pytest.raises(ValidationError, match="cannot have failure"):
+    with pytest.raises(ValidationError, match="Extra inputs"):
         ScoreAttemptRecord.model_validate(success)
-    with pytest.raises(ValidationError, match="cannot have score"):
-        ScoreAttemptRecord.model_validate(error)
 
 
-def test_score_attempt_error_allows_partial_diagnostics() -> None:
+def test_score_attempt_completed_allows_partial_diagnostics() -> None:
     attempt = ScoreAttemptRecord(
         score_attempt_id="score-error",
         prediction_id="prediction-1",
@@ -705,10 +719,11 @@ def test_score_attempt_error_allows_partial_diagnostics() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
-        status=ScoreAttemptStatus.ERROR,
-        generated_code_outcome=GeneratedCodeOutcome.EXTRACTION_FAILED,
-        extracted_code=ExtractedCodePayload(
-            raw_generation="def broken(",
+        status=ScoreAttemptStatus.SUCCESS,
+        submission_outcome=SubmissionOutcome.EXTRACTION_FAILED,
+        score=0.0,
+        extracted_submission=ExtractedSubmissionPayload(
+            raw_submission="def broken(",
             parser_profile_id="best-effort",
             parser_version="v1",
         ),
@@ -724,16 +739,15 @@ def test_score_attempt_error_allows_partial_diagnostics() -> None:
                 average_word_length=5.5,
             ),
         ),
-        failure=_failure(),
         started_at=NOW,
         completed_at=NOW,
     )
 
-    assert attempt.generated_code_outcome is (
-        GeneratedCodeOutcome.EXTRACTION_FAILED
+    assert attempt.submission_outcome is (
+        SubmissionOutcome.EXTRACTION_FAILED
     )
     assert attempt.metrics is not None
-    assert attempt.extracted_code is not None
+    assert attempt.extracted_submission is not None
 
 
 def test_score_attempt_allows_distinct_metrics_profile() -> None:
@@ -749,7 +763,9 @@ def test_score_attempt_allows_distinct_metrics_profile() -> None:
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
+        submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
+        extracted_submission=_extracted_submission(),
         metrics=MetricsPayload(
             profile_id="humaneval-metrics",
             profile_version="v1",
@@ -805,7 +821,9 @@ def _score_attempt_base_kwargs() -> dict[str, Any]:
         "dataset_name": DEFAULT_SCORE_DATASET_NAME,
         "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
         "status": ScoreAttemptStatus.SUCCESS,
+        "submission_outcome": SubmissionOutcome.PASSED,
         "score": 1.0,
+        "extracted_submission": _extracted_submission(),
         "started_at": NOW,
         "completed_at": NOW,
     }
@@ -852,7 +870,7 @@ def test_score_attempt_rejects_oversized_metrics_payload(
 def test_score_attempt_rejects_mismatched_parser_profile() -> None:
     with pytest.raises(
         ValidationError,
-        match="extracted_code parser_profile_id",
+        match="extracted_submission parser_profile_id",
     ):
         ScoreAttemptRecord(
             score_attempt_id="score-1",
@@ -865,13 +883,14 @@ def test_score_attempt_rejects_mismatched_parser_profile() -> None:
             parser_version="v1",
             dataset_name=DEFAULT_SCORE_DATASET_NAME,
             dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
-            status=ScoreAttemptStatus.ERROR,
-            extracted_code=ExtractedCodePayload(
-                raw_generation="def broken(",
+            status=ScoreAttemptStatus.SUCCESS,
+            submission_outcome=SubmissionOutcome.EXTRACTION_FAILED,
+            score=0.0,
+            extracted_submission=ExtractedSubmissionPayload(
+                raw_submission="def broken(",
                 parser_profile_id="other",
                 parser_version="v1",
             ),
-            failure=_failure(),
             started_at=NOW,
             completed_at=NOW,
         )
@@ -891,7 +910,9 @@ def test_score_attempt_attempt_index_must_be_non_negative() -> None:
             dataset_name=DEFAULT_SCORE_DATASET_NAME,
             dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
             status=ScoreAttemptStatus.SUCCESS,
+            submission_outcome=SubmissionOutcome.PASSED,
             score=1.0,
+            extracted_submission=_extracted_submission(),
             started_at=NOW,
             completed_at=NOW,
         )

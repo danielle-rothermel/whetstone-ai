@@ -6,14 +6,15 @@ from functools import cache
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
+    HumanEvalTask,
+    load_human_eval_rows,
+    parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
-from dr_code.humaneval.sampling import load_human_eval_rows
-from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
 from dr_platform import WORKFLOW_START_RACE_ERRORS
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
@@ -25,8 +26,9 @@ from whetstone.platform.persistence import (
     load_node_attempts_for_generation_run,
     load_prediction_spec,
     persist_score_attempt,
+    persist_score_harness_failure,
 )
-from whetstone.platform.scoring import score_generation_run
+from whetstone.platform.scoring import score_submission_run
 from whetstone.platform.scoring_workflow_state import (
     ScoringWorkflowPresence,
     classify_scoring_workflow_presence,
@@ -39,26 +41,29 @@ from whetstone.records import (
     NodeAttemptRecord,
     PredictionSpecRecord,
     ScoreAttemptRecord,
+    ScoreHarnessFailureRecord,
     stable_score_attempt_id,
 )
 
-PLATFORM_SCORING_WORKFLOW_NAME = "dr_dspy_platform_humaneval_scoring_v1"
+PLATFORM_SCORING_WORKFLOW_NAME = (
+    "dr_dspy_platform_humaneval_submission_scoring_v1"
+)
 LOAD_SCORING_TARGET_STEP_NAME = "dr_dspy_platform_load_scoring_target_v1"
 LOAD_HUMANEVAL_TASK_STEP_NAME = "dr_dspy_platform_load_humaneval_task_v1"
 SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
-SCORE_GENERATION_STEP_NAME = "dr_dspy_platform_score_generation_v1"
-PERSIST_SCORE_ATTEMPT_STEP_NAME = "dr_dspy_platform_persist_score_attempt_v1"
-WORKFLOW_ID_PREFIX = "platform-score-v1"
+SCORE_SUBMISSION_STEP_NAME = "dr_dspy_platform_score_submission_v1"
+PERSIST_SCORE_RESULT_STEP_NAME = "dr_dspy_platform_persist_score_result_v1"
+WORKFLOW_ID_PREFIX = "platform-submission-score-v1"
 
 
-class ScoreGenerationWorkflowResult(BaseModel):
+class ScoreSubmissionWorkflowResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     score_attempt_id: str
     insert_status: ScoreAttemptInsertStatus
 
 
-class ScheduledScoreGenerationWorkflow(BaseModel):
+class ScheduledScoreSubmissionWorkflow(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     score_attempt_id: str
@@ -69,7 +74,7 @@ class ScheduledScoreGenerationWorkflow(BaseModel):
 
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
-def run_score_generation_workflow(
+def run_score_submission_workflow(
     database_url: str,
     generation_run_id: str,
     score_attempt_index: int = 0,
@@ -111,7 +116,7 @@ def run_score_generation_workflow(
     started_at = datetime.fromisoformat(
         scoring_started_at_step(score_attempt_id)
     )
-    score_attempt_payload = score_generation_step(
+    score_result_payload = score_submission_step(
         spec.model_dump(mode="json"),
         generation_run.model_dump(mode="json"),
         [attempt.model_dump(mode="json") for attempt in node_attempts],
@@ -123,15 +128,15 @@ def run_score_generation_workflow(
         started_at.isoformat(),
     )
     insert_result = ScoreAttemptInsertResult.model_validate(
-        persist_score_attempt_step(database_url, score_attempt_payload)
+        persist_score_result_step(database_url, score_result_payload)
     )
-    return ScoreGenerationWorkflowResult(
+    return ScoreSubmissionWorkflowResult(
         score_attempt_id=score_attempt_id,
         insert_status=insert_result.status,
     ).model_dump(mode="json")
 
 
-def start_score_generation_workflow(
+def start_score_submission_workflow(
     database_url: str,
     generation_run_id: str,
     score_attempt_index: int = 0,
@@ -140,7 +145,7 @@ def start_score_generation_workflow(
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
 ) -> str:
-    score_attempt_id, _handle = _start_score_generation_workflow_handle(
+    score_attempt_id, _handle = _start_score_submission_workflow_handle(
         database_url=database_url,
         generation_run_id=generation_run_id,
         score_attempt_index=score_attempt_index,
@@ -152,7 +157,7 @@ def start_score_generation_workflow(
     return score_attempt_id
 
 
-def schedule_score_generation_workflow(
+def schedule_score_submission_workflow(
     database_url: str,
     generation_run_id: str,
     score_attempt_index: int = 0,
@@ -161,7 +166,7 @@ def schedule_score_generation_workflow(
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
     recover_orphans: bool = True,
-) -> ScheduledScoreGenerationWorkflow:
+) -> ScheduledScoreSubmissionWorkflow:
     score_attempt_id = score_attempt_id_for_workflow(
         generation_run_id=generation_run_id,
         score_attempt_index=score_attempt_index,
@@ -177,13 +182,13 @@ def schedule_score_generation_workflow(
         workflow_id=workflow_id,
     )
     if presence is ScoringWorkflowPresence.COMPLETE:
-        return ScheduledScoreGenerationWorkflow(
+        return ScheduledScoreSubmissionWorkflow(
             score_attempt_id=score_attempt_id,
             workflow_id=workflow_id,
             scheduled=False,
         )
     if presence is ScoringWorkflowPresence.IN_FLIGHT:
-        return ScheduledScoreGenerationWorkflow(
+        return ScheduledScoreSubmissionWorkflow(
             score_attempt_id=score_attempt_id,
             workflow_id=workflow_id,
             scheduled=False,
@@ -193,7 +198,7 @@ def schedule_score_generation_workflow(
             database_url=database_url,
             workflow_id=workflow_id,
             score_attempt_id=score_attempt_id,
-            replay_workflow=run_score_generation_workflow,
+            replay_workflow=run_score_submission_workflow,
             replay_args=(
                 database_url,
                 generation_run_id,
@@ -204,13 +209,13 @@ def schedule_score_generation_workflow(
                 dataset_split,
             ),
         ):
-            return ScheduledScoreGenerationWorkflow(
+            return ScheduledScoreSubmissionWorkflow(
                 score_attempt_id=score_attempt_id,
                 workflow_id=workflow_id,
                 scheduled=True,
                 recovered=True,
             )
-        return ScheduledScoreGenerationWorkflow(
+        return ScheduledScoreSubmissionWorkflow(
             score_attempt_id=score_attempt_id,
             workflow_id=workflow_id,
             scheduled=False,
@@ -218,7 +223,7 @@ def schedule_score_generation_workflow(
     with SetWorkflowID(workflow_id):
         try:
             workflow_handle = DBOS.start_workflow(
-                run_score_generation_workflow,
+                run_score_submission_workflow,
                 database_url,
                 generation_run_id,
                 score_attempt_index,
@@ -228,7 +233,7 @@ def schedule_score_generation_workflow(
                 dataset_split,
             )
         except WORKFLOW_START_RACE_ERRORS:
-            return ScheduledScoreGenerationWorkflow(
+            return ScheduledScoreSubmissionWorkflow(
                 score_attempt_id=score_attempt_id,
                 workflow_id=workflow_id,
                 scheduled=False,
@@ -238,13 +243,13 @@ def schedule_score_generation_workflow(
                 workflow_id=workflow_id,
                 error=error,
             ):
-                return ScheduledScoreGenerationWorkflow(
+                return ScheduledScoreSubmissionWorkflow(
                     score_attempt_id=score_attempt_id,
                     workflow_id=workflow_id,
                     scheduled=False,
                 )
             raise
-    return ScheduledScoreGenerationWorkflow(
+    return ScheduledScoreSubmissionWorkflow(
         score_attempt_id=score_attempt_id,
         workflow_id=workflow_id,
         scheduled=True,
@@ -257,7 +262,7 @@ def await_scheduled_score_workflows(handles: Sequence[Any]) -> None:
         handle.get_result()
 
 
-def run_score_generation_workflow_once(
+def run_score_submission_workflow_once(
     database_url: str,
     generation_run_id: str,
     score_attempt_index: int = 0,
@@ -265,8 +270,8 @@ def run_score_generation_workflow_once(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-) -> ScoreGenerationWorkflowResult:
-    _score_attempt_id, handle = _start_score_generation_workflow_handle(
+) -> ScoreSubmissionWorkflowResult:
+    _score_attempt_id, handle = _start_score_submission_workflow_handle(
         database_url=database_url,
         generation_run_id=generation_run_id,
         score_attempt_index=score_attempt_index,
@@ -278,7 +283,7 @@ def run_score_generation_workflow_once(
     result = handle.get_result()
     if not isinstance(result, dict):
         raise TypeError("platform scoring workflow returned a non-dict result")
-    return ScoreGenerationWorkflowResult.model_validate(result)
+    return ScoreSubmissionWorkflowResult.model_validate(result)
 
 
 def platform_scoring_workflow_id(score_attempt_id: str) -> str:
@@ -319,7 +324,7 @@ def _scoring_workflow_start_raced(
     return isinstance(error, WORKFLOW_START_RACE_ERRORS)
 
 
-def _start_score_generation_workflow_handle(
+def _start_score_submission_workflow_handle(
     *,
     database_url: str,
     generation_run_id: str,
@@ -339,7 +344,7 @@ def _start_score_generation_workflow_handle(
     )
     with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
         handle = DBOS.start_workflow(
-            run_score_generation_workflow,
+            run_score_submission_workflow,
             database_url,
             generation_run_id,
             score_attempt_index,
@@ -421,8 +426,8 @@ def timestamp_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-@DBOS.step(name=SCORE_GENERATION_STEP_NAME)
-def score_generation_step(
+@DBOS.step(name=SCORE_SUBMISSION_STEP_NAME)
+def score_submission_step(
     spec_payload: dict[str, Any],
     generation_run_payload: dict[str, Any],
     node_attempt_payloads: list[dict[str, Any]],
@@ -436,7 +441,7 @@ def score_generation_step(
     scoring_profile = HumanEvalScoringProfile.model_validate(
         scoring_profile_payload
     )
-    record = score_generation_run(
+    record = score_submission_run(
         spec=PredictionSpecRecord.model_validate(spec_payload),
         generation_run=GenerationRunRecord.model_validate(
             generation_run_payload
@@ -455,19 +460,28 @@ def score_generation_step(
     return record.model_dump(mode="json")
 
 
-@DBOS.step(name=PERSIST_SCORE_ATTEMPT_STEP_NAME)
-def persist_score_attempt_step(
+@DBOS.step(name=PERSIST_SCORE_RESULT_STEP_NAME)
+def persist_score_result_step(
     database_url: str,
-    score_attempt_payload: dict[str, Any],
+    score_result_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    score_attempt = ScoreAttemptRecord.model_validate(score_attempt_payload)
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
-            result = persist_score_attempt(
-                connection,
-                score_attempt=score_attempt,
-            )
+            if score_result_payload.get("kind") == "harness_failure":
+                result = persist_score_harness_failure(
+                    connection,
+                    harness_failure=ScoreHarnessFailureRecord.model_validate(
+                        score_result_payload
+                    ),
+                )
+            else:
+                result = persist_score_attempt(
+                    connection,
+                    score_attempt=ScoreAttemptRecord.model_validate(
+                        score_result_payload
+                    ),
+                )
         return result.model_dump(mode="json")
     finally:
         engine.dispose()

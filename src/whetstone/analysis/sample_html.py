@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from dr_code.humaneval.task import EvaluationCaseStatus
+from dr_code.humaneval import EvaluationCaseStatus
 from dr_providers import PromptMessage
 from pygments import highlight
 from pygments.formatters.html import HtmlFormatter
@@ -173,9 +173,9 @@ def _node_output_card(
 
 def _extraction_card(bundle: RunBundle) -> str:
     score_attempt = bundle.score_attempt
-    if score_attempt is None or score_attempt.extracted_code is None:
+    if score_attempt is None:
         return _card("Extraction", "<p class='error'>No score attempt</p>")
-    extracted = score_attempt.extracted_code
+    extracted = score_attempt.extracted_submission
     meta = extracted.metadata or {}
     lines = [
         f"Method: {extracted.extraction_method}",
@@ -187,22 +187,18 @@ def _extraction_card(bundle: RunBundle) -> str:
     if meta.get("extraction_error"):
         lines.append(f"Extraction error: {meta['extraction_error']}")
     header = f"<pre class='plain'>{_escape(chr(10).join(lines))}</pre>"
-    raw = extracted.raw_generation or ""
+    raw = extracted.raw_submission or ""
     raw_block = _code_block(raw, language="python")
-    body = header + "<h3>Raw generation</h3>" + raw_block
+    body = header + "<h3>Raw submission</h3>" + raw_block
     return _card("Extraction", body)
 
 
 def _scored_code_card(bundle: RunBundle) -> str:
     score_attempt = bundle.score_attempt
-    if score_attempt is None or score_attempt.extracted_code is None:
+    if score_attempt is None:
         return _card("Scored code", "<p class='error'>No extracted code</p>")
-    code = score_attempt.extracted_code.extracted_code or ""
-    outcome = (
-        score_attempt.generated_code_outcome.value
-        if score_attempt.generated_code_outcome is not None
-        else "unknown"
-    )
+    code = score_attempt.extracted_submission.extracted_code or ""
+    outcome = score_attempt.submission_outcome.value
     score = score_attempt.score
     subtitle = f"outcome={outcome}, score={score}"
     return _card(

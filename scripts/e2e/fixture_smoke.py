@@ -82,7 +82,7 @@ def main(
 ) -> None:
     from whetstone.platform import node_execution
     from whetstone.platform.platform_db import PLATFORM_SCHEMA
-    from whetstone.platform.rescoring import rescore_generation_runs
+    from whetstone.platform.rescoring import rescore_submission_runs
     from whetstone.platform.spec_builder import (
         DEFAULT_CONFIGS_ROOT,
         iter_experiment_specs_from_file,
@@ -148,7 +148,7 @@ def main(
             timeout_seconds=timeout_seconds,
         )
         typer.echo(f"      workflows: {breakdown.status_counts}")
-        rescore = rescore_generation_runs(
+        rescore = rescore_submission_runs(
             engine,
             database_url=config.database_url,
             experiment_name=experiment_name,
@@ -179,10 +179,10 @@ def main(
                 ),
                 "score_attempts_by_outcome": _counts(
                     connection,
-                    "SELECT status, generated_code_outcome, COUNT(*) "
+                    "SELECT status, submission_outcome, COUNT(*) "
                     "FROM dr_dspy_score_attempts "
-                    "GROUP BY status, generated_code_outcome "
-                    "ORDER BY status, generated_code_outcome",
+                    "GROUP BY status, submission_outcome "
+                    "ORDER BY status, submission_outcome",
                 ),
                 "sample_ids": _counts(
                     connection,

@@ -497,7 +497,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?branch=main#d37b7832f241933855bbaa2b325d71ea5df7e1f0" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?rev=f7090724e8303c70eb9c723b4c3660a550a1e3bd#f7090724e8303c70eb9c723b4c3660a550a1e3bd" }
 dependencies = [
     { name = "datasets" },
     { name = "marimo", extra = ["recommended"] },
@@ -3013,7 +3013,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=f7090724e8303c70eb9c723b4c3660a550a1e3bd" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=drprov-v02-migration" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },

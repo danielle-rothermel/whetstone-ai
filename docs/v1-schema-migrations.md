@@ -37,7 +37,7 @@ The chain is **linear** (no branches). Future schema changes require **new forwa
 | `20260630_0003` | `claiming` enqueue status; heal stale pending metadata |
 | `20260630_0004` | Remove `prepared` operation status (backfill rows to `enqueuing`) |
 | `20260630_0005` | `dataset_name` / `dataset_split` on score attempts; profile uniqueness |
-| `20260630_0006` | Widen score-attempt `generated_code_outcome` check constraint to allow `evaluation_incomplete` |
+| `20260630_0006` | Widen score-attempt `submission_outcome` check constraint to allow `evaluation_incomplete` |
 
 ---
 

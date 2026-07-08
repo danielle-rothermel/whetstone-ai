@@ -241,7 +241,7 @@ def test_summarize_attempts_groups_by_candidate_id() -> None:
                 "generation_status": "success",
                 "score_status": "success",
                 "score": 1.0,
-                "generated_code_outcome": "passed",
+                "submission_outcome": "passed",
             },
             {
                 "dimensions": json.dumps(
@@ -255,7 +255,7 @@ def test_summarize_attempts_groups_by_candidate_id() -> None:
                 "generation_status": "success",
                 "score_status": "success",
                 "score": 0.0,
-                "generated_code_outcome": "failed",
+                "submission_outcome": "failed",
             },
         ]
     )

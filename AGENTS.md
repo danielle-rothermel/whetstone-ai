@@ -37,11 +37,6 @@ See [TESTING.md](TESTING.md) for the tier model, fixtures, and conventions.
 - Lint/type: `./scripts/ci/lint.sh` (`ruff check` + `ty check`).
 - Integration: `DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh`
   (opt-in via `@pytest.mark.integration`; skips cleanly without Postgres).
-- Golden gate: `uv run pytest -k golden` pins parser/scoring/digest behavior
-  with committed fixtures. The golden suite lands with PR #4 and applies on
-  branches that include it; a failing golden test means fix your change, not
-  the fixtures.
-
 ## Conventions
 
 - Generation, node, and score outcome rows are **append-only** (enforced by

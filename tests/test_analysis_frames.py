@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval import SubmissionOutcome
 
 from whetstone.analysis.figures import FigureRun
 from whetstone.analysis.frames import (
@@ -122,18 +122,18 @@ def test_parse_score_metrics_reads_compression_and_text() -> None:
 
 
 def test_is_pass_row_accepts_score_and_outcome() -> None:
-    assert is_pass_row({"score": 1.0, "generated_code_outcome": None}) is True
+    assert is_pass_row({"score": 1.0, "submission_outcome": None}) is True
     assert (
         is_pass_row(
             {
                 "score": 0.0,
-                "generated_code_outcome": GeneratedCodeOutcome.PASSED.value,
+                "submission_outcome": SubmissionOutcome.PASSED.value,
             }
         )
         is True
     )
     assert is_pass_row(
-        {"score": 0.0, "generated_code_outcome": "tests_failed"}
+        {"score": 0.0, "submission_outcome": "tests_failed"}
     ) is False
 
 
@@ -148,7 +148,7 @@ def test_build_model_candidate_summary_handles_missing_scores() -> None:
                 "generation_status": "success",
                 "score_status": pd.NA,
                 "score": pd.NA,
-                "generated_code_outcome": pd.NA,
+                "submission_outcome": pd.NA,
                 "total_provider_cost": 0.01,
             },
             {
@@ -158,7 +158,7 @@ def test_build_model_candidate_summary_handles_missing_scores() -> None:
                 "generation_status": "success",
                 "score_status": "success",
                 "score": 1.0,
-                "generated_code_outcome": "passed",
+                "submission_outcome": "passed",
                 "total_provider_cost": 0.02,
             },
         ]

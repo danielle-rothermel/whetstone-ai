@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval import SubmissionOutcome
 from dr_platform.batch_status import (
     BatchItemEnqueueStatus,
     BatchItemInsertStatus,
     BatchOperationStatus,
 )
+from dr_providers import FailureClass
 from sqlalchemy import (
     CheckConstraint,
     Column,
@@ -35,6 +36,7 @@ PREDICTION_SPECS_TABLE = "dr_dspy_prediction_specs"
 GENERATION_RUNS_TABLE = "dr_dspy_generation_runs"
 NODE_ATTEMPTS_TABLE = "dr_dspy_node_attempts"
 SCORE_ATTEMPTS_TABLE = "dr_dspy_score_attempts"
+SCORE_HARNESS_FAILURES_TABLE = "dr_dspy_score_harness_failures"
 PREDICTION_PROJECTION_TABLE = "dr_dspy_prediction_projection"
 BATCH_SUBMIT_OPERATIONS_TABLE = "dr_dspy_batch_submit_operations"
 BATCH_SUBMIT_ITEMS_TABLE = "dr_dspy_batch_submit_items"
@@ -46,6 +48,7 @@ V1_TABLE_NAMES = (
     GENERATION_RUNS_TABLE,
     NODE_ATTEMPTS_TABLE,
     SCORE_ATTEMPTS_TABLE,
+    SCORE_HARNESS_FAILURES_TABLE,
     PREDICTION_PROJECTION_TABLE,
     BATCH_SUBMIT_OPERATIONS_TABLE,
     BATCH_SUBMIT_ITEMS_TABLE,
@@ -60,6 +63,7 @@ APPEND_ONLY_OUTCOME_TABLE_NAMES = (
     GENERATION_RUNS_TABLE,
     NODE_ATTEMPTS_TABLE,
     SCORE_ATTEMPTS_TABLE,
+    SCORE_HARNESS_FAILURES_TABLE,
 )
 
 metadata = MetaData()
@@ -307,12 +311,11 @@ score_attempts = Table(
     Column("dataset_name", Text, nullable=False),
     Column("dataset_split", Text, nullable=False),
     Column("status", Text, nullable=False),
-    Column("generated_code_outcome", Text),
-    Column("score", Float),
-    Column("extracted_code", JSONB),
+    Column("submission_outcome", Text, nullable=False),
+    Column("score", Float, nullable=False),
+    Column("extracted_submission", JSONB, nullable=False),
     Column("metrics", JSONB),
     Column("per_test_results", JSONB, nullable=False),
-    Column("failure", JSONB),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
@@ -324,21 +327,15 @@ score_attempts = Table(
         name="ck_dr_dspy_score_attempts_attempt_index",
     ),
     CheckConstraint(
-        "(status != 'success' OR (score IS NOT NULL AND failure IS NULL)) "
-        "AND (status != 'error' OR ("
-        "failure IS NOT NULL "
-        "AND score IS NULL "
-        "AND per_test_results = '[]'::jsonb"
-        "))",
+        "status = 'success'",
         name="ck_dr_dspy_score_attempts_status_payload",
     ),
     CheckConstraint(
-        "generated_code_outcome IS NULL OR "
-        f"({enum_check('generated_code_outcome', GeneratedCodeOutcome)})",
-        name="ck_dr_dspy_score_attempts_generated_code_outcome",
+        enum_check("submission_outcome", SubmissionOutcome),
+        name="ck_dr_dspy_score_attempts_submission_outcome",
     ),
     CheckConstraint(
-        "score IS NULL OR (score >= 0 AND score <= 1)",
+        "score >= 0 AND score <= 1",
         name="ck_dr_dspy_score_attempts_score_range",
     ),
     CheckConstraint(
@@ -374,6 +371,69 @@ score_attempts = Table(
             f"{GENERATION_RUNS_TABLE}.prediction_id",
         ],
         name="fk_dr_dspy_score_attempts_generation_run",
+    ),
+)
+
+score_harness_failures = Table(
+    SCORE_HARNESS_FAILURES_TABLE,
+    metadata,
+    Column("score_attempt_id", Text, primary_key=True),
+    Column(
+        "prediction_id",
+        Text,
+        ForeignKey(f"{PREDICTION_SPECS_TABLE}.prediction_id"),
+        nullable=False,
+    ),
+    Column("generation_run_id", Text, nullable=False),
+    Column("scoring_profile_id", Text, nullable=False),
+    Column("scoring_profile_version", Text, nullable=False),
+    Column("parser_profile_id", Text, nullable=False),
+    Column("parser_version", Text, nullable=False),
+    Column("attempt_index", Integer, nullable=False),
+    Column("dataset_name", Text, nullable=False),
+    Column("dataset_split", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("raw_submission", Text, nullable=False),
+    Column("extracted_submission", JSONB),
+    Column("cause", JSONB, nullable=False),
+    Column("failure_class", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "attempt_index >= 0",
+        name="ck_dr_dspy_score_harness_failures_attempt_index",
+    ),
+    CheckConstraint(
+        "kind = 'harness_failure'",
+        name="ck_dr_dspy_score_harness_failures_kind",
+    ),
+    CheckConstraint(
+        enum_check("failure_class", FailureClass),
+        name="ck_dr_dspy_score_harness_failures_failure_class",
+    ),
+    CheckConstraint(
+        "completed_at >= started_at",
+        name="ck_dr_dspy_score_harness_failures_time_order",
+    ),
+    UniqueConstraint(
+        "prediction_id",
+        "generation_run_id",
+        "scoring_profile_id",
+        "scoring_profile_version",
+        "parser_profile_id",
+        "parser_version",
+        "attempt_index",
+        "dataset_name",
+        "dataset_split",
+        name="uq_dr_dspy_score_harness_failures_profile",
+    ),
+    ForeignKeyConstraint(
+        ["generation_run_id", "prediction_id"],
+        [
+            f"{GENERATION_RUNS_TABLE}.generation_run_id",
+            f"{GENERATION_RUNS_TABLE}.prediction_id",
+        ],
+        name="fk_dr_dspy_score_harness_failures_generation_run",
     ),
 )
 
@@ -562,8 +622,15 @@ Index("ix_dr_dspy_score_attempts_profile", score_attempts.c.scoring_profile_id,
       score_attempts.c.scoring_profile_version)
 Index("ix_dr_dspy_score_attempts_parser", score_attempts.c.parser_profile_id,
       score_attempts.c.parser_version)
-Index("ix_dr_dspy_score_attempts_generated_code_outcome",
-      score_attempts.c.generated_code_outcome)
+Index("ix_dr_dspy_score_attempts_submission_outcome",
+      score_attempts.c.submission_outcome)
+Index("ix_dr_dspy_score_harness_failures_prediction",
+      score_harness_failures.c.prediction_id)
+Index("ix_dr_dspy_score_harness_failures_run",
+      score_harness_failures.c.generation_run_id)
+Index("ix_dr_dspy_score_harness_failures_profile",
+      score_harness_failures.c.scoring_profile_id,
+      score_harness_failures.c.scoring_profile_version)
 Index("ix_dr_dspy_projection_generation",
       prediction_projection.c.generation_run_id)
 Index("ix_dr_dspy_projection_score", prediction_projection.c.score_attempt_id)
@@ -585,6 +652,7 @@ v1_tables: tuple[Table, ...] = (
     generation_runs,
     node_attempts,
     score_attempts,
+    score_harness_failures,
     prediction_projection,
     batch_submit_operations,
     batch_submit_items,
@@ -602,6 +670,7 @@ __all__ = [
     "PREDICTION_PROJECTION_TABLE",
     "PREDICTION_SPECS_TABLE",
     "SCORE_ATTEMPTS_TABLE",
+    "SCORE_HARNESS_FAILURES_TABLE",
     "THROTTLE_BACKOFF_TABLE",
     "V1_TABLE_NAMES",
     "batch_submit_items",
@@ -613,6 +682,7 @@ __all__ = [
     "prediction_projection",
     "prediction_specs",
     "score_attempts",
+    "score_harness_failures",
     "throttle_backoff",
     "v1_tables",
 ]

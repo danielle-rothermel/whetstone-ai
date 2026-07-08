@@ -65,7 +65,7 @@ def test_score_one_wires_scoring_workflow_runner(
     )
     monkeypatch.setattr(
         worker,
-        "run_score_generation_workflow_once",
+        "run_score_submission_workflow_once",
         run_once,
     )
     monkeypatch.setattr(worker, "destroy_dbos_runtime", destroy_runtime)
@@ -323,7 +323,7 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
         "create_engine",
         lambda database_url: FakeEngine(),
     )
-    monkeypatch.setattr(worker, "rescore_generation_runs", fake_rescore)
+    monkeypatch.setattr(worker, "rescore_submission_runs", fake_rescore)
     monkeypatch.setattr(worker, "destroy_dbos_runtime", fake_destroy)
 
     result = CliRunner().invoke(
@@ -334,7 +334,7 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
             "postgresql://app/db",
             "--experiment-name",
             "exp",
-            "--generation-status",
+            "--producer-status",
             "success",
             "--max-in-flight",
             "30",
@@ -358,13 +358,13 @@ def test_rescore_rejects_invalid_generation_status() -> None:
             "rescore",
             "--experiment-name",
             "exp",
-            "--generation-status",
+            "--producer-status",
             "not-a-status",
         ],
     )
 
     assert result.exit_code != 0
-    assert "generation-status must be one of" in result.output
+    assert "producer-status must be one of" in result.output
 
 
 def test_backfill_v0_encdec_dry_run_calls_backfill_helper(

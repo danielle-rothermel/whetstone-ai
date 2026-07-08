@@ -281,7 +281,7 @@ Extracted code gets AST/code metrics when parsing succeeds; raw text metrics + p
 
 Terminal and node-output metrics use original payloads converted to text at platform boundary; extraction metrics use parser result. Non-string payloads go through recordability boundary and canonical JSON.
 
-`GeneratedCodeOutcome` on primitive HumanEval score results supports later score-attempt persistence of pass/fail/extraction/no-top-level-function reasons.
+`SubmissionOutcome` on primitive HumanEval score results supports later score-attempt persistence of pass/fail/extraction/no-top-level-function reasons.
 
 Metrics payloads enforce domain-tier stage-count and byte caps at record validation time.
 
@@ -359,7 +359,7 @@ Default unit suite covers pure graph orchestration, record conversion, idempoten
 - Fairness vs execution — submit/enqueue order only
 - Throttle table — intentional app-owned coordination
 - Append-only vs mutable batch audit — as designed
-- Pure/domain boundary — `recordable_text` at recordability boundary; platform reuses `domain_score.raw_generation` for terminal metrics
+- Pure/domain boundary — `recordable_text` at recordability boundary; platform reuses `domain_score.raw_submission` for terminal metrics
 - Dataset defaults — centralized in `records/hashing.py`
 - Throttle clear failure swallowing — preserves generation outcome
 

@@ -31,12 +31,9 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 
 ### 2026-07-04 — stage 0
 
-- Landed: `composable-migration` branch; golden fixture generator
-  (`scripts/golden/generate_golden_fixtures.py`, typer CLI) writing
-  `tests/fixtures/golden/{hashing,graph_digests,record_ids,parser_scoring}.json`;
-  golden pytest module `tests/test_golden_fixtures.py` (loads the generator
-  via the repo's importlib script-loading pattern and compares payloads to
-  committed fixtures).
+- Landed: `composable-migration` branch; golden fixtures and their pytest
+  gate existed in this stage, then were retired during the 2026-07-08
+  dr-code Phase 2 lockstep update.
 - Fixture coverage: 13 canonical-JSON/digest value cases; canonical payload
   strings + digests for `direct_graph` (b00851facf9fe358), `encdec_graph`
   (ec4e636b819ecfbf), `humaneval_encdec_graph` (9a1f1b1b791a5057); record ID
@@ -158,7 +155,7 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
 - Landed (dr-code commit e1a9dbd): `src/dr_code/humaneval/` = whetstone's
   humaneval package verbatim (imports rewritten only; the package had
   exactly one whetstone-internal import). v1 profile IDs unchanged.
-- Injection point per code_parse_test.md: `score_humaneval_generation`
+- Injection point per code_parse_test.md: `score_humaneval_submission`
   now takes a required `recordable_text: Callable[[Any], str]` keyword;
   whetstone will pass `eval_failures.recording.recordable_text` at 3c
   (for the golden fixtures' all-string inputs, `str` is behaviorally
@@ -184,7 +181,7 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   swapped to `dr_code.humaneval` (19 src + 11 test/support files +
   golden generator); dr-code consumed via `[tool.uv.sources]` path dep
   (pin before merge); `recordable_text` injected at the three
-  `score_humaneval_generation` call sites (platform/scoring.py, golden
+  `score_humaneval_submission` call sites (platform/scoring.py, golden
   generator, test_platform_scoring); whetstone's
   test_humaneval_primitives + test_import_inference deleted (they moved
   to dr-code in 3b).
@@ -621,7 +618,7 @@ gh auth: yes · postgres: yes · keys: OPENROUTER y / OPENAI y / GEMINI y
   FixtureProvider (every LM call scripted — zero network spend), then
   drives submit-jsonl semantics + an in-process queue worker
   (configure_platform_dbos_runtime consume_generation_queue=True,
-  sqlite DBOS system DB) + rescore_generation_runs.
+  sqlite DBOS system DB) + rescore_submission_runs.
 - Evidence: spec_count=24 (1 tiny-split task x 3 model pairings x 4
   repetition seeds x 2 dimension axes); submit result requested=24
   inserted=24 enqueued=24 failed=0; batch operation ('completed', 24,

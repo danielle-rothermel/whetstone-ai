@@ -7,12 +7,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pandas as pd
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
+    EvaluationCaseStatus,
+    SubmissionOutcome,
 )
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
-from dr_code.humaneval.task import EvaluationCaseStatus
 from dr_graph import NodeOutcome, NodeOutput, resolve_node_inputs
 from dr_providers import PromptMessage
 from sqlalchemy import Select, and_, select
@@ -485,18 +485,13 @@ def build_debug_metadata(
                 "dataset_split": score_attempt.dataset_split,
                 "status": score_attempt.status.value,
                 "score": score_attempt.score,
-                "generated_code_outcome": (
-                    score_attempt.generated_code_outcome.value
-                    if score_attempt.generated_code_outcome is not None
-                    else None
-                ),
-                "extracted_code": _serialize_optional(
-                    score_attempt.extracted_code
+                "submission_outcome": score_attempt.submission_outcome.value,
+                "extracted_submission": _serialize_optional(
+                    score_attempt.extracted_submission
                 ),
                 "metrics": _serialize_optional(score_attempt.metrics),
                 "test_summary": test_summary,
                 "per_test_results": per_test_json,
-                "failure": _serialize_optional(score_attempt.failure),
                 "started_at": score_attempt.started_at.isoformat(),
                 "completed_at": score_attempt.completed_at.isoformat(),
             }
@@ -512,6 +507,6 @@ def is_passing_run(bundle: RunBundle) -> bool:
         return False
     if score_attempt.status is not ScoreAttemptStatus.SUCCESS:
         return False
-    if score_attempt.generated_code_outcome is GeneratedCodeOutcome.PASSED:
+    if score_attempt.submission_outcome is SubmissionOutcome.PASSED:
         return True
     return score_attempt.score is not None and score_attempt.score == 1.0

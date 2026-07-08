@@ -52,7 +52,7 @@ uv run pytest tests/test_platform_scoring.py tests/test_platform_worker_cli.py \
 ```bash
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
+  --producer-status success \
   --max-in-flight 200 \
   --progress-interval 5
 ```
@@ -70,15 +70,15 @@ uv run python -m dr_dspy.platform.worker rescore \
 Live `rescore` on `encdec-budget-full-v0` failed mid-batch with:
 
 ```text
-CheckViolation: ck_dr_dspy_score_attempts_generated_code_outcome
-generated_code_outcome = evaluation_incomplete
+CheckViolation: ck_dr_dspy_score_attempts_submission_outcome
+submission_outcome = evaluation_incomplete
 ```
 
 The Python enum and live `schema.py` already allowed `evaluation_incomplete` (partial HumanEval coverage — score 0, not an error row), but the applied Alembic revision `20260629_0001` omitted it from the Postgres check constraint. A secondary `DBOSException: System database accessed before DBOS was launched` appeared while DBOS tried to record the failed workflow — treat that as fallout from the insert failure, not the root cause.
 
 ### Fix
 
-Migration [`20260630_0006`](../src/dr_dspy/db/migrations/versions/20260630_0006_score_attempt_evaluation_incomplete_outcome.py) widens `ck_dr_dspy_score_attempts_generated_code_outcome` to include `evaluation_incomplete`.
+Migration [`20260630_0006`](../src/dr_dspy/db/migrations/versions/20260630_0006_score_attempt_evaluation_incomplete_outcome.py) widens `ck_dr_dspy_score_attempts_submission_outcome` to include `evaluation_incomplete`.
 
 Progress heartbeats on `backfill-v0-encdec` and `rescore` now include **`total_candidates`** alongside **`selected`** (e.g. `selected=2 total_candidates=52593`).
 
@@ -108,12 +108,12 @@ uv run pytest tests/test_db_migrations.py tests/test_platform_progress_log.py \
 ```bash
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
+  --producer-status success \
   --max-in-flight 200 \
   --progress-interval 5
 ```
 
-Use `--generation-status success` only for v0 backfill pass-rate work; many `partial` v0 rows lack scorable terminal output.
+Use `--producer-status success` only for v0 backfill pass-rate work; many `partial` v0 rows lack scorable terminal output.
 
 ---
 
@@ -160,8 +160,8 @@ uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
 # Rescore dry-run smoke
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
-  --generation-status partial \
+  --producer-status success \
+  --producer-status partial \
   --limit 50 --max-in-flight 10 --dry-run
 ```
 
@@ -176,14 +176,14 @@ uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
 # Per-experiment rescore (explicit in-flight cap)
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
-  --generation-status partial \
+  --producer-status success \
+  --producer-status partial \
   --max-in-flight 30
 
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-smoke \
-  --generation-status success \
-  --generation-status partial \
+  --producer-status success \
+  --producer-status partial \
   --max-in-flight 30
 ```
 
@@ -253,8 +253,8 @@ uv run python -m dr_dspy.platform.worker backfill-v0-encdec \
 ```bash
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name v0_encdec_backfill_smoke_20260630_r2 \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 ```
 
 | Metric | Value |
@@ -288,13 +288,13 @@ ORDER BY experiment_name;
 # Per-experiment rescore under humaneval@v1
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-smoke \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 ```
 
 ---
@@ -463,8 +463,8 @@ All 10 selected rows had `generation_status=generated` (scoreable). Ordering `ge
 ```bash
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name v0_encdec_backfill_smoke_20260630 \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 ```
 
 | Metric | Value |
@@ -508,13 +508,13 @@ ORDER BY experiment_name;
 # Per-experiment rescore under humaneval@v1
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-budget-full-v0 \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name encdec-smoke \
-  --generation-status success \
-  --generation-status partial
+  --producer-status success \
+  --producer-status partial
 ```
 
 ---
@@ -565,7 +565,7 @@ uv run python -m dr_dspy.platform.worker worker --worker-concurrency 30
 
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name humaneval_encdec_smoke_v1 \
-  --generation-status success
+  --producer-status success
 # → scheduled_count: 16, failed_count: 0 (~59s, clean DBOS shutdown)
 ```
 
@@ -701,7 +701,7 @@ uv run python -m dr_dspy.platform.worker worker --worker-concurrency 30
 # Scoring (attempted)
 uv run python -m dr_dspy.platform.worker rescore \
   --experiment-name humaneval_encdec_smoke_v1 \
-  --generation-status success
+  --producer-status success
 # → failed (DBOS conflict — see findings)
 
 uv run python -m dr_dspy.platform.worker score-one \
@@ -747,7 +747,7 @@ These model strings are valid OpenRouter-style slugs but **not** valid on the di
 
 | Step | Outcome |
 |------|---------|
-| `rescore --generation-status success` | **Failed** — `DBOSException: System database accessed before DBOS was launched` (likely conflict with concurrent DBOS recovery of in-flight generation workflows) |
+| `rescore --producer-status success` | **Failed** — `DBOSException: System database accessed before DBOS was launched` (likely conflict with concurrent DBOS recovery of in-flight generation workflows) |
 | `score-one` (single run) | Workflow completed; **8** score attempts persisted (DBOS auto-recovered remaining success workflows on launch) |
 | Score attempt status | **8 / 8 `error`** (permanent) |
 
