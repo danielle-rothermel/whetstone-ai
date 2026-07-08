@@ -41,8 +41,8 @@ dev = [
 # before this branch merges.
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f451eeba5fb4dc69e8a29464d67571c62a125cd6" }
-dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "d5b05b563eea5d025e990f96ac157f46d8548089" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "6b9405f5f89893bda9a7cf34ad29f4da9ec22a94" }
+dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "0ae3342d5da4d9be309a79b64305870f1e319472" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "9af2e35aee588a810395a265f8a179625b6cf491" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "8b098b02ca87111e69b8f727503184a2f0fbdea9" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "cfdf4496f1a5510d1788dba70f554300b39a3bca" }
 
