@@ -1,8 +1,8 @@
-"""DSPy-aware serialization handlers registered with dr-serialize.
+"""DSPy-aware serialization handlers for dr-serialize.
 
-``register_dspy_handlers`` runs at whetstone package import (see
-``whetstone/__init__.py``); the handlers recognize DSPy values when the
-``dspy`` package is installed and fall through otherwise.
+The handlers recognize DSPy values when the ``dspy`` package is installed and
+fall through otherwise. Install them by using ``dspy_serializer()`` or passing
+``DSPY_HANDLERS`` to a ``Serializer``.
 """
 
 from __future__ import annotations
@@ -10,14 +10,16 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from dr_serialize import (
+    ConversionContext,
     JsonableHandle,
+    JsonableHandler,
     JsonPath,
     SerializationError,
+    Serializer,
     ValueTransformError,
-    convert_value,
     detail_repr,
+    postgres_jsonb_limits,
     preview_repr,
-    register_handler,
 )
 
 
@@ -66,7 +68,7 @@ def _signature_summary(
 
 
 def jsonable_dspy_example(
-    x: Any, depth: int, path: JsonPath
+    x: Any, ctx: ConversionContext
 ) -> JsonableHandle:
     try:
         dspy = _dspy_module()
@@ -74,12 +76,12 @@ def jsonable_dspy_example(
         return False, None
     if isinstance(x, dspy.Example):
         try:
-            return True, convert_value(x.toDict(), depth + 1, path)
+            return True, ctx.convert(x.toDict())
         except SerializationError:
             raise
         except Exception as error:
             raise ExampleSerializationError(
-                path=path,
+                path=ctx.path,
                 underlying=error,
                 value_preview=preview_repr(x),
                 detail=detail_repr(x),
@@ -88,15 +90,14 @@ def jsonable_dspy_example(
 
 
 def jsonable_dspy_signature_type(
-    x: Any, depth: int, path: JsonPath
+    x: Any, ctx: ConversionContext
 ) -> JsonableHandle:
-    del depth
     if not isinstance(x, type):
         return False, None
     try:
         dspy = _dspy_module()
         if issubclass(x, dspy.Signature):
-            return True, _signature_summary(x, path)
+            return True, _signature_summary(x, ctx.path)
     except ImportError:
         pass
     except TypeError:
@@ -104,16 +105,15 @@ def jsonable_dspy_signature_type(
     return False, None
 
 
-def jsonable_dspy_lm(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
-    del depth, path
+def jsonable_dspy_lm(x: Any, ctx: ConversionContext) -> JsonableHandle:
+    del ctx
     try:
         dspy = _dspy_module()
     except ImportError:
         return False, None
     if isinstance(x, dspy.BaseLM):
-        # Lazy: package __init__ registers these handlers, and importing
-        # whetstone.lm there would break the graph/lm isolation contract
-        # (see tests/test_graph_imports.py).
+        # Lazy: importing whetstone.lm at module load would break the
+        # graph/lm isolation contract (see tests/test_graph_imports.py).
         from whetstone.lm.utils import sanitize_lm_kwargs
 
         return True, {
@@ -125,8 +125,17 @@ def jsonable_dspy_lm(x: Any, depth: int, path: JsonPath) -> JsonableHandle:
     return False, None
 
 
-def register_dspy_handlers() -> None:
-    """Idempotently register whetstone's DSPy handlers with dr-serialize."""
-    register_handler(jsonable_dspy_example)
-    register_handler(jsonable_dspy_signature_type)
-    register_handler(jsonable_dspy_lm)
+DSPY_HANDLERS: tuple[JsonableHandler, ...] = (
+    jsonable_dspy_example,
+    jsonable_dspy_signature_type,
+    jsonable_dspy_lm,
+)
+
+
+def dspy_serializer(max_bytes: int | None = None) -> Serializer:
+    limits = (
+        postgres_jsonb_limits()
+        if max_bytes is None
+        else postgres_jsonb_limits(max_bytes)
+    )
+    return Serializer(limits=limits, handlers=DSPY_HANDLERS)

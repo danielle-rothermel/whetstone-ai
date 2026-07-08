@@ -17,10 +17,9 @@ if TYPE_CHECKING:
 from dr_serialize import (
     POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
     SerializationError,
-    postgres_jsonb_limits,
-    to_jsonable,
 )
 
+from whetstone.dspy_serialization import dspy_serializer
 from whetstone.eval_failures.exceptions import (
     EvalFailureError,
     RecordingFailureError,
@@ -34,7 +33,7 @@ def ensure_recordable(
 ) -> Any:
     """Shared path for all storable JSON/JSONB values."""
     try:
-        return to_jsonable(value, limits=postgres_jsonb_limits(max_bytes))
+        return dspy_serializer(max_bytes).to_jsonable(value)
     except SerializationError as exc:
         raise RecordingFailureError(str(exc), underlying=exc) from exc
 

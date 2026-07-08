@@ -1,7 +1,7 @@
 """Contract tests for whetstone's DSPy serialization handlers.
 
 The generic engine tests live in the dr-serialize repo; these cover the
-app-side handlers registered at whetstone package import.
+app-side handlers exported for whetstone serializer instances.
 """
 
 from __future__ import annotations
@@ -9,11 +9,6 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from dr_serialize import (
-    postgres_jsonb_limits,
-    registered_handlers,
-    to_jsonable,
-)
 
 import dspy
 import whetstone.dspy_serialization as dspy_serialization
@@ -24,11 +19,13 @@ from tests.serialization_support import (
     stub_lm,
 )
 from whetstone.dspy_serialization import (
+    DSPY_HANDLERS,
     ExampleSerializationError,
     SignatureSummaryError,
+    dspy_serializer,
 )
 
-DEFAULT_LIMITS = postgres_jsonb_limits()
+DEFAULT_SERIALIZER = dspy_serializer()
 
 
 def assert_diagnostics_shape(exc: Any) -> None:
@@ -41,17 +38,12 @@ def assert_diagnostics_shape(exc: Any) -> None:
     }
 
 
-def test_handlers_registered_at_package_import() -> None:
-    handlers = registered_handlers()
-    assert dspy_serialization.jsonable_dspy_example in handlers
-    assert dspy_serialization.jsonable_dspy_signature_type in handlers
-    assert dspy_serialization.jsonable_dspy_lm in handlers
-
-
-def test_repeated_registration_is_idempotent() -> None:
-    before = registered_handlers()
-    dspy_serialization.register_dspy_handlers()
-    assert registered_handlers() == before
+def test_dspy_handlers_exported() -> None:
+    assert DSPY_HANDLERS == (
+        dspy_serialization.jsonable_dspy_example,
+        dspy_serialization.jsonable_dspy_signature_type,
+        dspy_serialization.jsonable_dspy_lm,
+    )
 
 
 def test_dspy_example() -> None:
@@ -95,7 +87,7 @@ def test_example_serialization_error(
 
     monkeypatch.setattr(dspy.Example, "toDict", boom)
     with pytest.raises(ExampleSerializationError) as exc_info:
-        to_jsonable(example, limits=DEFAULT_LIMITS)
+        DEFAULT_SERIALIZER.to_jsonable(example)
     assert_diagnostics_shape(exc_info.value)
 
 
@@ -126,5 +118,5 @@ def test_signature_summary_error(
         dspy_serialization, "_signature_summary", intercept
     )
     with pytest.raises(SignatureSummaryError) as exc_info:
-        to_jsonable(QASig, limits=DEFAULT_LIMITS)
+        DEFAULT_SERIALIZER.to_jsonable(QASig)
     assert_diagnostics_shape(exc_info.value)
