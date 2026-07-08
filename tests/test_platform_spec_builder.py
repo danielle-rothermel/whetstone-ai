@@ -254,11 +254,11 @@ def test_humaneval_encdec_config_builds_target_spec() -> None:
         "encoder.description"
     )
     assert (
-        encoder.config.metadata["user_prompt_template"]
+        encoder.config.parameters["user_prompt_template"]
         == HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE
     )
     assert (
-        decoder.config.metadata["user_prompt_template"]
+        decoder.config.parameters["user_prompt_template"]
         == HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE
     )
     assert spec.dimensions.values["compression_target"] == 0.5

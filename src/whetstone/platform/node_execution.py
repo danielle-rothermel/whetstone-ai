@@ -30,7 +30,13 @@ from whetstone.lm.boundary import (
     translate_provider_failure,
 )
 from whetstone.node_ops import LLM_CALL_OP
-from whetstone.platform.prompts import build_node_messages, node_prompt_spec
+from whetstone.platform.prompts import (
+    PROVIDER_CONFIG_ID_KEY,
+    SYSTEM_PROMPT_KEY,
+    USER_PROMPT_TEMPLATE_KEY,
+    build_node_messages,
+    node_prompt_spec,
+)
 from whetstone.records import (
     FailureMetadataPayload,
     NodeAttemptStatus,
@@ -44,6 +50,13 @@ from whetstone.records import (
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 120.0
 NODE_STEP_STARTED_AT_METADATA_KEY = "node_step_started_at"
 NODE_STEP_COMPLETED_AT_METADATA_KEY = "node_step_completed_at"
+LLM_CONFIG_ONLY_PARAMETER_KEYS: frozenset[str] = frozenset(
+    {
+        USER_PROMPT_TEMPLATE_KEY,
+        SYSTEM_PROMPT_KEY,
+        PROVIDER_CONFIG_ID_KEY,
+    }
+)
 
 
 class NodeStepResult(BaseModel):
@@ -369,9 +382,14 @@ def merged_node_parameters(
     provider_ref: ProviderConfigRef,
     node: NodeSpec,
 ) -> dict[str, Any]:
+    node_request_parameters = {
+        key: value
+        for key, value in node.config.parameters.items()
+        if key not in LLM_CONFIG_ONLY_PARAMETER_KEYS
+    }
     return {
         **provider_ref.parameters,
-        **node.config.parameters,
+        **node_request_parameters,
     }
 
 

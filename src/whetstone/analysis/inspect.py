@@ -276,7 +276,7 @@ def reconstruct_prompts(
         encoder_node = graph.node(ENCODER_NODE_ID)
         encoder_inputs = resolve_node_inputs(
             node=encoder_node,
-            task_inputs=task_inputs,
+            inputs=task_inputs,
             outcomes={},
             graph=graph,
         )
@@ -303,7 +303,7 @@ def reconstruct_prompts(
             )
             decoder_inputs = resolve_node_inputs(
                 node=decoder_node,
-                task_inputs=task_inputs,
+                inputs=task_inputs,
                 outcomes={ENCODER_NODE_ID: upstream},
                 graph=graph,
             )
