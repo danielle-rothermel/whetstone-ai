@@ -1,7 +1,7 @@
 """Zero-spend end-to-end smoke for the composable migration.
 
 Builds specs from an experiment config, routes every LM call through
-dr-providers' ``FixtureProvider`` (no network, no spend), then drives
+dr-providers' ``ScriptedProvider`` (no network, no spend), then drives
 the real platform path — ``submit-jsonl`` semantics, an in-process
 queue worker, and ``rescore`` — against a scratch database, and prints
 the append-only outcome/score evidence.
@@ -25,7 +25,7 @@ from typing import Annotated
 
 import typer
 from dr_platform import await_operation, destroy_dbos_runtime
-from dr_providers import FixtureOutcome, FixtureProvider, Provider
+from dr_providers import Provider, ScriptedOutcome, ScriptedProvider
 from sqlalchemy import create_engine, text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -46,7 +46,7 @@ APP = typer.Typer(add_completion=False)
 
 
 def _fixture_provider() -> Provider:
-    return FixtureProvider([FixtureOutcome(text=FIXTURE_GENERATION)])
+    return ScriptedProvider([ScriptedOutcome(text=FIXTURE_GENERATION)])
 
 
 def _migrate(database_url: str) -> None:
@@ -107,7 +107,7 @@ def main(
     write_prediction_specs_jsonl(specs, specs_file)
     typer.echo(f"      spec_count={len(specs)} experiment={experiment_name}")
 
-    typer.echo("[3/6] routing all LM calls through FixtureProvider")
+    typer.echo("[3/6] routing all LM calls through ScriptedProvider")
     # Deliberate module-attribute patch: the provider seam for the
     # zero-spend smoke.
     node_execution.default_http_provider = _fixture_provider  # ty: ignore[invalid-assignment]

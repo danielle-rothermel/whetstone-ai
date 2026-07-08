@@ -107,17 +107,17 @@ def test_node_step_result_graph_output_returns_output_on_success() -> None:
     assert result.graph_output().values == {"code": "def f(): pass"}
 
 
-def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
-    """Acceptance: full node execution against FixtureProvider, no network.
+def test_execute_lm_node_end_to_end_with_scripted_provider() -> None:
+    """Acceptance: full node execution against ScriptedProvider, no network.
 
     Exercises spec → runtime config → LlmRequest (with idempotency key)
-    → FixtureProvider.complete → ProviderResult → NodeStepResult.
+    → ScriptedProvider.complete → ProviderResult → NodeStepResult.
     """
     from dr_graph import GraphSpec
     from dr_providers import (
         CostInfo,
-        FixtureOutcome,
-        FixtureProvider,
+        ScriptedOutcome,
+        ScriptedProvider,
         TokenUsage,
     )
 
@@ -126,9 +126,9 @@ def test_execute_lm_node_end_to_end_with_fixture_provider() -> None:
 
     node = _node("direct", bindings={"prompt": "task.prompt"})
     spec = _spec(GraphSpec(nodes=(node,), terminal_node_id="direct"))
-    provider = FixtureProvider(
+    provider = ScriptedProvider(
         [
-            FixtureOutcome(
+            ScriptedOutcome(
                 text="def add(a, b):\n    return a + b\n",
                 usage=TokenUsage(total_tokens=7),
                 cost=CostInfo(total_cost=0.003),
