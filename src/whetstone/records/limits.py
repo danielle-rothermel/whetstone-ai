@@ -5,9 +5,9 @@ from typing import Any
 from dr_serialize import (
     POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
     SerializationError,
-    postgres_jsonb_limits,
-    to_jsonable,
 )
+
+from whetstone.dspy_serialization import dspy_serializer
 
 # Tier-1 catastrophe guards — aligned with serialization ceiling.
 DOMAIN_PAYLOAD_MAX_BYTES = POSTGRES_JSONB_PAYLOAD_MAX_BYTES  # ~768 MiB
@@ -29,6 +29,6 @@ def validate_payload_size(
     label: str,
 ) -> None:
     try:
-        to_jsonable(value, limits=postgres_jsonb_limits(max_bytes))
+        dspy_serializer(max_bytes).to_jsonable(value)
     except SerializationError as exc:
         raise ValueError(f"{label}: {exc}") from exc

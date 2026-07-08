@@ -41,10 +41,10 @@ dev = [
 # before this branch merges.
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "f451eeba5fb4dc69e8a29464d67571c62a125cd6" }
-dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "30de90c57103e6b3139a2e5b87b809ada7ae1d45" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "f71a2ee34ef3566dbf965f9b7f615cad60711c4e" }
+dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", rev = "58b55648b99b3ce387e83885957ee01e18a2358a" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "dd679cfb9ceffc8ec16a7309ba91189d9a210608" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "8b098b02ca87111e69b8f727503184a2f0fbdea9" }
-dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "19abbc707820efde16b599801a5eba1dd6953cbf" }
+dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", rev = "a9c21b30addc6952511f044821285570ec9821d2" }
 
 [build-system]
 requires = ["hatchling"]

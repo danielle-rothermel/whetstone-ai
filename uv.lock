@@ -511,7 +511,7 @@ dependencies = [
 [[package]]
 name = "dr-graph"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-graph?rev=30de90c57103e6b3139a2e5b87b809ada7ae1d45#30de90c57103e6b3139a2e5b87b809ada7ae1d45" }
+source = { git = "https://github.com/danielle-rothermel/dr-graph?rev=58b55648b99b3ce387e83885957ee01e18a2358a#58b55648b99b3ce387e83885957ee01e18a2358a" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "pydantic" },
@@ -520,7 +520,7 @@ dependencies = [
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=f71a2ee34ef3566dbf965f9b7f615cad60711c4e#f71a2ee34ef3566dbf965f9b7f615cad60711c4e" }
+source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=dd679cfb9ceffc8ec16a7309ba91189d9a210608#dd679cfb9ceffc8ec16a7309ba91189d9a210608" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos" },
@@ -543,7 +543,7 @@ dependencies = [
 [[package]]
 name = "dr-serialize"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-serialize?rev=19abbc707820efde16b599801a5eba1dd6953cbf#19abbc707820efde16b599801a5eba1dd6953cbf" }
+source = { git = "https://github.com/danielle-rothermel/dr-serialize?rev=a9c21b30addc6952511f044821285570ec9821d2#a9c21b30addc6952511f044821285570ec9821d2" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -3014,10 +3014,10 @@ requires-dist = [
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=f451eeba5fb4dc69e8a29464d67571c62a125cd6" },
-    { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?rev=30de90c57103e6b3139a2e5b87b809ada7ae1d45" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=f71a2ee34ef3566dbf965f9b7f615cad60711c4e" },
+    { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?rev=58b55648b99b3ce387e83885957ee01e18a2358a" },
+    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=dd679cfb9ceffc8ec16a7309ba91189d9a210608" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=8b098b02ca87111e69b8f727503184a2f0fbdea9" },
-    { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?rev=19abbc707820efde16b599801a5eba1dd6953cbf" },
+    { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?rev=a9c21b30addc6952511f044821285570ec9821d2" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
     { name = "matplotlib", specifier = ">=3.11.0" },
     { name = "pandas", specifier = ">=3.0.3" },

@@ -10,10 +10,10 @@ import json
 from typing import Any
 
 import pydantic
-from dr_serialize import postgres_jsonb_limits, to_jsonable
 
 import dspy
 from dspy.utils.dummies import DummyLM
+from whetstone.dspy_serialization import dspy_serializer
 
 _JSON_TYPES = (type(None), bool, int, float, str, list, dict)
 
@@ -43,7 +43,7 @@ def assert_only_json_types(value: Any) -> None:
 
 
 def assert_to_jsonable(value: Any) -> Any:
-    result = to_jsonable(value, limits=postgres_jsonb_limits())
+    result = dspy_serializer().to_jsonable(value)
     assert_json_dumps(result)
     assert_only_json_types(result)
     return result
