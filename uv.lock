@@ -497,7 +497,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?rev=927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8#927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?branch=main#a7e81d0e8b9b8e2b27ecd60215bb2d9a5dda6ce6" }
 dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
@@ -508,7 +508,7 @@ dependencies = [
 [[package]]
 name = "dr-graph"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-graph?branch=main#e4a123ed43a0af32b53bc539fcaa8a9e41355749" }
+source = { git = "https://github.com/danielle-rothermel/dr-graph?branch=main#cdc08e7779454bf6c7ba92fbfa63988254427423" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "pydantic" },
@@ -540,7 +540,7 @@ dependencies = [
 [[package]]
 name = "dr-serialize"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-serialize?rev=cfdf4496f1a5510d1788dba70f554300b39a3bca#cfdf4496f1a5510d1788dba70f554300b39a3bca" }
+source = { git = "https://github.com/danielle-rothermel/dr-serialize?branch=main#a3b3184e07a10bf1b83bb61a66247cb3e9a2acf6" }
 dependencies = [
     { name = "pydantic" },
 ]
@@ -3010,7 +3010,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=927422dfe2a9d0d33ae8f76144e708cfb2b6a1b8" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=drprov-v02-migration" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },
