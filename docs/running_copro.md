@@ -47,7 +47,7 @@ The loop follows the DSPy COPRO pattern without importing DSPy at runtime:
 
 ```text
 scripts/optimization/run_copro_encdec.py   # Typer CLI
-src/dr_dspy/optimization/copro.py          # models, loop, evaluation, artifacts
+src/whetstone/optimization/copro.py        # models, loop, evaluation, artifacts
 tests/test_optimization_copro.py           # unit tests
 ```
 
@@ -211,7 +211,7 @@ Submit to the DBOS generation queue instead of running sync. Start a worker in
 another terminal first:
 
 ```bash
-uv run python -m dr_dspy.platform.worker worker --worker-concurrency 4
+uv run python -m whetstone.platform.worker worker --worker-concurrency 4
 ```
 
 Then run the optimizer:
