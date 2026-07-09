@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-07-08 - Phase 2 Lockstep Scoring Schema And Submission Vocabulary
+
+- Pinned `dr-code` to the Phase 2 contract SHA and moved production scoring
+  imports to the curated `dr_code.humaneval` root.
+- Split completed evaluations from harness failures: `score_attempts` stores
+  completed scores with `submission_outcome`; `score_harness_failures` stores
+  harness trouble with `failure_class` and cause detail.
+- Renamed scoped scoring vocabulary from generation/code outcome to submission
+  outcome and added `terminal_submission_text` at the generation persistence
+  boundary.
+- Collapsed the Alembic chain to a pristine `20260708_0001` initial schema and
+  added `scripts/db/archive_current_v1_tables.py` for one-time archival of the
+  prior v1 tables.
+- Removed the golden fixture mechanism.
+
 ## 2026-07-08 - Phase 2 Cutover And Docs Sweep
 
 - Removed the `docs/composable/` migration narrative, stale DBOS flow export,

@@ -27,6 +27,7 @@ from whetstone.records import (
     ProviderConfigRef,
     ResponseMetadataPayload,
     ScoreAttemptRecord,
+    ScoreHarnessFailureRecord,
     UsageCostPayload,
     stable_node_attempt_id,
 )
@@ -179,6 +180,10 @@ def generation_run_record_from_result(
             execution_order=result.execution_order,
             terminal_node_id=result.terminal_node_id,
             terminal_output=result.terminal_output,
+            terminal_submission_text=terminal_submission_text(
+                result.terminal_output,
+                status=status,
+            ),
             terminal_error=_terminal_error_payload(result.terminal_error),
         ),
         started_at=started_at,
@@ -255,7 +260,10 @@ _NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
     {"provider_config", "output", "failure"}
 )
 _SCORE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
-    {"extracted_code", "metrics", "failure"}
+    {"metrics"}
+)
+_SCORE_HARNESS_FAILURE_NULLABLE_JSONB_COLUMNS = frozenset(
+    {"extracted_submission"}
 )
 
 
@@ -288,6 +296,26 @@ def persist_score_attempt(
     )
     return ScoreAttemptInsertResult(
         score_attempt_id=score_attempt.score_attempt_id,
+        status=status,
+    )
+
+
+def persist_score_harness_failure(
+    connection: Connection,
+    *,
+    harness_failure: ScoreHarnessFailureRecord,
+) -> ScoreAttemptInsertResult:
+    result = connection.execute(
+        idempotent_insert_score_harness_failure(harness_failure)
+    )
+    inserted_row = result.first()
+    status = (
+        ScoreAttemptInsertStatus.INSERTED
+        if inserted_row is not None
+        else ScoreAttemptInsertStatus.ALREADY_PRESENT
+    )
+    return ScoreAttemptInsertResult(
+        score_attempt_id=harness_failure.score_attempt_id,
         status=status,
     )
 
@@ -327,6 +355,41 @@ def idempotent_insert_score_attempt(record: ScoreAttemptRecord) -> Any:
         .on_conflict_do_nothing(index_elements=["score_attempt_id"])
         .returning(schema.score_attempts.c.score_attempt_id)
     )
+
+
+def idempotent_insert_score_harness_failure(
+    record: ScoreHarnessFailureRecord,
+) -> Any:
+    return (
+        insert(schema.score_harness_failures)
+        .values(
+            _postgres_insert_values(
+                io.score_harness_failure_row(record),
+                nullable_jsonb_columns=(
+                    _SCORE_HARNESS_FAILURE_NULLABLE_JSONB_COLUMNS
+                ),
+            )
+        )
+        .on_conflict_do_nothing(index_elements=["score_attempt_id"])
+        .returning(schema.score_harness_failures.c.score_attempt_id)
+    )
+
+
+def terminal_submission_text(
+    value: Any,
+    *,
+    status: GenerationRunStatus,
+) -> str:
+    if value is None and status not in {
+        GenerationRunStatus.SUCCESS,
+        GenerationRunStatus.PARTIAL,
+    }:
+        return ""
+    if not isinstance(value, str):
+        raise TypeError("terminal output must be a string submission")
+    if not value.strip():
+        raise ValueError("terminal output must be a non-empty submission")
+    return value
 
 
 def _terminal_error_payload(

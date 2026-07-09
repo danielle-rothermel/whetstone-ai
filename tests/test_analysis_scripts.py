@@ -28,7 +28,7 @@ def test_estimate_repeat_stability_handles_sparse_data() -> None:
                 "compression_target": 0.25,
                 "score_status": "success",
                 "score": 1.0,
-                "generated_code_outcome": "passed",
+                "submission_outcome": "passed",
             }
         ]
     )
@@ -47,7 +47,7 @@ def test_build_task_variation_summary_marks_useful_signal_task() -> None:
                 "compression_target": 0.25,
                 "score_status": "success",
                 "score": 1.0,
-                "generated_code_outcome": "passed",
+                "submission_outcome": "passed",
             },
             {
                 "task_id": "HumanEval/1",
@@ -55,7 +55,7 @@ def test_build_task_variation_summary_marks_useful_signal_task() -> None:
                 "compression_target": 0.5,
                 "score_status": "success",
                 "score": 0.0,
-                "generated_code_outcome": "tests_failed",
+                "submission_outcome": "tests_failed",
             },
             {
                 "task_id": "HumanEval/1",
@@ -63,7 +63,7 @@ def test_build_task_variation_summary_marks_useful_signal_task() -> None:
                 "compression_target": 0.75,
                 "score_status": "success",
                 "score": 0.0,
-                "generated_code_outcome": "tests_failed",
+                "submission_outcome": "tests_failed",
             },
         ]
     )
@@ -83,7 +83,7 @@ def test_build_compression_summary_aggregates_overall_rows() -> None:
                 "generation_status": "success",
                 "score_status": "success",
                 "score": 1.0,
-                "generated_code_outcome": "passed",
+                "submission_outcome": "passed",
                 "realized_compression_ratio": 0.2,
             },
             {
@@ -92,7 +92,7 @@ def test_build_compression_summary_aggregates_overall_rows() -> None:
                 "generation_status": "success",
                 "score_status": "success",
                 "score": 0.0,
-                "generated_code_outcome": "tests_failed",
+                "submission_outcome": "tests_failed",
                 "realized_compression_ratio": 0.3,
             },
         ]

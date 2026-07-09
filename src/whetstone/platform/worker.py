@@ -6,7 +6,7 @@ from typing import Annotated
 
 import typer
 from dbos import DBOS
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )
@@ -39,12 +39,12 @@ from whetstone.platform.queue_worker import (
 from whetstone.platform.rescoring import (
     DEFAULT_MAX_IN_FLIGHT,
     DEFAULT_RESCORE_CHUNK_SIZE,
-    parse_rescore_generation_statuses,
-    rescore_generation_runs,
+    parse_rescore_producer_statuses,
+    rescore_submission_runs,
 )
 from whetstone.platform.scoring_workflow import (
     platform_scoring_workflow_id,
-    run_score_generation_workflow_once,
+    run_score_submission_workflow_once,
 )
 from whetstone.platform.spec_builder import (
     DEFAULT_CONFIGS_ROOT,
@@ -217,7 +217,7 @@ def score_one(
         database_url_error_suffix="for platform scoring workflow",
     )
     try:
-        score_result = run_score_generation_workflow_once(
+        score_result = run_score_submission_workflow_once(
             database_url=config.database_url,
             generation_run_id=generation_run_id,
             score_attempt_index=score_attempt_index,
@@ -252,16 +252,16 @@ def rescore(
     generation_status: Annotated[
         list[str] | None,
         typer.Option(
-            "--generation-status",
+            "--producer-status",
             help=(
-                "Repeatable generation statuses to rescore. "
+                "Repeatable producer run statuses to rescore. "
                 "Defaults to success and partial."
             ),
         ),
     ] = None,
     generation_attempt_index: Annotated[
         int | None,
-        typer.Option("--generation-attempt-index", min=0),
+        typer.Option("--producer-attempt-index", min=0),
     ] = None,
     score_attempt_index: Annotated[
         int,
@@ -347,7 +347,7 @@ def rescore(
 ) -> None:
     load_env_file(env_file) if env_file is not None else load_env_file()
     try:
-        resolved_generation_statuses = parse_rescore_generation_statuses(
+        resolved_generation_statuses = parse_rescore_producer_statuses(
             generation_status
         )
     except ValueError as error:
@@ -373,7 +373,7 @@ def rescore(
             "rescore",
             interval_seconds=progress_interval,
         ) as progress:
-            execution = rescore_generation_runs(
+            execution = rescore_submission_runs(
                 engine,
                 database_url=resolved_database_url,
                 experiment_name=experiment_name,

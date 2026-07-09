@@ -105,6 +105,7 @@ def reshape_v0_direct_row(row: Mapping[str, Any]) -> V0ReshapeResult:
                 execution_order=("direct",),
                 terminal_node_id="direct",
                 terminal_output=terminal_output,
+                terminal_submission_text=terminal_output or "",
                 metadata={V0_SOURCE_METADATA_KEY: source_metadata},
             ),
             started_at=started_at,
@@ -154,6 +155,7 @@ def reshape_v0_direct_row(row: Mapping[str, Any]) -> V0ReshapeResult:
         summary=GenerationRunSummaryPayload(
             execution_order=("direct",),
             terminal_node_id="direct",
+            terminal_submission_text="",
             terminal_error=GenerationTerminalErrorPayload(
                 node_id="direct",
                 status=GenerationRunStatus.ERROR,
@@ -245,6 +247,7 @@ def reshape_v0_encdec_row(row: Mapping[str, Any]) -> V0ReshapeResult:
                 execution_order=("encoder", "decoder"),
                 terminal_node_id="decoder",
                 terminal_output=terminal_output,
+                terminal_submission_text=terminal_output or "",
                 metadata={
                     V0_SOURCE_METADATA_KEY: source_metadata,
                     "extraction_error": row.get("extraction_error"),
@@ -341,6 +344,7 @@ def reshape_v0_encdec_row(row: Mapping[str, Any]) -> V0ReshapeResult:
         summary=GenerationRunSummaryPayload(
             execution_order=execution_order,
             terminal_node_id=terminal_node_id,
+            terminal_submission_text="",
             terminal_error=summary_terminal_error,
             metadata={V0_SOURCE_METADATA_KEY: source_metadata},
         ),

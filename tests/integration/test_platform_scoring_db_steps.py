@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
+from dr_code.humaneval import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
-)
-from dr_code.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
@@ -28,10 +29,16 @@ from tests.support.platform_scoring_fixtures import (
 )
 from tests.support.postgres_fixtures import start_test_workflow
 from whetstone.platform.persistence import persist_score_attempt
-from whetstone.platform.scoring import score_generation_run
-from whetstone.records import stable_score_attempt_id
+from whetstone.platform.scoring import score_submission_run
+from whetstone.records import ScoreAttemptRecord, stable_score_attempt_id
 
 pytestmark = pytest.mark.integration
+
+
+def _completed_score_submission_run(**kwargs: Any) -> ScoreAttemptRecord:
+    record = score_submission_run(**kwargs)
+    assert isinstance(record, ScoreAttemptRecord)
+    return record
 
 
 def test_load_scoring_target_step_round_trips_through_dbos(
@@ -60,7 +67,7 @@ def test_load_scoring_target_step_round_trips_through_dbos(
     assert payload["node_attempts"] == []
 
 
-def test_persist_score_attempt_step_writes_rows_and_is_idempotent(
+def test_persist_score_result_step_writes_rows_and_is_idempotent(
     app_postgres_schema,
     reset_dbos,
 ) -> None:
@@ -70,7 +77,7 @@ def test_persist_score_attempt_step_writes_rows_and_is_idempotent(
         spec=spec,
         generation_run=run,
     )
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),
@@ -111,7 +118,7 @@ def test_score_attempt_profile_unique_constraint_rejects_duplicate_profile(
         spec=spec,
         generation_run=run,
     )
-    score = score_generation_run(
+    score = _completed_score_submission_run(
         spec=spec,
         generation_run=run,
         node_attempts=(),

@@ -27,7 +27,7 @@
   "generation_failure_metadata": {},
   "encoded_description": "subtract two numbers",
   "decoded_generation": "def subtract(a, b):\n    return a - b",
-  "raw_generation": "def subtract(a, b):\n    return a - b",
+  "raw_submission": "def subtract(a, b):\n    return a - b",
   "encoder_response_metadata": {"id": "enc-resp-1"},
   "decoder_response_metadata": {"id": "dec-resp-1"},
   "encoder_usage_metadata": {"total_tokens": 10},

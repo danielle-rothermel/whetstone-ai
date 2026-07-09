@@ -72,24 +72,7 @@ def _apply_v1_migrations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     migration_modules = (
-        "whetstone.db.migrations.versions.20260629_0001_v1_domain_schema",
-        "whetstone.db.migrations.versions.20260629_0002_throttle_backoff",
-        "whetstone.db.migrations.versions."
-        "20260629_0003_batch_submit_already_scheduled_count",
-        "whetstone.db.migrations.versions."
-        "20260629_0004_batch_submit_enqueuing_status",
-        "whetstone.db.migrations.versions."
-        "20260630_0001_append_only_outcome_triggers",
-        "whetstone.db.migrations.versions."
-        "20260630_0002_batch_submit_terminal_enqueue_accounting",
-        "whetstone.db.migrations.versions."
-        "20260630_0003_batch_submit_claiming_status",
-        "whetstone.db.migrations.versions."
-        "20260630_0004_batch_submit_remove_prepared_status",
-        "whetstone.db.migrations.versions."
-        "20260630_0005_score_attempt_dataset_axes",
-        "whetstone.db.migrations.versions."
-        "20260630_0006_score_attempt_evaluation_incomplete_outcome",
+        "whetstone.db.migrations.versions.20260708_0001_initial_schema",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)
@@ -131,7 +114,7 @@ def app_postgres_schema(
         with engine.begin() as connection:
             connection.execute(text(f"CREATE SCHEMA {schema_name}"))
             connection.execute(
-                text(f"SET search_path TO {schema_name}, public")
+                text(f"SET search_path TO {schema_name}")
             )
             _apply_v1_migrations(connection, monkeypatch)
         ensure_platform_schema(

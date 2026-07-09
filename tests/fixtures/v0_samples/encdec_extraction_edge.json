@@ -27,7 +27,7 @@
   "generation_failure_metadata": {},
   "encoded_description": "raise a to the b power",
   "decoded_generation": "```python\ndef power(a, b):\n    return a ** b\n```",
-  "raw_generation": "```python\ndef power(a, b):\n    return a ** b\n```",
+  "raw_submission": "```python\ndef power(a, b):\n    return a ** b\n```",
   "encoder_response_metadata": {"id": "enc-resp-edge"},
   "decoder_response_metadata": {"id": "dec-resp-edge"},
   "encoder_usage_metadata": {"total_tokens": 11},

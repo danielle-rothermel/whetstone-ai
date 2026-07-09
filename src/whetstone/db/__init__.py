@@ -9,6 +9,7 @@ from whetstone.db.schema import (
     PREDICTION_PROJECTION_TABLE,
     PREDICTION_SPECS_TABLE,
     SCORE_ATTEMPTS_TABLE,
+    SCORE_HARNESS_FAILURES_TABLE,
     THROTTLE_BACKOFF_TABLE,
     V1_TABLE_NAMES,
     batch_submit_items,
@@ -20,6 +21,7 @@ from whetstone.db.schema import (
     prediction_projection,
     prediction_specs,
     score_attempts,
+    score_harness_failures,
     throttle_backoff,
     v1_tables,
 )
@@ -33,6 +35,7 @@ __all__ = [
     "PREDICTION_PROJECTION_TABLE",
     "PREDICTION_SPECS_TABLE",
     "SCORE_ATTEMPTS_TABLE",
+    "SCORE_HARNESS_FAILURES_TABLE",
     "THROTTLE_BACKOFF_TABLE",
     "V1_TABLE_NAMES",
     "batch_submit_items",
@@ -44,6 +47,7 @@ __all__ = [
     "prediction_projection",
     "prediction_specs",
     "score_attempts",
+    "score_harness_failures",
     "throttle_backoff",
     "v1_tables",
 ]

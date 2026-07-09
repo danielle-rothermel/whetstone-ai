@@ -28,6 +28,7 @@ def test_schema_declares_append_only_outcome_tables() -> None:
         schema.GENERATION_RUNS_TABLE,
         schema.NODE_ATTEMPTS_TABLE,
         schema.SCORE_ATTEMPTS_TABLE,
+        schema.SCORE_HARNESS_FAILURES_TABLE,
     )
 
 
@@ -114,7 +115,7 @@ def test_schema_has_core_unique_constraints_and_checks() -> None:
         schema.node_attempts,
         CheckConstraint,
     )
-    assert "ck_dr_dspy_score_attempts_generated_code_outcome" in (
+    assert "ck_dr_dspy_score_attempts_submission_outcome" in (
         _constraint_names(schema.score_attempts, CheckConstraint)
     )
     assert "ck_dr_dspy_score_attempts_attempt_index" in _constraint_names(
@@ -237,7 +238,7 @@ def test_schema_has_indexes_for_common_reads() -> None:
         "ix_dr_dspy_node_attempts_node",
         "ix_dr_dspy_score_attempts_profile",
         "ix_dr_dspy_score_attempts_parser",
-        "ix_dr_dspy_score_attempts_generated_code_outcome",
+        "ix_dr_dspy_score_attempts_submission_outcome",
         "ix_dr_dspy_projection_score",
         "ix_dr_dspy_batch_items_fair_order",
         "ix_dr_dspy_throttle_backoff_blocked_until",

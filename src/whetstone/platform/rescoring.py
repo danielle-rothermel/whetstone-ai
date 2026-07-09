@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
     resolve_humaneval_scoring_profile,
@@ -22,10 +22,10 @@ from sqlalchemy.engine import Connection, Engine
 from whetstone.db import io
 from whetstone.eval_failures import failure_metadata_from_exception
 from whetstone.platform.scoring_workflow import (
-    ScheduledScoreGenerationWorkflow,
+    ScheduledScoreSubmissionWorkflow,
     await_scheduled_score_workflows,
     platform_scoring_workflow_id,
-    schedule_score_generation_workflow,
+    schedule_score_submission_workflow,
 )
 from whetstone.platform.scoring_workflow_state import (
     ScoringWorkflowPresence,
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
 DEFAULT_RESCORE_CHUNK_SIZE = 500
 DEFAULT_MAX_IN_FLIGHT = 100
-DEFAULT_RESCORE_GENERATION_STATUSES = (
+DEFAULT_RESCORE_SUBMISSION_STATUSES = (
     GenerationRunStatus.SUCCESS,
     GenerationRunStatus.PARTIAL,
 )
@@ -66,6 +66,7 @@ class RescoreGenerationCandidate(BaseModel):
     prediction_id: StrictStr
     fair_order_key: StrictStr
     generation_run_id: StrictStr
+    score_attempt_index: StrictInt
     existing_score_attempt_id: StrictStr | None = None
 
 
@@ -131,7 +132,7 @@ class ScheduleScoreWorkflow(Protocol):
         dataset_name: str,
         dataset_split: str,
         recover_orphans: bool = True,
-    ) -> ScheduledScoreGenerationWorkflow: ...
+    ) -> ScheduledScoreSubmissionWorkflow: ...
 
 
 def _await_oldest_handle(
@@ -208,13 +209,13 @@ def _await_remaining_handles(
     return slots_released
 
 
-def rescore_generation_runs(
+def rescore_submission_runs(
     engine: Engine,
     *,
     database_url: str,
     experiment_name: str,
     generation_statuses: Sequence[GenerationRunStatus] = (
-        DEFAULT_RESCORE_GENERATION_STATUSES
+        DEFAULT_RESCORE_SUBMISSION_STATUSES
     ),
     generation_attempt_index: int | None = None,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
@@ -228,7 +229,7 @@ def rescore_generation_runs(
     recover_orphans: bool = True,
     max_in_flight: int = DEFAULT_MAX_IN_FLIGHT,
     schedule_workflow: ScheduleScoreWorkflow = (
-        schedule_score_generation_workflow
+        schedule_score_submission_workflow
     ),
     await_workflows: Any = await_scheduled_score_workflows,
     progress: OperationProgress | None = None,
@@ -250,7 +251,7 @@ def rescore_generation_runs(
     slots_released = 0
     offset = 0
     with engine.begin() as connection:
-        total_candidates = count_rescore_generation_candidates(
+        total_candidates = count_rescore_submission_candidates(
             connection,
             experiment_name=experiment_name,
             generation_statuses=generation_statuses,
@@ -292,7 +293,7 @@ def rescore_generation_runs(
             chunk_size if limit is None else min(chunk_size, limit - offset)
         )
         with engine.begin() as connection:
-            candidates = load_rescore_generation_candidates(
+            candidates = load_rescore_submission_candidates(
                 connection,
                 experiment_name=experiment_name,
                 generation_statuses=generation_statuses,
@@ -422,7 +423,7 @@ def _rescore_count_metrics(
     }
 
 
-def count_rescore_generation_candidates(
+def count_rescore_submission_candidates(
     connection: Connection,
     *,
     experiment_name: str,
@@ -438,7 +439,7 @@ def count_rescore_generation_candidates(
 ) -> int:
     return int(
         connection.execute(
-            io.count_rescore_generation_candidates(
+            io.count_rescore_submission_candidates(
                 experiment_name=experiment_name,
                 generation_statuses=tuple(generation_statuses),
                 generation_attempt_index=generation_attempt_index,
@@ -454,7 +455,7 @@ def count_rescore_generation_candidates(
     )
 
 
-def load_rescore_generation_candidates(
+def load_rescore_submission_candidates(
     connection: Connection,
     *,
     experiment_name: str,
@@ -471,7 +472,7 @@ def load_rescore_generation_candidates(
     offset: int,
 ) -> tuple[RescoreGenerationCandidate, ...]:
     rows = connection.execute(
-        io.select_rescore_generation_candidates(
+        io.select_rescore_submission_candidates(
             experiment_name=experiment_name,
             generation_statuses=tuple(generation_statuses),
             generation_attempt_index=generation_attempt_index,
@@ -486,7 +487,7 @@ def load_rescore_generation_candidates(
             offset=offset,
         )
     ).mappings()
-    return tuple(rescore_generation_candidate_from_row(row) for row in rows)
+    return tuple(rescore_submission_candidate_from_row(row) for row in rows)
 
 
 def plan_or_schedule_rescore_item(
@@ -510,7 +511,7 @@ def plan_or_schedule_rescore_item(
         scoring_profile_version=scoring_profile_version,
         parser_profile_id=parser_profile_id,
         parser_version=parser_version,
-        attempt_index=score_attempt_index,
+        attempt_index=candidate.score_attempt_index,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
     )
@@ -539,7 +540,7 @@ def plan_or_schedule_rescore_item(
         scheduled = schedule_workflow(
             database_url=database_url,
             generation_run_id=candidate.generation_run_id,
-            score_attempt_index=score_attempt_index,
+            score_attempt_index=candidate.score_attempt_index,
             scoring_profile_id=scoring_profile_id,
             scoring_profile_version=scoring_profile_version,
             dataset_name=dataset_name,
@@ -702,20 +703,21 @@ def batch_rescore_result(
     )
 
 
-def rescore_generation_candidate_from_row(
+def rescore_submission_candidate_from_row(
     row: Any,
 ) -> RescoreGenerationCandidate:
     return RescoreGenerationCandidate(
         prediction_id=row["prediction_id"],
         fair_order_key=row["fair_order_key"],
         generation_run_id=row["generation_run_id"],
+        score_attempt_index=row["score_attempt_index"],
         existing_score_attempt_id=row["existing_score_attempt_id"],
     )
-def parse_rescore_generation_statuses(
+def parse_rescore_producer_statuses(
     values: Sequence[str] | None,
 ) -> tuple[GenerationRunStatus, ...]:
     if not values:
-        return DEFAULT_RESCORE_GENERATION_STATUSES
+        return DEFAULT_RESCORE_SUBMISSION_STATUSES
     resolved: list[GenerationRunStatus] = []
     for value in values:
         try:
@@ -723,7 +725,7 @@ def parse_rescore_generation_statuses(
         except ValueError as error:
             allowed = ", ".join(status.value for status in GenerationRunStatus)
             raise ValueError(
-                f"generation-status must be one of: {allowed}"
+                f"producer-status must be one of: {allowed}"
             ) from error
     return tuple(resolved)
 

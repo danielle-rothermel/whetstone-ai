@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from dr_code.humaneval.parsed_tests import HumanEvalTestCaseKind
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
-from dr_code.humaneval.task import EvaluationCaseStatus
+from dr_code.humaneval import (
+    EvaluationCaseStatus,
+    HumanEvalTestCaseKind,
+    SubmissionOutcome,
+)
 from dr_graph import graph_digest
 from dr_providers import EndpointKind, ProviderKind
 
@@ -22,7 +24,7 @@ from whetstone.analysis.sample_html import _code_block, render_sample_html
 from whetstone.platform.spec_builder import humaneval_encdec_graph
 from whetstone.records import (
     DimensionsPayload,
-    ExtractedCodePayload,
+    ExtractedSubmissionPayload,
     GenerationRunRecord,
     GenerationRunStatus,
     GenerationRunSummaryPayload,
@@ -156,6 +158,7 @@ def _encdec_bundle(
             execution_order=("encoder", "decoder"),
             terminal_node_id="decoder",
             terminal_output=decoder_code,
+            terminal_submission_text=decoder_code,
         ),
         started_at=NOW,
         completed_at=NOW,
@@ -210,10 +213,10 @@ def _encdec_bundle(
         dataset_name="humaneval",
         dataset_split="test",
         status=ScoreAttemptStatus.SUCCESS,
-        generated_code_outcome=GeneratedCodeOutcome.PASSED,
+        submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
-        extracted_code=ExtractedCodePayload(
-            raw_generation=decoder_code,
+        extracted_submission=ExtractedSubmissionPayload(
+            raw_submission=decoder_code,
             extracted_code=decoder_code,
             extraction_method="fenced",
             parser_profile_id="default",

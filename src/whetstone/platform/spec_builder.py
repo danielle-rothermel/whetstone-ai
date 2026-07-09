@@ -9,12 +9,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from dr_code.humaneval.sampling import (
+from dr_code.humaneval import (
+    HumanEvalTask,
     SampledHumanEvalTask,
     sample_human_eval_tasks,
     sample_human_eval_tasks_from_rows,
 )
-from dr_code.humaneval.task import HumanEvalTask
 from dr_graph import (
     BindingRef,
     FieldRole,

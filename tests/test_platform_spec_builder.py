@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-from dr_code.humaneval.sampling import SampledHumanEvalTask
-from dr_code.humaneval.task import HumanEvalTask, parse_human_eval_dataset
+from dr_code.humaneval import (
+    HumanEvalTask,
+    SampledHumanEvalTask,
+    parse_human_eval_dataset,
+)
 from dr_platform import index_jsonl_items
 
 from whetstone.platform import spec_builder

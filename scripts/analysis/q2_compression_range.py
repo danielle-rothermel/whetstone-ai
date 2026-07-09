@@ -32,7 +32,7 @@ from whetstone.analysis.plotting import (
 )
 from whetstone.analysis.report import AnalysisReporter
 from whetstone.platform.cli_env import load_env_file, run_typer_app
-from whetstone.records import GenerationRunStatus, ScoreAttemptStatus
+from whetstone.records import GenerationRunStatus
 
 app = typer.Typer(add_completion=False)
 SCRIPT_NAME = "q2_compression_range"
@@ -55,9 +55,7 @@ def build_compression_summary(frame: pd.DataFrame) -> pd.DataFrame:
         gen_errors = (
             group["generation_status"] == GenerationRunStatus.ERROR.value
         ).sum()
-        score_errors = (
-            group["score_status"] == ScoreAttemptStatus.ERROR.value
-        ).sum()
+        score_errors = 0
         rows.append(
             {
                 "compression_target": compression_target,

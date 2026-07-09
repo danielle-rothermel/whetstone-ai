@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval import SubmissionOutcome
 from dr_graph import (
     BindingRef,
     FieldRole,
@@ -25,6 +25,7 @@ from whetstone.records import (
     DEFAULT_SCORE_DATASET_SPLIT,
     DimensionsPayload,
     ExperimentRecord,
+    ExtractedSubmissionPayload,
     GenerationRunRecord,
     GenerationRunStatus,
     GenerationRunSummaryPayload,
@@ -50,6 +51,15 @@ from whetstone.records import (
 from whetstone.records import models as records_models
 
 NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
+
+
+def _extracted_submission() -> ExtractedSubmissionPayload:
+    return ExtractedSubmissionPayload(
+        raw_submission="def add_one(x):\n    return x + 1\n",
+        extracted_code="def add_one(x):\n    return x + 1\n",
+        parser_profile_id="best-effort",
+        parser_version="v1",
+    )
 
 
 def _node(
@@ -326,7 +336,7 @@ def test_failure_payload_promotes_underlying_exception_type() -> None:
     assert payload.metadata == {"status_code": 401}
 
 
-def test_score_attempt_row_includes_generated_code_outcome() -> None:
+def test_score_attempt_row_includes_submission_outcome() -> None:
     record = ScoreAttemptRecord(
         score_attempt_id="score-1",
         prediction_id="prediction-1",
@@ -339,8 +349,9 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
-        generated_code_outcome=GeneratedCodeOutcome.PASSED,
+        submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
+        extracted_submission=_extracted_submission(),
         metrics=MetricsPayload(
             profile_id="humaneval",
             profile_version="v1",
@@ -360,7 +371,7 @@ def test_score_attempt_row_includes_generated_code_outcome() -> None:
     row = io.score_attempt_row(record)
 
     assert row["attempt_index"] == 0
-    assert row["generated_code_outcome"] == "passed"
+    assert row["submission_outcome"] == "passed"
     assert row["metrics"] == {
         "profile_id": "humaneval",
         "profile_version": "v1",
@@ -506,8 +517,9 @@ def test_score_attempt_row_round_trips_through_record_from_row() -> None:
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
         status=ScoreAttemptStatus.SUCCESS,
-        generated_code_outcome=GeneratedCodeOutcome.PASSED,
+        submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
+        extracted_submission=_extracted_submission(),
         metrics=MetricsPayload(
             profile_id="humaneval",
             profile_version="v1",
@@ -543,6 +555,7 @@ def test_generation_run_row_round_trips_through_record_from_row() -> None:
             execution_order=("direct",),
             terminal_node_id="direct",
             terminal_output="ok",
+            terminal_submission_text="ok",
         ),
         started_at=NOW,
         completed_at=NOW,

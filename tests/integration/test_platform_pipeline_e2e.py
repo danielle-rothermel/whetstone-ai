@@ -4,13 +4,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from dr_code.humaneval import (
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
+)
 from dr_code.humaneval.code_parsing import (
     BEST_EFFORT_HUMANEVAL_PARSER_PROFILE_ID,
     PARSER_PROFILE_VERSION,
-)
-from dr_code.humaneval.profiles import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
 )
 from dr_graph import GraphSpec
 from dr_platform import BatchOperationStatus
@@ -33,7 +33,7 @@ from whetstone.platform import graph_workflow, scoring_workflow, submission
 from whetstone.platform.graph_workflow import platform_generation_workflow_id
 from whetstone.platform.node_execution import NodeStepResult
 from whetstone.platform.scoring_workflow import (
-    run_score_generation_workflow_once,
+    run_score_submission_workflow_once,
 )
 from whetstone.records import (
     GenerationRunStatus,
@@ -136,7 +136,7 @@ def test_jsonl_submit_enqueue_generation_and_scoring(
     assert snapshot.run_status == GenerationRunStatus.SUCCESS.value
     assert snapshot.node_count == 1
 
-    score_result = run_score_generation_workflow_once(
+    score_result = run_score_submission_workflow_once(
         database_url,
         generation_run_id,
     )

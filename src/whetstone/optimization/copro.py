@@ -45,9 +45,9 @@ from whetstone.platform.node_execution import (
     runtime_provider_config,
 )
 from whetstone.platform.platform_db import PLATFORM_SCHEMA
-from whetstone.platform.rescoring import rescore_generation_runs
+from whetstone.platform.rescoring import rescore_submission_runs
 from whetstone.platform.scoring_workflow import (
-    run_score_generation_workflow_once,
+    run_score_submission_workflow_once,
 )
 from whetstone.platform.spec_builder import (
     DEFAULT_CONFIGS_ROOT,
@@ -77,7 +77,6 @@ from whetstone.records import (
     GenerationRunStatus,
     PredictionSpecRecord,
     ProviderConfigRef,
-    ScoreAttemptStatus,
     stable_generation_run_id,
 )
 
@@ -705,9 +704,7 @@ def summarize_attempts(
         gen_errors = (
             group["generation_status"] == GenerationRunStatus.ERROR.value
         ).sum()
-        score_errors = (
-            group["score_status"] == ScoreAttemptStatus.ERROR.value
-        ).sum()
+        score_errors = 0
         attempts.append(
             CoproAttempt(
                 candidate_id=candidate.candidate_id,
@@ -805,7 +802,7 @@ def evaluate_specs_sync(
             attempt_index=0,
         )
         generation_run_ids.append(generation_run_id)
-        run_score_generation_workflow_once(
+        run_score_submission_workflow_once(
             database_url=database_url,
             generation_run_id=generation_run_id,
         )
@@ -848,7 +845,7 @@ def evaluate_specs_queue(
             "ensure `python -m whetstone.platform.worker worker` is "
             f"running ({error.breakdown.status_counts})"
         ) from error
-    rescore_generation_runs(
+    rescore_submission_runs(
         engine,
         database_url=database_url,
         experiment_name=experiment_name,

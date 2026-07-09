@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from dr_code.humaneval.profiles import (
+from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
 )

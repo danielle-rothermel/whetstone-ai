@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from dr_code.humaneval.scoring import GeneratedCodeOutcome
+from dr_code.humaneval import SubmissionOutcome
 from dr_graph import GraphRunStatus, NodeError, NodeOutput
 from dr_providers import FailureClass
 from pydantic import BaseModel
@@ -15,12 +15,13 @@ from whetstone.eval_failures.recording import ensure_recordable
 from whetstone.records import (
     DimensionsPayload,
     ExperimentRecord,
-    ExtractedCodePayload,
+    ExtractedSubmissionPayload,
     FailureMetadataPayload,
     GenerationRunRecord,
     GenerationRunStatus,
     GenerationRunSummaryPayload,
     GraphSnapshotPayload,
+    HarnessFailureCausePayload,
     MetricsPayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
@@ -32,6 +33,7 @@ from whetstone.records import (
     ResponseMetadataPayload,
     ScoreAttemptRecord,
     ScoreAttemptStatus,
+    ScoreHarnessFailureRecord,
     TaskSnapshotPayload,
     UsageCostPayload,
 )
@@ -58,10 +60,13 @@ NODE_ATTEMPT_JSONB_FIELDS = (
     "failure",
 )
 SCORE_ATTEMPT_JSONB_FIELDS = (
-    "extracted_code",
+    "extracted_submission",
     "metrics",
     "per_test_results",
-    "failure",
+)
+SCORE_HARNESS_FAILURE_JSONB_FIELDS = (
+    "extracted_submission",
+    "cause",
 )
 BATCH_SUBMIT_OPERATION_JSONB_FIELDS = ("spec", "metadata")
 BATCH_SUBMIT_ITEM_JSONB_FIELDS = ("enqueue_metadata", "failure")
@@ -206,16 +211,39 @@ def score_attempt_row(record: ScoreAttemptRecord) -> Row:
         "dataset_name": record.dataset_name,
         "dataset_split": record.dataset_split,
         "status": record.status.value,
-        "generated_code_outcome": _enum_value(record.generated_code_outcome),
+        "submission_outcome": _enum_value(record.submission_outcome),
         "score": record.score,
-        "extracted_code": _dump_optional(record.extracted_code),
+        "extracted_submission": _dump(record.extracted_submission),
         "metrics": _dump_optional(record.metrics),
         "per_test_results": _dump_many(record.per_test_results),
-        "failure": _dump_optional(record.failure),
         "started_at": record.started_at,
         "completed_at": record.completed_at,
     }
     _validate_jsonb_fields(row, *SCORE_ATTEMPT_JSONB_FIELDS)
+    return row
+
+
+def score_harness_failure_row(record: ScoreHarnessFailureRecord) -> Row:
+    row = {
+        "score_attempt_id": record.score_attempt_id,
+        "prediction_id": record.prediction_id,
+        "generation_run_id": record.generation_run_id,
+        "attempt_index": record.attempt_index,
+        "scoring_profile_id": record.scoring_profile_id,
+        "scoring_profile_version": record.scoring_profile_version,
+        "parser_profile_id": record.parser_profile_id,
+        "parser_version": record.parser_version,
+        "dataset_name": record.dataset_name,
+        "dataset_split": record.dataset_split,
+        "kind": record.kind,
+        "raw_submission": record.raw_submission,
+        "extracted_submission": _dump_optional(record.extracted_submission),
+        "cause": _dump(record.cause),
+        "failure_class": record.failure_class.value,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+    }
+    _validate_jsonb_fields(row, *SCORE_HARNESS_FAILURE_JSONB_FIELDS)
     return row
 
 
@@ -308,7 +336,7 @@ def node_attempt_record_from_row(row: Row) -> NodeAttemptRecord:
 
 
 def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
-    generated_code_outcome = row["generated_code_outcome"]
+    submission_outcome = row["submission_outcome"]
     return ScoreAttemptRecord(
         score_attempt_id=row["score_attempt_id"],
         prediction_id=row["prediction_id"],
@@ -321,22 +349,44 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
         dataset_name=row["dataset_name"],
         dataset_split=row["dataset_split"],
         status=ScoreAttemptStatus(row["status"]),
-        generated_code_outcome=(
-            GeneratedCodeOutcome(generated_code_outcome)
-            if generated_code_outcome is not None
-            else None
-        ),
+        submission_outcome=SubmissionOutcome(submission_outcome),
         score=row["score"],
-        extracted_code=_load_optional(
-            ExtractedCodePayload,
-            row["extracted_code"],
+        extracted_submission=_load(
+            ExtractedSubmissionPayload,
+            row["extracted_submission"],
         ),
         metrics=_load_optional(MetricsPayload, row["metrics"]),
         per_test_results=_load_many(
             PerTestResultPayload,
             row["per_test_results"],
         ),
-        failure=_load_optional(FailureMetadataPayload, row["failure"]),
+        started_at=row["started_at"],
+        completed_at=row["completed_at"],
+    )
+
+
+def score_harness_failure_record_from_row(
+    row: Row,
+) -> ScoreHarnessFailureRecord:
+    return ScoreHarnessFailureRecord(
+        score_attempt_id=row["score_attempt_id"],
+        prediction_id=row["prediction_id"],
+        generation_run_id=row["generation_run_id"],
+        attempt_index=row["attempt_index"],
+        scoring_profile_id=row["scoring_profile_id"],
+        scoring_profile_version=row["scoring_profile_version"],
+        parser_profile_id=row["parser_profile_id"],
+        parser_version=row["parser_version"],
+        dataset_name=row["dataset_name"],
+        dataset_split=row["dataset_split"],
+        kind=row["kind"],
+        raw_submission=row["raw_submission"],
+        extracted_submission=_load_optional(
+            ExtractedSubmissionPayload,
+            row["extracted_submission"],
+        ),
+        cause=_load(HarnessFailureCausePayload, row["cause"]),
+        failure_class=FailureClass(row["failure_class"]),
         started_at=row["started_at"],
         completed_at=row["completed_at"],
     )
@@ -378,6 +428,14 @@ def insert_node_attempt(record: NodeAttemptRecord) -> Insert:
 
 def insert_score_attempt(record: ScoreAttemptRecord) -> Insert:
     return schema.score_attempts.insert().values(score_attempt_row(record))
+
+
+def insert_score_harness_failure(
+    record: ScoreHarnessFailureRecord,
+) -> Insert:
+    return schema.score_harness_failures.insert().values(
+        score_harness_failure_row(record)
+    )
 
 
 def insert_prediction_projection(
@@ -504,7 +562,7 @@ def select_node_attempts_by_generation_run(
     )
 
 
-def select_rescore_generation_candidates(
+def select_rescore_submission_candidates(
     *,
     experiment_name: str,
     generation_statuses: tuple[GenerationRunStatus, ...]
@@ -520,6 +578,31 @@ def select_rescore_generation_candidates(
     limit: int | None = None,
     offset: int = 0,
 ) -> Select[tuple[Any, ...]]:
+    matching_harness_failure = and_(
+        schema.score_harness_failures.c.generation_run_id
+        == schema.generation_runs.c.generation_run_id,
+        schema.score_harness_failures.c.scoring_profile_id
+        == scoring_profile_id,
+        schema.score_harness_failures.c.scoring_profile_version
+        == scoring_profile_version,
+        schema.score_harness_failures.c.parser_profile_id
+        == parser_profile_id,
+        schema.score_harness_failures.c.parser_version == parser_version,
+        schema.score_harness_failures.c.attempt_index >= score_attempt_index,
+        schema.score_harness_failures.c.dataset_name == dataset_name,
+        schema.score_harness_failures.c.dataset_split == dataset_split,
+    )
+    next_attempt_index = (
+        select(
+            func.coalesce(
+                func.max(schema.score_harness_failures.c.attempt_index) + 1,
+                score_attempt_index,
+            )
+        )
+        .where(matching_harness_failure)
+        .scalar_subquery()
+        .label("score_attempt_index")
+    )
     matching_score_attempt = and_(
         schema.score_attempts.c.generation_run_id
         == schema.generation_runs.c.generation_run_id,
@@ -540,6 +623,7 @@ def select_rescore_generation_candidates(
             schema.score_attempts.c.score_attempt_id.label(
                 "existing_score_attempt_id"
             ),
+            next_attempt_index,
         )
         .select_from(
             schema.generation_runs.join(
@@ -571,7 +655,7 @@ def select_rescore_generation_candidates(
     return statement
 
 
-def count_rescore_generation_candidates(
+def count_rescore_submission_candidates(
     *,
     experiment_name: str,
     generation_statuses: tuple[GenerationRunStatus, ...]
@@ -585,7 +669,7 @@ def count_rescore_generation_candidates(
     dataset_split: str,
     generation_attempt_index: int | None = None,
 ) -> Select[tuple[int]]:
-    candidate_query = select_rescore_generation_candidates(
+    candidate_query = select_rescore_submission_candidates(
         experiment_name=experiment_name,
         generation_statuses=generation_statuses,
         generation_attempt_index=generation_attempt_index,

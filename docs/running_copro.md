@@ -82,7 +82,7 @@ For each candidate, the implementation:
 
 | Mode | Flag | Behavior |
 | --- | --- | --- |
-| **Sync** (default) | `--execution-mode sync` | Insert specs, then call `run_prediction_graph_workflow_once` and `run_score_generation_workflow_once` per spec. No external worker required. Best for tiny smoke runs. |
+| **Sync** (default) | `--execution-mode sync` | Insert specs, then call `run_prediction_graph_workflow_once` and `run_score_submission_workflow_once` per spec. No external worker required. Best for tiny smoke runs. |
 | **Queue** | `--execution-mode queue` | Submit specs to the DBOS generation queue, poll until runs finish, then batch-rescore with `--rescore-max-in-flight`. Requires a running platform worker. |
 
 ### Proposal modes

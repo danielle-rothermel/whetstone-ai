@@ -614,7 +614,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
         "create_engine",
         lambda database_url: FakeEngine(),
     )
-    monkeypatch.setattr(worker, "rescore_generation_runs", fake_rescore)
+    monkeypatch.setattr(worker, "rescore_submission_runs", fake_rescore)
 
     result = CliRunner().invoke(
         worker.APP,
@@ -624,9 +624,9 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
             "postgresql://example/db",
             "--experiment-name",
             "exp",
-            "--generation-status",
+            "--producer-status",
             "success",
-            "--generation-attempt-index",
+            "--producer-attempt-index",
             "0",
             "--score-attempt-index",
             "1",

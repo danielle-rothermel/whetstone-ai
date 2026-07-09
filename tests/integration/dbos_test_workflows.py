@@ -10,7 +10,7 @@ from whetstone.platform.graph_workflow import (
 )
 from whetstone.platform.scoring_workflow import (
     load_scoring_target_step,
-    persist_score_attempt_step,
+    persist_score_result_step,
 )
 
 LOAD_SPEC_TEST_WORKFLOW = "dr_dspy_test_integration_load_spec_v1"
@@ -65,4 +65,4 @@ def integration_persist_score_workflow(
     database_url: str,
     score_attempt_payload: dict,
 ) -> dict:
-    return persist_score_attempt_step(database_url, score_attempt_payload)
+    return persist_score_result_step(database_url, score_attempt_payload)

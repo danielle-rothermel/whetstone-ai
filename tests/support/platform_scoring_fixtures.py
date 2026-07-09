@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dr_code.humaneval.task import HumanEvalTask
+from dr_code.humaneval import HumanEvalTask
 from dr_graph import (
     BindingRef,
     FieldRole,
@@ -171,7 +171,7 @@ def scoring_prediction_spec(layout: str = "direct") -> PredictionSpecRecord:
 
 def successful_generation_run(
     spec: PredictionSpecRecord,
-    raw_generation: Any,
+    raw_submission: Any,
     *,
     generation_run_id: str | None = None,
 ) -> GenerationRunRecord:
@@ -189,7 +189,10 @@ def successful_generation_run(
         summary=GenerationRunSummaryPayload(
             execution_order=tuple(node.id for node in spec.graph.graph.nodes),
             terminal_node_id=spec.graph.graph.terminal_node_id,
-            terminal_output=raw_generation,
+            terminal_output=raw_submission,
+            terminal_submission_text=raw_submission
+            if isinstance(raw_submission, str)
+            else "",
         ),
         started_at=NOW,
         completed_at=LATER,
@@ -202,12 +205,12 @@ def unique_generation_run_id() -> str:
 
 def seeded_scoring_target(
     *,
-    raw_generation: str = "def add_one(x):\n    return x + 1\n",
+    raw_submission: str = "def add_one(x):\n    return x + 1\n",
 ) -> tuple[PredictionSpecRecord, GenerationRunRecord]:
     spec = scoring_prediction_spec()
     run = successful_generation_run(
         spec,
-        raw_generation,
+        raw_submission,
         generation_run_id=unique_generation_run_id(),
     )
     return spec, run
