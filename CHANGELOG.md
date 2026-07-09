@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-07-09 - HumanEval+ Raw-Row Snapshot Loading
+
+- Routed HumanEval+ sampling and scoring through dr-code's build-once
+  raw-row snapshot loader with an explicit snapshot path in experiment
+  configs (no silent Hugging Face fallback).
+- Persisted dataset snapshot identity on score attempts and harness failures
+  (forward migration `20260708_0002`) so results trace to exact dataset bytes.
+- Pinned `dr-code` to the in-flight dr-code#22 snapshot rev; `TODO(repin)`
+  moves it back to main once dr-code#22 merges.
+
 ## 2026-07-08 - Phase 2 Lockstep Scoring Schema And Submission Vocabulary
 
 - Pinned `dr-code` to the Phase 2 contract SHA and moved production scoring
