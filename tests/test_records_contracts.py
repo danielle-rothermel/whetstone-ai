@@ -33,6 +33,7 @@ from dr_providers import (
 from dr_serialize import canonical_json
 from pydantic import ValidationError
 
+from tests.support.platform_scoring_fixtures import dataset_snapshot_identity
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -604,6 +605,7 @@ def test_score_attempt_success_and_error_shapes() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
@@ -647,6 +649,9 @@ def test_score_attempt_success_and_error_shapes() -> None:
                 "parser_version": "v1",
                 "dataset_name": DEFAULT_SCORE_DATASET_NAME,
                 "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
+                "dataset_snapshot": dataset_snapshot_identity().model_dump(
+                    mode="json"
+                ),
                 "status": ScoreAttemptStatus.SUCCESS,
                 "started_at": NOW,
                 "completed_at": NOW,
@@ -692,6 +697,9 @@ def test_score_attempt_rejects_failure_payload() -> None:
         "parser_version": "v1",
         "dataset_name": DEFAULT_SCORE_DATASET_NAME,
         "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
+        "dataset_snapshot": dataset_snapshot_identity().model_dump(
+            mode="json"
+        ),
         "status": "success",
         "submission_outcome": "passed",
         "score": 1.0,
@@ -719,6 +727,7 @@ def test_score_attempt_completed_allows_partial_diagnostics() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.EXTRACTION_FAILED,
         score=0.0,
@@ -762,6 +771,7 @@ def test_score_attempt_allows_distinct_metrics_profile() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
@@ -820,6 +830,7 @@ def _score_attempt_base_kwargs() -> dict[str, Any]:
         "parser_version": "v1",
         "dataset_name": DEFAULT_SCORE_DATASET_NAME,
         "dataset_split": DEFAULT_SCORE_DATASET_SPLIT,
+        "dataset_snapshot": dataset_snapshot_identity(),
         "status": ScoreAttemptStatus.SUCCESS,
         "submission_outcome": SubmissionOutcome.PASSED,
         "score": 1.0,
@@ -883,6 +894,7 @@ def test_score_attempt_rejects_mismatched_parser_profile() -> None:
             parser_version="v1",
             dataset_name=DEFAULT_SCORE_DATASET_NAME,
             dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+            dataset_snapshot=dataset_snapshot_identity(),
             status=ScoreAttemptStatus.SUCCESS,
             submission_outcome=SubmissionOutcome.EXTRACTION_FAILED,
             score=0.0,
@@ -909,6 +921,7 @@ def test_score_attempt_attempt_index_must_be_non_negative() -> None:
             parser_version="v1",
             dataset_name=DEFAULT_SCORE_DATASET_NAME,
             dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+            dataset_snapshot=dataset_snapshot_identity(),
             status=ScoreAttemptStatus.SUCCESS,
             submission_outcome=SubmissionOutcome.PASSED,
             score=1.0,

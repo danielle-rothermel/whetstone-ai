@@ -83,7 +83,7 @@ def test_alembic_initial_schema_revision_renders_current_contract(
 def test_alembic_initial_schema_revision_metadata_is_pristine() -> None:
     migration = importlib.import_module(INITIAL_MIGRATION_MODULE)
 
-    assert migration.revision == V1_MIGRATION_HEAD
+    assert migration.revision == V1_MIGRATION_BASE
     assert migration.down_revision is None
 
 

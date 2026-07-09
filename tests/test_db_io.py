@@ -19,6 +19,7 @@ from dr_graph import (
 from dr_providers import EndpointKind, ProviderKind
 from pydantic import ValidationError
 
+from tests.support.platform_scoring_fixtures import dataset_snapshot_identity
 from whetstone.db import io
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
@@ -348,6 +349,7 @@ def test_score_attempt_row_includes_submission_outcome() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,
@@ -516,6 +518,7 @@ def test_score_attempt_row_round_trips_through_record_from_row() -> None:
         parser_version="v1",
         dataset_name=DEFAULT_SCORE_DATASET_NAME,
         dataset_split=DEFAULT_SCORE_DATASET_SPLIT,
+        dataset_snapshot=dataset_snapshot_identity(),
         status=ScoreAttemptStatus.SUCCESS,
         submission_outcome=SubmissionOutcome.PASSED,
         score=1.0,

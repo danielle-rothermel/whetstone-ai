@@ -73,6 +73,7 @@ def _apply_v1_migrations(
 ) -> None:
     migration_modules = (
         "whetstone.db.migrations.versions.20260708_0001_initial_schema",
+        "whetstone.db.migrations.versions.20260708_0002_score_dataset_snapshot",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)

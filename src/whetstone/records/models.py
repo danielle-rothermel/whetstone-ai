@@ -87,6 +87,23 @@ class TaskSnapshotPayload(BaseModel):
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
 
+class DatasetSnapshotHeaderPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: StrictInt
+    dataset_id: StrictStr
+    hf_revision: StrictStr
+    overrides_digest: StrictStr
+
+
+class DatasetSnapshotIdentityPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_path: StrictStr
+    sha256: StrictStr
+    header: DatasetSnapshotHeaderPayload
+
+
 class DimensionsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -460,6 +477,7 @@ class ScoreAttemptRecord(BaseModel):
     parser_version: StrictStr
     dataset_name: StrictStr
     dataset_split: StrictStr
+    dataset_snapshot: DatasetSnapshotIdentityPayload
     status: ScoreAttemptStatus
     submission_outcome: SubmissionOutcome
     score: StrictFloat | None = None
@@ -535,6 +553,7 @@ class ScoreHarnessFailureRecord(BaseModel):
     parser_version: StrictStr
     dataset_name: StrictStr
     dataset_split: StrictStr
+    dataset_snapshot: DatasetSnapshotIdentityPayload
     kind: StrictStr
     raw_submission: StrictStr
     extracted_submission: ExtractedSubmissionPayload | None = None

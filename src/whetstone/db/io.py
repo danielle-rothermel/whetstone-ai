@@ -13,6 +13,7 @@ from sqlalchemy.sql.dml import Insert
 from whetstone.db import schema
 from whetstone.eval_failures.recording import ensure_recordable
 from whetstone.records import (
+    DatasetSnapshotIdentityPayload,
     DimensionsPayload,
     ExperimentRecord,
     ExtractedSubmissionPayload,
@@ -60,11 +61,13 @@ NODE_ATTEMPT_JSONB_FIELDS = (
     "failure",
 )
 SCORE_ATTEMPT_JSONB_FIELDS = (
+    "dataset_snapshot",
     "extracted_submission",
     "metrics",
     "per_test_results",
 )
 SCORE_HARNESS_FAILURE_JSONB_FIELDS = (
+    "dataset_snapshot",
     "extracted_submission",
     "cause",
 )
@@ -210,6 +213,7 @@ def score_attempt_row(record: ScoreAttemptRecord) -> Row:
         "parser_version": record.parser_version,
         "dataset_name": record.dataset_name,
         "dataset_split": record.dataset_split,
+        "dataset_snapshot": _dump(record.dataset_snapshot),
         "status": record.status.value,
         "submission_outcome": _enum_value(record.submission_outcome),
         "score": record.score,
@@ -235,6 +239,7 @@ def score_harness_failure_row(record: ScoreHarnessFailureRecord) -> Row:
         "parser_version": record.parser_version,
         "dataset_name": record.dataset_name,
         "dataset_split": record.dataset_split,
+        "dataset_snapshot": _dump(record.dataset_snapshot),
         "kind": record.kind,
         "raw_submission": record.raw_submission,
         "extracted_submission": _dump_optional(record.extracted_submission),
@@ -348,6 +353,10 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
         parser_version=row["parser_version"],
         dataset_name=row["dataset_name"],
         dataset_split=row["dataset_split"],
+        dataset_snapshot=_load(
+            DatasetSnapshotIdentityPayload,
+            row["dataset_snapshot"],
+        ),
         status=ScoreAttemptStatus(row["status"]),
         submission_outcome=SubmissionOutcome(submission_outcome),
         score=row["score"],
@@ -379,6 +388,10 @@ def score_harness_failure_record_from_row(
         parser_version=row["parser_version"],
         dataset_name=row["dataset_name"],
         dataset_split=row["dataset_split"],
+        dataset_snapshot=_load(
+            DatasetSnapshotIdentityPayload,
+            row["dataset_snapshot"],
+        ),
         kind=row["kind"],
         raw_submission=row["raw_submission"],
         extracted_submission=_load_optional(

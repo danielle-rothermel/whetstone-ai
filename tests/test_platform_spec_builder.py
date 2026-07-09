@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from dr_code.humaneval import (
     HumanEvalTask,
-    SampledHumanEvalTask,
     parse_human_eval_dataset,
 )
 from dr_platform import index_jsonl_items
@@ -137,6 +136,9 @@ def test_experiment_spec_config_rejects_invalid_layout_providers() -> None:
                 "dataset": {
                     "name": "local/fixture",
                     "split": "test",
+                    "snapshot_path": (
+                        "../dr-code/tests/corpus/humanevalplus_snapshot.json"
+                    ),
                     "sample_count": 1,
                 },
                 "providers": [
@@ -173,10 +175,10 @@ def test_sample_tasks_for_config_uses_injected_rows(
     config = load_experiment_spec_config(FIXTURES_DIR / "encdec_minimal.json")
     rows = _fixture_rows()
 
-    def fail_load(**kwargs: object) -> list[SampledHumanEvalTask]:
-        raise AssertionError("load_human_eval_tasks should not be called")
+    def fail_load(**kwargs: object) -> object:
+        raise AssertionError("load_humaneval_snapshot should not be called")
 
-    monkeypatch.setattr(spec_builder, "sample_human_eval_tasks", fail_load)
+    monkeypatch.setattr(spec_builder, "load_humaneval_snapshot", fail_load)
     sampled = spec_builder.sample_tasks_for_config(config, rows=rows)
 
     assert len(sampled) == 1
@@ -304,6 +306,9 @@ def _write_composable_config_tree(configs_root: Path) -> Path:
                 "dataset": {
                     "name": "local/fixture",
                     "split": "test",
+                    "snapshot_path": (
+                        "../dr-code/tests/corpus/humanevalplus_snapshot.json"
+                    ),
                     "sample_seed": 3,
                     "sample_count": 1,
                 },

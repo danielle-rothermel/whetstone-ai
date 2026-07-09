@@ -18,6 +18,7 @@ from tests.support.platform_integration_helpers import (
     seed_scoring_target,
 )
 from tests.support.platform_scoring_fixtures import (
+    dataset_snapshot_identity,
     scoring_task,
     seeded_scoring_target,
 )
@@ -52,6 +53,7 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_load_humaneval_task_step(
         dataset_name: str,
         dataset_split: str,
+        dataset_snapshot_path: str,
         task_id: str,
     ) -> dict[str, Any]:
         assert task_id == "HumanEval/fixture"
@@ -61,6 +63,11 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
         scoring_workflow,
         "load_humaneval_task_step",
         fake_load_humaneval_task_step,
+    )
+    monkeypatch.setattr(
+        scoring_workflow,
+        "read_snapshot_identity",
+        lambda path: dataset_snapshot_identity(),
     )
 
 
@@ -81,6 +88,7 @@ def test_run_score_submission_workflow_once_persists_success(
     result = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     expected_score_id = stable_score_attempt_id(
@@ -120,10 +128,12 @@ def test_run_score_submission_workflow_once_is_idempotent_on_replay(
     first = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
     second = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     assert first.score_attempt_id == second.score_attempt_id
@@ -149,7 +159,7 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
         spec=spec,
         generation_run=run,
     )
-    load_calls: list[tuple[str, str, str]] = []
+    load_calls: list[tuple[str, str, str, str]] = []
     task_payload = scoring_task().model_dump(
         mode="json",
         exclude={
@@ -161,9 +171,12 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
     def counting_load_humaneval_task_step(
         dataset_name: str,
         dataset_split: str,
+        dataset_snapshot_path: str,
         task_id: str,
     ) -> dict[str, Any]:
-        load_calls.append((dataset_name, dataset_split, task_id))
+        load_calls.append(
+            (dataset_name, dataset_split, dataset_snapshot_path, task_id)
+        )
         return task_payload
 
     monkeypatch.setattr(
@@ -171,21 +184,29 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
         "load_humaneval_task_step",
         counting_load_humaneval_task_step,
     )
+    monkeypatch.setattr(
+        scoring_workflow,
+        "read_snapshot_identity",
+        lambda path: dataset_snapshot_identity(),
+    )
     scoring_workflow.load_humaneval_task_map.cache_clear()
 
     run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
     run_score_submission_workflow_once(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
 
     assert load_calls == [
         (
             DEFAULT_SCORE_DATASET_NAME,
             DEFAULT_SCORE_DATASET_SPLIT,
+            "snapshot.json",
             "HumanEval/fixture",
         ),
     ]
@@ -247,6 +268,12 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
             workflow_id,
             app_postgres_schema.database_url,
             run.generation_run_id,
+            0,
+            HUMANEVAL_SCORING_PROFILE_ID,
+            HUMANEVAL_SCORING_PROFILE_VERSION,
+            DEFAULT_SCORE_DATASET_NAME,
+            DEFAULT_SCORE_DATASET_SPLIT,
+            "snapshot.json",
         )
 
     persist_state["fail"] = False
@@ -268,6 +295,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     scheduled = scoring_workflow.schedule_score_submission_workflow(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
         recover_orphans=False,
     )
     assert scheduled.scheduled is False
@@ -276,6 +304,7 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
     recovered = scoring_workflow.schedule_score_submission_workflow(
         app_postgres_schema.database_url,
         run.generation_run_id,
+        dataset_snapshot_path="snapshot.json",
         recover_orphans=True,
     )
     assert recovered.scheduled is True

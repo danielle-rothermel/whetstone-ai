@@ -3,6 +3,7 @@
   "dataset": {
     "name": "evalplus/humanevalplus",
     "split": "test",
+    "snapshot_path": "../dr-code/tests/corpus/humanevalplus_snapshot.json",
     "sample_seed": 0,
     "sample_count": 1
   }

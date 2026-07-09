@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -576,8 +577,11 @@ def test_submit_jsonl_help_describes_queue_registration_concurrency() -> None:
 
 def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, Any] = {}
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
 
     class FakeEngine:
         def dispose(self) -> None:
@@ -638,6 +642,8 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
             "dataset",
             "--dataset-split",
             "split",
+            "--dataset-snapshot-path",
+            str(snapshot_path),
             "--chunk-size",
             "7",
             "--max-in-flight",
@@ -663,6 +669,7 @@ def test_rescore_cli_dry_run_wires_options_without_launching_dbos(
         "score_attempt_index": 1,
         "dataset_name": "dataset",
         "dataset_split": "split",
+        "dataset_snapshot_path": str(snapshot_path),
         "chunk_size": 7,
         "max_in_flight": 10,
         "limit": 9,
@@ -707,8 +714,6 @@ def test_run_one_runtime_keeps_empty_queue_listener(
     )
 
     assert ("listen", []) in calls
-
-
 
 
 

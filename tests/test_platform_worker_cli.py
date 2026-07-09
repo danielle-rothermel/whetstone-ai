@@ -18,11 +18,14 @@ from whetstone.platform import worker
 
 def test_score_one_wires_scoring_workflow_runner(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     class RuntimeConfig:
         database_url = "postgresql://example/db"
 
     calls: list[tuple[str, Any]] = []
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
 
     def load_env_file(env_file: Any = None) -> None:
         calls.append(("load_env", env_file))
@@ -77,6 +80,7 @@ def test_score_one_wires_scoring_workflow_runner(
         scoring_profile_version="v2",
         dataset_name="dataset",
         dataset_split="split",
+        dataset_snapshot_path=snapshot_path,
         database_url="postgresql://app/db",
         dbos_system_database_url="postgresql://dbos/db",
         env_file=None,
@@ -96,6 +100,7 @@ def test_score_one_wires_scoring_workflow_runner(
             "scoring_profile_version": "v2",
             "dataset_name": "dataset",
             "dataset_split": "split",
+            "dataset_snapshot_path": str(snapshot_path),
         },
     )
     assert calls[-1] == ("destroy", None)
@@ -273,9 +278,12 @@ def test_worker_command_runs_until_interrupt(
 
 def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     captured: dict[str, Any] = {}
     lifecycle: list[str] = []
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
 
     class RuntimeConfig:
         database_url = "postgresql://example/db"
@@ -338,6 +346,8 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
             "success",
             "--max-in-flight",
             "30",
+            "--dataset-snapshot-path",
+            str(snapshot_path),
         ],
     )
 
@@ -346,12 +356,15 @@ def test_rescore_non_dry_run_launches_dbos_and_calls_rescore(
     assert captured["kwargs"]["dry_run"] is False
     assert captured["kwargs"]["experiment_name"] == "exp"
     assert captured["kwargs"]["max_in_flight"] == 30
+    assert captured["kwargs"]["dataset_snapshot_path"] == str(snapshot_path)
     assert captured["disposed"] is True
     assert captured["destroyed"] is True
     assert lifecycle == ["destroy"]
 
 
-def test_rescore_rejects_invalid_generation_status() -> None:
+def test_rescore_rejects_invalid_generation_status(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
     result = CliRunner().invoke(
         worker.APP,
         [
@@ -360,6 +373,8 @@ def test_rescore_rejects_invalid_generation_status() -> None:
             "exp",
             "--producer-status",
             "not-a-status",
+            "--dataset-snapshot-path",
+            str(snapshot_path),
         ],
     )
 

@@ -11,7 +11,6 @@ from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     HumanEvalTask,
-    load_human_eval_rows,
     parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
@@ -19,6 +18,10 @@ from dr_platform import WORKFLOW_START_RACE_ERRORS
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
+from whetstone.platform.dataset_snapshot import (
+    load_humaneval_snapshot,
+    read_snapshot_identity,
+)
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
     ScoreAttemptInsertStatus,
@@ -37,6 +40,7 @@ from whetstone.platform.scoring_workflow_state import (
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
+    DatasetSnapshotIdentityPayload,
     GenerationRunRecord,
     NodeAttemptRecord,
     PredictionSpecRecord,
@@ -82,7 +86,11 @@ def run_score_submission_workflow(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: str | None = None,
 ) -> dict[str, Any]:
+    resolved_snapshot_path = require_dataset_snapshot_path(
+        dataset_snapshot_path
+    )
     target = load_scoring_target_step(database_url, generation_run_id)
     spec = PredictionSpecRecord.model_validate(target["spec"])
     generation_run = GenerationRunRecord.model_validate(
@@ -96,9 +104,13 @@ def run_score_submission_workflow(
         load_humaneval_task_step(
             dataset_name,
             dataset_split,
+            resolved_snapshot_path,
             spec.task_id,
         )
     )
+    dataset_snapshot_payload = read_snapshot_identity(
+        resolved_snapshot_path
+    ).model_dump(mode="json")
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
@@ -125,6 +137,7 @@ def run_score_submission_workflow(
         score_attempt_index,
         dataset_name,
         dataset_split,
+        dataset_snapshot_payload,
         started_at.isoformat(),
     )
     insert_result = ScoreAttemptInsertResult.model_validate(
@@ -144,6 +157,7 @@ def start_score_submission_workflow(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: str | None = None,
 ) -> str:
     score_attempt_id, _handle = _start_score_submission_workflow_handle(
         database_url=database_url,
@@ -153,6 +167,7 @@ def start_score_submission_workflow(
         scoring_profile_version=scoring_profile_version,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
+        dataset_snapshot_path=dataset_snapshot_path,
     )
     return score_attempt_id
 
@@ -165,8 +180,12 @@ def schedule_score_submission_workflow(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: str | None = None,
     recover_orphans: bool = True,
 ) -> ScheduledScoreSubmissionWorkflow:
+    resolved_snapshot_path = require_dataset_snapshot_path(
+        dataset_snapshot_path
+    )
     score_attempt_id = score_attempt_id_for_workflow(
         generation_run_id=generation_run_id,
         score_attempt_index=score_attempt_index,
@@ -207,6 +226,7 @@ def schedule_score_submission_workflow(
                 scoring_profile_version,
                 dataset_name,
                 dataset_split,
+                resolved_snapshot_path,
             ),
         ):
             return ScheduledScoreSubmissionWorkflow(
@@ -231,6 +251,7 @@ def schedule_score_submission_workflow(
                 scoring_profile_version,
                 dataset_name,
                 dataset_split,
+                resolved_snapshot_path,
             )
         except WORKFLOW_START_RACE_ERRORS:
             return ScheduledScoreSubmissionWorkflow(
@@ -270,6 +291,7 @@ def run_score_submission_workflow_once(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: str | None = None,
 ) -> ScoreSubmissionWorkflowResult:
     _score_attempt_id, handle = _start_score_submission_workflow_handle(
         database_url=database_url,
@@ -279,6 +301,7 @@ def run_score_submission_workflow_once(
         scoring_profile_version=scoring_profile_version,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
+        dataset_snapshot_path=dataset_snapshot_path,
     )
     result = handle.get_result()
     if not isinstance(result, dict):
@@ -333,7 +356,11 @@ def _start_score_submission_workflow_handle(
     scoring_profile_version: str,
     dataset_name: str,
     dataset_split: str,
+    dataset_snapshot_path: str | None,
 ) -> tuple[str, Any]:
+    resolved_snapshot_path = require_dataset_snapshot_path(
+        dataset_snapshot_path
+    )
     score_attempt_id = score_attempt_id_for_workflow(
         generation_run_id=generation_run_id,
         score_attempt_index=score_attempt_index,
@@ -352,6 +379,7 @@ def _start_score_submission_workflow_handle(
             scoring_profile_version,
             dataset_name,
             dataset_split,
+            resolved_snapshot_path,
         )
     return score_attempt_id, handle
 
@@ -391,11 +419,13 @@ def load_scoring_target_step(
 def load_humaneval_task_step(
     dataset_name: str,
     dataset_split: str,
+    dataset_snapshot_path: str,
     task_id: str,
 ) -> dict[str, Any]:
     task = load_humaneval_task_map(
         dataset_name=dataset_name,
         dataset_split=dataset_split,
+        dataset_snapshot_path=dataset_snapshot_path,
     ).get(task_id)
     if task is None:
         raise ValueError(f"HumanEval task not found: {task_id}")
@@ -407,13 +437,14 @@ def load_humaneval_task_map(
     *,
     dataset_name: str,
     dataset_split: str,
+    dataset_snapshot_path: str,
 ) -> dict[str, HumanEvalTask]:
-    tasks = parse_human_eval_dataset(
-        load_human_eval_rows(
-            dataset_name=dataset_name,
-            dataset_split=dataset_split,
-        )
+    snapshot = load_humaneval_snapshot(
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+        snapshot_path=dataset_snapshot_path,
     )
+    tasks = parse_human_eval_dataset(snapshot.rows)
     return {task.task_id: task for task in tasks}
 
 
@@ -436,6 +467,7 @@ def score_submission_step(
     score_attempt_index: int,
     dataset_name: str,
     dataset_split: str,
+    dataset_snapshot_payload: dict[str, Any],
     started_at: str,
 ) -> dict[str, Any]:
     scoring_profile = HumanEvalScoringProfile.model_validate(
@@ -455,6 +487,9 @@ def score_submission_step(
         score_attempt_index=score_attempt_index,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
+        dataset_snapshot=DatasetSnapshotIdentityPayload.model_validate(
+            dataset_snapshot_payload
+        ),
         started_at=datetime.fromisoformat(started_at),
     )
     return record.model_dump(mode="json")
@@ -502,3 +537,11 @@ def humaneval_task_from_payload(payload: dict[str, Any]) -> HumanEvalTask:
     cleaned.pop("ground_truth_code", None)
     cleaned.pop("ground_truth_code_without_comments", None)
     return HumanEvalTask.model_validate(cleaned)
+
+
+def require_dataset_snapshot_path(
+    dataset_snapshot_path: str | None,
+) -> str:
+    if dataset_snapshot_path is None or not dataset_snapshot_path:
+        raise ValueError("dataset_snapshot_path is required")
+    return dataset_snapshot_path

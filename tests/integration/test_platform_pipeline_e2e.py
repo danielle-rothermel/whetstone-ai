@@ -23,7 +23,10 @@ from tests.support.platform_integration_helpers import (
     fetch_workflow_run_snapshot,
     wait_for_workflow_result,
 )
-from tests.support.platform_scoring_fixtures import scoring_task
+from tests.support.platform_scoring_fixtures import (
+    dataset_snapshot_identity,
+    scoring_task,
+)
 from tests.support.platform_workflow_fixtures import (
     direct_node,
     prediction_spec,
@@ -74,6 +77,7 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_load_humaneval_task_step(
         dataset_name: str,
         dataset_split: str,
+        dataset_snapshot_path: str,
         task_id: str,
     ) -> dict[str, Any]:
         assert task_id == "HumanEval/fixture"
@@ -83,6 +87,11 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
         scoring_workflow,
         "load_humaneval_task_step",
         fake_load_humaneval_task_step,
+    )
+    monkeypatch.setattr(
+        scoring_workflow,
+        "read_snapshot_identity",
+        lambda path: dataset_snapshot_identity(),
     )
 
 
@@ -139,6 +148,7 @@ def test_jsonl_submit_enqueue_generation_and_scoring(
     score_result = run_score_submission_workflow_once(
         database_url,
         generation_run_id,
+        dataset_snapshot_path="snapshot.json",
     )
     expected_score_id = stable_score_attempt_id(
         generation_run_id=generation_run_id,

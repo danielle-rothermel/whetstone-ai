@@ -131,6 +131,7 @@ class ScheduleScoreWorkflow(Protocol):
         scoring_profile_version: str,
         dataset_name: str,
         dataset_split: str,
+        dataset_snapshot_path: str | None = None,
         recover_orphans: bool = True,
     ) -> ScheduledScoreSubmissionWorkflow: ...
 
@@ -223,6 +224,7 @@ def rescore_submission_runs(
     score_attempt_index: int = 0,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    dataset_snapshot_path: str | None = None,
     chunk_size: int = DEFAULT_RESCORE_CHUNK_SIZE,
     limit: int | None = None,
     dry_run: bool = False,
@@ -321,6 +323,7 @@ def rescore_submission_runs(
                 parser_version=scoring_profile.parser_profile.version,
                 dataset_name=dataset_name,
                 dataset_split=dataset_split,
+                dataset_snapshot_path=dataset_snapshot_path,
                 dry_run=dry_run,
                 recover_orphans=recover_orphans,
                 schedule_workflow=schedule_workflow,
@@ -501,6 +504,7 @@ def plan_or_schedule_rescore_item(
     parser_version: str,
     dataset_name: str,
     dataset_split: str,
+    dataset_snapshot_path: str | None,
     dry_run: bool,
     recover_orphans: bool,
     schedule_workflow: ScheduleScoreWorkflow,
@@ -545,6 +549,7 @@ def plan_or_schedule_rescore_item(
             scoring_profile_version=scoring_profile_version,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
+            dataset_snapshot_path=dataset_snapshot_path,
             recover_orphans=recover_orphans,
         )
     except Exception as error:
