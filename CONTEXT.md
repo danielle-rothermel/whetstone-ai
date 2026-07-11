@@ -8,7 +8,9 @@ durable via DBOS through the dr-platform kernel.
 
 **Experiment**:
 A named set of Prediction Specs evaluated together. At the platform
-boundary, submitting an Experiment's specs is a dr-platform Operation.
+boundary, generation and scoring are linked dr-platform Operations; Experiment
+outcome comes from Whetstone's Generation Run and Score Attempt records, not
+from platform execution success alone.
 _Avoid_: batch, sweep, run (unqualified)
 
 **Prediction**:
@@ -29,6 +31,15 @@ append-only.
 **Score Attempt**:
 One scoring pass over a completed Generation Run, recorded append-only.
 _Avoid_: eval, grading
+
+**Generation Operation**:
+The platform-facing submission that manages Prediction generation through the
+shared dr-platform lifecycle.
+
+**Scoring Operation**:
+The platform-facing submission that manages Score Attempts through the same
+dr-platform lifecycle after Whetstone selects eligible Generation Runs.
+_Avoid_: a separate scoring batch/recovery subsystem
 
 ### Boundary
 
