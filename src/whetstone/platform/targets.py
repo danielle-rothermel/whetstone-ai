@@ -31,6 +31,7 @@ from sqlalchemy.dialects.postgresql import insert
 from whetstone.db import io as db_io
 from whetstone.db import schema
 from whetstone.platform.graph_workflow import run_prediction_graph_workflow
+from whetstone.platform.scoring_workflow import run_score_submission_workflow
 from whetstone.records import ExperimentRecord, PredictionSpecRecord
 
 GENERATION_QUEUE_NAME = "whetstone-generation"
@@ -39,6 +40,10 @@ GENERATION_TARGET_KEY = "whetstone-generation"
 GENERATION_TARGET_VERSION = 1
 GENERATION_WORKFLOW_VERSION = 1
 GENERATION_ARGUMENT_RECIPE_VERSION = 1
+SCORING_TARGET_KEY = "whetstone-scoring"
+SCORING_TARGET_VERSION = 1
+SCORING_WORKFLOW_VERSION = 1
+SCORING_ARGUMENT_RECIPE_VERSION = 1
 CLASSIFIER_VERSION = 1
 
 
@@ -92,9 +97,50 @@ def generation_target() -> ExecutionTarget:
     )
 
 
+def scoring_target() -> ExecutionTarget:
+    """The final managed scoring target.
+
+    Its durable arguments are deliberately limited to a generation identity,
+    frozen profile/dataset axes, and the platform ordinal.  Database and
+    provider configuration are resolved inside DBOS steps.
+    """
+    declaration = TargetContractDeclaration(
+        queue_name=SCORING_QUEUE_NAME,
+        workflow_role="scoring",
+        managed_workflow_name="whetstone_scoring",
+        managed_workflow_version=SCORING_WORKFLOW_VERSION,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=SCORING_ARGUMENT_RECIPE_VERSION,
+        classifier_version=CLASSIFIER_VERSION,
+        registration_hook_name="whetstone_score_target_registration",
+        registration_hook_version=1,
+    )
+    return ExecutionTarget(
+        ref=declaration.target_ref(
+            target_key=SCORING_TARGET_KEY,
+            target_version=SCORING_TARGET_VERSION,
+        ),
+        queue_name=SCORING_QUEUE_NAME,
+        workflow_role="scoring",
+        managed_workflow_name="whetstone_scoring",
+        managed_workflow_version=SCORING_WORKFLOW_VERSION,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=SCORING_ARGUMENT_RECIPE_VERSION,
+        classifier_version=CLASSIFIER_VERSION,
+        registration_hook_name="whetstone_score_target_registration",
+        registration_hook_version=1,
+        workflow=run_score_submission_workflow,
+        execution_for=_scoring_execution_identity,
+        args_for=_scoring_arguments,
+        recipe_for=_scoring_recipe,
+        classify_error=enqueue_failure_from_whetstone_exception,
+        registration_hook=_register_score_targets,
+    )
+
+
 def target_registry() -> TargetRegistry:
     registry = TargetRegistry()
-    registry.register(generation_target())
+    registry.register_all((generation_target(), scoring_target()))
     return registry
 
 
@@ -138,8 +184,52 @@ def _generation_execution_identity(
     )
 
 
-def _generation_arguments(item: Any, attempt: int) -> tuple[str, int]:
-    return (str(item.spec["prediction_id"]), attempt)
+def _generation_arguments(item: Any, attempt: int) -> tuple[str, int, str]:
+    recipe_digest = _generation_recipe(cast("SubmittableItem", item)).digest()
+    return (str(item.spec["prediction_id"]), attempt, recipe_digest)
+
+
+def _scoring_recipe(item: SubmittableItem) -> ExecutionRecipeEnvelope:
+    target = scoring_target()
+    spec = item.spec
+    return ExecutionRecipeEnvelope(
+        target_ref=target.ref,
+        managed_workflow_name=target.managed_workflow_name,
+        managed_workflow_version=target.managed_workflow_version,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=SCORING_ARGUMENT_RECIPE_VERSION,
+        payload={
+            "generation_run_id": spec["generation_run_id"],
+            "scoring_profile_id": spec["scoring_profile_id"],
+            "scoring_profile_version": spec["scoring_profile_version"],
+            "parser_profile_id": spec["parser_profile_id"],
+            "parser_version": spec["parser_version"],
+            "dataset_name": spec["dataset_name"],
+            "dataset_split": spec["dataset_split"],
+            "dataset_snapshot": spec["dataset_snapshot"],
+            "application_version": "whetstone-v6",
+        },
+    )
+
+
+def _scoring_execution_identity(item: Any, attempt: int) -> ExecutionIdentity:
+    recipe_digest = _scoring_recipe(cast("SubmittableItem", item)).digest()
+    key = sha256_json_digest({"recipe": recipe_digest, "attempt": attempt})
+    return ExecutionIdentity(
+        execution_key=key, workflow_id=f"whetstone-scoring:{key}"
+    )
+
+
+def _scoring_arguments(item: Any, attempt: int) -> tuple[Any, ...]:
+    spec = item.spec
+    return (
+        str(spec["generation_run_id"]),
+        attempt,
+        str(spec["scoring_profile_id"]),
+        str(spec["scoring_profile_version"]),
+        str(spec["dataset_name"]),
+        str(spec["dataset_split"]),
+    )
 
 
 def _register_prediction_specs(
@@ -188,3 +278,23 @@ def _register_prediction_specs(
             )
         )
     return RegistrationResult(items=tuple(results))
+
+
+def _register_score_targets(
+    connection: Any, *, operation_key: str, items: tuple[RegistrationItem, ...]
+) -> RegistrationResult:
+    """Validate the frozen target rows without recreating legacy batching.
+
+    Score outcomes are append-only and are intentionally *not* inserted at
+    registration time.  A retry receives a new platform ordinal and persists
+    either one immutable ScoreAttempt or one harness-failure record.
+    """
+    _ = connection, operation_key
+    return RegistrationResult(
+        items=tuple(
+            RegistrationItemResult(
+                item_key=item.item_key, insert_status=ItemInsertStatus.INSERTED
+            )
+            for item in items
+        )
+    )

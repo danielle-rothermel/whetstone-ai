@@ -1,6 +1,11 @@
 """Whetstone v6 database schema exports."""
 
 from whetstone.db.schema import (
+    experiment_acceptance_evaluations,
+    experiment_acceptance_generation_candidates,
+    experiment_acceptance_generation_members,
+    experiment_acceptance_scoring_candidates,
+    experiment_acceptance_scoring_members,
     experiment_operation_manifests,
     experiments,
     generation_runs,
@@ -13,6 +18,11 @@ from whetstone.db.schema import (
 )
 
 __all__ = [
+    "experiment_acceptance_evaluations",
+    "experiment_acceptance_generation_candidates",
+    "experiment_acceptance_generation_members",
+    "experiment_acceptance_scoring_candidates",
+    "experiment_acceptance_scoring_members",
     "experiment_operation_manifests",
     "experiments",
     "generation_runs",

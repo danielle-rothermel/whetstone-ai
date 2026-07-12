@@ -128,6 +128,7 @@ def run_prediction_graph_core(
 def run_prediction_graph_workflow(
     prediction_id: str,
     attempt_index: int = 0,
+    execution_recipe_digest: str = "",
 ) -> str:
     database_url = resolve_database_url(None)
     spec = PredictionSpecRecord.model_validate(
@@ -135,6 +136,7 @@ def run_prediction_graph_workflow(
     )
     generation_run_id = stable_generation_run_id(
         prediction_id=spec.prediction_id,
+        execution_recipe_digest=execution_recipe_digest,
         attempt_index=attempt_index,
     )
     started_at = datetime.fromisoformat(
@@ -243,6 +245,7 @@ def _start_prediction_graph_workflow_handle(
 ) -> tuple[str, Any]:
     generation_run_id = stable_generation_run_id(
         prediction_id=prediction_id,
+        execution_recipe_digest="",
         attempt_index=attempt_index,
     )
     workflow_id = platform_generation_workflow_id(generation_run_id)
