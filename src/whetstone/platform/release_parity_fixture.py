@@ -777,14 +777,37 @@ def _rollback_prepare(journal: RunJournal, directory: Path) -> None:
 def _delete_remote(
     fence: PostgresPublicationFence, plane: PlaneDestination
 ) -> Mapping[str, int]:
-    for member in plane.members.values():
+    members = plane.members
+    if not members:
+        with fence.engine.connect() as connection:
+            manifest = connection.execute(
+                text(
+                    f"SELECT manifest_json FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+                ),
+                {
+                    "destination": plane.destination_id,
+                    "bundle": plane.bundle_key,
+                    "bundle_id": plane.pin.bundle_id,
+                },
+            ).scalar_one_or_none()
+        members = (
+            {
+                str(
+                    item["table_name"]
+                ): f"{item['schema_name']}.{item['table_name']}"
+                for item in json.loads(str(manifest)).get("members", [])
+            }
+            if manifest is not None
+            else {}
+        )
+    for member in members.values():
         schema, table = member.split(".", 1)
         if not _IDENTIFIER.fullmatch(schema) or not _IDENTIFIER.fullmatch(
             table
         ):
             raise ValueError("unsafe descriptor member")
     with fence.engine.begin() as connection:
-        for member in plane.members.values():
+        for member in members.values():
             schema, table = member.split(".", 1)
             connection.execute(
                 text(f'DROP TABLE IF EXISTS "{schema}"."{table}"')
@@ -815,7 +838,7 @@ def _delete_remote(
         )
     with fence.engine.connect() as connection:
         physical = 0
-        for member in plane.members.values():
+        for member in members.values():
             schema, table = member.split(".", 1)
             physical += int(
                 connection.execute(
@@ -849,28 +872,125 @@ def _delete_remote(
         } | {"physical_candidates": physical}
 
 
-def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
-    journal = _load_journal(descriptor_path)
-    descriptor = load_descriptor(descriptor_path)
+def _journal_plane(
+    journal: RunJournal, name: Literal["analysis", "detail"]
+) -> PlaneDestination | None:
+    """Reconstruct only deterministic, journal-owned remote cleanup authority."""
+    bundle_id = getattr(journal, f"{name}_bundle_id")
+    if not bundle_id:
+        return None
+    destination_id = getattr(journal, f"{name}_destination_id")
+    bundle_key = (
+        ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
+    )
+    return PlaneDestination(
+        destination_id=destination_id,
+        bundle_key=bundle_key,
+        pin=PinIdentity(
+            pin_id=f"{journal.run_id}-{name}-recovery",
+            bundle_id=bundle_id,
+            expires_at_ms=0,
+        ),
+        snapshot_seq=0,
+        members={},
+        member_counts={},
+        member_checksums={},
+    )
+
+
+def _cleanup_descriptor_or_journal(
+    descriptor_path: Path, journal: RunJournal
+) -> ReleaseParityDescriptor | None:
+    try:
+        descriptor = load_descriptor(descriptor_path)
+    except (FileNotFoundError, ValueError):
+        return None
     _descriptor_matches_journal(descriptor, journal)
+    return descriptor
+
+
+def _delete_journal_remote(
+    fence: PostgresPublicationFence,
+    journal: RunJournal,
+    name: Literal["analysis", "detail"],
+) -> Mapping[str, int]:
+    """Delete only bundle identities under this run's unique destination."""
+    destination = getattr(journal, f"{name}_destination_id")
+    bundle = ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
+    with fence.engine.connect() as connection:
+        values = connection.execute(
+            text(
+                f"SELECT DISTINCT bundle_id FROM {fence._bundles_table} "
+                "WHERE destination_id=:destination AND bundle_key=:bundle"
+            ),
+            {"destination": destination, "bundle": bundle},
+        ).scalars()
+        bundle_ids = [str(value) for value in values]
+    expected_id = getattr(journal, f"{name}_bundle_id")
+    if expected_id and expected_id not in bundle_ids:
+        bundle_ids.append(expected_id)
+    observations = [
+        _delete_remote(
+            fence,
+            PlaneDestination(
+                destination_id=destination,
+                bundle_key=bundle,
+                pin=PinIdentity(
+                    pin_id=f"{journal.run_id}-{name}-recovery",
+                    bundle_id=bundle_id,
+                    expires_at_ms=0,
+                ),
+                snapshot_seq=0,
+                members={},
+                member_counts={},
+                member_checksums={},
+            ),
+        )
+        for bundle_id in bundle_ids
+    ]
+    if not observations:
+        return dict.fromkeys(
+            ("state_rows", "bundle_rows", "pin_rows", "physical_candidates"),
+            0,
+        )
+    return {
+        key: sum(item[key] for item in observations) for key in observations[0]
+    }
+
+
+def cleanup(
+    descriptor_path: Path, proof_path: Path, journal_path: Path | None = None
+) -> CleanupProof:
+    if journal_path is not None and journal_path != _journal_path(
+        descriptor_path
+    ):
+        journal = RunJournal.model_validate_json(journal_path.read_text())
+        journal.validate_contract()
+    else:
+        journal = _load_journal(descriptor_path)
+    descriptor = _cleanup_descriptor_or_journal(descriptor_path, journal)
+    analysis = _remote(descriptor.analysis) if descriptor else None
+    detail = _remote(descriptor.detail) if descriptor else None
     analysis_fence = _fence(
         _required_env("MOTHERDUCK_DATABASE_URL"),
-        _remote(descriptor.analysis).destination_id,
+        journal.analysis_destination_id,
         "motherduck",
     )
     detail_fence = _fence(
         _required_env("NEON_DATABASE_URL"),
-        _remote(descriptor.detail).destination_id,
+        journal.detail_destination_id,
         "neon",
     )
     try:
         destinations = {
-            _remote(descriptor.analysis).destination_id: _delete_remote(
-                analysis_fence, _remote(descriptor.analysis)
-            ),
-            _remote(descriptor.detail).destination_id: _delete_remote(
-                detail_fence, _remote(descriptor.detail)
-            ),
+            journal.analysis_destination_id: _delete_remote(
+                analysis_fence, analysis
+            )
+            if analysis
+            else _delete_journal_remote(analysis_fence, journal, "analysis"),
+            journal.detail_destination_id: _delete_remote(detail_fence, detail)
+            if detail
+            else _delete_journal_remote(detail_fence, journal, "detail"),
         }
     finally:
         analysis_fence.engine.dispose()
@@ -902,21 +1022,54 @@ def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
         path.with_name(path.name + ".lock").unlink(missing_ok=True)
     proof = CleanupProof(
         schema_version=SCHEMA_VERSION,
-        run_id=descriptor.run_id,
+        run_id=journal.run_id,
         source_schema_absent=absent,
         local_files_absent=all(
             not (descriptor_path.parent / name).exists() for name in files
         ),
         destinations=destinations,
     )
-    proof.validate_against(descriptor)
+    if descriptor is not None:
+        proof.validate_against(descriptor)
+    elif any(
+        value != 0
+        for facts in destinations.values()
+        for value in facts.values()
+    ):
+        raise ValueError("journal recovery cleanup proof is not zero-state")
     proof_path.write_text(proof.model_dump_json(indent=2))
-    _trace("cleanup_succeeded", run_id=descriptor.run_id)
+    _trace(
+        "cleanup_succeeded", run_id=journal.run_id, recovery=descriptor is None
+    )
     return proof
 
 
-def verify_evidence(descriptor_path: Path, proof_path: Path) -> None:
-    descriptor = load_descriptor(descriptor_path)
+def verify_evidence(
+    descriptor_path: Path, proof_path: Path, journal_path: Path | None = None
+) -> None:
+    journal = (
+        RunJournal.model_validate_json(journal_path.read_text())
+        if journal_path is not None
+        else _load_journal(descriptor_path)
+    )
+    journal.validate_contract()
     proof = CleanupProof.model_validate_json(proof_path.read_text())
-    proof.validate_against(descriptor)
-    _trace("evidence_verified", run_id=descriptor.run_id)
+    descriptor = _cleanup_descriptor_or_journal(descriptor_path, journal)
+    if descriptor is not None:
+        proof.validate_against(descriptor)
+    elif (
+        proof.run_id != journal.run_id
+        or set(proof.destinations)
+        != {journal.analysis_destination_id, journal.detail_destination_id}
+        or not proof.source_schema_absent
+        or not proof.local_files_absent
+        or any(
+            value != 0
+            for facts in proof.destinations.values()
+            for value in facts.values()
+        )
+    ):
+        raise ValueError("journal recovery cleanup proof is not zero-state")
+    _trace(
+        "evidence_verified", run_id=journal.run_id, recovery=descriptor is None
+    )

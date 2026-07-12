@@ -133,6 +133,7 @@ def release_parity_fixture(
     cleanup_proof: Annotated[
         Path | None, typer.Option("--cleanup-proof")
     ] = None,
+    journal: Annotated[Path | None, typer.Option("--journal")] = None,
 ) -> None:
     """Produce or remove the disposable v6 release-parity fixture."""
 
@@ -147,7 +148,7 @@ def release_parity_fixture(
             raise typer.BadParameter("cleanup requires --cleanup-proof")
         typer.echo(
             cleanup_release_parity_fixture(
-                descriptor, cleanup_proof
+                descriptor, cleanup_proof, journal
             ).model_dump_json()
         )
     elif action == "verify-evidence":
@@ -155,7 +156,7 @@ def release_parity_fixture(
             raise typer.BadParameter(
                 "verify-evidence requires --cleanup-proof"
             )
-        verify_release_parity_evidence(descriptor, cleanup_proof)
+        verify_release_parity_evidence(descriptor, cleanup_proof, journal)
         typer.echo("verified")
     else:
         raise typer.BadParameter(

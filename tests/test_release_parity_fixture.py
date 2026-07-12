@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -10,6 +11,11 @@ from whetstone.platform.release_parity_fixture import (
     PinIdentity,
     PlaneDestination,
     ReleaseParityDescriptor,
+    RunJournal,
+    _cleanup_descriptor_or_journal,
+    _journal_path,
+    _write_journal,
+    verify_evidence,
 )
 from whetstone.publication import (
     ANALYSIS_BUNDLE_KEY,
@@ -174,3 +180,73 @@ def test_cleanup_proof_requires_independent_zero_state() -> None:
                 }
             }
         ).validate_against(descriptor)
+
+
+def test_missing_descriptor_retains_journal_recovery_authority(
+    tmp_path: Path,
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    journal = RunJournal(
+        schema_version=1,
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    )
+    _write_journal(_journal_path(descriptor_path), journal)
+    assert _cleanup_descriptor_or_journal(descriptor_path, journal) is None
+
+
+def test_recovery_evidence_accepts_a_missing_descriptor_with_zero_proof(
+    tmp_path: Path,
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    journal = RunJournal(
+        schema_version=1,
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    )
+    journal_path = _journal_path(descriptor_path)
+    _write_journal(journal_path, journal)
+    proof_path = tmp_path / "proof.json"
+    zero = {
+        "state_rows": 0,
+        "bundle_rows": 0,
+        "pin_rows": 0,
+        "physical_candidates": 0,
+    }
+    proof = CleanupProof(
+        schema_version=1,
+        run_id=journal.run_id,
+        source_schema_absent=True,
+        local_files_absent=True,
+        destinations={
+            journal.analysis_destination_id: zero,
+            journal.detail_destination_id: zero,
+        },
+    )
+    proof_path.write_text(proof.model_dump_json())
+    verify_evidence(descriptor_path, proof_path, journal_path)
+
+
+def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
+    workflow = Path(".github/workflows/release-parity.yml").read_text()
+    assert "DATABASE_URL: ${{ secrets.DATABASE_URL }}" in workflow
+    analysis_url = (
+        "ANALYSIS_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}"
+    )
+    assert analysis_url in workflow
+    assert "DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}" in workflow
+    journal = (
+        '--journal "$RUNNER_TEMP/release-parity/descriptor.json.journal.json"'
+    )
+    assert journal in workflow
+    action = "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
+    assert action in workflow
+    assert "@v4" not in workflow
