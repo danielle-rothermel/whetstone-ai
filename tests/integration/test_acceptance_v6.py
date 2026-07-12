@@ -76,26 +76,22 @@ def _submit_generation(
     )
 
 
-def _target(prediction_id: str, generation_run_id: str) -> ScoringTargetSpec:
+def _target(
+    prediction_id: str,
+    generation_run_id: str,
+    dataset_snapshot: dict[str, Any],
+) -> ScoringTargetSpec:
     return ScoringTargetSpec(
         prediction_id=prediction_id,
         generation_run_id=generation_run_id,
-        scoring_profile_id="score-profile",
-        scoring_profile_version="1",
-        parser_profile_id="parser-profile",
-        parser_version="1",
-        dataset_name="dataset",
+        scoring_profile_id="humaneval",
+        scoring_profile_version="v1",
+        parser_profile_id="humaneval-best-effort",
+        parser_version="v1",
+        dataset_name=str(dataset_snapshot["header"]["dataset_id"]),
         dataset_split="test",
         dataset_snapshot=DatasetSnapshotIdentityPayload.model_validate(
-            {
-                "sha256": "a" * 64,
-                "header": {
-                    "schema_version": 1,
-                    "dataset_id": "dataset",
-                    "hf_revision": "frozen",
-                    "overrides_digest": "b" * 64,
-                },
-            }
+            dataset_snapshot
         ),
     )
 
@@ -272,10 +268,67 @@ def test_conflicting_generation_registration_rolls_back_specs(
 
 
 @pytest.mark.integration
+def test_scoring_registration_rejects_forged_recipe_axes(
+    app_postgres_schema: Any,
+) -> None:
+    spec = prediction_spec(direct_graph(), experiment_name="exp")
+    snapshot = {
+        "sha256": "a" * 64,
+        "header": {
+            "schema_version": 1,
+            "dataset_id": "evalplus/humanevalplus",
+            "hf_revision": "frozen",
+            "overrides_digest": "b" * 64,
+        },
+    }
+    spec.task.metadata["dataset_snapshot"] = snapshot
+    _submit_generation(
+        app_postgres_schema.engine,
+        operation_key="generation",
+        specs=(spec,),
+    )
+    platform = PlatformSchema(prefix="whetstone")
+    with app_postgres_schema.engine.begin() as connection:
+        generation_item = connection.execute(
+            select(platform.items.c.item_id).where(
+                platform.items.c.operation_key == "generation"
+            )
+        ).scalar_one()
+        _insert_generation_run(
+            connection,
+            prediction_id=spec.prediction_id,
+            generation_run_id="run",
+            platform_item_id=generation_item,
+            platform_attempt=0,
+        )
+    forged = _target(spec.prediction_id, "run", snapshot).model_copy(
+        update={"parser_profile_id": "forged-parser"}
+    )
+    with pytest.raises(
+        ValueError,
+        match="profile/parser axes do not match",
+    ):
+        _submit_scoring(
+            app_postgres_schema.engine,
+            operation_key="scoring-forged",
+            targets=(forged,),
+        )
+
+
+@pytest.mark.integration
 def test_selection_candidates_cut_current_read_and_cli(
     app_postgres_schema: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec = prediction_spec(direct_graph(), experiment_name="exp")
+    spec.task.metadata["dataset_snapshot"] = {
+        "sha256": "a" * 64,
+        "header": {
+            "schema_version": 1,
+            "dataset_id": "evalplus/humanevalplus",
+            "hf_revision": "frozen",
+            "overrides_digest": "b" * 64,
+        },
+    }
     _submit_generation(
         app_postgres_schema.engine,
         operation_key="generation",
@@ -349,8 +402,16 @@ def test_selection_candidates_cut_current_read_and_cli(
     assert [run.generation_run_id for run in selected] == ["run-1"]
 
     targets = (
-        _target(spec.prediction_id, "run-0"),
-        _target(spec.prediction_id, "run-1"),
+        _target(
+            spec.prediction_id,
+            "run-0",
+            spec.task.metadata["dataset_snapshot"],
+        ),
+        _target(
+            spec.prediction_id,
+            "run-1",
+            spec.task.metadata["dataset_snapshot"],
+        ),
     )
     _submit_scoring(
         app_postgres_schema.engine,
@@ -358,12 +419,12 @@ def test_selection_candidates_cut_current_read_and_cli(
         targets=targets,
     )
     profile = RequiredScoringProfile(
-        scoring_profile_id="score-profile",
-        scoring_profile_version="1",
-        parser_profile_id="parser-profile",
-        parser_version="1",
-        dataset_name="dataset",
-        dataset_split="test",
+        scoring_profile_id=targets[0].scoring_profile_id,
+        scoring_profile_version=targets[0].scoring_profile_version,
+        parser_profile_id=targets[0].parser_profile_id,
+        parser_version=targets[0].parser_version,
+        dataset_name=targets[0].dataset_name,
+        dataset_split=targets[0].dataset_split,
     )
     with app_postgres_schema.engine.begin() as connection:
         scoring_items = {
@@ -453,11 +514,11 @@ def test_selection_candidates_cut_current_read_and_cli(
         [
             "evaluate",
             "exp",
-            "score-profile",
-            "1",
-            "parser-profile",
-            "1",
-            "dataset",
+            "humaneval",
+            "v1",
+            "humaneval-best-effort",
+            "v1",
+            targets[0].dataset_name,
             "test",
             "--json",
         ],

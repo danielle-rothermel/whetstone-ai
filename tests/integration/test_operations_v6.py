@@ -57,6 +57,15 @@ def test_authoritative_generation_and_scoring_domain_outcomes_create_retries(
     engine = app_postgres_schema.engine
     platform = PlatformSchema(prefix="whetstone")
     spec = prediction_spec(direct_graph(), experiment_name="exp")
+    spec.task.metadata["dataset_snapshot"] = {
+        "sha256": "a" * 64,
+        "header": {
+            "schema_version": 1,
+            "dataset_id": "evalplus/humanevalplus",
+            "hf_revision": "frozen",
+            "overrides_digest": "b" * 64,
+        },
+    }
     _submit_generation(engine, operation_key="generation", specs=(spec,))
     now = datetime.now(UTC)
     with engine.begin() as connection:
@@ -124,7 +133,11 @@ def test_authoritative_generation_and_scoring_domain_outcomes_create_retries(
         == generation_result
     )
 
-    target = _target(spec.prediction_id, "failed-run")
+    target = _target(
+        spec.prediction_id,
+        "failed-run",
+        spec.task.metadata["dataset_snapshot"],
+    )
     _submit_scoring(engine, operation_key="scoring", targets=(target,))
     with engine.begin() as connection:
         scoring_item = connection.execute(

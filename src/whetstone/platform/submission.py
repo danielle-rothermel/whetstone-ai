@@ -17,13 +17,13 @@ from dr_platform import (
 )
 from dr_platform.submission import prepare_manifest
 from dr_serialize import sha256_json_digest
-from pydantic import BaseModel, ConfigDict, StrictStr
 from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Connection, Engine
 
 from whetstone.db import io as db_io
 from whetstone.db import schema
 from whetstone.platform.targets import (
+    ScoringTargetSpec,
     generation_target,
     scoring_target,
     target_registry,
@@ -50,46 +50,6 @@ class PredictionSpecManifestSource:
         self, *, start_index: int, end_index: int
     ) -> tuple[PredictionSpecRecord, ...]:
         return self.specs[start_index:end_index]
-
-
-class ScoringTargetSpec(BaseModel):
-    """A concrete, immutable scoring Item recipe input."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    prediction_id: StrictStr
-    generation_run_id: StrictStr
-    scoring_profile_id: StrictStr
-    scoring_profile_version: StrictStr
-    parser_profile_id: StrictStr
-    parser_version: StrictStr
-    dataset_name: StrictStr
-    dataset_split: StrictStr
-    dataset_snapshot: DatasetSnapshotIdentityPayload
-
-    @property
-    def item_key(self) -> str:
-        return sha256_json_digest(
-            {
-                "generation_run_id": self.generation_run_id,
-                "scoring_profile_id": self.scoring_profile_id,
-                "scoring_profile_version": self.scoring_profile_version,
-                "parser_profile_id": self.parser_profile_id,
-                "parser_version": self.parser_version,
-                "dataset_name": self.dataset_name,
-                "dataset_split": self.dataset_split,
-            }
-        )
-
-    @property
-    def spec(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-    @property
-    def service_class(self):
-        from dr_platform import ServiceClass
-
-        return ServiceClass.STANDARD
 
 
 @dataclass(frozen=True)

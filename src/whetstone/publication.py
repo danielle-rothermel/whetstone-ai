@@ -39,6 +39,8 @@ DETAIL_MEMBERS = (
     "detail_score_harness_failures",
     "detail_platform_attempts",
 )
+PUBLISHED_COMPRESSION_METHOD = "gzip"
+PUBLISHED_COMPRESSION_SEMANTICS = "ratio_to_ground_truth"
 
 
 class BundleRow(BaseModel):
@@ -74,13 +76,39 @@ def _builder(
 # historical evaluation is never silently published merely because it is the
 # newest row; the experiment pointer is the authority.
 _ACCEPTED = """
-WITH accepted_predictions AS (
-  SELECT p.* FROM whetstone_prediction_specs p
-  JOIN whetstone_experiments e ON e.experiment_name = p.experiment_name
+WITH current_acceptances AS (
+  SELECT e.*, a.acceptance_id
+  FROM whetstone_experiments e
   JOIN whetstone_experiment_acceptance_evaluations a
     ON a.acceptance_id = e.current_acceptance_id
   WHERE e.current_acceptance_id IS NOT NULL
     AND a.acceptance_source_version = e.acceptance_source_version
+),
+accepted_predictions AS (
+  SELECT p.*, e.acceptance_id,
+    gm.generation_run_id AS selected_generation_run_id
+  FROM current_acceptances e
+  JOIN whetstone_experiment_acceptance_generation_members gm
+    ON gm.acceptance_id = e.acceptance_id
+    AND gm.disposition = 'selected_success'
+  JOIN whetstone_prediction_specs p
+    ON p.prediction_id = gm.prediction_id
+    AND p.experiment_name = e.experiment_name
+),
+selected_generation_runs AS (
+  SELECT g.* FROM accepted_predictions p
+  JOIN whetstone_generation_runs g
+    ON g.generation_run_id = p.selected_generation_run_id
+),
+selected_score_attempts AS (
+  SELECT s.* FROM accepted_predictions p
+  JOIN whetstone_experiment_acceptance_scoring_members sm
+    ON sm.acceptance_id = p.acceptance_id
+    AND sm.prediction_id = p.prediction_id
+    AND sm.disposition = 'accepted'
+  JOIN whetstone_score_attempts s
+    ON s.score_attempt_id = sm.score_attempt_id
+    AND s.generation_run_id = p.selected_generation_run_id
 )
 """
 
@@ -105,17 +133,15 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "snapshot_seq",
             ),
             unique_key=("experiment_id",),
-            full_rebuild_builder=_builder("""
+            full_rebuild_builder=_builder(_ACCEPTED + """
               SELECT e.experiment_name AS experiment_id, e.experiment_name AS display_name,
                 COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind,
                 'whetstone' AS source, count(p.prediction_id)::bigint AS row_count,
                 avg(CASE WHEN s.score >= 1 THEN 1.0 ELSE 0.0 END) AS pass_rate,
                 e.created_at, e.acceptance_updated_at AS updated_at, e.config_metadata AS config_json
-              FROM whetstone_experiments e
-              JOIN whetstone_experiment_acceptance_evaluations a ON a.acceptance_id = e.current_acceptance_id
-              LEFT JOIN whetstone_prediction_specs p ON p.experiment_name = e.experiment_name
-              LEFT JOIN LATERAL (SELECT score FROM whetstone_score_attempts x WHERE x.prediction_id = p.prediction_id ORDER BY x.completed_at DESC LIMIT 1) s ON true
-              WHERE a.acceptance_source_version = e.acceptance_source_version
+              FROM current_acceptances e
+              LEFT JOIN accepted_predictions p ON p.experiment_name = e.experiment_name
+              LEFT JOIN LATERAL (SELECT score FROM selected_score_attempts x WHERE x.prediction_id = p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
               GROUP BY e.experiment_name, e.config_metadata, e.created_at, e.acceptance_updated_at
             """),
         ),
@@ -148,7 +174,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
             references=(("experiment_id", "experiments", "experiment_id"),),
             full_rebuild_builder=_builder(
                 _ACCEPTED
-                + """
+                + f"""
               SELECT p.prediction_id, p.experiment_name AS experiment_id, p.prediction_id AS candidate_id,
                 p.task_id, p.repetition_seed AS sample_index,
                 COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind,
@@ -157,17 +183,16 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 g.status AS generation_status, s.status AS scoring_status, s.score,
                 costs.provider_cost,
                 EXTRACT(EPOCH FROM (COALESCE(s.completed_at, g.completed_at) - COALESCE(s.started_at, g.started_at))) * 1000 AS latency_ms,
-                NULLIF(s.metrics->>'realized_compression_ratio', '')::double precision AS compression_ratio,
-                COALESCE(h.failure->>'class', n.failure->>'class') AS failure_class,
+                NULLIF(s.metrics->'compression'->'{PUBLISHED_COMPRESSION_METHOD}'->>'{PUBLISHED_COMPRESSION_SEMANTICS}', '')::double precision AS compression_ratio,
+                n.failure->>'class' AS failure_class,
                 p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
                 COALESCE(s.metrics, g.summary) AS summary_json
               FROM accepted_predictions p
               JOIN whetstone_experiments e ON e.experiment_name = p.experiment_name
-              LEFT JOIN LATERAL (SELECT * FROM whetstone_generation_runs x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) g ON true
-              LEFT JOIN LATERAL (SELECT * FROM whetstone_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) s ON true
-              LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id) costs ON true
-              LEFT JOIN LATERAL (SELECT * FROM whetstone_score_harness_failures x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) h ON true
-              LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id AND x.failure IS NOT NULL ORDER BY x.completed_at DESC LIMIT 1) n ON true
+              JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
+              LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
+              LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id) costs ON true
+              LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id AND x.failure IS NOT NULL ORDER BY x.completed_at DESC LIMIT 1) n ON true
             """
             ),
         ),
@@ -196,7 +221,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
               SELECT g.generation_run_id, g.prediction_id, g.attempt_index, g.execution_recipe_digest,
                 g.platform_item_id, g.platform_attempt, g.status, g.terminal_node_id,
                 g.summary AS summary_json, g.started_at, g.completed_at
-              FROM whetstone_generation_runs g JOIN accepted_predictions p ON p.prediction_id=g.prediction_id
+              FROM selected_generation_runs g JOIN accepted_predictions p ON p.selected_generation_run_id=g.generation_run_id
             """
             ),
         ),
@@ -235,7 +260,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 s.platform_item_id, s.platform_attempt, s.scoring_profile_id, s.parser_profile_id,
                 s.dataset_name, s.dataset_split, s.status, s.submission_outcome, s.score,
                 s.metrics AS metrics_json, s.started_at, s.completed_at
-              FROM whetstone_score_attempts s JOIN accepted_predictions p ON p.prediction_id=s.prediction_id
+              FROM selected_score_attempts s JOIN accepted_predictions p ON p.prediction_id=s.prediction_id
             """
             ),
         ),
@@ -250,8 +275,8 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
             ),
             unique_key=("experiment_id", "metric_key"),
             references=(("experiment_id", "experiments", "experiment_id"),),
-            full_rebuild_builder=_builder("""
-          SELECT experiment_name AS experiment_id, 'acceptance_source_version' AS metric_key, acceptance_source_version::double precision AS metric_value FROM whetstone_experiments WHERE current_acceptance_id IS NOT NULL
+            full_rebuild_builder=_builder(_ACCEPTED + """
+          SELECT experiment_name AS experiment_id, 'acceptance_source_version' AS metric_key, acceptance_source_version::double precision AS metric_value FROM current_acceptances
         """),
         ),
         ProjectionSpec(
@@ -269,7 +294,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 _ACCEPTED
                 + """
           SELECT p.experiment_name AS experiment_id, COALESCE(n.failure->>'class', 'NONE') AS failure_class, count(*)::bigint AS failure_count
-          FROM accepted_predictions p LEFT JOIN whetstone_node_attempts n ON n.prediction_id=p.prediction_id AND n.failure IS NOT NULL
+          FROM accepted_predictions p LEFT JOIN whetstone_node_attempts n ON n.generation_run_id=p.selected_generation_run_id AND n.failure IS NOT NULL
           GROUP BY p.experiment_name, COALESCE(n.failure->>'class', 'NONE')
         """
             ),
@@ -291,9 +316,9 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
         p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
         COALESCE(s.metrics, g.summary) AS summary_json
       FROM accepted_predictions p JOIN whetstone_experiments e ON e.experiment_name=p.experiment_name
-      LEFT JOIN LATERAL (SELECT * FROM whetstone_generation_runs x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) g ON true
-      LEFT JOIN LATERAL (SELECT * FROM whetstone_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) s ON true
-      LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id) costs ON true
+      JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
+      LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
+      LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id) costs ON true
     """
     )
     return (
@@ -349,9 +374,9 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             p.graph_snapshot->>'prompt' AS prompt_text, p.task_snapshot->>'code' AS code_text,
             g.summary AS raw_generation, s.metrics AS metrics_json, NULL::jsonb AS request_json,
             n.response_metadata AS response_json, NULL::jsonb AS validation_json
-          FROM accepted_predictions p LEFT JOIN LATERAL (SELECT * FROM whetstone_generation_runs x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) g ON true
-          LEFT JOIN LATERAL (SELECT * FROM whetstone_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) s ON true
-          LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.completed_at DESC LIMIT 1) n ON true
+          FROM accepted_predictions p JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
+          LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
+          LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id ORDER BY x.completed_at DESC LIMIT 1) n ON true
         """
             ),
         ),
@@ -378,7 +403,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + """
-          SELECT g.prediction_id, g.generation_run_id, g.attempt_index, g.execution_recipe_digest, g.platform_item_id, g.platform_attempt, g.status, g.terminal_node_id, g.terminal_output_node_id, g.summary AS summary_json, g.started_at, g.completed_at FROM whetstone_generation_runs g JOIN accepted_predictions p ON p.prediction_id=g.prediction_id
+          SELECT g.prediction_id, g.generation_run_id, g.attempt_index, g.execution_recipe_digest, g.platform_item_id, g.platform_attempt, g.status, g.terminal_node_id, g.terminal_output_node_id, g.summary AS summary_json, g.started_at, g.completed_at FROM accepted_predictions p JOIN whetstone_experiment_acceptance_generation_candidates c ON c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id JOIN whetstone_generation_runs g ON g.generation_run_id=c.generation_run_id
         """
             ),
         ),
@@ -409,7 +434,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + """
-          SELECT n.prediction_id, n.node_attempt_id, n.generation_run_id, n.node_id, n.attempt_index, n.status, n.provider_kind, n.endpoint_kind, n.model, n.provider_config AS provider_config_json, n.output AS output_json, n.usage_cost AS usage_cost_json, n.response_metadata AS response_metadata_json, n.failure AS failure_json, n.started_at, n.completed_at FROM whetstone_node_attempts n JOIN accepted_predictions p ON p.prediction_id=n.prediction_id
+          SELECT n.prediction_id, n.node_attempt_id, n.generation_run_id, n.node_id, n.attempt_index, n.status, n.provider_kind, n.endpoint_kind, n.model, n.provider_config AS provider_config_json, n.output AS output_json, n.usage_cost AS usage_cost_json, n.response_metadata AS response_metadata_json, n.failure AS failure_json, n.started_at, n.completed_at FROM accepted_predictions p JOIN whetstone_experiment_acceptance_generation_candidates c ON c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id JOIN whetstone_node_attempts n ON n.generation_run_id=c.generation_run_id
         """
             ),
         ),
@@ -446,7 +471,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + """
-          SELECT s.prediction_id, s.score_attempt_id, s.generation_run_id, s.attempt_index, s.execution_recipe_digest, s.platform_item_id, s.platform_attempt, s.scoring_profile_id, s.scoring_profile_version, s.parser_profile_id, s.parser_version, s.dataset_name, s.dataset_split, s.dataset_snapshot AS dataset_snapshot_json, s.status, s.submission_outcome, s.score, s.extracted_submission AS extracted_submission_json, s.metrics AS metrics_json, s.per_test_results AS per_test_results_json, s.started_at, s.completed_at FROM whetstone_score_attempts s JOIN accepted_predictions p ON p.prediction_id=s.prediction_id
+          SELECT s.prediction_id, s.score_attempt_id, s.generation_run_id, s.attempt_index, s.execution_recipe_digest, s.platform_item_id, s.platform_attempt, s.scoring_profile_id, s.scoring_profile_version, s.parser_profile_id, s.parser_version, s.dataset_name, s.dataset_split, s.dataset_snapshot AS dataset_snapshot_json, s.status, s.submission_outcome, s.score, s.extracted_submission AS extracted_submission_json, s.metrics AS metrics_json, s.per_test_results AS per_test_results_json, s.started_at, s.completed_at FROM accepted_predictions p JOIN whetstone_experiment_acceptance_scoring_candidates c ON c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id AND c.candidate_kind='score_attempt' JOIN whetstone_score_attempts s ON s.score_attempt_id=c.score_attempt_id
         """
             ),
         ),
@@ -476,7 +501,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + """
-          SELECT h.prediction_id, h.score_harness_failure_id, h.generation_run_id, h.score_attempt_id, h.attempt_index, h.execution_recipe_digest, h.platform_item_id, h.platform_attempt, h.scoring_profile_id, h.parser_profile_id, h.dataset_name, h.dataset_split, h.failure AS failure_json, h.started_at, h.completed_at FROM whetstone_score_harness_failures h JOIN accepted_predictions p ON p.prediction_id=h.prediction_id
+          SELECT h.prediction_id, h.score_harness_failure_id, h.generation_run_id, h.score_attempt_id, h.attempt_index, h.execution_recipe_digest, h.platform_item_id, h.platform_attempt, h.scoring_profile_id, h.parser_profile_id, h.dataset_name, h.dataset_split, h.failure AS failure_json, h.started_at, h.completed_at FROM accepted_predictions p JOIN whetstone_experiment_acceptance_scoring_candidates c ON c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id AND c.candidate_kind='score_harness_failure' JOIN whetstone_score_harness_failures h ON h.score_attempt_id=c.score_attempt_id
         """
             ),
         ),
@@ -505,7 +530,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 _ACCEPTED
                 + """
           SELECT p.prediction_id, a.item_id AS platform_item_id, a.attempt AS platform_attempt, a.workflow_role, a.execution_key, a.workflow_id, a.execution_state, a.dbos_status, a.failure AS failure_json, a.created_at, a.enqueued_at, a.terminal_at, a.updated_at
-          FROM accepted_predictions p JOIN whetstone_item_attempts a ON (a.item_id, a.attempt) IN (SELECT g.platform_item_id, g.platform_attempt FROM whetstone_generation_runs g WHERE g.prediction_id=p.prediction_id UNION ALL SELECT s.platform_item_id, s.platform_attempt FROM whetstone_score_attempts s WHERE s.prediction_id=p.prediction_id UNION ALL SELECT h.platform_item_id, h.platform_attempt FROM whetstone_score_harness_failures h WHERE h.prediction_id=p.prediction_id)
+          FROM accepted_predictions p JOIN whetstone_item_attempts a ON (a.item_id, a.attempt) IN (SELECT c.platform_item_id, c.platform_attempt FROM whetstone_experiment_acceptance_generation_candidates c WHERE c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id UNION SELECT c.platform_item_id, c.platform_attempt FROM whetstone_experiment_acceptance_scoring_candidates c WHERE c.acceptance_id=p.acceptance_id AND c.prediction_id=p.prediction_id)
         """
             ),
         ),

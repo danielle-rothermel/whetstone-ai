@@ -31,7 +31,7 @@ def summarize_pinned_candidates(
     """Summarize only one immutable Analysis snapshot for COPRO ranking."""
 
     predictions = reader.rows(
-        "predictions", where="experiment_name = ?", params=(experiment_name,)
+        "predictions", where="experiment_id = ?", params=(experiment_name,)
     )
     candidate_for_prediction = {
         str(row["prediction_id"]): str(row.get("candidate_id", ""))

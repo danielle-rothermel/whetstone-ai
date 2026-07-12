@@ -27,6 +27,7 @@ from dr_platform.submission import (
 )
 from dr_platform.targets import TargetContractDeclaration
 from dr_serialize import sha256_json_digest
+from pydantic import BaseModel, ConfigDict, StrictStr
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
@@ -39,7 +40,11 @@ from whetstone.platform.acceptance import (
 )
 from whetstone.platform.graph_workflow import run_prediction_graph_workflow
 from whetstone.platform.scoring_workflow import run_score_submission_workflow
-from whetstone.records import ExperimentRecord, PredictionSpecRecord
+from whetstone.records import (
+    DatasetSnapshotIdentityPayload,
+    ExperimentRecord,
+    PredictionSpecRecord,
+)
 
 GENERATION_QUEUE_NAME = "whetstone-generation"
 SCORING_QUEUE_NAME = "whetstone-scoring"
@@ -52,6 +57,46 @@ SCORING_TARGET_VERSION = 1
 SCORING_WORKFLOW_VERSION = 1
 SCORING_ARGUMENT_RECIPE_VERSION = 1
 CLASSIFIER_VERSION = 1
+
+
+class ScoringTargetSpec(BaseModel):
+    """A concrete, immutable scoring Item recipe input."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    prediction_id: StrictStr
+    generation_run_id: StrictStr
+    scoring_profile_id: StrictStr
+    scoring_profile_version: StrictStr
+    parser_profile_id: StrictStr
+    parser_version: StrictStr
+    dataset_name: StrictStr
+    dataset_split: StrictStr
+    dataset_snapshot: DatasetSnapshotIdentityPayload
+
+    @property
+    def item_key(self) -> str:
+        return sha256_json_digest(
+            {
+                "generation_run_id": self.generation_run_id,
+                "scoring_profile_id": self.scoring_profile_id,
+                "scoring_profile_version": self.scoring_profile_version,
+                "parser_profile_id": self.parser_profile_id,
+                "parser_version": self.parser_version,
+                "dataset_name": self.dataset_name,
+                "dataset_split": self.dataset_split,
+            }
+        )
+
+    @property
+    def spec(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    @property
+    def service_class(self):
+        from dr_platform import ServiceClass
+
+        return ServiceClass.STANDARD
 
 
 def enqueue_failure_from_whetstone_exception(
@@ -205,7 +250,7 @@ def _generation_arguments(
 
 def _scoring_recipe(item: SubmittableItem) -> ExecutionRecipeEnvelope:
     target = scoring_target()
-    spec = item.spec
+    spec = ScoringTargetSpec.model_validate(item.spec).model_dump(mode="json")
     return ExecutionRecipeEnvelope(
         target_ref=target.ref,
         managed_workflow_name=target.managed_workflow_name,
@@ -235,14 +280,17 @@ def _scoring_execution_identity(item: Any, attempt: int) -> ExecutionIdentity:
 
 
 def _scoring_arguments(item: Any, attempt: int) -> tuple[Any, ...]:
-    spec = item.spec
+    spec = ScoringTargetSpec.model_validate(item.spec)
     return (
-        str(spec["generation_run_id"]),
+        spec.generation_run_id,
         attempt,
-        str(spec["scoring_profile_id"]),
-        str(spec["scoring_profile_version"]),
-        str(spec["dataset_name"]),
-        str(spec["dataset_split"]),
+        spec.scoring_profile_id,
+        spec.scoring_profile_version,
+        spec.parser_profile_id,
+        spec.parser_version,
+        spec.dataset_name,
+        spec.dataset_split,
+        spec.dataset_snapshot.model_dump(mode="json"),
         _scoring_recipe(cast("SubmittableItem", item)).digest(),
         item.item_id,
     )
@@ -375,17 +423,51 @@ def _register_score_targets(
     registration time.  A retry receives a new platform ordinal and persists
     either one immutable ScoreAttempt or one harness-failure record.
     """
-    if page.is_final_page:
-        platform = PlatformSchema(prefix="whetstone")
-        operation = (
-            connection.execute(
-                select(platform.operations).where(
-                    platform.operations.c.operation_key == operation_key
-                )
+    platform = PlatformSchema(prefix="whetstone")
+    operation = (
+        connection.execute(
+            select(platform.operations).where(
+                platform.operations.c.operation_key == operation_key
             )
-            .mappings()
-            .one()
         )
+        .mappings()
+        .one()
+    )
+    experiment_name = str(operation["group_key"])
+    results: list[RegistrationItemResult] = []
+    for item in items:
+        target = ScoringTargetSpec.model_validate(item.spec)
+        canonical_spec = target.model_dump(mode="json")
+        if item.spec != canonical_spec:
+            raise ValueError(
+                "scoring target is not in exact canonical form: "
+                f"{item.item_key!r}"
+            )
+        if item.item_key != target.item_key:
+            raise ValueError(
+                "scoring target item key does not match its recipe"
+            )
+        canonical_recipe = _scoring_recipe(cast("SubmittableItem", item))
+        if (
+            item.execution_recipe != canonical_recipe
+            or item.execution_recipe_digest != canonical_recipe.digest()
+        ):
+            raise ValueError(
+                "scoring target execution recipe does not match its canonical "
+                "profile/parser/snapshot inputs"
+            )
+        _validate_registered_scoring_target(
+            connection,
+            target=target,
+            experiment_name=experiment_name,
+        )
+        results.append(
+            RegistrationItemResult(
+                item_key=item.item_key,
+                insert_status=ItemInsertStatus.INSERTED,
+            )
+        )
+    if page.is_final_page:
         spec = dict(operation["spec"])
         accept_operation_manifest(
             connection,
@@ -396,14 +478,71 @@ def _register_score_targets(
             selection_digest=str(spec["selection_digest"]),
             target_ref=_target_ref_from_operation(operation),
         )
-    return RegistrationResult(
-        items=tuple(
-            RegistrationItemResult(
-                item_key=item.item_key, insert_status=ItemInsertStatus.INSERTED
+    return RegistrationResult(items=tuple(results))
+
+
+def _validate_registered_scoring_target(
+    connection: Any,
+    *,
+    target: ScoringTargetSpec,
+    experiment_name: str,
+) -> None:
+    generation_run = (
+        connection.execute(
+            select(schema.generation_runs).where(
+                schema.generation_runs.c.generation_run_id
+                == target.generation_run_id
             )
-            for item in items
         )
+        .mappings()
+        .one()
     )
+    if generation_run["prediction_id"] != target.prediction_id:
+        raise ValueError(
+            "scoring target Generation Run does not belong to its Prediction"
+        )
+    prediction = (
+        connection.execute(
+            select(schema.prediction_specs).where(
+                schema.prediction_specs.c.prediction_id == target.prediction_id
+            )
+        )
+        .mappings()
+        .one()
+    )
+    canonical_prediction = db_io.prediction_spec_record_from_row(
+        dict(prediction)
+    )
+    if canonical_prediction.experiment_name != experiment_name:
+        raise ValueError(
+            "scoring target Prediction does not belong to the Operation group"
+        )
+    snapshot = canonical_prediction.task.metadata.get("dataset_snapshot")
+    if snapshot != target.dataset_snapshot.model_dump(mode="json"):
+        raise ValueError(
+            "scoring target dataset snapshot does not match the canonical "
+            "Prediction snapshot"
+        )
+    if target.dataset_snapshot.header.dataset_id != target.dataset_name:
+        raise ValueError(
+            "scoring target dataset name does not match its snapshot identity"
+        )
+    from dr_code.humaneval import resolve_humaneval_scoring_profile
+
+    profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=target.scoring_profile_id,
+        scoring_profile_version=target.scoring_profile_version,
+    )
+    if (
+        profile.profile_id != target.scoring_profile_id
+        or profile.version != target.scoring_profile_version
+        or profile.parser_profile.profile_id != target.parser_profile_id
+        or profile.parser_profile.version != target.parser_version
+    ):
+        raise ValueError(
+            "scoring target profile/parser axes do not match the canonical "
+            "scoring profile"
+        )
 
 
 def _target_ref_from_operation(operation: Any) -> dict[str, Any]:
