@@ -40,12 +40,14 @@ def test_tuple_json_output_is_one_valid_array(
             item_id="a",
             source_attempt=0,
             workflow_id="w-a",
+            execution_key="execution-a",
             execution_state="active",
         ),
         operations.AttemptPreview(
             item_id="b",
             source_attempt=1,
             workflow_id="w-b",
+            execution_key="execution-b",
             execution_state="succeeded",
         ),
     )
@@ -116,11 +118,16 @@ def test_cancel_preview_does_not_mutate_and_drift_blocks_apply(
         operation_key="operation",
         platform_cut_version=3,
         affected_attempts=(),
+        expected_cut=operations.CancellationExpectedCut(
+            platform_cut_version=3,
+            attempts=(),
+        ),
         eligible=True,
         exhausted=False,
         rejection_detail=None,
     )
     mutation_calls = 0
+    submitted_requests: list[Any] = []
 
     class Canceller:
         client = SimpleNamespace(destroy=lambda: None)
@@ -128,6 +135,7 @@ def test_cancel_preview_does_not_mutate_and_drift_blocks_apply(
     def mutate(*args: Any, **kwargs: Any) -> None:
         nonlocal mutation_calls
         mutation_calls += 1
+        submitted_requests.append(args[0])
 
     monkeypatch.setattr(operations, "_engine", lambda: engine)
     monkeypatch.setattr(operations, "WhetstoneDbosCanceller", Canceller)
@@ -156,4 +164,75 @@ def test_cancel_preview_does_not_mutate_and_drift_blocks_apply(
         confirm=True,
         preview_digest=preview.preview_digest,
     )
-    assert mutation_calls == 1
+    operations.cancel(
+        "operation",
+        "request",
+        "operator",
+        confirm=True,
+        preview_digest=preview.preview_digest,
+    )
+    assert mutation_calls == 2
+    assert isinstance(preview, operations.CancellationPreview)
+    expected_request = operations.CancellationRequest(
+        operation_key="operation",
+        request_id="request",
+        requested_by="operator",
+        expected_cut=preview.expected_cut,
+    )
+    assert submitted_requests == [
+        expected_request,
+        expected_request,
+    ]
+
+
+def test_cancel_preview_digest_binds_exact_sorted_attempt_cut() -> None:
+    expected = operations.CancellationExpectedCut(
+        platform_cut_version=3,
+        attempts=(
+            operations.CancellationAttemptCut(
+                item_id="item-a",
+                attempt=0,
+                workflow_id="workflow-a",
+                execution_key="execution-a",
+            ),
+            operations.CancellationAttemptCut(
+                item_id="item-b",
+                attempt=1,
+                workflow_id="workflow-b",
+                execution_key="execution-b",
+            ),
+        ),
+    )
+    preview = operations._mutation_preview(
+        command="cancel",
+        request_identity={"operation_key": "operation"},
+        operation_key="operation",
+        platform_cut_version=3,
+        affected_attempts=(),
+        expected_cut=expected,
+        eligible=True,
+        exhausted=False,
+        rejection_detail=None,
+    )
+    aba_preview = operations._mutation_preview(
+        **{
+            **preview.model_dump(exclude={"preview_digest"}),
+            "expected_cut": expected.model_copy(
+                update={
+                    "attempts": (
+                        expected.attempts[0].model_copy(
+                            update={"execution_key": "execution-a-successor"}
+                        ),
+                        expected.attempts[1],
+                    )
+                }
+            ),
+        }
+    )
+
+    assert aba_preview.preview_digest != preview.preview_digest
+    with pytest.raises(ValueError, match="unique and sorted"):
+        operations.CancellationExpectedCut(
+            platform_cut_version=3,
+            attempts=(expected.attempts[1], expected.attempts[0]),
+        )

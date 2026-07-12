@@ -11,6 +11,8 @@ import typer
 from dbos import DBOSClient
 from dr_platform import (
     AttemptExecutionState,
+    CancellationAttemptCut,
+    CancellationExpectedCut,
     CancellationInspection,
     CancellationInspectionDisposition,
     CancellationRequest,
@@ -61,6 +63,7 @@ class AttemptPreview(BaseModel):
     item_id: str
     source_attempt: int
     workflow_id: str
+    execution_key: str
     execution_state: str
     has_children: bool | None = None
     shared_reference: bool | None = None
@@ -80,13 +83,25 @@ class MutationPreview(BaseModel):
     preview_digest: str
 
 
+class CancellationPreview(MutationPreview):
+    expected_cut: CancellationExpectedCut
+
+
 def _preview_digest(value: dict[str, Any]) -> str:
     return sha256_json_digest(value)
 
 
 def _mutation_preview(**values: Any) -> MutationPreview:
-    digest = _preview_digest(values)
-    return MutationPreview(**values, preview_digest=digest)
+    preview_type = (
+        CancellationPreview
+        if values.get("expected_cut") is not None
+        else MutationPreview
+    )
+    preview = preview_type(**values, preview_digest="")
+    digest = _preview_digest(
+        preview.model_dump(mode="json", exclude={"preview_digest"})
+    )
+    return preview.model_copy(update={"preview_digest": digest})
 
 
 def _emit(value: Any, *, as_json: bool) -> None:
@@ -190,6 +205,7 @@ def _cancel_preview(
                     item_id=attempt.item_id,
                     source_attempt=attempt.attempt,
                     workflow_id=attempt.workflow_id,
+                    execution_key=attempt.execution_key,
                     execution_state=attempt.execution_state.value,
                     has_children=(
                         inspection.has_children if inspection else None
@@ -197,12 +213,33 @@ def _cancel_preview(
                     shared_reference=shared is not None,
                 )
             )
+    attempts.sort(
+        key=lambda attempt: (
+            attempt.item_id,
+            attempt.source_attempt,
+            attempt.workflow_id,
+            attempt.execution_key,
+        )
+    )
+    expected_cut = CancellationExpectedCut(
+        platform_cut_version=operation.platform_cut_version,
+        attempts=tuple(
+            CancellationAttemptCut(
+                item_id=attempt.item_id,
+                attempt=attempt.source_attempt,
+                workflow_id=attempt.workflow_id,
+                execution_key=attempt.execution_key,
+            )
+            for attempt in attempts
+        ),
+    )
     return _mutation_preview(
         command="cancel",
         request_identity=request.model_dump(mode="json"),
         operation_key=request.operation_key,
         platform_cut_version=operation.platform_cut_version,
         affected_attempts=tuple(attempts),
+        expected_cut=expected_cut,
         eligible=True,
         exhausted=False,
         rejection_detail=None,
@@ -288,6 +325,7 @@ def _authoritative_cancel_retry(
                 item_id=item_id,
                 source_attempt=source_attempt,
                 workflow_id=str(source["workflow_id"]),
+                execution_key=str(source["execution_key"]),
                 execution_state=str(source["execution_state"]),
             ),
         ),
@@ -667,8 +705,12 @@ def cancel(
             raise typer.BadParameter(
                 "preview drift detected; inspect and confirm the new preview"
             )
+        if not isinstance(preview, CancellationPreview):
+            raise RuntimeError(
+                "cancel preview did not capture an expected cut"
+            )
         result = cancel_operation(
-            request,
+            request.model_copy(update={"expected_cut": preview.expected_cut}),
             engine=engine,
             canceller=canceller,
             schema=PLATFORM_SCHEMA,
