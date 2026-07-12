@@ -46,7 +46,7 @@ dev = [
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "e4c0f04695c4fe605438398ef1bbe9f311c265a1" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "64421908c2732de101ce82e46997042306b55bf1" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 
