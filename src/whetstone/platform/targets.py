@@ -32,7 +32,11 @@ from sqlalchemy.dialects.postgresql import insert
 
 from whetstone.db import io as db_io
 from whetstone.db import schema
-from whetstone.platform.acceptance import accept_operation_manifest
+from whetstone.platform.acceptance import (
+    GenerationMembershipConflictError,
+    ManifestRelationshipResult,
+    accept_operation_manifest,
+)
 from whetstone.platform.graph_workflow import run_prediction_graph_workflow
 from whetstone.platform.scoring_workflow import run_score_submission_workflow
 from whetstone.records import ExperimentRecord, PredictionSpecRecord
@@ -251,9 +255,71 @@ def _register_prediction_specs(
     items: tuple[RegistrationItem, ...],
     page: RegistrationPageContext,
 ) -> RegistrationResult:
+    platform = PlatformSchema(prefix="whetstone")
+    operation = (
+        connection.execute(
+            select(platform.operations).where(
+                platform.operations.c.operation_key == operation_key
+            )
+        )
+        .mappings()
+        .one()
+    )
+    experiment_name = str(operation["group_key"])
+    existing_relationship = (
+        connection.execute(
+            select(schema.experiment_operation_manifests).where(
+                schema.experiment_operation_manifests.c.experiment_name
+                == experiment_name,
+                schema.experiment_operation_manifests.c.workflow_role
+                == "generation",
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if existing_relationship is not None and (
+        existing_relationship["operation_key"] != operation_key
+        or existing_relationship["manifest_digest"] != page.manifest_digest
+        or dict(existing_relationship["target_ref"])
+        != _target_ref_from_operation(operation)
+    ):
+        raise GenerationMembershipConflictError(
+            "generation membership is already fixed by a different Manifest"
+        )
+    if page.is_final_page:
+        connection.execute(
+            insert(schema.experiments)
+            .values(
+                db_io.experiment_row(
+                    ExperimentRecord(experiment_name=experiment_name)
+                )
+            )
+            .on_conflict_do_nothing(index_elements=["experiment_name"])
+        )
+        relationship_result = accept_operation_manifest(
+            connection,
+            experiment_name=experiment_name,
+            workflow_role="generation",
+            operation_key=operation_key,
+            manifest_digest=page.manifest_digest,
+            target_ref=_target_ref_from_operation(operation),
+        )
+        if (
+            relationship_result
+            is ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
+        ):
+            raise GenerationMembershipConflictError(
+                "generation membership is already fixed by a different "
+                "Manifest"
+            )
     results: list[RegistrationItemResult] = []
     for item in items:
         spec = PredictionSpecRecord.model_validate(item.spec)
+        if spec.experiment_name != experiment_name:
+            raise ValueError(
+                "prediction spec Experiment does not match the Operation group"
+            )
         existing = (
             connection.execute(
                 select(schema.prediction_specs).where(
@@ -293,21 +359,6 @@ def _register_prediction_specs(
                 item_key=item.item_key, insert_status=status
             )
         )
-    if page.is_final_page:
-        operation = connection.execute(
-            select(PlatformSchema(prefix="whetstone").operations).where(
-                PlatformSchema(prefix="whetstone").operations.c.operation_key
-                == operation_key
-            )
-        ).mappings().one()
-        accept_operation_manifest(
-            connection,
-            experiment_name=str(operation["group_key"]),
-            workflow_role="generation",
-            operation_key=operation_key,
-            manifest_digest=page.manifest_digest,
-            target_ref=_target_ref_from_operation(operation),
-        )
     return RegistrationResult(items=tuple(results))
 
 
@@ -325,12 +376,16 @@ def _register_score_targets(
     either one immutable ScoreAttempt or one harness-failure record.
     """
     if page.is_final_page:
-        operation = connection.execute(
-            select(PlatformSchema(prefix="whetstone").operations).where(
-                PlatformSchema(prefix="whetstone").operations.c.operation_key
-                == operation_key
+        platform = PlatformSchema(prefix="whetstone")
+        operation = (
+            connection.execute(
+                select(platform.operations).where(
+                    platform.operations.c.operation_key == operation_key
+                )
             )
-        ).mappings().one()
+            .mappings()
+            .one()
+        )
         spec = dict(operation["spec"])
         accept_operation_manifest(
             connection,

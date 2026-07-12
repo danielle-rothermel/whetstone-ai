@@ -29,6 +29,12 @@ from dr_platform import (
 )
 from sqlalchemy import create_engine
 
+from whetstone.platform.acceptance import (
+    RequiredScoringProfile,
+    evaluate_strict_acceptance,
+    load_acceptance,
+    load_current_acceptance,
+)
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.targets import target_registry
 
@@ -178,6 +184,71 @@ def operation_wait(
                 sleeper=time.sleep,
             ),
         )
+        _emit(result, as_json=as_json)
+    finally:
+        engine.dispose()
+
+
+@APP.command("evaluate")
+def acceptance_evaluate(
+    experiment_name: str,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    dataset_name: str,
+    dataset_split: str,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Evaluate and, when fully current, promote strict acceptance."""
+    profile = RequiredScoringProfile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+        parser_profile_id=parser_profile_id,
+        parser_version=parser_version,
+        dataset_name=dataset_name,
+        dataset_split=dataset_split,
+    )
+    engine = _engine()
+    try:
+        with engine.begin() as connection:
+            result = evaluate_strict_acceptance(
+                connection,
+                experiment_name=experiment_name,
+                required_profiles=(profile,),
+            )
+        _emit(result, as_json=as_json)
+    finally:
+        engine.dispose()
+
+
+@APP.command("show-current")
+def acceptance_show_current(
+    experiment_name: str,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Load current acceptance only after revalidating its Platform cut."""
+    engine = _engine()
+    try:
+        with engine.connect() as connection:
+            result = load_current_acceptance(
+                connection, experiment_name=experiment_name
+            )
+        _emit(result, as_json=as_json)
+    finally:
+        engine.dispose()
+
+
+@APP.command("show-acceptance")
+def acceptance_show_historical(
+    acceptance_id: str,
+    as_json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Load one immutable historical acceptance evaluation by identity."""
+    engine = _engine()
+    try:
+        with engine.connect() as connection:
+            result = load_acceptance(connection, acceptance_id=acceptance_id)
         _emit(result, as_json=as_json)
     finally:
         engine.dispose()

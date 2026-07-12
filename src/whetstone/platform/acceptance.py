@@ -1,24 +1,25 @@
-"""Immutable experiment relationship and deterministic acceptance reduction.
-
-This module owns domain selection.  It deliberately does not infer a DAG from
-platform operations: callers accept completed immutable manifests explicitly.
-"""
+"""Immutable relationships and deterministic acceptance reduction."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, cast
 
-from dr_platform import PlatformSchema
+from dr_platform import PlatformOperationCut, PlatformSchema
 from dr_serialize import Jsonable, sha256_json_digest
-from sqlalchemy import false, func, insert, select, update
+from pydantic import BaseModel, ConfigDict, StrictStr
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.engine import Connection
 
 from whetstone.db import schema
 from whetstone.records import GenerationRunStatus, ScoreAttemptStatus
+
+_TERMINAL_OPERATION_STATUSES = frozenset(
+    {"succeeded", "partial", "failed", "cancelled"}
+)
+_DBOS_SUCCESS = "SUCCESS"
 
 
 class ManifestRelationshipResult(StrEnum):
@@ -27,15 +28,41 @@ class ManifestRelationshipResult(StrEnum):
     GENERATION_MEMBERSHIP_CONFLICT = "generation_membership_conflict"
 
 
+class GenerationMembershipConflictError(ValueError):
+    """An unequal second Generation Manifest cannot enter an Experiment."""
+
+
 class AcceptanceStatus(StrEnum):
     PARTIAL = "partial"
     ACCEPTED = "accepted"
+
+
+class AcceptanceDisposition(StrEnum):
+    PROMOTED = "promoted"
+    HISTORICAL_PARTIAL = "historical_partial"
+    EXECUTION_NOT_TERMINAL = "execution_not_terminal"
+    EXECUTION_INCOMPATIBLE = "execution_incompatible"
+    SOURCE_ADVANCED = "source_advanced"
+    PLATFORM_CUT_ADVANCED = "platform_cut_advanced"
+
+
+class CurrentAcceptanceDisposition(StrEnum):
+    CURRENT = "current"
+    NOT_ACCEPTED = "not_accepted"
+    SOURCE_ADVANCED = "source_advanced"
+    STALE_PLATFORM_CUT = "stale_platform_cut"
 
 
 class GenerationDisposition(StrEnum):
     MISSING = "missing"
     REJECTED = "rejected"
     SELECTED_SUCCESS = "selected_success"
+
+
+class GenerationCandidateDisposition(StrEnum):
+    SELECTED = "selected"
+    SUPERSEDED_SUCCESS = "superseded_success"
+    REJECTED = "rejected"
 
 
 class ScoringDisposition(StrEnum):
@@ -45,18 +72,70 @@ class ScoringDisposition(StrEnum):
     ACCEPTED = "accepted"
 
 
-@dataclass(frozen=True)
-class AcceptanceResult:
-    acceptance_id: str
+class ScoringCandidateDisposition(StrEnum):
+    SELECTED = "selected"
+    SUPERSEDED_GENERATION = "superseded_generation"
+    SUPERSEDED_RELATIONSHIP = "superseded_relationship"
+    SUPERSEDED_ATTEMPT = "superseded_attempt"
+    REJECTED = "rejected"
+
+
+class RequiredScoringProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scoring_profile_id: StrictStr
+    scoring_profile_version: StrictStr
+    parser_profile_id: StrictStr
+    parser_version: StrictStr
+    dataset_name: StrictStr
+    dataset_split: StrictStr
+
+
+class AcceptanceResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    acceptance_id: StrictStr | None
     status: AcceptanceStatus
+    disposition: AcceptanceDisposition
     expected_count: int
     accepted_count: int
     missing_count: int
     rejected_count: int
 
 
+class AcceptanceEvaluation(BaseModel):
+    """Typed immutable public view of one historical evaluation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    acceptance_id: StrictStr
+    experiment_name: StrictStr
+    acceptance_source_version: int
+    status: AcceptanceStatus
+    platform_cut: tuple[PlatformOperationCut, ...]
+    required_profiles: tuple[RequiredScoringProfile, ...]
+    expected_count: int
+    accepted_count: int
+    missing_count: int
+    rejected_count: int
+    created_at: datetime
+
+
+class CurrentAcceptanceResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    disposition: CurrentAcceptanceDisposition
+    evaluation: AcceptanceEvaluation | None = None
+
+
 def _digest(value: object) -> str:
     return sha256_json_digest(cast(Jsonable, value))
+
+
+def _profile_payloads(
+    profiles: tuple[RequiredScoringProfile, ...],
+) -> list[dict[str, Any]]:
+    return [profile.model_dump(mode="json") for profile in profiles]
 
 
 def accept_operation_manifest(
@@ -69,11 +148,7 @@ def accept_operation_manifest(
     target_ref: dict[str, Any],
     selection_digest: str | None = None,
 ) -> ManifestRelationshipResult:
-    """Accept exactly one generation manifest and ordered scoring manifests.
-
-    The Experiment row lock makes source invalidation and scoring ordinal
-    allocation one transaction.  Exact replays do not change either value.
-    """
+    """Accept one Generation Manifest and ordered Scoring Manifests."""
     experiment = (
         connection.execute(
             select(schema.experiments)
@@ -101,6 +176,8 @@ def accept_operation_manifest(
             for row in existing
             if row["operation_key"] == operation_key
             and row["manifest_digest"] == manifest_digest
+            and row["selection_digest"] == selection_digest
+            and dict(row["target_ref"]) == target_ref
         ),
         None,
     )
@@ -155,28 +232,9 @@ def accept_operation_manifest(
     return ManifestRelationshipResult.ACCEPTED
 
 
-def evaluate_strict_acceptance(
-    connection: Connection,
-    *,
-    experiment_name: str,
-    required_profiles: tuple[dict[str, str], ...],
-) -> AcceptanceResult:
-    """Persist a complete, populated matrix from append-only domain rows.
-
-    Selection is run-pinned: the highest successful generation ordinal wins;
-    a score belonging to any other run is never eligible for the cell.
-    """
-    # Locking the experiment makes the domain cut and pointer promotion one
-    # serializable decision.  Writers use this same row to invalidate it.
-    experiment = (
-        connection.execute(
-            select(schema.experiments)
-            .where(schema.experiments.c.experiment_name == experiment_name)
-            .with_for_update()
-        )
-        .mappings()
-        .one()
-    )
+def _load_relationships(
+    connection: Connection, experiment_name: str
+) -> tuple[Any, list[Any]]:
     relationships = (
         connection.execute(
             select(schema.experiment_operation_manifests)
@@ -191,35 +249,84 @@ def evaluate_strict_acceptance(
         .mappings()
         .all()
     )
-    generation_relationship = next(
-        (row for row in relationships if row["workflow_role"] == "generation"),
-        None,
-    )
-    scoring_relationships = [
+    generations = [
+        row for row in relationships if row["workflow_role"] == "generation"
+    ]
+    if len(generations) != 1:
+        raise ValueError(
+            "strict acceptance requires exactly one accepted Generation "
+            "Manifest"
+        )
+    return generations[0], [
         row for row in relationships if row["workflow_role"] == "scoring"
     ]
-    platform = PlatformSchema(prefix="whetstone")
-    specs = (
+
+
+def _lock_platform_cut(
+    connection: Connection,
+    *,
+    operation_keys: list[str],
+    platform: PlatformSchema,
+) -> list[dict[str, Any]]:
+    keys = sorted(set(operation_keys))
+    rows = (
         connection.execute(
-            select(schema.prediction_specs.c.prediction_id).where(
-                schema.prediction_specs.c.experiment_name == experiment_name
+            select(
+                platform.operations.c.operation_key,
+                platform.operations.c.platform_cut_version,
+                platform.operations.c.status,
             )
+            .where(platform.operations.c.operation_key.in_(keys))
+            .order_by(platform.operations.c.operation_key)
+            .with_for_update()
         )
-        .scalars()
+        .mappings()
         .all()
     )
-    generation_members: list[dict[str, Any]] = []
-    scoring_members: list[dict[str, Any]] = []
-    expected = accepted = missing = rejected = 0
-    for prediction_id in specs:
-        run_query = select(schema.generation_runs).where(
-            schema.generation_runs.c.prediction_id == prediction_id,
-            schema.generation_runs.c.status
-            == GenerationRunStatus.SUCCESS.value,
+    if [row["operation_key"] for row in rows] != keys:
+        raise ValueError(
+            "an accepted Manifest relationship Operation is missing"
         )
-        if generation_relationship is not None:
-            run_query = (
-                run_query.join(
+    return [
+        {
+            "operation_key": str(row["operation_key"]),
+            "platform_cut_version": int(row["platform_cut_version"]),
+            "status": str(row["status"]),
+        }
+        for row in rows
+    ]
+
+
+def _generation_inputs(
+    connection: Connection,
+    *,
+    relationship: Any,
+    platform: PlatformSchema,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    predictions = list(
+        connection.execute(
+            select(platform.items.c.item_key)
+            .where(
+                platform.items.c.operation_key == relationship["operation_key"]
+            )
+            .order_by(platform.items.c.item_index)
+        ).scalars()
+    )
+    members: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for prediction_id in predictions:
+        rows = (
+            connection.execute(
+                select(
+                    schema.generation_runs,
+                    platform.item_attempts.c.execution_state.label(
+                        "platform_execution_state"
+                    ),
+                    platform.item_attempts.c.dbos_status.label(
+                        "platform_dbos_status"
+                    ),
+                )
+                .join(
                     platform.items,
                     platform.items.c.item_id
                     == schema.generation_runs.c.platform_item_id,
@@ -236,211 +343,487 @@ def evaluate_strict_acceptance(
                     ),
                 )
                 .where(
+                    schema.generation_runs.c.prediction_id == prediction_id,
                     platform.items.c.operation_key
-                    == generation_relationship["operation_key"],
-                    platform.item_attempts.c.execution_state == "succeeded",
+                    == relationship["operation_key"],
                 )
-            )
-        else:
-            run_query = run_query.where(false())
-        run = (
-            connection.execute(
-                run_query.order_by(
-                    schema.generation_runs.c.platform_attempt.desc()
-                ).limit(1)
+                .order_by(
+                    schema.generation_runs.c.platform_attempt.desc(),
+                    schema.generation_runs.c.generation_run_id,
+                )
             )
             .mappings()
-            .first()
+            .all()
         )
-        generation_members.append(
+        selected = next(
+            (
+                row
+                for row in rows
+                if row["status"] == GenerationRunStatus.SUCCESS.value
+            ),
+            None,
+        )
+        members.append(
             {
                 "prediction_id": prediction_id,
-                "disposition": GenerationDisposition.SELECTED_SUCCESS.value
-                if run
-                else GenerationDisposition.MISSING.value,
-                "generation_run_id": run["generation_run_id"] if run else None,
-                "platform_item_id": run["platform_item_id"] if run else None,
-                "platform_attempt": run["platform_attempt"] if run else None,
-                "generation_operation_key": (
-                    generation_relationship["operation_key"]
-                    if generation_relationship
-                    else None
+                "disposition": (
+                    GenerationDisposition.SELECTED_SUCCESS.value
+                    if selected is not None
+                    else GenerationDisposition.MISSING.value
+                    if not rows
+                    else GenerationDisposition.REJECTED.value
                 ),
+                "generation_run_id": (
+                    selected["generation_run_id"] if selected else None
+                ),
+                "generation_operation_key": relationship["operation_key"],
+                "platform_item_id": selected["platform_item_id"]
+                if selected
+                else None,
+                "platform_attempt": selected["platform_attempt"]
+                if selected
+                else None,
             }
         )
-        if run is not None:
-            generation_members[-1]["disposition"] = (
-                GenerationDisposition.SELECTED_SUCCESS.value
-                if generation_relationship is not None
-                else GenerationDisposition.REJECTED.value
+        for row in rows:
+            if (
+                selected is not None
+                and row["generation_run_id"] == selected["generation_run_id"]
+            ):
+                disposition = GenerationCandidateDisposition.SELECTED
+            elif row["status"] == GenerationRunStatus.SUCCESS.value:
+                disposition = GenerationCandidateDisposition.SUPERSEDED_SUCCESS
+            else:
+                disposition = GenerationCandidateDisposition.REJECTED
+            candidates.append(
+                {
+                    "prediction_id": prediction_id,
+                    "generation_run_id": row["generation_run_id"],
+                    "disposition": disposition.value,
+                    "generation_operation_key": relationship["operation_key"],
+                    "platform_item_id": row["platform_item_id"],
+                    "platform_attempt": row["platform_attempt"],
+                    "status": row["status"],
+                    "platform_execution_state": row[
+                        "platform_execution_state"
+                    ],
+                    "platform_dbos_status": row["platform_dbos_status"],
+                }
             )
-        for profile in required_profiles:
-            expected += 1
-            if run is None:
-                missing += 1
-                scoring_members.append(
-                    {
-                        **profile,
-                        "prediction_id": prediction_id,
-                        "disposition": (
-                            ScoringDisposition.MISSING_GENERATION.value
-                        ),
-                        "generation_run_id": None,
-                        "score_attempt_id": None,
-                    }
+    return members, candidates
+
+
+def _score_rows_for_relationship(
+    connection: Connection,
+    *,
+    relationship: Any,
+    prediction_id: str,
+    profile: dict[str, Any],
+    platform: PlatformSchema,
+) -> list[dict[str, Any]]:
+    filters = (
+        schema.score_attempts.c.prediction_id == prediction_id,
+        schema.score_attempts.c.scoring_profile_id
+        == profile["scoring_profile_id"],
+        schema.score_attempts.c.scoring_profile_version
+        == profile["scoring_profile_version"],
+        schema.score_attempts.c.parser_profile_id
+        == profile["parser_profile_id"],
+        schema.score_attempts.c.parser_version == profile["parser_version"],
+        schema.score_attempts.c.dataset_name == profile["dataset_name"],
+        schema.score_attempts.c.dataset_split == profile["dataset_split"],
+        platform.items.c.operation_key == relationship["operation_key"],
+    )
+    score_rows = (
+        connection.execute(
+            select(
+                schema.score_attempts,
+                platform.item_attempts.c.execution_state.label(
+                    "platform_execution_state"
+                ),
+                platform.item_attempts.c.dbos_status.label(
+                    "platform_dbos_status"
+                ),
+            )
+            .join(
+                platform.items,
+                platform.items.c.item_id
+                == schema.score_attempts.c.platform_item_id,
+            )
+            .join(
+                platform.item_attempts,
+                (
+                    platform.item_attempts.c.item_id
+                    == schema.score_attempts.c.platform_item_id
                 )
-                continue
-            candidates: list[dict[str, Any]] = []
-            for relationship in reversed(scoring_relationships):
-                candidate = (
-                    connection.execute(
-                        select(schema.score_attempts)
-                        .join(
-                            platform.items,
-                            platform.items.c.item_id
-                            == schema.score_attempts.c.platform_item_id,
-                        )
-                        .join(
-                            platform.item_attempts,
-                            (
-                                platform.item_attempts.c.item_id
-                                == schema.score_attempts.c.platform_item_id
-                            )
-                            & (
-                                platform.item_attempts.c.attempt
-                                == schema.score_attempts.c.platform_attempt
-                            ),
-                        )
-                        .where(
-                            schema.score_attempts.c.generation_run_id
-                            == run["generation_run_id"],
-                            schema.score_attempts.c.scoring_profile_id
-                            == profile["scoring_profile_id"],
-                            schema.score_attempts.c.scoring_profile_version
-                            == profile["scoring_profile_version"],
-                            schema.score_attempts.c.parser_profile_id
-                            == profile["parser_profile_id"],
-                            schema.score_attempts.c.parser_version
-                            == profile["parser_version"],
-                            schema.score_attempts.c.dataset_name
-                            == profile["dataset_name"],
-                            schema.score_attempts.c.dataset_split
-                            == profile["dataset_split"],
-                            platform.items.c.operation_key
-                            == relationship["operation_key"],
-                            platform.item_attempts.c.execution_state
-                            == "succeeded",
-                        )
-                        .order_by(
-                            schema.score_attempts.c.platform_attempt.desc()
-                        )
+                & (
+                    platform.item_attempts.c.attempt
+                    == schema.score_attempts.c.platform_attempt
+                ),
+            )
+            .where(*filters)
+        )
+        .mappings()
+        .all()
+    )
+    failure_filters = (
+        schema.score_harness_failures.c.prediction_id == prediction_id,
+        schema.score_harness_failures.c.scoring_profile_id
+        == profile["scoring_profile_id"],
+        schema.score_harness_failures.c.scoring_profile_version
+        == profile["scoring_profile_version"],
+        schema.score_harness_failures.c.parser_profile_id
+        == profile["parser_profile_id"],
+        schema.score_harness_failures.c.parser_version
+        == profile["parser_version"],
+        schema.score_harness_failures.c.dataset_name
+        == profile["dataset_name"],
+        schema.score_harness_failures.c.dataset_split
+        == profile["dataset_split"],
+        platform.items.c.operation_key == relationship["operation_key"],
+    )
+    failure_rows = (
+        connection.execute(
+            select(
+                schema.score_harness_failures,
+                platform.item_attempts.c.execution_state.label(
+                    "platform_execution_state"
+                ),
+                platform.item_attempts.c.dbos_status.label(
+                    "platform_dbos_status"
+                ),
+            )
+            .join(
+                platform.items,
+                platform.items.c.item_id
+                == schema.score_harness_failures.c.platform_item_id,
+            )
+            .join(
+                platform.item_attempts,
+                (
+                    platform.item_attempts.c.item_id
+                    == schema.score_harness_failures.c.platform_item_id
+                )
+                & (
+                    platform.item_attempts.c.attempt
+                    == schema.score_harness_failures.c.platform_attempt
+                ),
+            )
+            .where(*failure_filters)
+        )
+        .mappings()
+        .all()
+    )
+    common = {
+        "accepted_scoring_ordinal": relationship["accepted_scoring_ordinal"],
+        "operation_key": relationship["operation_key"],
+        "manifest_digest": relationship["manifest_digest"],
+        "selection_digest": relationship["selection_digest"],
+    }
+    normalized = [
+        {**dict(row), **common, "candidate_kind": "score_attempt"}
+        for row in score_rows
+    ]
+    normalized.extend(
+        {
+            **dict(row),
+            **common,
+            "status": "harness_failure",
+            "candidate_kind": "score_harness_failure",
+        }
+        for row in failure_rows
+    )
+    return sorted(
+        normalized,
+        key=lambda row: (
+            -int(row["accepted_scoring_ordinal"]),
+            -int(row["platform_attempt"]),
+            str(row["score_attempt_id"]),
+        ),
+    )
+
+
+def _scoring_inputs(
+    connection: Connection,
+    *,
+    generation_members: list[dict[str, Any]],
+    relationships: list[Any],
+    profiles: list[dict[str, Any]],
+    platform: PlatformSchema,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    members: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    for generation in generation_members:
+        for profile in profiles:
+            rows: list[dict[str, Any]] = []
+            for relationship in relationships:
+                rows.extend(
+                    _score_rows_for_relationship(
+                        connection,
+                        relationship=relationship,
+                        prediction_id=generation["prediction_id"],
+                        profile=profile,
+                        platform=platform,
                     )
-                    .mappings()
-                    .all()
                 )
-                candidates.extend(
-                    {**dict(row), "relationship": dict(relationship)}
-                    for row in candidate
+            rows.sort(
+                key=lambda row: (
+                    -int(row["accepted_scoring_ordinal"]),
+                    -int(row["platform_attempt"]),
+                    str(row["score_attempt_id"]),
                 )
-            score = next(
+            )
+            selected_run_id = generation["generation_run_id"]
+            winner = next(
                 (
                     row
-                    for row in candidates
-                    if row["status"] == ScoreAttemptStatus.SUCCESS.value
+                    for row in rows
+                    if row["generation_run_id"] == selected_run_id
+                    and row["status"] == ScoreAttemptStatus.SUCCESS.value
                 ),
                 None,
             )
-            if score is None:
-                missing += 1
-                disposition = ScoringDisposition.MISSING_SCORE.value
+            if selected_run_id is None:
+                member_disposition = ScoringDisposition.MISSING_GENERATION
+            elif winner is not None:
+                member_disposition = ScoringDisposition.ACCEPTED
+            elif rows:
+                member_disposition = ScoringDisposition.REJECTED
             else:
-                accepted += 1
-                disposition = ScoringDisposition.ACCEPTED.value
-            relationship = score.get("relationship") if score else None
-            scoring_members.append(
+                member_disposition = ScoringDisposition.MISSING_SCORE
+            members.append(
                 {
                     **profile,
-                    "prediction_id": prediction_id,
-                    "disposition": disposition,
-                    "generation_run_id": run["generation_run_id"],
-                    "score_attempt_id": score["score_attempt_id"]
-                    if score
+                    "prediction_id": generation["prediction_id"],
+                    "disposition": member_disposition.value,
+                    "generation_run_id": selected_run_id,
+                    "score_attempt_id": winner["score_attempt_id"]
+                    if winner
                     else None,
-                    "accepted_scoring_ordinal": relationship[
+                    "accepted_scoring_ordinal": winner[
                         "accepted_scoring_ordinal"
                     ]
-                    if relationship
+                    if winner
                     else None,
-                    "scoring_operation_key": relationship["operation_key"]
-                    if relationship
+                    "scoring_operation_key": winner["operation_key"]
+                    if winner
                     else None,
-                    "platform_item_id": score["platform_item_id"]
-                    if score
+                    "platform_item_id": winner["platform_item_id"]
+                    if winner
                     else None,
-                    "platform_attempt": score["platform_attempt"]
-                    if score
+                    "platform_attempt": winner["platform_attempt"]
+                    if winner
                     else None,
-                    "manifest_digest": relationship["manifest_digest"]
-                    if relationship
+                    "manifest_digest": winner["manifest_digest"]
+                    if winner
                     else None,
                 }
             )
-    payload = {
-        "experiment_name": experiment_name,
-        "source_version": experiment["acceptance_source_version"],
-        "generation_members": generation_members,
-        "scoring_members": scoring_members,
-        "required_profiles": required_profiles,
-        "generation_relationship": dict(generation_relationship)
-        if generation_relationship
-        else None,
-        "scoring_relationships": [dict(row) for row in scoring_relationships],
-    }
-    acceptance_id = _digest(payload)
+            for row in rows:
+                if row["generation_run_id"] != selected_run_id:
+                    disposition = (
+                        ScoringCandidateDisposition.SUPERSEDED_GENERATION
+                    )
+                elif (
+                    winner is not None
+                    and row["score_attempt_id"] == winner["score_attempt_id"]
+                ):
+                    disposition = ScoringCandidateDisposition.SELECTED
+                elif row["status"] != ScoreAttemptStatus.SUCCESS.value:
+                    disposition = ScoringCandidateDisposition.REJECTED
+                elif winner is not None and (
+                    row["accepted_scoring_ordinal"]
+                    != winner["accepted_scoring_ordinal"]
+                ):
+                    disposition = (
+                        ScoringCandidateDisposition.SUPERSEDED_RELATIONSHIP
+                    )
+                else:
+                    disposition = (
+                        ScoringCandidateDisposition.SUPERSEDED_ATTEMPT
+                    )
+                candidates.append(
+                    {
+                        **profile,
+                        "prediction_id": generation["prediction_id"],
+                        "accepted_scoring_ordinal": row[
+                            "accepted_scoring_ordinal"
+                        ],
+                        "score_attempt_id": row["score_attempt_id"],
+                        "generation_run_id": row["generation_run_id"],
+                        "disposition": disposition.value,
+                        "operation_key": row["operation_key"],
+                        "manifest_digest": row["manifest_digest"],
+                        "selection_digest": row["selection_digest"],
+                        "platform_item_id": row["platform_item_id"],
+                        "platform_attempt": row["platform_attempt"],
+                        "status": row["status"],
+                        "candidate_kind": row["candidate_kind"],
+                        "platform_execution_state": row[
+                            "platform_execution_state"
+                        ],
+                        "platform_dbos_status": row["platform_dbos_status"],
+                    }
+                )
+    return members, candidates
+
+
+def _execution_disposition(
+    *,
+    platform_cut: list[dict[str, Any]],
+    generation_candidates: list[dict[str, Any]],
+    scoring_candidates: list[dict[str, Any]],
+) -> AcceptanceDisposition | None:
+    if any(
+        row["status"] not in _TERMINAL_OPERATION_STATUSES
+        for row in platform_cut
+    ):
+        return AcceptanceDisposition.EXECUTION_NOT_TERMINAL
+    selected = [
+        row
+        for row in (*generation_candidates, *scoring_candidates)
+        if row["disposition"] == "selected"
+    ]
+    if any(
+        row["platform_execution_state"] != "succeeded"
+        or row["platform_dbos_status"] != _DBOS_SUCCESS
+        for row in selected
+    ):
+        return AcceptanceDisposition.EXECUTION_INCOMPATIBLE
+    return None
+
+
+def evaluate_strict_acceptance(
+    connection: Connection,
+    *,
+    experiment_name: str,
+    required_profiles: tuple[RequiredScoringProfile, ...],
+) -> AcceptanceResult:
+    """Append one complete acceptance cut and promote it only when current."""
+    observed_source_version = connection.execute(
+        select(schema.experiments.c.acceptance_source_version).where(
+            schema.experiments.c.experiment_name == experiment_name
+        )
+    ).scalar_one()
+    generation_relationship, scoring_relationships = _load_relationships(
+        connection, experiment_name
+    )
+    platform = PlatformSchema(prefix="whetstone")
+    platform_cut = _lock_platform_cut(
+        connection,
+        operation_keys=[
+            generation_relationship["operation_key"],
+            *(row["operation_key"] for row in scoring_relationships),
+        ],
+        platform=platform,
+    )
+    experiment = (
+        connection.execute(
+            select(schema.experiments)
+            .where(schema.experiments.c.experiment_name == experiment_name)
+            .with_for_update()
+        )
+        .mappings()
+        .one()
+    )
+    source_version = int(experiment["acceptance_source_version"])
+    if source_version != observed_source_version:
+        return AcceptanceResult(
+            acceptance_id=None,
+            status=AcceptanceStatus.PARTIAL,
+            disposition=AcceptanceDisposition.SOURCE_ADVANCED,
+            expected_count=0,
+            accepted_count=0,
+            missing_count=0,
+            rejected_count=0,
+        )
+    generation_members, generation_candidates = _generation_inputs(
+        connection,
+        relationship=generation_relationship,
+        platform=platform,
+    )
+    profiles = _profile_payloads(required_profiles)
+    scoring_members, scoring_candidates = _scoring_inputs(
+        connection,
+        generation_members=generation_members,
+        relationships=scoring_relationships,
+        profiles=profiles,
+        platform=platform,
+    )
+    expected = len(scoring_members)
+    accepted = sum(row["disposition"] == "accepted" for row in scoring_members)
+    missing = sum(
+        row["disposition"].startswith("missing_") for row in scoring_members
+    )
+    rejected = sum(row["disposition"] == "rejected" for row in scoring_members)
     status = (
         AcceptanceStatus.ACCEPTED
-        if expected and accepted == expected
+        if expected > 0 and accepted == expected
         else AcceptanceStatus.PARTIAL
+    )
+    scoring_relationship_payload = [
+        {
+            "accepted_scoring_ordinal": row["accepted_scoring_ordinal"],
+            "operation_key": row["operation_key"],
+            "manifest_digest": row["manifest_digest"],
+            "selection_digest": row["selection_digest"],
+        }
+        for row in scoring_relationships
+    ]
+    selected_scoring_candidates = [
+        row for row in scoring_candidates if row["disposition"] == "selected"
+    ]
+    domain_cut = {
+        "generation_members": generation_members,
+        "generation_candidates": generation_candidates,
+        "scoring_members": scoring_members,
+        "scoring_candidates": scoring_candidates,
+    }
+    identity = {
+        "experiment_name": experiment_name,
+        "acceptance_source_version": source_version,
+        "generation_operation_key": generation_relationship["operation_key"],
+        "generation_manifest_digest": generation_relationship[
+            "manifest_digest"
+        ],
+        "scoring_relationships_digest": _digest(scoring_relationship_payload),
+        "selected_scoring_candidates_digest": _digest(
+            selected_scoring_candidates
+        ),
+        "domain_cut_digest": _digest(domain_cut),
+        "platform_cut_digest": _digest(platform_cut),
+        "policy_digest": _digest({"name": "strict", "version": 1}),
+        "observed_matrix_digest": _digest(scoring_members),
+    }
+    acceptance_id = _digest(identity)
+    execution_disposition = _execution_disposition(
+        platform_cut=platform_cut,
+        generation_candidates=generation_candidates,
+        scoring_candidates=scoring_candidates,
     )
     connection.execute(
         postgres_insert(schema.experiment_acceptance_evaluations)
         .values(
             acceptance_id=acceptance_id,
             experiment_name=experiment_name,
-            acceptance_source_version=experiment["acceptance_source_version"],
+            acceptance_source_version=source_version,
             status=status.value,
-            generation_operation_key=(
-                generation_relationship["operation_key"]
-                if generation_relationship
-                else ""
-            ),
-            generation_manifest_digest=(
-                generation_relationship["manifest_digest"]
-                if generation_relationship
-                else ""
-            ),
-            scoring_relationships=[dict(row) for row in scoring_relationships],
-            scoring_relationships_digest=_digest(
-                [dict(row) for row in scoring_relationships]
-            ),
-            selected_scoring_candidates=[
-                row
-                for row in scoring_members
-                if row["score_attempt_id"] is not None
+            generation_operation_key=generation_relationship["operation_key"],
+            generation_manifest_digest=generation_relationship[
+                "manifest_digest"
             ],
+            scoring_relationships=scoring_relationship_payload,
+            scoring_relationships_digest=_digest(scoring_relationship_payload),
+            selected_scoring_candidates=selected_scoring_candidates,
             selected_scoring_candidates_digest=_digest(
-                [
-                    row
-                    for row in scoring_members
-                    if row["score_attempt_id"] is not None
-                ]
+                selected_scoring_candidates
             ),
-            domain_cut=payload,
-            domain_cut_digest=_digest(payload),
-            platform_cut=[],
-            platform_cut_digest=_digest([]),
-            required_profiles=list(required_profiles),
-            required_profiles_digest=_digest(list(required_profiles)),
+            domain_cut=domain_cut,
+            domain_cut_digest=_digest(domain_cut),
+            platform_cut=platform_cut,
+            platform_cut_digest=_digest(platform_cut),
+            required_profiles=profiles,
+            required_profiles_digest=_digest(profiles),
             policy={"name": "strict", "version": 1},
             policy_digest=_digest({"name": "strict", "version": 1}),
             observed_matrix=scoring_members,
@@ -459,68 +842,171 @@ def evaluate_strict_acceptance(
             .values(acceptance_id=acceptance_id, **member)
             .on_conflict_do_nothing()
         )
-        if member["generation_run_id"] is not None:
-            connection.execute(
-                postgres_insert(
-                    schema.experiment_acceptance_generation_candidates
-                )
-                .values(
-                    acceptance_id=acceptance_id,
-                    prediction_id=member["prediction_id"],
-                    generation_run_id=member["generation_run_id"],
-                    disposition=member["disposition"],
-                    platform_item_id=member["platform_item_id"],
-                    platform_attempt=member["platform_attempt"],
-                )
-                .on_conflict_do_nothing()
-            )
+    for candidate in generation_candidates:
+        persisted = {
+            key: value
+            for key, value in candidate.items()
+            if not key.startswith("platform_")
+            or key in {"platform_item_id", "platform_attempt"}
+        }
+        connection.execute(
+            postgres_insert(schema.experiment_acceptance_generation_candidates)
+            .values(acceptance_id=acceptance_id, **persisted)
+            .on_conflict_do_nothing()
+        )
     for member in scoring_members:
         connection.execute(
             postgres_insert(schema.experiment_acceptance_scoring_members)
             .values(acceptance_id=acceptance_id, **member)
             .on_conflict_do_nothing()
         )
-        if member["score_attempt_id"] is not None:
-            connection.execute(
-                postgres_insert(
-                    schema.experiment_acceptance_scoring_candidates
+    for candidate in scoring_candidates:
+        persisted = {
+            key: value
+            for key, value in candidate.items()
+            if not key.startswith("platform_")
+            or key in {"platform_item_id", "platform_attempt"}
+        }
+        connection.execute(
+            postgres_insert(schema.experiment_acceptance_scoring_candidates)
+            .values(acceptance_id=acceptance_id, **persisted)
+            .on_conflict_do_nothing()
+        )
+    disposition = execution_disposition
+    if disposition is None and status is AcceptanceStatus.ACCEPTED:
+        current_cut = _lock_platform_cut(
+            connection,
+            operation_keys=[row["operation_key"] for row in platform_cut],
+            platform=platform,
+        )
+        if current_cut != platform_cut:
+            disposition = AcceptanceDisposition.PLATFORM_CUT_ADVANCED
+        else:
+            promoted = connection.execute(
+                update(schema.experiments)
+                .where(
+                    schema.experiments.c.experiment_name == experiment_name,
+                    schema.experiments.c.acceptance_source_version
+                    == source_version,
                 )
                 .values(
-                    acceptance_id=acceptance_id,
-                    prediction_id=member["prediction_id"],
-                    scoring_profile_id=member["scoring_profile_id"],
-                    scoring_profile_version=member["scoring_profile_version"],
-                    parser_profile_id=member["parser_profile_id"],
-                    parser_version=member["parser_version"],
-                    dataset_name=member["dataset_name"],
-                    dataset_split=member["dataset_split"],
-                    accepted_scoring_ordinal=member[
-                        "accepted_scoring_ordinal"
-                    ],
-                    score_attempt_id=member["score_attempt_id"],
-                    generation_run_id=member["generation_run_id"],
-                    disposition=member["disposition"],
-                    operation_key=member["scoring_operation_key"],
-                    manifest_digest=member["manifest_digest"],
-                    platform_item_id=member["platform_item_id"],
-                    platform_attempt=member["platform_attempt"],
-                    status=ScoreAttemptStatus.SUCCESS.value,
+                    current_acceptance_id=acceptance_id,
+                    acceptance_updated_at=datetime.now(UTC),
                 )
-                .on_conflict_do_nothing()
             )
-    if status is AcceptanceStatus.ACCEPTED:
+            disposition = (
+                AcceptanceDisposition.PROMOTED
+                if promoted.rowcount == 1
+                else AcceptanceDisposition.SOURCE_ADVANCED
+            )
+    if disposition is None:
+        disposition = AcceptanceDisposition.HISTORICAL_PARTIAL
+    return AcceptanceResult(
+        acceptance_id=acceptance_id,
+        status=status,
+        disposition=disposition,
+        expected_count=expected,
+        accepted_count=accepted,
+        missing_count=missing,
+        rejected_count=rejected,
+    )
+
+
+def load_acceptance(
+    connection: Connection, *, acceptance_id: str
+) -> AcceptanceEvaluation:
+    row = (
         connection.execute(
-            update(schema.experiments)
-            .where(
-                schema.experiments.c.experiment_name == experiment_name,
-                schema.experiments.c.acceptance_source_version
-                == experiment["acceptance_source_version"],
-            )
-            .values(
-                current_acceptance_id=acceptance_id,
-                acceptance_updated_at=datetime.now(UTC),
+            select(schema.experiment_acceptance_evaluations).where(
+                schema.experiment_acceptance_evaluations.c.acceptance_id
+                == acceptance_id
             )
         )
-    return AcceptanceResult(
-        acceptance_id, status, expected, accepted, missing, rejected
+        .mappings()
+        .one()
+    )
+    return AcceptanceEvaluation(
+        acceptance_id=row["acceptance_id"],
+        experiment_name=row["experiment_name"],
+        acceptance_source_version=row["acceptance_source_version"],
+        status=row["status"],
+        platform_cut=tuple(
+            PlatformOperationCut.model_validate(
+                {
+                    "operation_key": cut["operation_key"],
+                    "platform_cut_version": cut["platform_cut_version"],
+                }
+            )
+            for cut in row["platform_cut"]
+        ),
+        required_profiles=tuple(
+            RequiredScoringProfile.model_validate(profile)
+            for profile in row["required_profiles"]
+        ),
+        expected_count=row["expected_count"],
+        accepted_count=row["accepted_count"],
+        missing_count=row["missing_count"],
+        rejected_count=row["rejected_count"],
+        created_at=row["created_at"],
+    )
+
+
+def load_current_acceptance(
+    connection: Connection, *, experiment_name: str
+) -> CurrentAcceptanceResult:
+    observed_experiment = (
+        connection.execute(
+            select(schema.experiments).where(
+                schema.experiments.c.experiment_name == experiment_name
+            )
+        )
+        .mappings()
+        .one()
+    )
+    acceptance_id = observed_experiment["current_acceptance_id"]
+    if acceptance_id is None:
+        return CurrentAcceptanceResult(
+            disposition=CurrentAcceptanceDisposition.NOT_ACCEPTED
+        )
+    evaluation = load_acceptance(connection, acceptance_id=acceptance_id)
+    platform = PlatformSchema(prefix="whetstone")
+    current_cut = _lock_platform_cut(
+        connection,
+        operation_keys=[cut.operation_key for cut in evaluation.platform_cut],
+        platform=platform,
+    )
+    experiment = (
+        connection.execute(
+            select(schema.experiments)
+            .where(schema.experiments.c.experiment_name == experiment_name)
+            .with_for_update()
+        )
+        .mappings()
+        .one()
+    )
+    if experiment["current_acceptance_id"] != acceptance_id:
+        return CurrentAcceptanceResult(
+            disposition=CurrentAcceptanceDisposition.SOURCE_ADVANCED
+        )
+    if (
+        evaluation.acceptance_source_version
+        != experiment["acceptance_source_version"]
+    ):
+        return CurrentAcceptanceResult(
+            disposition=CurrentAcceptanceDisposition.SOURCE_ADVANCED
+        )
+    expected_versions = {
+        cut.operation_key: cut.platform_cut_version
+        for cut in evaluation.platform_cut
+    }
+    if {
+        row["operation_key"]: row["platform_cut_version"]
+        for row in current_cut
+    } != expected_versions:
+        return CurrentAcceptanceResult(
+            disposition=CurrentAcceptanceDisposition.STALE_PLATFORM_CUT
+        )
+    return CurrentAcceptanceResult(
+        disposition=CurrentAcceptanceDisposition.CURRENT,
+        evaluation=evaluation,
     )

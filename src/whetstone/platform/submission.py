@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from dr_code.humaneval import resolve_humaneval_scoring_profile
-from dr_platform import OperationManifest, SubmitOptions, SubmitResult, submit
+from dr_platform import (
+    OperationManifest,
+    PlatformSchema,
+    SubmitOptions,
+    SubmitResult,
+    submit,
+)
 from dr_platform.submission import prepare_manifest
 from dr_serialize import sha256_json_digest
 from pydantic import BaseModel, ConfigDict, StrictStr
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.engine import Connection, Engine
 
 from whetstone.db import io as db_io
@@ -162,6 +168,26 @@ def select_populated_scoring_generation_runs(
     Python ``strip`` is not permitted to stand in for this source-of-truth
     query.
     """
+    connection.execute(
+        select(schema.experiments.c.experiment_name)
+        .where(schema.experiments.c.experiment_name == experiment_name)
+        .with_for_update()
+    ).scalar_one()
+    generation_relationship = (
+        connection.execute(
+            select(schema.experiment_operation_manifests).where(
+                schema.experiment_operation_manifests.c.experiment_name
+                == experiment_name,
+                schema.experiment_operation_manifests.c.workflow_role
+                == "generation",
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if generation_relationship is None:
+        return ()
+    platform = PlatformSchema(prefix="whetstone")
     rows = connection.execute(
         select(schema.generation_runs)
         .join(
@@ -169,19 +195,41 @@ def select_populated_scoring_generation_runs(
             schema.prediction_specs.c.prediction_id
             == schema.generation_runs.c.prediction_id,
         )
+        .join(
+            platform.items,
+            platform.items.c.item_id
+            == schema.generation_runs.c.platform_item_id,
+        )
+        .join(
+            platform.item_attempts,
+            (
+                platform.item_attempts.c.item_id
+                == schema.generation_runs.c.platform_item_id
+            )
+            & (
+                platform.item_attempts.c.attempt
+                == schema.generation_runs.c.platform_attempt
+            ),
+        )
         .where(
             schema.prediction_specs.c.experiment_name == experiment_name,
-            schema.generation_runs.c.status.in_(
-                (
-                    GenerationRunStatus.SUCCESS.value,
-                    GenerationRunStatus.PARTIAL.value,
-                )
-            ),
-            schema.generation_runs.c.summary[
-                "terminal_submission_text"
-            ].astext.is_not(None),
-            schema.generation_runs.c.summary["terminal_submission_text"].astext.op("~")(
-                "[^[:space:]]"
+            platform.items.c.operation_key
+            == generation_relationship["operation_key"],
+            platform.item_attempts.c.execution_state == "succeeded",
+            platform.item_attempts.c.dbos_status == "SUCCESS",
+            or_(
+                schema.generation_runs.c.status
+                == GenerationRunStatus.SUCCESS.value,
+                and_(
+                    schema.generation_runs.c.status
+                    == GenerationRunStatus.PARTIAL.value,
+                    schema.generation_runs.c.summary[
+                        "terminal_submission_text"
+                    ].astext.is_not(None),
+                    schema.generation_runs.c.summary[
+                        "terminal_submission_text"
+                    ].astext.op("~")("[^[:space:]]"),
+                ),
             ),
         )
         .order_by(
@@ -189,9 +237,15 @@ def select_populated_scoring_generation_runs(
             schema.generation_runs.c.platform_attempt.desc(),
         )
     ).mappings()
-    return tuple(
-        db_io.generation_run_record_from_row(dict(row)) for row in rows
-    )
+    selected: list[GenerationRunRecord] = []
+    selected_prediction_ids: set[str] = set()
+    for row in rows:
+        prediction_id = str(row["prediction_id"])
+        if prediction_id in selected_prediction_ids:
+            continue
+        selected_prediction_ids.add(prediction_id)
+        selected.append(db_io.generation_run_record_from_row(dict(row)))
+    return tuple(selected)
 
 
 def prepare_generation_manifest(

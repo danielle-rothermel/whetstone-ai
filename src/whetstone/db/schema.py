@@ -532,8 +532,10 @@ experiment_acceptance_generation_candidates = Table(
         primary_key=True,
     ),
     Column("disposition", Text, nullable=False),
+    Column("generation_operation_key", Text, nullable=False),
     Column("platform_item_id", Text, nullable=False),
     Column("platform_attempt", Integer, nullable=False),
+    Column("status", Text, nullable=False),
 )
 experiment_acceptance_scoring_members = Table(
     EXPERIMENT_ACCEPTANCE_SCORING_MEMBERS_TABLE,
@@ -595,9 +597,11 @@ experiment_acceptance_scoring_candidates = Table(
     Column("disposition", Text, nullable=False),
     Column("operation_key", Text, nullable=False),
     Column("manifest_digest", Text, nullable=False),
+    Column("selection_digest", Text, nullable=False),
     Column("platform_item_id", Text, nullable=False),
     Column("platform_attempt", Integer, nullable=False),
     Column("status", Text, nullable=False),
+    Column("candidate_kind", Text, nullable=False),
 )
 
 v6_tables: tuple[Table, ...] = (
