@@ -80,6 +80,7 @@ jobs:
         env:
           WHETSTONE_RELEASE_PARITY_DESCRIPTOR: ${{ runner.temp }}/release-parity/descriptor.json
           UNITBENCH_RELEASE_PARITY_TOKEN: ${{ secrets.UNITBENCH_RELEASE_PARITY_TOKEN }}
+          UNITBENCH_BUNDLE_INTEGRITY_PUBLIC_KEYS: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
           ANALYSIS_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |

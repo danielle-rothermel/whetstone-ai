@@ -257,3 +257,20 @@ def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
         "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH: "
         "${{ runner.temp }}/whetstone-integrity/private.pem" in workflow
     )
+
+
+def test_release_parity_maps_public_integrity_keys_to_unitbench() -> (
+    None
+):
+    workflow = Path(".github/workflows/release-parity.yml").read_text()
+    consumer_step = workflow.split(
+        "      - name: Unitbench live delivery-parity evidence\n", 1
+    )[1].split("      - name: Always clean run-owned fixture\n", 1)[0]
+
+    assert (
+        "UNITBENCH_BUNDLE_INTEGRITY_PUBLIC_KEYS: "
+        "${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}"
+        in consumer_step
+    )
+    assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY" not in consumer_step
+    assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH" not in consumer_step
