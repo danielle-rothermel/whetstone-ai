@@ -13,7 +13,7 @@ from dr_code.humaneval import (
     parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
-from dr_platform import WORKFLOW_START_RACE_ERRORS
+from dr_platform.dbos_config import WORKFLOW_START_RACE_ERRORS
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from sqlalchemy import create_engine
 
@@ -47,17 +47,15 @@ from whetstone.records import (
     stable_score_attempt_id,
 )
 
-PLATFORM_SCORING_WORKFLOW_NAME = (
-    "dr_dspy_platform_humaneval_submission_scoring_v1"
-)
-LOAD_SCORING_TARGET_STEP_NAME = "dr_dspy_platform_load_scoring_target_v1"
+PLATFORM_SCORING_WORKFLOW_NAME = "whetstone_scoring"
+LOAD_SCORING_TARGET_STEP_NAME = "whetstone_load_scoring_target"
 LOAD_HUMANEVAL_SCORING_INPUT_STEP_NAME = (
-    "dr_dspy_platform_load_humaneval_scoring_input_v2"
+    "whetstone_load_humaneval_scoring_input"
 )
-SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
-SCORE_SUBMISSION_STEP_NAME = "dr_dspy_platform_score_submission_v1"
-PERSIST_SCORE_RESULT_STEP_NAME = "dr_dspy_platform_persist_score_result_v1"
-WORKFLOW_ID_PREFIX = "platform-submission-score-v1"
+SCORING_STARTED_AT_STEP_NAME = "whetstone_scoring_started_at"
+SCORE_SUBMISSION_STEP_NAME = "whetstone_score_submission"
+PERSIST_SCORE_RESULT_STEP_NAME = "whetstone_persist_score_result"
+WORKFLOW_ID_PREFIX = "whetstone-scoring"
 
 
 class ScoreSubmissionWorkflowResult(BaseModel):

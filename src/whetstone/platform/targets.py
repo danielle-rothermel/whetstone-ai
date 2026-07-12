@@ -1,0 +1,190 @@
+"""Versioned, top-level Whetstone execution targets."""
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+from dbos import DBOS
+from dr_platform import (
+    ExecutionIdentity,
+    ExecutionRecipeEnvelope,
+    ExecutionTarget,
+    FailureSnapshot,
+    ItemInsertStatus,
+    TargetRegistry,
+    WorkflowTopology,
+)
+from dr_platform import (
+    FailureClass as KernelFailureClass,
+)
+from dr_platform.items import SubmittableItem
+from dr_platform.submission import (
+    RegistrationItem,
+    RegistrationItemResult,
+    RegistrationResult,
+)
+from dr_platform.targets import TargetContractDeclaration
+from dr_serialize import sha256_json_digest
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+
+from whetstone.db import io as db_io
+from whetstone.db import schema
+from whetstone.platform.graph_workflow import run_prediction_graph_workflow
+from whetstone.records import ExperimentRecord, PredictionSpecRecord
+
+GENERATION_QUEUE_NAME = "whetstone-generation"
+SCORING_QUEUE_NAME = "whetstone-scoring"
+GENERATION_TARGET_KEY = "whetstone-generation"
+GENERATION_TARGET_VERSION = 1
+GENERATION_WORKFLOW_VERSION = 1
+GENERATION_ARGUMENT_RECIPE_VERSION = 1
+CLASSIFIER_VERSION = 1
+
+
+def enqueue_failure_from_whetstone_exception(
+    error: BaseException,
+) -> FailureSnapshot:
+    """Translate provider taxonomy into the kernel-owned failure enum."""
+    from whetstone.eval_failures import summarize_exception
+
+    summary = summarize_exception(error)
+    return FailureSnapshot(
+        failure_class=KernelFailureClass(summary.failure_class.value),
+        error_type=summary.failure_exception_type,
+        message=summary.message,
+        metadata=summary.failure_metadata,
+    )
+
+
+def generation_target() -> ExecutionTarget:
+    declaration = TargetContractDeclaration(
+        queue_name=GENERATION_QUEUE_NAME,
+        workflow_role="generation",
+        managed_workflow_name="whetstone_generation",
+        managed_workflow_version=GENERATION_WORKFLOW_VERSION,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=GENERATION_ARGUMENT_RECIPE_VERSION,
+        classifier_version=CLASSIFIER_VERSION,
+        registration_hook_name="whetstone_prediction_spec_registration",
+        registration_hook_version=1,
+    )
+    return ExecutionTarget(
+        ref=declaration.target_ref(
+            target_key=GENERATION_TARGET_KEY,
+            target_version=GENERATION_TARGET_VERSION,
+        ),
+        queue_name=GENERATION_QUEUE_NAME,
+        workflow_role="generation",
+        managed_workflow_name="whetstone_generation",
+        managed_workflow_version=GENERATION_WORKFLOW_VERSION,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=GENERATION_ARGUMENT_RECIPE_VERSION,
+        classifier_version=CLASSIFIER_VERSION,
+        registration_hook_name="whetstone_prediction_spec_registration",
+        registration_hook_version=1,
+        workflow=run_prediction_graph_workflow,
+        execution_for=_generation_execution_identity,
+        args_for=_generation_arguments,
+        recipe_for=_generation_recipe,
+        classify_error=enqueue_failure_from_whetstone_exception,
+        registration_hook=_register_prediction_specs,
+    )
+
+
+def target_registry() -> TargetRegistry:
+    registry = TargetRegistry()
+    registry.register(generation_target())
+    return registry
+
+
+def register_execution_queues(*, worker_concurrency: int) -> None:
+    for queue_name in (GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME):
+        DBOS.register_queue(
+            queue_name,
+            worker_concurrency=worker_concurrency,
+            priority_enabled=True,
+            on_conflict="always_update",
+        )
+
+
+def listen_to_execution_queues() -> None:
+    DBOS.listen_queues([GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME])
+
+
+def _generation_recipe(item: SubmittableItem) -> ExecutionRecipeEnvelope:
+    spec = PredictionSpecRecord.model_validate(item.spec)
+    target = generation_target()
+    return ExecutionRecipeEnvelope(
+        target_ref=target.ref,
+        managed_workflow_name=target.managed_workflow_name,
+        managed_workflow_version=target.managed_workflow_version,
+        topology=WorkflowTopology.TOP_LEVEL_ONLY,
+        argument_recipe_version=GENERATION_ARGUMENT_RECIPE_VERSION,
+        payload={
+            "prediction_spec": spec.model_dump(mode="json"),
+            "application_version": "whetstone-v6",
+        },
+    )
+
+
+def _generation_execution_identity(
+    item: Any, attempt: int
+) -> ExecutionIdentity:
+    recipe_digest = _generation_recipe(cast("SubmittableItem", item)).digest()
+    key = sha256_json_digest({"recipe": recipe_digest, "attempt": attempt})
+    return ExecutionIdentity(
+        execution_key=key, workflow_id=f"whetstone-generation:{key}"
+    )
+
+
+def _generation_arguments(item: Any, attempt: int) -> tuple[str, int]:
+    return (str(item.spec["prediction_id"]), attempt)
+
+
+def _register_prediction_specs(
+    connection: Any, *, operation_key: str, items: tuple[RegistrationItem, ...]
+) -> RegistrationResult:
+    results: list[RegistrationItemResult] = []
+    for item in items:
+        spec = PredictionSpecRecord.model_validate(item.spec)
+        existing = (
+            connection.execute(
+                select(schema.prediction_specs).where(
+                    schema.prediction_specs.c.prediction_id
+                    == spec.prediction_id
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if existing is None:
+            connection.execute(
+                insert(schema.experiments)
+                .values(
+                    db_io.experiment_row(
+                        ExperimentRecord(experiment_name=spec.experiment_name)
+                    )
+                )
+                .on_conflict_do_nothing(index_elements=["experiment_name"])
+            )
+            connection.execute(
+                insert(schema.prediction_specs).values(
+                    db_io.prediction_spec_row(spec)
+                )
+            )
+            status = ItemInsertStatus.INSERTED
+        else:
+            persisted = db_io.prediction_spec_record_from_row(dict(existing))
+            if persisted != spec:
+                raise ValueError(
+                    "prediction spec conflicts with the canonical persisted "
+                    f"spec: {spec.prediction_id!r}"
+                )
+            status = ItemInsertStatus.ALREADY_PRESENT
+        results.append(
+            RegistrationItemResult(
+                item_key=item.item_key, insert_status=status
+            )
+        )
+    return RegistrationResult(items=tuple(results))
