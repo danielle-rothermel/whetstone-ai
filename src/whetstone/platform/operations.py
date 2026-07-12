@@ -118,7 +118,7 @@ def _engine():
 def _cancel_preview(
     *,
     engine: Any,
-    canceller: _DbosCanceller,
+    canceller: WhetstoneDbosCanceller,
     request: CancellationRequest,
 ) -> MutationPreview:
     operation = inspect_operation(
@@ -354,11 +354,11 @@ def _domain_outcome_request(
     )
 
 
-class _DbosCanceller:
+class WhetstoneDbosCanceller:
     """Minimal DBOS adapter: it reads status and never requests recursion."""
 
-    def __init__(self) -> None:
-        self.client = DBOSClient()
+    def __init__(self, client: DBOSClient | None = None) -> None:
+        self.client = client or DBOSClient()
 
     def inspect(self, *, workflow_id: str) -> CancellationInspection:
         rows = self.client.list_workflows(
@@ -646,7 +646,7 @@ def cancel(
     as_json: bool = False,
 ) -> None:
     engine = _engine()
-    canceller = _DbosCanceller()
+    canceller = WhetstoneDbosCanceller()
     try:
         request = CancellationRequest(
             operation_key=operation_key,

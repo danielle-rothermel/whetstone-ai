@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import duckdb
 import pytest
@@ -13,8 +14,13 @@ from dr_code.humaneval import (
     extract_code_with_profile,
     resolve_humaneval_scoring_profile,
 )
-from dr_platform import pin_local_bundle, resolve_local_pin
+from dr_platform import (
+    ExportReconciliationDependencies,
+    pin_local_bundle,
+    resolve_local_pin,
+)
 from dr_platform.export import ApplicationSnapshot
+from dr_platform.reconciliation_runtime import ReconcileOptions
 from sqlalchemy import create_engine, text
 
 from whetstone.optimization.copro import (
@@ -22,6 +28,7 @@ from whetstone.optimization.copro import (
     summarize_pinned_candidates,
 )
 from whetstone.platform.scoring import score_metrics_payload
+from whetstone.platform.targets import target_registry
 from whetstone.publication import (
     ANALYSIS_BUNDLE_KEY,
     DETAIL_BUNDLE_KEY,
@@ -30,6 +37,19 @@ from whetstone.publication import (
     detail_projection_specs,
     export_whetstone,
 )
+
+
+class _UnusedQueueLookup:
+    def retrieve_queue(self, name: str) -> object | None:
+        raise AssertionError(f"unexpected queue lookup: {name}")
+
+
+class _UnusedLifecycleReader:
+    def observe(self, *, workflow_id: str):
+        raise AssertionError(f"unexpected lifecycle read: {workflow_id}")
+
+    def read_step_history(self, *, workflow_id: str, limit: int = 100):
+        raise AssertionError(f"unexpected step-history read: {workflow_id}")
 
 
 @pytest.mark.integration
@@ -204,6 +224,14 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
             spec.full_rebuild_builder(connection, snapshot)
     analysis, detail = export_whetstone(
         engine,
+        reconciliation=ExportReconciliationDependencies(
+            resolver=target_registry(),
+            queue_lookup=_UnusedQueueLookup(),
+            reader=_UnusedLifecycleReader(),
+            dbos_engine=engine,
+            options=ReconcileOptions(page_size=100),
+            max_cycles=2,
+        ),
         destination_path=database,
     )
     assert [item.status for item in analysis.destinations] == ["PROMOTED"], (
@@ -231,7 +259,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
     }
     reader = AnalysisBundleReader.from_pin(database, analysis_pin)
     prediction = reader.rows("predictions")[0]
-    assert prediction["provider_cost"] == "0.125"
+    assert prediction["provider_cost"] == Decimal("0.125")
     assert float(prediction["compression_ratio"]) == pytest.approx(
         expected_compression_ratio
     )

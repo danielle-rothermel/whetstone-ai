@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=c08c6dc#c08c6dc98b292b394f29a74404785ad2d993ba58" }
+source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=422a5a23ec36a3b2e64a8137da27aaed092ab3ee#422a5a23ec36a3b2e64a8137da27aaed092ab3ee" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos", extra = ["otel"] },
@@ -2397,6 +2397,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pytz"
+version = "2026.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/46/dd499ec9038423421951e4fad73051febaa13d2df82b4064f87af8b8c0c3/pytz-2026.2.tar.gz", hash = "sha256:0e60b47b29f21574376f218fe21abc009894a2321ea16c6754f3cad6eb7cdd6a", size = 320861, upload-time = "2026-05-04T01:35:29.667Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/dd/96da98f892250475bdf2328112d7468abdd4acc7b902b6af23f4ed958ea0/pytz-2026.2-py2.py3-none-any.whl", hash = "sha256:04156e608bee23d3792fd45c94ae47fae1036688e75032eea2e3bf0323d1f126", size = 510141, upload-time = "2026-05-04T01:35:27.408Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3094,6 +3103,7 @@ dependencies = [
     { name = "pygments" },
     { name = "pytest" },
     { name = "python-dotenv" },
+    { name = "pytz" },
     { name = "rich" },
     { name = "ruff" },
     { name = "sqlalchemy" },
@@ -3114,7 +3124,7 @@ requires-dist = [
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=c08c6dc" },
+    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=422a5a23ec36a3b2e64a8137da27aaed092ab3ee" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
@@ -3126,6 +3136,7 @@ requires-dist = [
     { name = "pygments", specifier = ">=2.20.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "python-dotenv", specifier = ">=1.1.0" },
+    { name = "pytz", specifier = ">=2025.2" },
     { name = "rich", specifier = ">=13.9.4" },
     { name = "ruff", specifier = ">=0.15.10" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },

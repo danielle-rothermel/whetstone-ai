@@ -77,7 +77,7 @@ def test_dbos_error_preserves_authoritative_terminal_classification(
                 )
             ]
 
-    canceller = object.__new__(operations._DbosCanceller)
+    canceller = object.__new__(operations.WhetstoneDbosCanceller)
     canceller.client = Client()
 
     result = canceller.inspect(workflow_id="workflow")
@@ -95,7 +95,7 @@ def test_dbos_error_fails_closed_without_classified_failure() -> None:
         def list_workflows(self, **kwargs: Any) -> list[Any]:
             return [SimpleNamespace(status="ERROR", error=None)]
 
-    canceller = object.__new__(operations._DbosCanceller)
+    canceller = object.__new__(operations.WhetstoneDbosCanceller)
     canceller.client = Client()
 
     with pytest.raises(RuntimeError, match="classification is unavailable"):
@@ -130,7 +130,7 @@ def test_cancel_preview_does_not_mutate_and_drift_blocks_apply(
         mutation_calls += 1
 
     monkeypatch.setattr(operations, "_engine", lambda: engine)
-    monkeypatch.setattr(operations, "_DbosCanceller", Canceller)
+    monkeypatch.setattr(operations, "WhetstoneDbosCanceller", Canceller)
     monkeypatch.setattr(
         operations, "_cancel_preview", lambda **kwargs: preview
     )

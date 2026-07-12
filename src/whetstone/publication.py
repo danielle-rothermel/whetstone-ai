@@ -11,8 +11,12 @@ import duckdb
 from dr_platform import (
     ApplicationSnapshot,
     ExportOptions,
+    ExportReconciliationDependencies,
     ExportResult,
     PinnedBundle,
+    PlatformSchema,
+    ProjectionColumn,
+    ProjectionColumnType,
     ProjectionSpec,
     export,
     resolve_local_pin,
@@ -41,6 +45,20 @@ DETAIL_MEMBERS = (
 )
 PUBLISHED_COMPRESSION_METHOD = "gzip"
 PUBLISHED_COMPRESSION_SEMANTICS = "ratio_to_ground_truth"
+PLATFORM_SCHEMA = PlatformSchema(prefix="whetstone")
+_TEXT = ProjectionColumnType.TEXT
+_INTEGER = ProjectionColumnType.INTEGER
+_NUMERIC = ProjectionColumnType.NUMERIC
+_TIMESTAMP = ProjectionColumnType.TIMESTAMP
+_JSON = ProjectionColumnType.JSON
+
+
+def _column_schema(
+    *columns: tuple[str, ProjectionColumnType],
+) -> tuple[ProjectionColumn, ...]:
+    return tuple(
+        ProjectionColumn(name=name, type=type_) for name, type_ in columns
+    )
 
 
 class BundleRow(BaseModel):
@@ -132,8 +150,23 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("experiment_id", _TEXT),
+                ("display_name", _TEXT),
+                ("experiment_kind", _TEXT),
+                ("source", _TEXT),
+                ("row_count", _INTEGER),
+                ("pass_rate", _NUMERIC),
+                ("created_at", _TIMESTAMP),
+                ("updated_at", _TIMESTAMP),
+                ("config_json", _JSON),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("experiment_id",),
-            full_rebuild_builder=_builder(_ACCEPTED + """
+            full_rebuild_builder=_builder(
+                _ACCEPTED
+                + """
               SELECT e.experiment_name AS experiment_id, e.experiment_name AS display_name,
                 COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind,
                 'whetstone' AS source, count(p.prediction_id)::bigint AS row_count,
@@ -143,7 +176,8 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
               LEFT JOIN accepted_predictions p ON p.experiment_name = e.experiment_name
               LEFT JOIN LATERAL (SELECT score FROM selected_score_attempts x WHERE x.prediction_id = p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
               GROUP BY e.experiment_name, e.config_metadata, e.created_at, e.acceptance_updated_at
-            """),
+            """
+            ),
         ),
         ProjectionSpec(
             member="predictions",
@@ -169,6 +203,29 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "summary_json",
                 "bundle_id",
                 "snapshot_seq",
+            ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("experiment_id", _TEXT),
+                ("candidate_id", _TEXT),
+                ("task_id", _TEXT),
+                ("sample_index", _INTEGER),
+                ("experiment_kind", _TEXT),
+                ("source", _TEXT),
+                ("model", _TEXT),
+                ("result_state", _TEXT),
+                ("generation_status", _TEXT),
+                ("scoring_status", _TEXT),
+                ("score", _NUMERIC),
+                ("provider_cost", _NUMERIC),
+                ("latency_ms", _NUMERIC),
+                ("compression_ratio", _NUMERIC),
+                ("failure_class", _TEXT),
+                ("created_at", _TIMESTAMP),
+                ("updated_at", _TIMESTAMP),
+                ("summary_json", _JSON),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
             ),
             unique_key=("prediction_id",),
             references=(("experiment_id", "experiments", "experiment_id"),),
@@ -213,6 +270,21 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("generation_run_id", _TEXT),
+                ("prediction_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("execution_recipe_digest", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("status", _TEXT),
+                ("terminal_node_id", _TEXT),
+                ("summary_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("generation_run_id",),
             references=(("prediction_id", "predictions", "prediction_id"),),
             full_rebuild_builder=_builder(
@@ -248,6 +320,27 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("score_attempt_id", _TEXT),
+                ("prediction_id", _TEXT),
+                ("generation_run_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("execution_recipe_digest", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("scoring_profile_id", _TEXT),
+                ("parser_profile_id", _TEXT),
+                ("dataset_name", _TEXT),
+                ("dataset_split", _TEXT),
+                ("status", _TEXT),
+                ("submission_outcome", _TEXT),
+                ("score", _NUMERIC),
+                ("metrics_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("score_attempt_id",),
             references=(
                 ("prediction_id", "predictions", "prediction_id"),
@@ -273,11 +366,21 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("experiment_id", _TEXT),
+                ("metric_key", _TEXT),
+                ("metric_value", _NUMERIC),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("experiment_id", "metric_key"),
             references=(("experiment_id", "experiments", "experiment_id"),),
-            full_rebuild_builder=_builder(_ACCEPTED + """
+            full_rebuild_builder=_builder(
+                _ACCEPTED
+                + """
           SELECT experiment_name AS experiment_id, 'acceptance_source_version' AS metric_key, acceptance_source_version::double precision AS metric_value FROM current_acceptances
-        """),
+        """
+            ),
         ),
         ProjectionSpec(
             member="failure_metrics",
@@ -287,6 +390,13 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "failure_count",
                 "bundle_id",
                 "snapshot_seq",
+            ),
+            column_schema=_column_schema(
+                ("experiment_id", _TEXT),
+                ("failure_class", _TEXT),
+                ("failure_count", _INTEGER),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
             ),
             unique_key=("experiment_id", "failure_class"),
             references=(("experiment_id", "experiments", "experiment_id"),),
@@ -343,6 +453,25 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("experiment_id", _TEXT),
+                ("source", _TEXT),
+                ("experiment_kind", _TEXT),
+                ("task_id", _TEXT),
+                ("sample_index", _INTEGER),
+                ("model", _TEXT),
+                ("result_state", _TEXT),
+                ("generation_status", _TEXT),
+                ("scoring_status", _TEXT),
+                ("score", _NUMERIC),
+                ("provider_cost", _NUMERIC),
+                ("created_at", _TIMESTAMP),
+                ("updated_at", _TIMESTAMP),
+                ("summary_json", _JSON),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("prediction_id",),
             full_rebuild_builder=detail_predictions,
         ),
@@ -363,6 +492,22 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "validation_json",
                 "bundle_id",
                 "snapshot_seq",
+            ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("input_kind", _TEXT),
+                ("input_text", _TEXT),
+                ("output_kind", _TEXT),
+                ("output_text", _TEXT),
+                ("prompt_text", _TEXT),
+                ("code_text", _TEXT),
+                ("raw_generation", _JSON),
+                ("metrics_json", _JSON),
+                ("request_json", _JSON),
+                ("response_json", _JSON),
+                ("validation_json", _JSON),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
             ),
             unique_key=("prediction_id",),
             references=(root,),
@@ -398,6 +543,22 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("generation_run_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("execution_recipe_digest", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("status", _TEXT),
+                ("terminal_node_id", _TEXT),
+                ("terminal_output_node_id", _TEXT),
+                ("summary_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("generation_run_id",),
             references=(root,),
             full_rebuild_builder=_builder(
@@ -428,6 +589,26 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "completed_at",
                 "bundle_id",
                 "snapshot_seq",
+            ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("node_attempt_id", _TEXT),
+                ("generation_run_id", _TEXT),
+                ("node_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("status", _TEXT),
+                ("provider_kind", _TEXT),
+                ("endpoint_kind", _TEXT),
+                ("model", _TEXT),
+                ("provider_config_json", _JSON),
+                ("output_json", _JSON),
+                ("usage_cost_json", _JSON),
+                ("response_metadata_json", _JSON),
+                ("failure_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
             ),
             unique_key=("node_attempt_id",),
             references=(root,),
@@ -466,6 +647,32 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("score_attempt_id", _TEXT),
+                ("generation_run_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("execution_recipe_digest", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("scoring_profile_id", _TEXT),
+                ("scoring_profile_version", _TEXT),
+                ("parser_profile_id", _TEXT),
+                ("parser_version", _TEXT),
+                ("dataset_name", _TEXT),
+                ("dataset_split", _TEXT),
+                ("dataset_snapshot_json", _JSON),
+                ("status", _TEXT),
+                ("submission_outcome", _TEXT),
+                ("score", _NUMERIC),
+                ("extracted_submission_json", _JSON),
+                ("metrics_json", _JSON),
+                ("per_test_results_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("score_attempt_id",),
             references=(root,),
             full_rebuild_builder=_builder(
@@ -496,6 +703,25 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("score_harness_failure_id", _TEXT),
+                ("generation_run_id", _TEXT),
+                ("score_attempt_id", _TEXT),
+                ("attempt_index", _INTEGER),
+                ("execution_recipe_digest", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("scoring_profile_id", _TEXT),
+                ("parser_profile_id", _TEXT),
+                ("dataset_name", _TEXT),
+                ("dataset_split", _TEXT),
+                ("failure_json", _JSON),
+                ("started_at", _TIMESTAMP),
+                ("completed_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("score_harness_failure_id",),
             references=(root,),
             full_rebuild_builder=_builder(
@@ -524,6 +750,23 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "bundle_id",
                 "snapshot_seq",
             ),
+            column_schema=_column_schema(
+                ("prediction_id", _TEXT),
+                ("platform_item_id", _TEXT),
+                ("platform_attempt", _INTEGER),
+                ("workflow_role", _TEXT),
+                ("execution_key", _TEXT),
+                ("workflow_id", _TEXT),
+                ("execution_state", _TEXT),
+                ("dbos_status", _TEXT),
+                ("failure_json", _JSON),
+                ("created_at", _TIMESTAMP),
+                ("enqueued_at", _TIMESTAMP),
+                ("terminal_at", _TIMESTAMP),
+                ("updated_at", _TIMESTAMP),
+                ("bundle_id", _TEXT),
+                ("snapshot_seq", _INTEGER),
+            ),
             unique_key=("platform_item_id", "platform_attempt"),
             references=(root,),
             full_rebuild_builder=_builder(
@@ -540,6 +783,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
 def export_whetstone(
     source: Engine,
     *,
+    reconciliation: ExportReconciliationDependencies,
     destination_path: str | Path,
     detail_destination_path: str | Path | None = None,
     remote_destinations: Sequence[Any] = (),
@@ -555,6 +799,8 @@ def export_whetstone(
             projections=analysis_projection_specs(),
             source_change_sequence="whetstone_change_seq",
         ),
+        reconciliation=reconciliation,
+        schema=PLATFORM_SCHEMA,
         remote_destinations=remote_destinations,
     )
     detail = export(
@@ -566,6 +812,8 @@ def export_whetstone(
             projections=detail_projection_specs(),
             source_change_sequence="whetstone_change_seq",
         ),
+        reconciliation=reconciliation,
+        schema=PLATFORM_SCHEMA,
         remote_destinations=remote_destinations,
     )
     return analysis, detail
@@ -581,6 +829,8 @@ def validate_projection_specs(specs: Iterable[ProjectionSpec]) -> None:
             spec.full_rebuild_builder is None
             or not spec.unique_key
             or not set(spec.unique_key).issubset(spec.columns)
+            or tuple(column.name for column in spec.column_schema)
+            != spec.columns
         ):
             raise ValueError(f"{spec.member} has an invalid rebuild contract")
         for local, target, target_column in spec.references:
