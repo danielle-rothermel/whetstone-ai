@@ -45,6 +45,28 @@ def test_export_uses_one_reconciliation_dependency_and_whetstone_schema(
     assert all(call["schema"] == publication.PLATFORM_SCHEMA for call in calls)
 
 
+def test_export_routes_analysis_and_detail_remotes_independently(
+    monkeypatch, tmp_path
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_export(*args: Any, **kwargs: Any) -> str:
+        calls.append(kwargs)
+        return str(len(calls))
+
+    monkeypatch.setattr(publication, "export", fake_export)
+    publication.export_whetstone(
+        cast("Any", object()),
+        reconciliation=cast("Any", object()),
+        destination_path=tmp_path / "analysis.duckdb",
+        analysis_remote_destinations=("motherduck",),
+        detail_remote_destinations=("neon",),
+    )
+
+    assert calls[0]["remote_destinations"] == ("motherduck",)
+    assert calls[1]["remote_destinations"] == ("neon",)
+
+
 def test_analysis_inventory_is_exact_and_referentially_closed() -> None:
     specs = analysis_projection_specs()
     assert tuple(spec.member for spec in specs) == ANALYSIS_MEMBERS

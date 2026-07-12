@@ -1,0 +1,654 @@
+"""Disposable, credential-free evidence for the v6 release parity gate.
+
+The descriptor is deliberately a reader contract: it identifies a pinned
+publication but never serializes a connection string, credential, or fixture
+payload.  The command obtains all connection strings from its environment.
+"""
+# ruff: noqa: E501
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import json
+import os
+import re
+import uuid
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Annotated, Any, Literal, cast
+from urllib.parse import quote
+
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
+from dr_platform import (
+    BundlePin,
+    ExportReconciliationDependencies,
+    PinnedBundle,
+    PostgresPublicationFence,
+    pin_local_bundle,
+    resolve_local_pin,
+)
+from dr_platform.reconciliation_runtime import ReconcileOptions
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.engine.url import make_url
+from sqlalchemy.pool import NullPool
+
+from whetstone.platform.platform_db import ensure_platform_schema
+from whetstone.platform.targets import target_registry
+from whetstone.publication import (
+    ANALYSIS_BUNDLE_KEY,
+    ANALYSIS_MEMBERS,
+    DETAIL_BUNDLE_KEY,
+    DETAIL_MEMBERS,
+    export_whetstone,
+)
+
+SCHEMA_VERSION = 1
+_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SECRET = re.compile(r"(token|password|secret|dsn|url|authorization)", re.I)
+_TRACE = Path(
+    "/private/tmp/platform-v6-headless-whetstone-release-parity-93.trace.txt"
+)
+
+NonEmpty = Annotated[StrictStr, Field(min_length=1)]
+
+
+def _trace(event: str, **facts: object) -> None:
+    """Write only stable, non-sensitive operational facts."""
+    safe = {
+        key: value for key, value in facts.items() if not _SECRET.search(key)
+    }
+    with _TRACE.open("a") as stream:
+        stream.write(
+            json.dumps({"event": event, **safe}, sort_keys=True) + "\n"
+        )
+
+
+class PinIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    pin_id: NonEmpty
+    bundle_id: NonEmpty
+    expires_at_ms: StrictInt = Field(ge=0)
+
+
+class PlaneDestination(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    destination_id: NonEmpty
+    bundle_key: Literal["whetstone-analysis", "whetstone-detail"]
+    pin: PinIdentity
+    snapshot_seq: StrictInt = Field(ge=0)
+    members: Mapping[NonEmpty, NonEmpty]
+    member_counts: Mapping[NonEmpty, StrictInt]
+    member_checksums: Mapping[NonEmpty, NonEmpty]
+
+
+class LocalPlane(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: NonEmpty
+    bundle: NonEmpty
+    pin: PinIdentity
+    snapshot_seq: StrictInt = Field(ge=0)
+    members: Mapping[NonEmpty, NonEmpty]
+    member_counts: Mapping[NonEmpty, StrictInt]
+    member_checksums: Mapping[NonEmpty, NonEmpty]
+
+
+PlaneMap = Mapping[Literal["local", "remote"], LocalPlane | PlaneDestination]
+
+
+class ReleaseParityDescriptor(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    run_id: NonEmpty
+    fixture_sha256: NonEmpty
+    source_schema: NonEmpty
+    analysis: PlaneMap
+    detail: PlaneMap
+
+    def validate_contract(self) -> None:
+        _reject_secrets(self.model_dump(mode="json"))
+        for name, expected, bundle in (
+            ("analysis", ANALYSIS_MEMBERS, ANALYSIS_BUNDLE_KEY),
+            ("detail", DETAIL_MEMBERS, DETAIL_BUNDLE_KEY),
+        ):
+            planes = getattr(self, name)
+            if set(planes) != {"local", "remote"}:
+                raise ValueError(
+                    f"{name} must contain local and remote planes"
+                )
+            local, remote = planes["local"], planes["remote"]
+            if set(local.members) != set(expected) or set(
+                remote.members
+            ) != set(expected):
+                raise ValueError(f"{name} member inventory is not frozen")
+            if local.bundle != bundle or remote.bundle_key != bundle:
+                raise ValueError(f"{name} bundle key is not frozen")
+            if local.pin.bundle_id != remote.pin.bundle_id:
+                raise ValueError(
+                    f"{name} local and remote bundle identities differ"
+                )
+            if local.snapshot_seq != remote.snapshot_seq:
+                raise ValueError(f"{name} local and remote snapshots differ")
+            if any(
+                value <= 0
+                for value in (
+                    *local.member_counts.values(),
+                    *remote.member_counts.values(),
+                )
+            ):
+                raise ValueError(f"{name} contains an empty member")
+
+
+class CleanupProof(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    run_id: NonEmpty
+    source_schema_absent: bool
+    local_files_absent: bool
+    destinations: Mapping[NonEmpty, Mapping[NonEmpty, StrictInt]]
+
+    def validate_against(self, descriptor: ReleaseParityDescriptor) -> None:
+        _reject_secrets(self.model_dump(mode="json"))
+        if self.run_id != descriptor.run_id:
+            raise ValueError("cleanup proof belongs to another run")
+        if not self.source_schema_absent or not self.local_files_absent:
+            raise ValueError("cleanup proof is not zero-state")
+        expected = {
+            _remote(descriptor.analysis).destination_id,
+            _remote(descriptor.detail).destination_id,
+        }
+        if set(self.destinations) != expected:
+            raise ValueError("cleanup proof misses a remote destination")
+        if any(
+            value != 0
+            for facts in self.destinations.values()
+            for value in facts.values()
+        ):
+            raise ValueError("cleanup proof reports remaining remote state")
+
+
+def _reject_secrets(value: object) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if _SECRET.search(str(key)):
+                raise ValueError(
+                    "descriptor/proof may not contain secret-shaped fields"
+                )
+            _reject_secrets(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_secrets(item)
+    elif isinstance(value, str) and "://" in value:
+        raise ValueError("descriptor/proof may not contain URLs")
+
+
+def load_descriptor(path: Path) -> ReleaseParityDescriptor:
+    descriptor = ReleaseParityDescriptor.model_validate_json(path.read_text())
+    descriptor.validate_contract()
+    return descriptor
+
+
+def _remote(descriptor_plane: PlaneMap) -> PlaneDestination:
+    value = descriptor_plane["remote"]
+    if not isinstance(value, PlaneDestination):
+        raise ValueError("remote plane has an invalid shape")
+    return value
+
+
+def _local(descriptor_plane: PlaneMap) -> LocalPlane:
+    value = descriptor_plane["local"]
+    if not isinstance(value, LocalPlane):
+        raise ValueError("local plane has an invalid shape")
+    return value
+
+
+class _UnusedQueueLookup:
+    def retrieve_queue(self, name: str) -> object | None:
+        raise AssertionError(f"unexpected queue lookup: {name}")
+
+
+class _UnusedLifecycleReader:
+    def observe(self, *, workflow_id: str) -> object:
+        raise AssertionError(f"unexpected lifecycle read: {workflow_id}")
+
+    def read_step_history(
+        self, *, workflow_id: str, limit: int = 100
+    ) -> object:
+        raise AssertionError(f"unexpected step history: {workflow_id}")
+
+
+def _reconciliation(source: Engine) -> ExportReconciliationDependencies:
+    return ExportReconciliationDependencies(
+        resolver=target_registry(),
+        queue_lookup=_UnusedQueueLookup(),
+        reader=cast(Any, _UnusedLifecycleReader()),
+        dbos_engine=source,
+        options=ReconcileOptions(page_size=100),
+        max_cycles=2,
+    )
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"{name} is required")
+    return value
+
+
+def _source_url(schema: str) -> str:
+    base = make_url(_required_env("DATABASE_URL"))
+    return str(
+        base.update_query_dict(
+            {"options": quote(f"-csearch_path={schema},public", safe="")}
+        )
+    )
+
+
+def _new_source(schema: str) -> Engine:
+    admin = create_engine(_required_env("DATABASE_URL"))
+    try:
+        with admin.begin() as connection:
+            connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            migration = cast(
+                Any,
+                importlib.import_module(
+                    "whetstone.db.migrations.versions.20260712_0001_whetstone_baseline"
+                ),
+            )
+            migration.op = Operations(MigrationContext.configure(connection))
+            migration.upgrade()
+    finally:
+        admin.dispose()
+    source_url = _source_url(schema)
+    ensure_platform_schema(source_url)
+    return create_engine(source_url)
+
+
+def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
+    """Seed one accepted, non-empty graph result; values never leave the DB."""
+    now = datetime.now(UTC)
+    fixture = f"release_parity_{run_id}"
+    values = {"fixture": fixture, "now": now}
+    with source.begin() as connection:
+        connection.execute(
+            text(
+                """
+            INSERT INTO whetstone_operations (
+                operation_key, group_key, workflow_role, status, requested_count,
+                manifest_version, manifest_digest, manifest_page_size,
+                manifest_page_count, operation_execution_recipe_digest,
+                target_key, target_version, target_contract_digest,
+                platform_cut_version, registration_cursor, retry_policy,
+                inserted_count, already_present_count, enqueued_count,
+                workflow_already_present_count, enqueue_failed_count,
+                active_count, succeeded_count, terminal_failed_count,
+                cancelled_count, spec, metadata, created_at,
+                registration_completed_at, updated_at, completed_at, change_seq
+            ) VALUES (
+                :fixture || '_operation', :fixture, 'generation', 'succeeded',
+                0, 3, 'manifest', 1, 0, 'recipe', 'target', 1, 'contract',
+                1, 0, '{}'::jsonb, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                '{}'::jsonb, '{}'::jsonb, :now, :now, :now, :now, 1
+            )
+        """
+            ),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiments (experiment_name, config_metadata, acceptance_source_version, current_acceptance_id, acceptance_updated_at, created_at)
+            VALUES (:fixture, '{"experiment_kind":"humaneval_encdec"}'::jsonb, 1, :fixture || '_acceptance', :now, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_prediction_specs (prediction_id, experiment_name, task_id, repetition_seed, graph_digest, dimensions_digest, graph_layout, provider_kind, endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, dimensions, provider_configs, created_at)
+            VALUES (:fixture || '_prediction', :fixture, 'HumanEval/0', 0, 'graph', 'dimensions', 'layout', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{"kind":"code"}'::jsonb, '{"prompt":"complete"}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_generation_runs (generation_run_id, prediction_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, status, terminal_node_id, terminal_output_node_id, summary, started_at, completed_at)
+            VALUES (:fixture || '_generation', :fixture || '_prediction', 0, 'recipe', :fixture || '_item', 0, 'success', 'terminal', 'terminal', '{"terminal_output":"return a+b"}'::jsonb, :now, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_node_attempts (node_attempt_id, generation_run_id, prediction_id, node_id, attempt_index, status, provider_kind, endpoint_kind, model, throttle_key, provider_config, output, usage_cost, response_metadata, started_at, completed_at)
+            VALUES (:fixture || '_node', :fixture || '_generation', :fixture || '_prediction', 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, '{"provider_cost":0.125}'::jsonb, '{}'::jsonb, :now, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
+            VALUES (:fixture || '_score', :fixture || '_prediction', :fixture || '_generation', 0, 'score', :fixture || '_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 1, '{"code":"return a+b"}'::jsonb, '{"realized_compression_ratio":0.5}'::jsonb, '[]'::jsonb, :now, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
+            VALUES (:fixture || '_acceptance', :fixture, 1, 'ACCEPTED', 'operation', 'digest', '[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', jsonb_build_array(jsonb_build_object('operation_key', :fixture || '_operation', 'platform_cut_version', 1)), 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiment_acceptance_generation_members (acceptance_id, prediction_id, disposition, generation_run_id, generation_operation_key, platform_item_id, platform_attempt)
+            VALUES (:fixture || '_acceptance', :fixture || '_prediction', 'selected_success', :fixture || '_generation', 'operation', :fixture || '_item', 0)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiment_acceptance_scoring_members (acceptance_id, prediction_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, disposition, generation_run_id, score_attempt_id, accepted_scoring_ordinal)
+            VALUES (:fixture || '_acceptance', :fixture || '_prediction', 'humaneval', '1', 'python', '1', 'humaneval', 'test', 'accepted', :fixture || '_generation', :fixture || '_score', 1)
+        """),
+            values,
+        )
+    return hashlib.sha256(fixture.encode()).hexdigest()
+
+
+def _fence(
+    url: str, destination_id: str, kind: Literal["motherduck", "neon"]
+) -> PostgresPublicationFence:
+    return PostgresPublicationFence(
+        create_engine(url, poolclass=NullPool),
+        destination_id=destination_id,
+        kind=kind,
+    )
+
+
+def _pin_identity(pin: BundlePin) -> PinIdentity:
+    return PinIdentity(
+        pin_id=pin.pin_id,
+        bundle_id=pin.bundle_id,
+        expires_at_ms=pin.expires_at_ms,
+    )
+
+
+def _plane(
+    result: Any,
+    pin: BundlePin,
+    pinned: PinnedBundle,
+    destination_id: str,
+    bundle_key: Literal["whetstone-analysis", "whetstone-detail"],
+) -> PlaneDestination:
+    if (
+        pinned.bundle_id != pin.bundle_id
+        or pinned.snapshot_seq != result.snapshot_seq
+    ):
+        raise ValueError("fresh pin resolution disagrees with publication")
+    return PlaneDestination(
+        destination_id=destination_id,
+        bundle_key=bundle_key,
+        pin=_pin_identity(pin),
+        snapshot_seq=pinned.snapshot_seq,
+        members=pinned.members,
+        member_counts=result.member_counts,
+        member_checksums=result.member_checksums,
+    )
+
+
+def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
+    descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex
+    schema = f"whetstone_v6_release_{run_id}"
+    analysis_path = descriptor_path.parent / f"{run_id}-analysis.duckdb"
+    detail_path = descriptor_path.parent / f"{run_id}-detail.duckdb"
+    analysis_id, detail_id = (
+        f"whetstone-v6-analysis-{run_id}",
+        f"whetstone-v6-detail-{run_id}",
+    )
+    source = _new_source(schema)
+    analysis_fence = _fence(
+        _required_env("MOTHERDUCK_DATABASE_URL"), analysis_id, "motherduck"
+    )
+    detail_fence = _fence(
+        _required_env("NEON_DATABASE_URL"), detail_id, "neon"
+    )
+    try:
+        fixture_sha256 = _seed_accepted_fixture(source, run_id)
+        analysis_fence.ensure_schema()
+        detail_fence.ensure_schema()
+        analysis, detail = export_whetstone(
+            source,
+            reconciliation=_reconciliation(source),
+            destination_path=analysis_path,
+            detail_destination_path=detail_path,
+            analysis_remote_destinations=(analysis_fence,),
+            detail_remote_destinations=(detail_fence,),
+        )
+        if [item.status for item in analysis.destinations] != [
+            "PROMOTED",
+            "PROMOTED",
+        ] or [item.status for item in detail.destinations] != [
+            "PROMOTED",
+            "PROMOTED",
+        ]:
+            raise RuntimeError("publication did not promote every destination")
+        analysis_local_pin = pin_local_bundle(
+            analysis_path,
+            bundle_key=ANALYSIS_BUNDLE_KEY,
+            pin_id=f"{run_id}-analysis-local",
+        )
+        detail_local_pin = pin_local_bundle(
+            detail_path,
+            bundle_key=DETAIL_BUNDLE_KEY,
+            pin_id=f"{run_id}-detail-local",
+        )
+        analysis_remote_pin = analysis_fence.pin_bundle(
+            bundle_key=ANALYSIS_BUNDLE_KEY, pin_id=f"{run_id}-analysis-remote"
+        )
+        detail_remote_pin = detail_fence.pin_bundle(
+            bundle_key=DETAIL_BUNDLE_KEY, pin_id=f"{run_id}-detail-remote"
+        )
+        descriptor = ReleaseParityDescriptor(
+            schema_version=SCHEMA_VERSION,
+            run_id=run_id,
+            fixture_sha256=fixture_sha256,
+            source_schema=schema,
+            analysis={
+                "local": LocalPlane(
+                    path=analysis_path.name,
+                    bundle=ANALYSIS_BUNDLE_KEY,
+                    pin=_pin_identity(analysis_local_pin),
+                    snapshot_seq=resolve_local_pin(
+                        analysis_path, analysis_local_pin
+                    ).snapshot_seq,
+                    members=resolve_local_pin(
+                        analysis_path, analysis_local_pin
+                    ).members,
+                    member_counts=analysis.member_counts,
+                    member_checksums=analysis.member_checksums,
+                ),
+                "remote": _plane(
+                    analysis,
+                    analysis_remote_pin,
+                    _fence(
+                        _required_env("MOTHERDUCK_DATABASE_URL"),
+                        analysis_id,
+                        "motherduck",
+                    ).resolve_pin(analysis_remote_pin),
+                    analysis_id,
+                    ANALYSIS_BUNDLE_KEY,
+                ),
+            },
+            detail={
+                "local": LocalPlane(
+                    path=detail_path.name,
+                    bundle=DETAIL_BUNDLE_KEY,
+                    pin=_pin_identity(detail_local_pin),
+                    snapshot_seq=resolve_local_pin(
+                        detail_path, detail_local_pin
+                    ).snapshot_seq,
+                    members=resolve_local_pin(
+                        detail_path, detail_local_pin
+                    ).members,
+                    member_counts=detail.member_counts,
+                    member_checksums=detail.member_checksums,
+                ),
+                "remote": _plane(
+                    detail,
+                    detail_remote_pin,
+                    _fence(
+                        _required_env("NEON_DATABASE_URL"), detail_id, "neon"
+                    ).resolve_pin(detail_remote_pin),
+                    detail_id,
+                    DETAIL_BUNDLE_KEY,
+                ),
+            },
+        )
+        descriptor.validate_contract()
+        descriptor_path.write_text(descriptor.model_dump_json(indent=2))
+        _trace(
+            "prepare_succeeded",
+            run_id=run_id,
+            analysis_members=len(ANALYSIS_MEMBERS),
+            detail_members=len(DETAIL_MEMBERS),
+        )
+        return descriptor
+    finally:
+        source.dispose()
+        analysis_fence.engine.dispose()
+        detail_fence.engine.dispose()
+
+
+def _delete_remote(
+    fence: PostgresPublicationFence, plane: PlaneDestination
+) -> Mapping[str, int]:
+    for member in plane.members.values():
+        schema, table = member.split(".", 1)
+        if not _IDENTIFIER.fullmatch(schema) or not _IDENTIFIER.fullmatch(
+            table
+        ):
+            raise ValueError("unsafe descriptor member")
+    with fence.engine.begin() as connection:
+        for member in plane.members.values():
+            schema, table = member.split(".", 1)
+            connection.execute(
+                text(f'DROP TABLE IF EXISTS "{schema}"."{table}"')
+            )
+        params = {
+            "destination": plane.destination_id,
+            "bundle": plane.bundle_key,
+            "bundle_id": plane.pin.bundle_id,
+            "pin": plane.pin.pin_id,
+        }
+        connection.execute(
+            text(
+                f"DELETE FROM {fence._pins_table} WHERE destination_id=:destination AND bundle_key=:bundle AND pin_id=:pin"
+            ),
+            params,
+        )
+        connection.execute(
+            text(
+                f"DELETE FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+            ),
+            params,
+        )
+        connection.execute(
+            text(
+                f"DELETE FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+            ),
+            params,
+        )
+    with fence.engine.connect() as connection:
+        return {
+            name: int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {table} WHERE destination_id=:destination"
+                    ),
+                    {"destination": plane.destination_id},
+                ).scalar_one()
+            )
+            for name, table in {
+                "state_rows": fence._table,
+                "bundle_rows": fence._bundles_table,
+                "pin_rows": fence._pins_table,
+            }.items()
+        } | {"physical_candidates": 0}
+
+
+def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
+    descriptor = load_descriptor(descriptor_path)
+    analysis_fence = _fence(
+        _required_env("MOTHERDUCK_DATABASE_URL"),
+        _remote(descriptor.analysis).destination_id,
+        "motherduck",
+    )
+    detail_fence = _fence(
+        _required_env("NEON_DATABASE_URL"),
+        _remote(descriptor.detail).destination_id,
+        "neon",
+    )
+    try:
+        destinations = {
+            _remote(descriptor.analysis).destination_id: _delete_remote(
+                analysis_fence, _remote(descriptor.analysis)
+            ),
+            _remote(descriptor.detail).destination_id: _delete_remote(
+                detail_fence, _remote(descriptor.detail)
+            ),
+        }
+    finally:
+        analysis_fence.engine.dispose()
+        detail_fence.engine.dispose()
+    admin = create_engine(_required_env("DATABASE_URL"))
+    try:
+        with admin.begin() as connection:
+            connection.execute(
+                text(
+                    f'DROP SCHEMA IF EXISTS "{descriptor.source_schema}" CASCADE'
+                )
+            )
+        with admin.connect() as connection:
+            absent = (
+                connection.execute(
+                    text(
+                        "SELECT 1 FROM information_schema.schemata WHERE schema_name=:schema"
+                    ),
+                    {"schema": descriptor.source_schema},
+                ).one_or_none()
+                is None
+            )
+    finally:
+        admin.dispose()
+    files = [_local(descriptor.analysis).path, _local(descriptor.detail).path]
+    for name in files:
+        path = descriptor_path.parent / name
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".lock").unlink(missing_ok=True)
+    proof = CleanupProof(
+        schema_version=SCHEMA_VERSION,
+        run_id=descriptor.run_id,
+        source_schema_absent=absent,
+        local_files_absent=all(
+            not (descriptor_path.parent / name).exists() for name in files
+        ),
+        destinations=destinations,
+    )
+    proof.validate_against(descriptor)
+    proof_path.write_text(proof.model_dump_json(indent=2))
+    _trace("cleanup_succeeded", run_id=descriptor.run_id)
+    return proof
+
+
+def verify_evidence(descriptor_path: Path, proof_path: Path) -> None:
+    descriptor = load_descriptor(descriptor_path)
+    proof = CleanupProof.model_validate_json(proof_path.read_text())
+    proof.validate_against(descriptor)
+    _trace("evidence_verified", run_id=descriptor.run_id)

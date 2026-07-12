@@ -21,6 +21,15 @@ from dr_platform.reconciliation_runtime import (
 from sqlalchemy import Engine, create_engine
 
 from whetstone.platform.operations import WhetstoneDbosCanceller
+from whetstone.platform.release_parity_fixture import (
+    cleanup as cleanup_release_parity_fixture,
+)
+from whetstone.platform.release_parity_fixture import (
+    prepare as prepare_release_parity_fixture,
+)
+from whetstone.platform.release_parity_fixture import (
+    verify_evidence as verify_release_parity_evidence,
+)
 from whetstone.platform.runtime import (
     build_whetstone_dbos_config,
     dbos_config,
@@ -113,6 +122,45 @@ def publish(
         typer.echo(detail.model_dump_json())
     finally:
         engine.dispose()
+
+
+@APP.command("release-parity-fixture")
+def release_parity_fixture(
+    action: Annotated[
+        str, typer.Argument(help="prepare, cleanup, or verify-evidence")
+    ],
+    descriptor: Annotated[Path, typer.Option("--descriptor")],
+    cleanup_proof: Annotated[
+        Path | None, typer.Option("--cleanup-proof")
+    ] = None,
+) -> None:
+    """Produce or remove the disposable v6 release-parity fixture."""
+
+    if action == "prepare":
+        if cleanup_proof is not None:
+            raise typer.BadParameter("prepare does not accept --cleanup-proof")
+        typer.echo(
+            prepare_release_parity_fixture(descriptor).model_dump_json()
+        )
+    elif action == "cleanup":
+        if cleanup_proof is None:
+            raise typer.BadParameter("cleanup requires --cleanup-proof")
+        typer.echo(
+            cleanup_release_parity_fixture(
+                descriptor, cleanup_proof
+            ).model_dump_json()
+        )
+    elif action == "verify-evidence":
+        if cleanup_proof is None:
+            raise typer.BadParameter(
+                "verify-evidence requires --cleanup-proof"
+            )
+        verify_release_parity_evidence(descriptor, cleanup_proof)
+        typer.echo("verified")
+    else:
+        raise typer.BadParameter(
+            "action must be prepare, cleanup, or verify-evidence"
+        )
 
 
 def main() -> None:

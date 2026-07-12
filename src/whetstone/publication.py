@@ -825,7 +825,8 @@ def export_whetstone(
     reconciliation: ExportReconciliationDependencies,
     destination_path: str | Path,
     detail_destination_path: str | Path | None = None,
-    remote_destinations: Sequence[Any] = (),
+    analysis_remote_destinations: Sequence[Any] = (),
+    detail_remote_destinations: Sequence[Any] = (),
 ) -> tuple[ExportResult, ExportResult]:
     """Run the one public platform export verb for both Whetstone bundles."""
 
@@ -840,7 +841,7 @@ def export_whetstone(
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,
-        remote_destinations=remote_destinations,
+        remote_destinations=analysis_remote_destinations,
     )
     detail = export(
         source,
@@ -853,7 +854,7 @@ def export_whetstone(
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,
-        remote_destinations=remote_destinations,
+        remote_destinations=detail_remote_destinations,
     )
     return analysis, detail
 
