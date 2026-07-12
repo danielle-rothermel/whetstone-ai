@@ -64,11 +64,7 @@ SCORE_ATTEMPT_JSONB_FIELDS = (
     "metrics",
     "per_test_results",
 )
-SCORE_HARNESS_FAILURE_JSONB_FIELDS = (
-    "dataset_snapshot",
-    "extracted_submission",
-    "cause",
-)
+SCORE_HARNESS_FAILURE_JSONB_FIELDS = ("failure",)
 
 
 def node_output_payload_from_graph_output(
@@ -151,6 +147,9 @@ def generation_run_row(record: GenerationRunRecord) -> Row:
         "generation_run_id": record.generation_run_id,
         "prediction_id": record.prediction_id,
         "attempt_index": record.attempt_index,
+        "execution_recipe_digest": record.execution_recipe_digest,
+        "platform_item_id": record.platform_item_id,
+        "platform_attempt": record.platform_attempt,
         "status": record.status.value,
         "terminal_node_id": record.terminal_node_id,
         "terminal_output_node_id": record.terminal_output_node_id,
@@ -226,18 +225,30 @@ def score_attempt_row(record: ScoreAttemptRecord) -> Row:
 
 def score_harness_failure_row(record: ScoreHarnessFailureRecord) -> Row:
     row = {
+        "score_harness_failure_id": record.score_harness_failure_id,
         "score_attempt_id": record.score_attempt_id,
         "prediction_id": record.prediction_id,
         "generation_run_id": record.generation_run_id,
         "attempt_index": record.attempt_index,
+        "execution_recipe_digest": record.execution_recipe_digest,
+        "platform_item_id": record.platform_item_id,
+        "platform_attempt": record.platform_attempt,
         "scoring_profile_id": record.scoring_profile_id,
         "scoring_profile_version": record.scoring_profile_version,
         "parser_profile_id": record.parser_profile_id,
         "parser_version": record.parser_version,
         "dataset_name": record.dataset_name,
         "dataset_split": record.dataset_split,
-        "dataset_snapshot": _dump(record.dataset_snapshot),
-        "failure": _dump(record),
+        "failure": {
+            "kind": record.kind,
+            "raw_submission": record.raw_submission,
+            "extracted_submission": _dump_optional(
+                record.extracted_submission
+            ),
+            "cause": _dump(record.cause),
+            "failure_class": _enum_value(record.failure_class),
+            "dataset_snapshot": _dump(record.dataset_snapshot),
+        },
         "started_at": record.started_at,
         "completed_at": record.completed_at,
     }
@@ -359,7 +370,28 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
 def score_harness_failure_record_from_row(
     row: Row,
 ) -> ScoreHarnessFailureRecord:
-    return ScoreHarnessFailureRecord.model_validate(row["failure"])
+    failure = dict(row["failure"])
+    return ScoreHarnessFailureRecord.model_validate(
+        {
+            "score_harness_failure_id": row["score_harness_failure_id"],
+            "score_attempt_id": row["score_attempt_id"],
+            "prediction_id": row["prediction_id"],
+            "generation_run_id": row["generation_run_id"],
+            "attempt_index": row["attempt_index"],
+            "execution_recipe_digest": row["execution_recipe_digest"],
+            "platform_item_id": row["platform_item_id"],
+            "platform_attempt": row["platform_attempt"],
+            "scoring_profile_id": row["scoring_profile_id"],
+            "scoring_profile_version": row["scoring_profile_version"],
+            "parser_profile_id": row["parser_profile_id"],
+            "parser_version": row["parser_version"],
+            "dataset_name": row["dataset_name"],
+            "dataset_split": row["dataset_split"],
+            "started_at": row["started_at"],
+            "completed_at": row["completed_at"],
+            **failure,
+        }
+    )
 
 
 def insert_experiment(record: ExperimentRecord) -> Insert:
@@ -367,9 +399,7 @@ def insert_experiment(record: ExperimentRecord) -> Insert:
 
 
 def insert_prediction_spec(record: PredictionSpecRecord) -> Insert:
-    return schema.prediction_specs.insert().values(
-        prediction_spec_row(record)
-    )
+    return schema.prediction_specs.insert().values(prediction_spec_row(record))
 
 
 def insert_generation_run(record: GenerationRunRecord) -> Insert:

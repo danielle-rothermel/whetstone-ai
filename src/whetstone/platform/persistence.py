@@ -11,7 +11,7 @@ from dr_graph import (
     TerminalError,
 )
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import null, select
+from sqlalchemy import null, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
@@ -59,9 +59,11 @@ def load_prediction_spec(
     *,
     prediction_id: str,
 ) -> PredictionSpecRecord:
-    row = connection.execute(
-        io.select_prediction_spec(prediction_id)
-    ).mappings().one()
+    row = (
+        connection.execute(io.select_prediction_spec(prediction_id))
+        .mappings()
+        .one()
+    )
     return prediction_spec_from_row(dict(row))
 
 
@@ -70,9 +72,11 @@ def load_generation_run(
     *,
     generation_run_id: str,
 ) -> GenerationRunRecord:
-    row = connection.execute(
-        io.select_generation_run(generation_run_id)
-    ).mappings().one()
+    row = (
+        connection.execute(io.select_generation_run(generation_run_id))
+        .mappings()
+        .one()
+    )
     return generation_run_from_row(dict(row))
 
 
@@ -251,7 +255,7 @@ def persist_generation_result(
     node_attempts: Iterable[NodeAttemptRecord],
 ) -> None:
     """Append rows and reject a deterministic identity with changed truth."""
-    _insert_or_exact_reload(
+    inserted = _insert_or_exact_reload(
         connection,
         statement=idempotent_insert_generation_run(generation_run),
         table=schema.generation_runs,
@@ -268,14 +272,16 @@ def persist_generation_result(
             key=node_attempt.node_attempt_id,
             expected=io.node_attempt_row(node_attempt),
         )
+    if inserted is not None:
+        _invalidate_experiment_acceptance(
+            connection, prediction_id=generation_run.prediction_id
+        )
 
 
 _NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
     {"provider_config", "output", "failure"}
 )
-_SCORE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
-    {"metrics"}
-)
+_SCORE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset({"metrics"})
 _SCORE_HARNESS_FAILURE_NULLABLE_JSONB_COLUMNS = frozenset(
     {"extracted_submission"}
 )
@@ -314,6 +320,10 @@ def persist_score_attempt(
         if inserted_row is not None
         else ScoreAttemptInsertStatus.ALREADY_PRESENT
     )
+    if inserted_row is not None:
+        _invalidate_experiment_acceptance(
+            connection, prediction_id=score_attempt.prediction_id
+        )
     return ScoreAttemptInsertResult(
         score_attempt_id=score_attempt.score_attempt_id,
         status=status,
@@ -338,6 +348,10 @@ def persist_score_harness_failure(
         if inserted_row is not None
         else ScoreAttemptInsertStatus.ALREADY_PRESENT
     )
+    if inserted_row is not None:
+        _invalidate_experiment_acceptance(
+            connection, prediction_id=harness_failure.prediction_id
+        )
     return ScoreAttemptInsertResult(
         score_attempt_id=harness_failure.score_attempt_id,
         status=status,
@@ -413,14 +427,45 @@ def _insert_or_exact_reload(
     inserted = connection.execute(statement).first()
     if inserted is not None:
         return inserted
-    actual = connection.execute(
-        select(table).where(table.c[key_column] == key)
-    ).mappings().one()
+    actual = (
+        connection.execute(select(table).where(table.c[key_column] == key))
+        .mappings()
+        .one()
+    )
     if dict(actual) != dict(expected):
         raise ValueError(
             f"append-only identity collision for {key_column}={key}"
         )
     return None
+
+
+def _invalidate_experiment_acceptance(
+    connection: Connection, *, prediction_id: str
+) -> None:
+    """Serialize a new terminal fact with acceptance pointer invalidation."""
+    experiment_name = connection.execute(
+        select(schema.prediction_specs.c.experiment_name).where(
+            schema.prediction_specs.c.prediction_id == prediction_id
+        )
+    ).scalar_one()
+    experiment = (
+        connection.execute(
+            select(schema.experiments)
+            .where(schema.experiments.c.experiment_name == experiment_name)
+            .with_for_update()
+        )
+        .mappings()
+        .one()
+    )
+    connection.execute(
+        update(schema.experiments)
+        .where(schema.experiments.c.experiment_name == experiment_name)
+        .values(
+            acceptance_source_version=experiment["acceptance_source_version"]
+            + 1,
+            current_acceptance_id=None,
+        )
+    )
 
 
 def terminal_submission_text(
