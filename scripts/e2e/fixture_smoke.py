@@ -20,11 +20,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
-from dr_platform import await_operation, destroy_dbos_runtime
+from dr_platform import OperationWaitOptions, wait_operation
 from dr_providers import Provider, ScriptedOutcome, ScriptedProvider
 from sqlalchemy import create_engine, text
 
@@ -34,13 +36,13 @@ DEFAULT_CONFIG = (
 )
 OPERATION_KEY = "e2e-fixture-smoke-v1"
 
-FIXTURE_GENERATION = '''Here is the solution:
+FIXTURE_GENERATION = """Here is the solution:
 
 ```python
 def solution(*args, **kwargs):
     return args[0] if args else None
 ```
-'''
+"""
 
 APP = typer.Typer(add_completion=False)
 
@@ -81,14 +83,15 @@ def main(
     timeout_seconds: Annotated[float, typer.Option()] = 1800.0,
 ) -> None:
     from whetstone.platform import node_execution
-    from whetstone.platform.platform_db import PLATFORM_SCHEMA
     from whetstone.platform.rescoring import rescore_submission_runs
+    from whetstone.platform.runtime import shutdown_dbos_runtime
     from whetstone.platform.spec_builder import (
         DEFAULT_CONFIGS_ROOT,
         iter_experiment_specs_from_file,
         write_prediction_specs_jsonl,
     )
     from whetstone.platform.submission import submit_prediction_specs_jsonl
+    from whetstone.platform.targets import target_registry
     from whetstone.platform.worker import configure_platform_dbos_runtime
 
     typer.echo(f"[1/6] migrating scratch database {database_url!r}")
@@ -116,17 +119,16 @@ def main(
     node_execution.default_http_provider = _fixture_provider  # ty: ignore[invalid-assignment]
 
     typer.echo("[4/6] launching in-process worker + submit-jsonl")
-    config = configure_platform_dbos_runtime(
+    configure_platform_dbos_runtime(
         database_url=database_url,
         dbos_system_database_url=f"sqlite:///{workdir}/dbos_system.sqlite",
         worker_concurrency=worker_concurrency,
-        consume_generation_queue=True,
     )
-    engine = create_engine(config.database_url)
+    engine = create_engine(database_url)
     try:
         submit_result = submit_prediction_specs_jsonl(
             engine,
-            database_url=config.database_url,
+            database_url=database_url,
             operation_key=OPERATION_KEY,
             experiment_name=experiment_name,
             specs_file=specs_file,
@@ -143,17 +145,23 @@ def main(
         )
 
         typer.echo("[5/6] awaiting generation workflows, then rescore")
-        breakdown = await_operation(
-            engine,
-            operation_key=OPERATION_KEY,
-            schema=PLATFORM_SCHEMA,
-            poll_interval_seconds=2.0,
-            timeout_seconds=timeout_seconds,
+        wait_result = wait_operation(
+            OPERATION_KEY,
+            engine=engine,
+            resolver=target_registry(),
+            options=OperationWaitOptions(
+                poll_interval_seconds=2.0,
+                timeout_seconds=timeout_seconds,
+                clock=lambda: datetime.now(UTC),
+                sleeper=time.sleep,
+            ),
         )
-        typer.echo(f"      workflows: {breakdown.status_counts}")
+        typer.echo(
+            f"      workflows: {wait_result.inspection.operation.status}"
+        )
         rescore = rescore_submission_runs(
             engine,
-            database_url=config.database_url,
+            database_url=database_url,
             experiment_name=experiment_name,
             dataset_snapshot_path=dataset_snapshot_path,
         )
@@ -199,7 +207,7 @@ def main(
             typer.echo(f"      {key}: {rows}")
     finally:
         engine.dispose()
-        destroy_dbos_runtime()
+        shutdown_dbos_runtime()
 
 
 if __name__ == "__main__":

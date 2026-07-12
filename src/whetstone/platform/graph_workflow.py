@@ -14,7 +14,6 @@ from dr_platform import (
 )
 from dr_platform.dbos_config import (
     WORKFLOW_START_RACE_ERRORS,
-    resolve_database_url,
     workflow_start_raced,
 )
 from pydantic import BaseModel, ConfigDict, Field
@@ -38,6 +37,7 @@ from whetstone.platform.persistence import (
     persist_generation_result,
 )
 from whetstone.platform.platform_db import PLATFORM_SCHEMA
+from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.records import (
     FailureMetadataPayload,
     GenerationRunRecord,
@@ -130,7 +130,7 @@ def run_prediction_graph_workflow(
     attempt_index: int = 0,
     execution_recipe_digest: str = "",
 ) -> str:
-    database_url = resolve_database_url(None)
+    database_url = resolve_application_database_url()
     spec = PredictionSpecRecord.model_validate(
         load_prediction_spec_step(database_url, prediction_id)
     )

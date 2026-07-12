@@ -13,9 +13,6 @@ from dr_code.humaneval import (
     parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
-from dr_platform.dbos_config import (
-    resolve_database_url,
-)
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from sqlalchemy import create_engine
 
@@ -31,6 +28,7 @@ from whetstone.platform.persistence import (
     persist_score_attempt,
     persist_score_harness_failure,
 )
+from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.scoring import score_submission_run
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
@@ -94,7 +92,7 @@ def run_score_submission_workflow(
 ) -> dict[str, Any]:
     # DBOS persists this workflow's arguments.  Resolve connection state at
     # execution time so DSNs and credentials never enter replay payloads.
-    database_url = resolve_database_url(None)
+    database_url = resolve_application_database_url()
     resolved_snapshot_path = require_dataset_snapshot_path(
         os.environ.get("WHETSTONE_HUMANEVAL_SNAPSHOT_PATH")
     )

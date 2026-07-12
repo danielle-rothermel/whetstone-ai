@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import typer
 from dbos import DBOS
-from dr_platform.dbos_config import destroy_dbos_runtime
 
 from whetstone.platform.cli_env import load_env_file, run_typer_app
-from whetstone.platform.dbos_bootstrap import (
-    build_dbos_config,
-    build_eval_dbos_config,
+from whetstone.platform.operations import APP as OPERATIONS_APP
+from whetstone.platform.runtime import (
+    build_whetstone_dbos_config,
+    dbos_config,
+    shutdown_dbos_runtime,
 )
 from whetstone.platform.targets import (
     listen_to_execution_queues,
@@ -19,6 +20,7 @@ from whetstone.platform.targets import (
 DBOS_APP_NAME = "whetstone"
 DEFAULT_WORKER_CONCURRENCY = 1
 APP = typer.Typer(no_args_is_help=True)
+APP.add_typer(OPERATIONS_APP, name="operation")
 
 
 def configure_platform_dbos_runtime(
@@ -27,20 +29,19 @@ def configure_platform_dbos_runtime(
     dbos_system_database_url: str | None,
     worker_concurrency: int = DEFAULT_WORKER_CONCURRENCY,
 ) -> None:
-    config = build_eval_dbos_config(
+    config = build_whetstone_dbos_config(
         database_url=database_url,
-        dbos_system_database_url=dbos_system_database_url,
+        system_database_url=dbos_system_database_url,
         generation_concurrency=worker_concurrency,
         scoring_concurrency=worker_concurrency,
-        database_url_error_suffix="for Whetstone execution",
     )
     try:
-        DBOS(config=build_dbos_config(config, app_name=DBOS_APP_NAME))
+        DBOS(config=dbos_config(config, app_name=DBOS_APP_NAME))
         listen_to_execution_queues()
         DBOS.launch()
         register_execution_queues(worker_concurrency=worker_concurrency)
     except Exception:
-        destroy_dbos_runtime()
+        shutdown_dbos_runtime()
         raise
 
 
@@ -61,7 +62,7 @@ def serve(
     try:
         typer.echo("Whetstone queues are registered.")
     finally:
-        destroy_dbos_runtime()
+        shutdown_dbos_runtime()
 
 
 def main() -> None:
