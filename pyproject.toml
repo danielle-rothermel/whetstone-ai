@@ -32,6 +32,9 @@ dependencies = [
     "zstandard>=0.25.0",
 ]
 
+[project.scripts]
+whetstone-publish = "whetstone.platform.publication:main"
+
 [dependency-groups]
 dev = [
     "dspy==3.3.0b1",
@@ -42,7 +45,7 @@ dev = [
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "88bf49dc8b546fabca262ae6d9f18e3dd88c72e9" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "c08c6dc" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 
