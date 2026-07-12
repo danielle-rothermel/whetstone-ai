@@ -28,7 +28,13 @@ from whetstone.platform.release_parity_fixture import (
     cleanup as cleanup_release_parity_fixture,
 )
 from whetstone.platform.release_parity_fixture import (
+    cleanup_local as cleanup_local_release_parity_fixture,
+)
+from whetstone.platform.release_parity_fixture import (
     prepare as prepare_release_parity_fixture,
+)
+from whetstone.platform.release_parity_fixture import (
+    prepare_local as prepare_local_release_parity_fixture,
 )
 from whetstone.platform.release_parity_fixture import (
     verify_evidence as verify_release_parity_evidence,
@@ -167,6 +173,24 @@ def release_parity_fixture(
         raise typer.BadParameter(
             "action must be prepare, cleanup, or verify-evidence"
         )
+
+
+@APP.command("local-release-parity-fixture")
+def local_release_parity_fixture(
+    action: Annotated[str, typer.Argument(help="prepare or cleanup")],
+    descriptor: Annotated[Path, typer.Option("--descriptor")],
+) -> None:
+    """Produce or remove only the signed local release-parity artifacts."""
+
+    if action == "prepare":
+        typer.echo(
+            prepare_local_release_parity_fixture(descriptor).model_dump_json()
+        )
+    elif action == "cleanup":
+        cleanup_local_release_parity_fixture(descriptor)
+        typer.echo("cleaned")
+    else:
+        raise typer.BadParameter("action must be prepare or cleanup")
 
 
 def main() -> None:

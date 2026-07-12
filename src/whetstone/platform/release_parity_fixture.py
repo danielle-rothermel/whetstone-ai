@@ -18,7 +18,6 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
-from urllib.parse import quote
 
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
@@ -103,6 +102,61 @@ class LocalPlane(BaseModel):
     members: Mapping[NonEmpty, NonEmpty]
     member_counts: Mapping[NonEmpty, StrictInt]
     member_checksums: Mapping[NonEmpty, NonEmpty]
+
+
+class LocalOnlyDescriptor(BaseModel):
+    """Reader evidence for a disposable, signed local Platform export.
+
+    The public ring stays at the operator boundary.  This document records the
+    environment reference and expected key IDs, never key or private material.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[2]
+    run_id: NonEmpty
+    fixture_sha256: NonEmpty
+    source_schema: NonEmpty
+    public_key_ring_environment: Literal[
+        "WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING"
+    ]
+    public_key_ids: tuple[NonEmpty, ...]
+    analysis: LocalPlane
+    detail: LocalPlane
+
+    def validate_contract(self) -> None:
+        _reject_secrets(self.model_dump(mode="json"))
+        if _RUN_ID.fullmatch(self.run_id) is None:
+            raise ValueError("run_id is not a generated run identity")
+        if _SHA256.fullmatch(self.fixture_sha256) is None:
+            raise ValueError("fixture_sha256 must be a SHA-256 checksum")
+        if self.source_schema != f"whetstone_v6_release_{self.run_id}":
+            raise ValueError("source_schema is not owned by this run")
+        if not self.public_key_ids or len(set(self.public_key_ids)) != len(
+            self.public_key_ids
+        ):
+            raise ValueError("public key ring reference is invalid")
+        for name, plane, expected, bundle in (
+            ("analysis", self.analysis, ANALYSIS_MEMBERS, ANALYSIS_BUNDLE_KEY),
+            ("detail", self.detail, DETAIL_MEMBERS, DETAIL_BUNDLE_KEY),
+        ):
+            if plane.path != f"{self.run_id}-{name}.duckdb":
+                raise ValueError(f"{name} local path is not owned by this run")
+            if (
+                plane.bundle != bundle
+                or plane.pin.pin_id != f"{self.run_id}-{name}-local"
+            ):
+                raise ValueError(f"{name} local pin is not owned by this run")
+            if any(
+                set(getattr(plane, field)) != set(expected)
+                for field in ("members", "member_counts", "member_checksums")
+            ):
+                raise ValueError(f"{name} inventory is not frozen")
+            if any(
+                _SHA256.fullmatch(value) is None
+                for value in plane.member_checksums.values()
+            ):
+                raise ValueError(f"{name} contains a non-SHA-256 checksum")
 
 
 PlaneMap = Mapping[Literal["local", "remote"], LocalPlane | PlaneDestination]
@@ -362,9 +416,7 @@ def _required_env(name: str) -> str:
 def _source_url(schema: str) -> str:
     base = make_url(_required_env("DATABASE_URL"))
     return str(
-        base.update_query_dict(
-            {"options": quote(f"-csearch_path={schema},public", safe="")}
-        )
+        base.update_query_dict({"options": f"-c search_path={schema},public"})
     )
 
 
@@ -373,6 +425,9 @@ def _new_source(schema: str) -> Engine:
     try:
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            connection.execute(
+                text(f'SET LOCAL search_path TO "{schema}", public')
+            )
             migration = cast(
                 Any,
                 importlib.import_module(
@@ -442,14 +497,14 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         connection.execute(
             text("""
             INSERT INTO whetstone_node_attempts (node_attempt_id, generation_run_id, prediction_id, node_id, attempt_index, status, provider_kind, endpoint_kind, model, throttle_key, provider_config, output, usage_cost, response_metadata, started_at, completed_at)
-            VALUES (:fixture || '_node', :fixture || '_generation', :fixture || '_prediction', 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, '{"provider_cost":0.125}'::jsonb, '{}'::jsonb, :now, :now)
+            VALUES (:fixture || '_node', :fixture || '_generation', :fixture || '_prediction', 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, '{"provider_cost": 0.125}'::jsonb, '{}'::jsonb, :now, :now)
         """),
             values,
         )
         connection.execute(
             text("""
             INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
-            VALUES (:fixture || '_score', :fixture || '_prediction', :fixture || '_generation', 0, 'score', :fixture || '_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 1, '{"code":"return a+b"}'::jsonb, '{"realized_compression_ratio":0.5}'::jsonb, '[]'::jsonb, :now, :now)
+            VALUES (:fixture || '_score', :fixture || '_prediction', :fixture || '_generation', 0, 'score', :fixture || '_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 1, '{"code":"return a+b"}'::jsonb, '{"realized_compression_ratio": 0.5}'::jsonb, '[]'::jsonb, :now, :now)
         """),
             values,
         )
@@ -704,6 +759,106 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             analysis_fence.engine.dispose()
         if detail_fence is not None:
             detail_fence.engine.dispose()
+
+
+def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
+    """Materialize the exact signed Platform export without remote fences.
+
+    Ownership is intentionally limited to the generated source schema and the
+    two sibling DuckDB files; ``cleanup_local`` removes only those resources.
+    """
+
+    descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex
+    schema = f"whetstone_v6_release_{run_id}"
+    analysis_path = descriptor_path.parent / f"{run_id}-analysis.duckdb"
+    detail_path = descriptor_path.parent / f"{run_id}-detail.duckdb"
+    source: Engine | None = None
+    try:
+        integrity = required_bundle_integrity_configuration()
+        source = _new_source(schema)
+        fixture_sha256 = _seed_accepted_fixture(source, run_id)
+        analysis, detail = export_whetstone(
+            source,
+            reconciliation=_reconciliation(source),
+            integrity_signer=integrity.signer,
+            destination_path=analysis_path,
+            detail_destination_path=detail_path,
+        )
+        analysis_pin = pin_local_bundle(
+            analysis_path,
+            bundle_key=ANALYSIS_BUNDLE_KEY,
+            pin_id=f"{run_id}-analysis-local",
+        )
+        detail_pin = pin_local_bundle(
+            detail_path,
+            bundle_key=DETAIL_BUNDLE_KEY,
+            pin_id=f"{run_id}-detail-local",
+        )
+
+        def local_plane(
+            path: Path, pin: BundlePin, result: Any, bundle: str
+        ) -> LocalPlane:
+            pinned = resolve_local_pin(
+                path, pin, public_key_ring=integrity.public_key_ring
+            )
+            return LocalPlane(
+                path=path.name,
+                bundle=bundle,
+                pin=_pin_identity(pin),
+                snapshot_seq=pinned.snapshot_seq,
+                members=pinned.members,
+                member_counts=result.member_counts,
+                member_checksums=result.member_checksums,
+            )
+
+        descriptor = LocalOnlyDescriptor(
+            schema_version=2,
+            run_id=run_id,
+            fixture_sha256=fixture_sha256,
+            source_schema=schema,
+            public_key_ring_environment="WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING",
+            public_key_ids=tuple(sorted(integrity.public_key_ring)),
+            analysis=local_plane(
+                analysis_path, analysis_pin, analysis, ANALYSIS_BUNDLE_KEY
+            ),
+            detail=local_plane(
+                detail_path, detail_pin, detail, DETAIL_BUNDLE_KEY
+            ),
+        )
+        descriptor.validate_contract()
+        descriptor_path.write_text(descriptor.model_dump_json(indent=2))
+        return descriptor
+    except Exception:
+        for path in (analysis_path, detail_path):
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        if source is not None:
+            source.dispose()
+
+
+def cleanup_local(descriptor_path: Path) -> None:
+    """Remove only local-only fixture resources after validating ownership."""
+
+    descriptor = LocalOnlyDescriptor.model_validate_json(
+        descriptor_path.read_text()
+    )
+    descriptor.validate_contract()
+    admin = create_engine(_required_env("DATABASE_URL"))
+    try:
+        with admin.begin() as connection:
+            connection.execute(
+                text(
+                    f'DROP SCHEMA IF EXISTS "{descriptor.source_schema}" CASCADE'
+                )
+            )
+    finally:
+        admin.dispose()
+    for plane in (descriptor.analysis, descriptor.detail):
+        path = descriptor_path.parent / plane.path
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".lock").unlink(missing_ok=True)
 
 
 def _rollback_prepare(journal: RunJournal, directory: Path) -> None:
