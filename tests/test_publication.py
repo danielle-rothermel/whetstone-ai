@@ -36,6 +36,7 @@ def test_export_uses_one_reconciliation_dependency_and_whetstone_schema(
     result = publication.export_whetstone(
         cast("Any", object()),
         reconciliation=reconciliation,
+        integrity_signer=cast("Any", object()),
         destination_path=tmp_path / "publication.duckdb",
     )
 
@@ -58,6 +59,7 @@ def test_export_routes_analysis_and_detail_remotes_independently(
     publication.export_whetstone(
         cast("Any", object()),
         reconciliation=cast("Any", object()),
+        integrity_signer=cast("Any", object()),
         destination_path=tmp_path / "analysis.duckdb",
         analysis_remote_destinations=("motherduck",),
         detail_remote_destinations=("neon",),

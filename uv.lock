@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=fd7e4b9e4c2f031c1eede2649e2a778441ef1478#fd7e4b9e4c2f031c1eede2649e2a778441ef1478" }
+source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=e4c0f04695c4fe605438398ef1bbe9f311c265a1#e4c0f04695c4fe605438398ef1bbe9f311c265a1" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos", extra = ["otel"] },
@@ -3124,7 +3124,7 @@ requires-dist = [
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=fd7e4b9e4c2f031c1eede2649e2a778441ef1478" },
+    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=e4c0f04695c4fe605438398ef1bbe9f311c265a1" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },

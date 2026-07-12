@@ -20,6 +20,9 @@ from dr_platform.reconciliation_runtime import (
 )
 from sqlalchemy import Engine, create_engine
 
+from whetstone.platform.integrity import (
+    required_bundle_integrity_configuration,
+)
 from whetstone.platform.operations import WhetstoneDbosCanceller
 from whetstone.platform.release_parity_fixture import (
     cleanup as cleanup_release_parity_fixture,
@@ -106,6 +109,7 @@ def publish(
     """Build, validate, and promote both complete Whetstone bundles."""
 
     application_database_url = resolve_application_database_url()
+    integrity = required_bundle_integrity_configuration()
     engine = create_engine(application_database_url)
     try:
         with build_export_reconciliation_dependencies(
@@ -115,6 +119,7 @@ def publish(
             analysis, detail = export_whetstone(
                 engine,
                 reconciliation=reconciliation,
+                integrity_signer=integrity.signer,
                 destination_path=destination,
                 detail_destination_path=detail_destination,
             )

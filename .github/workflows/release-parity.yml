@@ -18,6 +18,12 @@ on:
         required: true
       UNITBENCH_RELEASE_PARITY_TOKEN:
         required: true
+      WHETSTONE_BUNDLE_INTEGRITY_KEY_ID:
+        required: true
+      WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY:
+        required: true
+      WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING:
+        required: true
 
 permissions: {}
 
@@ -46,12 +52,23 @@ jobs:
           GIT_CONFIG_COUNT: 1
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}@github.com/danielle-rothermel/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/
+      - name: Materialize ephemeral bundle integrity key
+        env:
+          PRIVATE_KEY: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY }}
+        run: |
+          umask 077
+          install -d -m 700 "$RUNNER_TEMP/whetstone-integrity"
+          printf '%s' "$PRIVATE_KEY" > "$RUNNER_TEMP/whetstone-integrity/private.pem"
+          chmod 600 "$RUNNER_TEMP/whetstone-integrity/private.pem"
       - name: Prepare Whetstone fixture
         run: uv run whetstone-publish release-parity-fixture prepare --descriptor "$RUNNER_TEMP/release-parity/descriptor.json"
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MOTHERDUCK_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          WHETSTONE_BUNDLE_INTEGRITY_KEY_ID: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_KEY_ID }}
+          WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH: ${{ runner.temp }}/whetstone-integrity/private.pem
+          WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
       - name: Checkout exact caller Unitbench revision
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -77,9 +94,15 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MOTHERDUCK_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          WHETSTONE_BUNDLE_INTEGRITY_KEY_ID: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_KEY_ID }}
+          WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH: ${{ runner.temp }}/whetstone-integrity/private.pem
+          WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
       - name: Verify fail-closed cleanup evidence
         if: always()
         run: uv run whetstone-publish release-parity-fixture verify-evidence --descriptor "$RUNNER_TEMP/release-parity/descriptor.json" --journal "$RUNNER_TEMP/release-parity/descriptor.json.journal.json" --cleanup-proof "$RUNNER_TEMP/release-parity/cleanup-proof.json"
+      - name: Remove ephemeral bundle integrity key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/whetstone-integrity"
       - name: Upload parity evidence
         if: always()
         uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce

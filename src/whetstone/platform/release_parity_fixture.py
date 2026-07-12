@@ -36,6 +36,10 @@ from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.pool import NullPool
 
+from whetstone.platform.integrity import (
+    BundleIntegrityConfiguration,
+    required_bundle_integrity_configuration,
+)
 from whetstone.platform.platform_db import ensure_platform_schema
 from whetstone.platform.targets import target_registry
 from whetstone.publication import (
@@ -474,12 +478,18 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
 
 
 def _fence(
-    url: str, destination_id: str, kind: Literal["motherduck", "neon"]
+    url: str,
+    destination_id: str,
+    kind: Literal["motherduck", "neon"],
+    *,
+    integrity: BundleIntegrityConfiguration | None = None,
 ) -> PostgresPublicationFence:
     return PostgresPublicationFence(
         create_engine(url, poolclass=NullPool),
         destination_id=destination_id,
         kind=kind,
+        signer=integrity.signer if integrity else None,
+        public_key_ring=integrity.public_key_ring if integrity else {},
     )
 
 
@@ -541,12 +551,19 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
     analysis_fence: PostgresPublicationFence | None = None
     detail_fence: PostgresPublicationFence | None = None
     try:
+        integrity = required_bundle_integrity_configuration()
         source = _new_source(schema)
         analysis_fence = _fence(
-            _required_env("MOTHERDUCK_DATABASE_URL"), analysis_id, "motherduck"
+            _required_env("MOTHERDUCK_DATABASE_URL"),
+            analysis_id,
+            "motherduck",
+            integrity=integrity,
         )
         detail_fence = _fence(
-            _required_env("NEON_DATABASE_URL"), detail_id, "neon"
+            _required_env("NEON_DATABASE_URL"),
+            detail_id,
+            "neon",
+            integrity=integrity,
         )
         fixture_sha256 = _seed_accepted_fixture(source, run_id)
         analysis_fence.ensure_schema()
@@ -554,6 +571,7 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         analysis, detail = export_whetstone(
             source,
             reconciliation=_reconciliation(source),
+            integrity_signer=integrity.signer,
             destination_path=analysis_path,
             detail_destination_path=detail_path,
             analysis_remote_destinations=(analysis_fence,),
@@ -601,10 +619,14 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
                     bundle=ANALYSIS_BUNDLE_KEY,
                     pin=_pin_identity(analysis_local_pin),
                     snapshot_seq=resolve_local_pin(
-                        analysis_path, analysis_local_pin
+                        analysis_path,
+                        analysis_local_pin,
+                        public_key_ring=integrity.public_key_ring,
                     ).snapshot_seq,
                     members=resolve_local_pin(
-                        analysis_path, analysis_local_pin
+                        analysis_path,
+                        analysis_local_pin,
+                        public_key_ring=integrity.public_key_ring,
                     ).members,
                     member_counts=analysis.member_counts,
                     member_checksums=analysis.member_checksums,
@@ -616,6 +638,7 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
                         _required_env("MOTHERDUCK_DATABASE_URL"),
                         analysis_id,
                         "motherduck",
+                        integrity=integrity,
                     ).resolve_pin(analysis_remote_pin),
                     analysis_id,
                     ANALYSIS_BUNDLE_KEY,
@@ -627,10 +650,14 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
                     bundle=DETAIL_BUNDLE_KEY,
                     pin=_pin_identity(detail_local_pin),
                     snapshot_seq=resolve_local_pin(
-                        detail_path, detail_local_pin
+                        detail_path,
+                        detail_local_pin,
+                        public_key_ring=integrity.public_key_ring,
                     ).snapshot_seq,
                     members=resolve_local_pin(
-                        detail_path, detail_local_pin
+                        detail_path,
+                        detail_local_pin,
+                        public_key_ring=integrity.public_key_ring,
                     ).members,
                     member_counts=detail.member_counts,
                     member_checksums=detail.member_checksums,
@@ -639,7 +666,10 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
                     detail,
                     detail_remote_pin,
                     _fence(
-                        _required_env("NEON_DATABASE_URL"), detail_id, "neon"
+                        _required_env("NEON_DATABASE_URL"),
+                        detail_id,
+                        "neon",
+                        integrity=integrity,
                     ).resolve_pin(detail_remote_pin),
                     detail_id,
                     DETAIL_BUNDLE_KEY,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -23,6 +25,7 @@ from dr_platform import (
     resolve_local_pin,
 )
 from dr_platform.export import ApplicationSnapshot
+from dr_platform.publication import OpenSslEd25519Signer
 from dr_platform.reconciliation_runtime import ReconcileOptions
 from sqlalchemy import create_engine, insert, text
 
@@ -53,6 +56,37 @@ class _UnusedLifecycleReader:
 
     def read_step_history(self, *, workflow_id: str, limit: int = 100):
         raise AssertionError(f"unexpected step-history read: {workflow_id}")
+
+
+def _integrity_signer(tmp_path):
+    private_key = tmp_path / "integrity-private.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "genpkey",
+            "-algorithm",
+            "ED25519",
+            "-out",
+            str(private_key),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    public_key = subprocess.run(
+        [
+            "openssl",
+            "pkey",
+            "-in",
+            str(private_key),
+            "-pubout",
+            "-outform",
+            "DER",
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout
+    signer = OpenSslEd25519Signer(key_id="test", private_key_path=private_key)
+    return signer, {signer.key_id: base64.b64encode(public_key).decode()}
 
 
 @pytest.mark.integration
@@ -264,6 +298,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         )
 
     database = tmp_path / "analysis.duckdb"
+    integrity_signer, public_key_ring = _integrity_signer(tmp_path)
     with engine.begin() as connection:
         snapshot = ApplicationSnapshot(
             source_database="test", captured_at=now, snapshot_seq=1
@@ -284,6 +319,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
             options=ReconcileOptions(page_size=100),
             max_cycles=2,
         ),
+        integrity_signer=integrity_signer,
         destination_path=database,
     )
     assert [item.status for item in analysis.destinations] == ["PROMOTED"], (
@@ -292,7 +328,11 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
     assert [item.status for item in detail.destinations] == ["PROMOTED"]
     analysis_pin = pin_local_bundle(database, bundle_key=ANALYSIS_BUNDLE_KEY)
     detail_pin = pin_local_bundle(database, bundle_key=DETAIL_BUNDLE_KEY)
-    assert set(resolve_local_pin(database, analysis_pin).members) == {
+    assert set(
+        resolve_local_pin(
+            database, analysis_pin, public_key_ring=public_key_ring
+        ).members
+    ) == {
         "experiments",
         "predictions",
         "generation_runs",
@@ -300,7 +340,11 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         "sweep_metrics",
         "failure_metrics",
     }
-    assert set(resolve_local_pin(database, detail_pin).members) == {
+    assert set(
+        resolve_local_pin(
+            database, detail_pin, public_key_ring=public_key_ring
+        ).members
+    ) == {
         "detail_predictions",
         "detail_prediction_payloads",
         "detail_generation_runs",
@@ -309,7 +353,9 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         "detail_score_harness_failures",
         "detail_platform_attempts",
     }
-    reader = AnalysisBundleReader.from_pin(database, analysis_pin)
+    reader = AnalysisBundleReader.from_pin(
+        database, analysis_pin, public_key_ring=public_key_ring
+    )
     prediction = reader.rows("predictions")[0]
     assert prediction["provider_cost"] == Decimal("0.125")
     assert float(prediction["compression_ratio"]) == pytest.approx(
@@ -325,7 +371,9 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
     assert len(copro_results) == 1
     assert copro_results[0].pass_count == 1
     assert select_best_candidate(copro_results) == copro_results[0]
-    detail_bundle = resolve_local_pin(database, detail_pin)
+    detail_bundle = resolve_local_pin(
+        database, detail_pin, public_key_ring=public_key_ring
+    )
     with duckdb.connect(str(database), read_only=True) as connection:
         detail_generation_ids = {
             row[0]

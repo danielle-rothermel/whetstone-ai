@@ -21,6 +21,7 @@ from dr_platform import (
     export,
     resolve_local_pin,
 )
+from dr_platform.publication import BundleIntegritySigner
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 from sqlalchemy import Connection, Engine, text
 
@@ -823,6 +824,7 @@ def export_whetstone(
     source: Engine,
     *,
     reconciliation: ExportReconciliationDependencies,
+    integrity_signer: BundleIntegritySigner,
     destination_path: str | Path,
     detail_destination_path: str | Path | None = None,
     analysis_remote_destinations: Sequence[Any] = (),
@@ -838,6 +840,7 @@ def export_whetstone(
             full_rebuild=True,
             projections=analysis_projection_specs(),
             source_change_sequence="whetstone_change_seq",
+            integrity_signer=integrity_signer,
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,
@@ -851,6 +854,7 @@ def export_whetstone(
             full_rebuild=True,
             projections=detail_projection_specs(),
             source_change_sequence="whetstone_change_seq",
+            integrity_signer=integrity_signer,
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,
@@ -900,9 +904,18 @@ class AnalysisBundleReader:
 
     @classmethod
     def from_pin(
-        cls, database_path: str | Path, pin: Any
+        cls,
+        database_path: str | Path,
+        pin: Any,
+        *,
+        public_key_ring: Mapping[str, str],
     ) -> AnalysisBundleReader:
-        return cls(database_path, resolve_local_pin(database_path, pin))
+        return cls(
+            database_path,
+            resolve_local_pin(
+                database_path, pin, public_key_ring=public_key_ring
+            ),
+        )
 
     @property
     def snapshot_seq(self) -> int:

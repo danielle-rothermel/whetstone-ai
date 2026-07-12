@@ -250,3 +250,10 @@ def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
     action = "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
     assert action in workflow
     assert "@v4" not in workflow
+    assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY:" in workflow
+    assert "Materialize ephemeral bundle integrity key" in workflow
+    assert "Remove ephemeral bundle integrity key" in workflow
+    assert (
+        "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH: "
+        "${{ runner.temp }}/whetstone-integrity/private.pem" in workflow
+    )
