@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from whetstone.platform.release_parity_fixture import (
@@ -18,13 +20,18 @@ from whetstone.publication import (
 
 
 def _plane(
-    members: tuple[str, ...], bundle: str
+    members: tuple[str, ...],
+    bundle: Literal["whetstone-analysis", "whetstone-detail"],
+    name: str,
 ) -> tuple[LocalPlane, PlaneDestination]:
     counts = {member: 1 for member in members}
     checksums = {member: "a" * 64 for member in members}
-    pin = PinIdentity(pin_id="pin", bundle_id="bundle", expires_at_ms=1)
+    run_id = "a" * 32
+    pin = PinIdentity(
+        pin_id=f"{run_id}-{name}-local", bundle_id="bundle", expires_at_ms=1
+    )
     local = LocalPlane(
-        path="fixture.duckdb",
+        path=f"{run_id}-{name}.duckdb",
         bundle=bundle,
         pin=pin,
         snapshot_seq=1,
@@ -33,9 +40,13 @@ def _plane(
         member_checksums=checksums,
     )
     remote = PlaneDestination(
-        destination_id=f"{bundle}-destination",
+        destination_id=f"whetstone-v6-{name}-{run_id}",
         bundle_key=bundle,
-        pin=pin,
+        pin=PinIdentity(
+            pin_id=f"{run_id}-{name}-remote",
+            bundle_id="bundle",
+            expires_at_ms=1,
+        ),
         snapshot_seq=1,
         members={member: f"main.remote_{member}" for member in members},
         member_counts=counts,
@@ -46,14 +57,16 @@ def _plane(
 
 def _descriptor() -> ReleaseParityDescriptor:
     analysis_local, analysis_remote = _plane(
-        ANALYSIS_MEMBERS, ANALYSIS_BUNDLE_KEY
+        ANALYSIS_MEMBERS, ANALYSIS_BUNDLE_KEY, "analysis"
     )
-    detail_local, detail_remote = _plane(DETAIL_MEMBERS, DETAIL_BUNDLE_KEY)
+    detail_local, detail_remote = _plane(
+        DETAIL_MEMBERS, DETAIL_BUNDLE_KEY, "detail"
+    )
     return ReleaseParityDescriptor(
         schema_version=1,
-        run_id="run",
+        run_id="a" * 32,
         fixture_sha256="b" * 64,
-        source_schema="fixture_schema",
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
         analysis={"local": analysis_local, "remote": analysis_remote},
         detail={"local": detail_local, "remote": detail_remote},
     )
@@ -81,6 +94,40 @@ def test_descriptor_requires_frozen_complete_nonempty_planes() -> None:
         broken.validate_contract()
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("member_checksums", {}),
+        ("member_checksums", {"predictions": "not-a-checksum"}),
+    ],
+)
+def test_descriptor_rejects_missing_or_invalid_checksums(
+    field: str, value: object
+) -> None:
+    descriptor = _descriptor()
+    broken = descriptor.model_copy(
+        update={
+            "analysis": {
+                "local": descriptor.analysis["local"],
+                "remote": descriptor.analysis["remote"].model_copy(
+                    update={field: value}
+                ),
+            }
+        }
+    )
+    with pytest.raises(ValueError):
+        broken.validate_contract()
+
+
+def test_descriptor_rejects_substituted_cleanup_identity() -> None:
+    descriptor = _descriptor()
+    broken = descriptor.model_copy(
+        update={"source_schema": "unrelated_schema"}
+    )
+    with pytest.raises(ValueError, match="owned"):
+        broken.validate_contract()
+
+
 def test_descriptor_rejects_secret_shaped_data() -> None:
     payload = _descriptor().model_dump(mode="json")
     payload["analysis"]["remote"]["destination_id"] = (
@@ -94,17 +141,17 @@ def test_cleanup_proof_requires_independent_zero_state() -> None:
     descriptor = _descriptor()
     proof = CleanupProof(
         schema_version=1,
-        run_id="run",
+        run_id="a" * 32,
         source_schema_absent=True,
         local_files_absent=True,
         destinations={
-            "whetstone-analysis-destination": {
+            f"whetstone-v6-analysis-{'a' * 32}": {
                 "state_rows": 0,
                 "bundle_rows": 0,
                 "pin_rows": 0,
                 "physical_candidates": 0,
             },
-            "whetstone-detail-destination": {
+            f"whetstone-v6-detail-{'a' * 32}": {
                 "state_rows": 0,
                 "bundle_rows": 0,
                 "pin_rows": 0,
@@ -118,7 +165,12 @@ def test_cleanup_proof_requires_independent_zero_state() -> None:
             update={
                 "destinations": {
                     **proof.destinations,
-                    "whetstone-analysis-destination": {"state_rows": 1},
+                    f"whetstone-v6-analysis-{'a' * 32}": {
+                        "state_rows": 1,
+                        "bundle_rows": 0,
+                        "pin_rows": 0,
+                        "physical_candidates": 0,
+                    },
                 }
             }
         ).validate_against(descriptor)

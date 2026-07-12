@@ -2,6 +2,11 @@ name: Whetstone Release Parity
 
 on:
   workflow_call:
+    inputs:
+      whetstone_sha:
+        description: Exact immutable Whetstone producer commit requested by the caller.
+        required: true
+        type: string
     secrets:
       GH_DR_ORG_REPOS_READ_TOKEN:
         required: true
@@ -26,8 +31,15 @@ jobs:
       MOTHERDUCK_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
       NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Reject an unlocked producer
+        env:
+          WHETSTONE_SHA: ${{ inputs.whetstone_sha }}
+        run: test "${WHETSTONE_SHA}" = "$(printf '%s' "${WHETSTONE_SHA}" | grep -E '^[0-9a-f]{40}$')"
+      - name: Checkout locked Whetstone producer
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
+          repository: danielle-rothermel/whetstone-ai
+          ref: ${{ inputs.whetstone_sha }}
           persist-credentials: false
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
@@ -40,15 +52,22 @@ jobs:
           GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/
       - name: Prepare Whetstone fixture
         run: uv run whetstone-publish release-parity-fixture prepare --descriptor "$RUNNER_TEMP/release-parity/descriptor.json"
-      - name: Unitbench pinned consumer evidence
+      - name: Checkout exact caller Unitbench revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: unitbench
+          persist-credentials: false
+      - name: Unitbench live delivery-parity evidence
         env:
-          UNITBENCH_RELEASE_PARITY_TOKEN: ${{ secrets.UNITBENCH_RELEASE_PARITY_TOKEN }}
           WHETSTONE_RELEASE_PARITY_DESCRIPTOR: ${{ runner.temp }}/release-parity/descriptor.json
+          UNITBENCH_RELEASE_PARITY_TOKEN: ${{ secrets.UNITBENCH_RELEASE_PARITY_TOKEN }}
         run: |
-          git -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${UNITBENCH_RELEASE_PARITY_TOKEN}" clone --depth 1 https://github.com/danielle-rothermel/unitbench.git "$RUNNER_TEMP/unitbench"
-          git -C "$RUNNER_TEMP/unitbench" fetch --depth 1 origin 8d18038
-          git -C "$RUNNER_TEMP/unitbench" checkout --detach 8d18038
-          cd "$RUNNER_TEMP/unitbench" && npm ci && npm run test:release-parity
+          cd unitbench
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm check:delivery-parity
       - name: Always clean run-owned fixture
         if: always()
         run: uv run whetstone-publish release-parity-fixture cleanup --descriptor "$RUNNER_TEMP/release-parity/descriptor.json" --cleanup-proof "$RUNNER_TEMP/release-parity/cleanup-proof.json"

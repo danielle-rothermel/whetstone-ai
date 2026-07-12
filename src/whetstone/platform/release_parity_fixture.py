@@ -48,9 +48,11 @@ from whetstone.publication import (
 
 SCHEMA_VERSION = 1
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_RUN_ID = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SECRET = re.compile(r"(token|password|secret|dsn|url|authorization)", re.I)
 _TRACE = Path(
-    "/private/tmp/platform-v6-headless-whetstone-release-parity-93.trace.txt"
+    "/private/tmp/platform-v6-headless-whetstone-parity-v2-99.trace.txt"
 )
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
@@ -114,6 +116,12 @@ class ReleaseParityDescriptor(BaseModel):
 
     def validate_contract(self) -> None:
         _reject_secrets(self.model_dump(mode="json"))
+        if _RUN_ID.fullmatch(self.run_id) is None:
+            raise ValueError("run_id is not a generated run identity")
+        if _SHA256.fullmatch(self.fixture_sha256) is None:
+            raise ValueError("fixture_sha256 must be a SHA-256 checksum")
+        if self.source_schema != f"whetstone_v6_release_{self.run_id}":
+            raise ValueError("source_schema is not owned by this run")
         for name, expected, bundle in (
             ("analysis", ANALYSIS_MEMBERS, ANALYSIS_BUNDLE_KEY),
             ("detail", DETAIL_MEMBERS, DETAIL_BUNDLE_KEY),
@@ -124,12 +132,22 @@ class ReleaseParityDescriptor(BaseModel):
                     f"{name} must contain local and remote planes"
                 )
             local, remote = planes["local"], planes["remote"]
-            if set(local.members) != set(expected) or set(
-                remote.members
-            ) != set(expected):
-                raise ValueError(f"{name} member inventory is not frozen")
+            for field in ("members", "member_counts", "member_checksums"):
+                if set(getattr(local, field)) != set(expected) or set(
+                    getattr(remote, field)
+                ) != set(expected):
+                    raise ValueError(f"{name} {field} inventory is not frozen")
             if local.bundle != bundle or remote.bundle_key != bundle:
                 raise ValueError(f"{name} bundle key is not frozen")
+            if local.path != f"{self.run_id}-{name}.duckdb":
+                raise ValueError(f"{name} local path is not owned by this run")
+            if remote.destination_id != f"whetstone-v6-{name}-{self.run_id}":
+                raise ValueError(
+                    f"{name} destination is not owned by this run"
+                )
+            for pin, suffix in ((local.pin, "local"), (remote.pin, "remote")):
+                if pin.pin_id != f"{self.run_id}-{name}-{suffix}":
+                    raise ValueError(f"{name} pin is not owned by this run")
             if local.pin.bundle_id != remote.pin.bundle_id:
                 raise ValueError(
                     f"{name} local and remote bundle identities differ"
@@ -144,6 +162,14 @@ class ReleaseParityDescriptor(BaseModel):
                 )
             ):
                 raise ValueError(f"{name} contains an empty member")
+            if any(
+                _SHA256.fullmatch(value) is None
+                for value in (
+                    *local.member_checksums.values(),
+                    *remote.member_checksums.values(),
+                )
+            ):
+                raise ValueError(f"{name} contains a non-SHA-256 checksum")
 
 
 class CleanupProof(BaseModel):
@@ -167,6 +193,19 @@ class CleanupProof(BaseModel):
         }
         if set(self.destinations) != expected:
             raise ValueError("cleanup proof misses a remote destination")
+        expected_facts = {
+            "state_rows",
+            "bundle_rows",
+            "pin_rows",
+            "physical_candidates",
+        }
+        if any(
+            set(facts) != expected_facts
+            for facts in self.destinations.values()
+        ):
+            raise ValueError(
+                "cleanup proof has an incomplete catalog observation"
+            )
         if any(
             value != 0
             for facts in self.destinations.values()
@@ -194,6 +233,79 @@ def load_descriptor(path: Path) -> ReleaseParityDescriptor:
     descriptor = ReleaseParityDescriptor.model_validate_json(path.read_text())
     descriptor.validate_contract()
     return descriptor
+
+
+class RunJournal(BaseModel):
+    """Durable, secret-free recovery authority written before any resource."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1]
+    run_id: NonEmpty
+    source_schema: NonEmpty
+    analysis_path: NonEmpty
+    detail_path: NonEmpty
+    analysis_destination_id: NonEmpty
+    detail_destination_id: NonEmpty
+    analysis_bundle_id: str = ""
+    detail_bundle_id: str = ""
+
+    def validate_contract(self) -> None:
+        _reject_secrets(self.model_dump(mode="json"))
+        if _RUN_ID.fullmatch(self.run_id) is None:
+            raise ValueError("journal run_id is invalid")
+        expected = {
+            "source_schema": f"whetstone_v6_release_{self.run_id}",
+            "analysis_path": f"{self.run_id}-analysis.duckdb",
+            "detail_path": f"{self.run_id}-detail.duckdb",
+            "analysis_destination_id": f"whetstone-v6-analysis-{self.run_id}",
+            "detail_destination_id": f"whetstone-v6-detail-{self.run_id}",
+        }
+        if any(getattr(self, key) != value for key, value in expected.items()):
+            raise ValueError("journal contains an unrelated cleanup identity")
+
+
+def _journal_path(descriptor_path: Path) -> Path:
+    return descriptor_path.with_name(descriptor_path.name + ".journal.json")
+
+
+def _write_journal(path: Path, journal: RunJournal) -> None:
+    journal.validate_contract()
+    path.write_text(journal.model_dump_json(indent=2))
+
+
+def _load_journal(descriptor_path: Path) -> RunJournal:
+    journal = RunJournal.model_validate_json(
+        _journal_path(descriptor_path).read_text()
+    )
+    journal.validate_contract()
+    return journal
+
+
+def _descriptor_matches_journal(
+    descriptor: ReleaseParityDescriptor, journal: RunJournal
+) -> None:
+    if (
+        descriptor.run_id != journal.run_id
+        or descriptor.source_schema != journal.source_schema
+        or _local(descriptor.analysis).path != journal.analysis_path
+        or _local(descriptor.detail).path != journal.detail_path
+        or _remote(descriptor.analysis).destination_id
+        != journal.analysis_destination_id
+        or _remote(descriptor.detail).destination_id
+        != journal.detail_destination_id
+        or (
+            journal.analysis_bundle_id
+            and _remote(descriptor.analysis).pin.bundle_id
+            != journal.analysis_bundle_id
+        )
+        or (
+            journal.detail_bundle_id
+            and _remote(descriptor.detail).pin.bundle_id
+            != journal.detail_bundle_id
+        )
+    ):
+        raise ValueError("descriptor does not match its run journal")
 
 
 def _remote(descriptor_plane: PlaneMap) -> PlaneDestination:
@@ -412,14 +524,30 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         f"whetstone-v6-analysis-{run_id}",
         f"whetstone-v6-detail-{run_id}",
     )
-    source = _new_source(schema)
-    analysis_fence = _fence(
-        _required_env("MOTHERDUCK_DATABASE_URL"), analysis_id, "motherduck"
+    journal_path = _journal_path(descriptor_path)
+    journal = RunJournal(
+        schema_version=SCHEMA_VERSION,
+        run_id=run_id,
+        source_schema=schema,
+        analysis_path=analysis_path.name,
+        detail_path=detail_path.name,
+        analysis_destination_id=analysis_id,
+        detail_destination_id=detail_id,
     )
-    detail_fence = _fence(
-        _required_env("NEON_DATABASE_URL"), detail_id, "neon"
-    )
+    # This is deliberately first: every later boundary has durable recovery
+    # authority even if descriptor serialization never happens.
+    _write_journal(journal_path, journal)
+    source: Engine | None = None
+    analysis_fence: PostgresPublicationFence | None = None
+    detail_fence: PostgresPublicationFence | None = None
     try:
+        source = _new_source(schema)
+        analysis_fence = _fence(
+            _required_env("MOTHERDUCK_DATABASE_URL"), analysis_id, "motherduck"
+        )
+        detail_fence = _fence(
+            _required_env("NEON_DATABASE_URL"), detail_id, "neon"
+        )
         fixture_sha256 = _seed_accepted_fixture(source, run_id)
         analysis_fence.ensure_schema()
         detail_fence.ensure_schema()
@@ -431,6 +559,13 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             analysis_remote_destinations=(analysis_fence,),
             detail_remote_destinations=(detail_fence,),
         )
+        journal = journal.model_copy(
+            update={
+                "analysis_bundle_id": str(getattr(analysis, "bundle_id", "")),
+                "detail_bundle_id": str(getattr(detail, "bundle_id", "")),
+            }
+        )
+        _write_journal(journal_path, journal)
         if [item.status for item in analysis.destinations] != [
             "PROMOTED",
             "PROMOTED",
@@ -513,6 +648,15 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         )
         descriptor.validate_contract()
         descriptor_path.write_text(descriptor.model_dump_json(indent=2))
+        journal = journal.model_copy(
+            update={
+                "analysis_bundle_id": _remote(
+                    descriptor.analysis
+                ).pin.bundle_id,
+                "detail_bundle_id": _remote(descriptor.detail).pin.bundle_id,
+            }
+        )
+        _write_journal(journal_path, journal)
         _trace(
             "prepare_succeeded",
             run_id=run_id,
@@ -520,10 +664,114 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             detail_members=len(DETAIL_MEMBERS),
         )
         return descriptor
+    except Exception:
+        _rollback_prepare(journal, descriptor_path.parent)
+        raise
     finally:
-        source.dispose()
-        analysis_fence.engine.dispose()
-        detail_fence.engine.dispose()
+        if source is not None:
+            source.dispose()
+        if analysis_fence is not None:
+            analysis_fence.engine.dispose()
+        if detail_fence is not None:
+            detail_fence.engine.dispose()
+
+
+def _rollback_prepare(journal: RunJournal, directory: Path) -> None:
+    """Best-effort rollback retains the journal for a later always-cleanup."""
+    for name in (journal.analysis_path, journal.detail_path):
+        path = directory / name
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".lock").unlink(missing_ok=True)
+    for url_name, destination, bundle, bundle_id, kind in (
+        (
+            "MOTHERDUCK_DATABASE_URL",
+            journal.analysis_destination_id,
+            ANALYSIS_BUNDLE_KEY,
+            journal.analysis_bundle_id,
+            "motherduck",
+        ),
+        (
+            "NEON_DATABASE_URL",
+            journal.detail_destination_id,
+            DETAIL_BUNDLE_KEY,
+            journal.detail_bundle_id,
+            "neon",
+        ),
+    ):
+        if bundle_id and os.environ.get(url_name):
+            try:
+                fence = _fence(_required_env(url_name), destination, kind)
+                try:
+                    with fence.engine.begin() as connection:
+                        manifest = connection.execute(
+                            text(
+                                f"SELECT manifest_json FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+                            ),
+                            {
+                                "destination": destination,
+                                "bundle": bundle,
+                                "bundle_id": bundle_id,
+                            },
+                        ).scalar_one_or_none()
+                        if manifest is not None:
+                            for facts in json.loads(str(manifest)).get(
+                                "members", []
+                            ):
+                                schema, table = (
+                                    facts["schema_name"],
+                                    facts["table_name"],
+                                )
+                                if _IDENTIFIER.fullmatch(
+                                    schema
+                                ) and _IDENTIFIER.fullmatch(table):
+                                    connection.execute(
+                                        text(
+                                            f'DROP TABLE IF EXISTS "{schema}"."{table}"'
+                                        )
+                                    )
+                        params = {
+                            "destination": destination,
+                            "bundle": bundle,
+                            "bundle_id": bundle_id,
+                        }
+                        connection.execute(
+                            text(
+                                f"DELETE FROM {fence._pins_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+                            ),
+                            params,
+                        )
+                        connection.execute(
+                            text(
+                                f"DELETE FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+                            ),
+                            params,
+                        )
+                        connection.execute(
+                            text(
+                                f"DELETE FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
+                            ),
+                            params,
+                        )
+                finally:
+                    fence.engine.dispose()
+            except Exception:
+                _trace(
+                    "prepare_remote_rollback_deferred", run_id=journal.run_id
+                )
+    try:
+        admin = create_engine(_required_env("DATABASE_URL"))
+        try:
+            with admin.begin() as connection:
+                connection.execute(
+                    text(
+                        f'DROP SCHEMA IF EXISTS "{journal.source_schema}" CASCADE'
+                    )
+                )
+        finally:
+            admin.dispose()
+    except Exception:
+        # The journal is intentionally retained as evidence and recovery input.
+        _trace("prepare_rollback_deferred", run_id=journal.run_id)
 
 
 def _delete_remote(
@@ -566,13 +814,31 @@ def _delete_remote(
             params,
         )
     with fence.engine.connect() as connection:
+        physical = 0
+        for member in plane.members.values():
+            schema, table = member.split(".", 1)
+            physical += int(
+                connection.execute(
+                    text(
+                        "SELECT count(*) FROM information_schema.tables "
+                        "WHERE table_schema=:schema AND table_name=:table"
+                    ),
+                    {"schema": schema, "table": table},
+                ).scalar_one()
+            )
         return {
             name: int(
                 connection.execute(
                     text(
-                        f"SELECT count(*) FROM {table} WHERE destination_id=:destination"
+                        f"SELECT count(*) FROM {table} WHERE destination_id=:destination "
+                        "AND bundle_key=:bundle "
+                        + (
+                            "AND bundle_id=:bundle_id"
+                            if name != "pin_rows"
+                            else "AND pin_id=:pin AND bundle_id=:bundle_id"
+                        )
                     ),
-                    {"destination": plane.destination_id},
+                    params,
                 ).scalar_one()
             )
             for name, table in {
@@ -580,11 +846,13 @@ def _delete_remote(
                 "bundle_rows": fence._bundles_table,
                 "pin_rows": fence._pins_table,
             }.items()
-        } | {"physical_candidates": 0}
+        } | {"physical_candidates": physical}
 
 
 def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
+    journal = _load_journal(descriptor_path)
     descriptor = load_descriptor(descriptor_path)
+    _descriptor_matches_journal(descriptor, journal)
     analysis_fence = _fence(
         _required_env("MOTHERDUCK_DATABASE_URL"),
         _remote(descriptor.analysis).destination_id,
@@ -612,7 +880,7 @@ def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
         with admin.begin() as connection:
             connection.execute(
                 text(
-                    f'DROP SCHEMA IF EXISTS "{descriptor.source_schema}" CASCADE'
+                    f'DROP SCHEMA IF EXISTS "{journal.source_schema}" CASCADE'
                 )
             )
         with admin.connect() as connection:
@@ -621,13 +889,13 @@ def cleanup(descriptor_path: Path, proof_path: Path) -> CleanupProof:
                     text(
                         "SELECT 1 FROM information_schema.schemata WHERE schema_name=:schema"
                     ),
-                    {"schema": descriptor.source_schema},
+                    {"schema": journal.source_schema},
                 ).one_or_none()
                 is None
             )
     finally:
         admin.dispose()
-    files = [_local(descriptor.analysis).path, _local(descriptor.detail).path]
+    files = [journal.analysis_path, journal.detail_path]
     for name in files:
         path = descriptor_path.parent / name
         path.unlink(missing_ok=True)
