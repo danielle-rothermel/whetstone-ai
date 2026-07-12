@@ -44,13 +44,15 @@ NOW = datetime(2026, 6, 29, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(seconds=1)
 
 
-def dataset_snapshot_identity() -> DatasetSnapshotIdentityPayload:
+def dataset_snapshot_identity(
+    *,
+    dataset_id: str = "evalplus/humanevalplus",
+) -> DatasetSnapshotIdentityPayload:
     return DatasetSnapshotIdentityPayload(
-        source_path="/tmp/humanevalplus_snapshot.json",
         sha256="0" * 64,
         header=DatasetSnapshotHeaderPayload(
             schema_version=1,
-            dataset_id="evalplus/humanevalplus",
+            dataset_id=dataset_id,
             hf_revision="d32357cf319e50e9c8d8dab5ea876c72b0fd321b",
             overrides_digest="1" * 64,
         ),
@@ -164,6 +166,11 @@ def scoring_prediction_spec(layout: str = "direct") -> PredictionSpecRecord:
         task=TaskSnapshotPayload(
             task_id="HumanEval/fixture",
             inputs=TaskInputsPayload(values={"prompt": "write add"}),
+            metadata={
+                "dataset_snapshot": dataset_snapshot_identity().model_dump(
+                    mode="json"
+                )
+            },
         ),
         provider_configs=(provider,),
         provider_axis=provider,

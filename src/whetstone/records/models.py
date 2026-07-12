@@ -99,7 +99,6 @@ class DatasetSnapshotHeaderPayload(BaseModel):
 class DatasetSnapshotIdentityPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    source_path: StrictStr
     sha256: StrictStr
     header: DatasetSnapshotHeaderPayload
 

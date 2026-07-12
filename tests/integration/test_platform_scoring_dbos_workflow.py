@@ -50,24 +50,23 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
         },
     )
 
-    def fake_load_humaneval_task_step(
+    def fake_load_humaneval_scoring_input_step(
         dataset_name: str,
         dataset_split: str,
         dataset_snapshot_path: str,
         task_id: str,
+        registered_snapshot_payload: dict[str, Any],
     ) -> dict[str, Any]:
         assert task_id == "HumanEval/fixture"
-        return task_payload
+        return {
+            "task": task_payload,
+            "dataset_snapshot": registered_snapshot_payload,
+        }
 
     monkeypatch.setattr(
         scoring_workflow,
-        "load_humaneval_task_step",
-        fake_load_humaneval_task_step,
-    )
-    monkeypatch.setattr(
-        scoring_workflow,
-        "read_snapshot_identity",
-        lambda path: dataset_snapshot_identity(),
+        "load_humaneval_scoring_input_step",
+        fake_load_humaneval_scoring_input_step,
     )
 
 
@@ -83,7 +82,6 @@ def test_run_score_submission_workflow_once_persists_success(
         generation_run=run,
     )
     _mock_humaneval_task_step(monkeypatch)
-    scoring_workflow.load_humaneval_task_map.cache_clear()
 
     result = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
@@ -123,7 +121,6 @@ def test_run_score_submission_workflow_once_is_idempotent_on_replay(
         generation_run=run,
     )
     _mock_humaneval_task_step(monkeypatch)
-    scoring_workflow.load_humaneval_task_map.cache_clear()
 
     first = run_score_submission_workflow_once(
         app_postgres_schema.database_url,
@@ -159,7 +156,7 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
         spec=spec,
         generation_run=run,
     )
-    load_calls: list[tuple[str, str, str, str]] = []
+    load_calls: list[tuple[str, str, str, str, dict[str, Any]]] = []
     task_payload = scoring_task().model_dump(
         mode="json",
         exclude={
@@ -168,28 +165,32 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
         },
     )
 
-    def counting_load_humaneval_task_step(
+    def counting_load_humaneval_scoring_input_step(
         dataset_name: str,
         dataset_split: str,
         dataset_snapshot_path: str,
         task_id: str,
+        registered_snapshot_payload: dict[str, Any],
     ) -> dict[str, Any]:
         load_calls.append(
-            (dataset_name, dataset_split, dataset_snapshot_path, task_id)
+            (
+                dataset_name,
+                dataset_split,
+                dataset_snapshot_path,
+                task_id,
+                registered_snapshot_payload,
+            )
         )
-        return task_payload
+        return {
+            "task": task_payload,
+            "dataset_snapshot": registered_snapshot_payload,
+        }
 
     monkeypatch.setattr(
         scoring_workflow,
-        "load_humaneval_task_step",
-        counting_load_humaneval_task_step,
+        "load_humaneval_scoring_input_step",
+        counting_load_humaneval_scoring_input_step,
     )
-    monkeypatch.setattr(
-        scoring_workflow,
-        "read_snapshot_identity",
-        lambda path: dataset_snapshot_identity(),
-    )
-    scoring_workflow.load_humaneval_task_map.cache_clear()
 
     run_score_submission_workflow_once(
         app_postgres_schema.database_url,
@@ -208,6 +209,7 @@ def test_scoring_task_loader_runs_once_across_workflow_replay(
             DEFAULT_SCORE_DATASET_SPLIT,
             "snapshot.json",
             "HumanEval/fixture",
+            dataset_snapshot_identity().model_dump(mode="json"),
         ),
     ]
 
@@ -224,7 +226,6 @@ def test_failed_scoring_workflow_is_classified_as_orphan(
         generation_run=run,
     )
     _mock_humaneval_task_step(monkeypatch)
-    scoring_workflow.load_humaneval_task_map.cache_clear()
 
     persist_impl = getattr(
         scoring_workflow.persist_score_result_step,

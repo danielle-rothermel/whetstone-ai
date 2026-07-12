@@ -445,7 +445,10 @@ def test_build_specs_writes_jsonl_from_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from tests.test_platform_spec_builder import FIXTURES_DIR, _fixture_rows
+    from tests.test_platform_spec_builder import (
+        FIXTURES_DIR,
+        _fixture_snapshot,
+    )
     from whetstone.platform import spec_builder
 
     def fake_iter_from_file(
@@ -457,7 +460,7 @@ def test_build_specs_writes_jsonl_from_config(
         config = spec_builder.load_experiment_spec_config(path)
         return spec_builder.iter_experiment_specs(
             config,
-            rows=_fixture_rows(),
+            snapshot=_fixture_snapshot(),
         )
 
     monkeypatch.setattr(
@@ -489,7 +492,7 @@ def test_build_specs_composable_config(
     tmp_path: Path,
 ) -> None:
     from tests.test_platform_spec_builder import (
-        _fixture_rows,
+        _fixture_snapshot,
         _write_composable_config_tree,
     )
 
@@ -507,7 +510,7 @@ def test_build_specs_composable_config(
         return spec_builder.iter_experiment_specs_from_file(
             path,
             configs_root=configs_root,
-            rows=_fixture_rows(),
+            snapshot=_fixture_snapshot(),
         )
 
     monkeypatch.setattr(

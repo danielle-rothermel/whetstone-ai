@@ -74,24 +74,23 @@ def _mock_humaneval_task_step(monkeypatch: pytest.MonkeyPatch) -> None:
         },
     )
 
-    def fake_load_humaneval_task_step(
+    def fake_load_humaneval_scoring_input_step(
         dataset_name: str,
         dataset_split: str,
         dataset_snapshot_path: str,
         task_id: str,
+        registered_snapshot_payload: dict[str, Any],
     ) -> dict[str, Any]:
         assert task_id == "HumanEval/fixture"
-        return task_payload
+        return {
+            "task": task_payload,
+            "dataset_snapshot": registered_snapshot_payload,
+        }
 
     monkeypatch.setattr(
         scoring_workflow,
-        "load_humaneval_task_step",
-        fake_load_humaneval_task_step,
-    )
-    monkeypatch.setattr(
-        scoring_workflow,
-        "read_snapshot_identity",
-        lambda path: dataset_snapshot_identity(),
+        "load_humaneval_scoring_input_step",
+        fake_load_humaneval_scoring_input_step,
     )
 
 
@@ -103,13 +102,27 @@ def test_jsonl_submit_enqueue_generation_and_scoring(
 ) -> None:
     graph = GraphSpec(nodes=(direct_node(),), terminal_node_id="direct")
     spec = prediction_spec(graph, task_id="HumanEval/fixture")
+    spec = spec.model_copy(
+        update={
+            "task": spec.task.model_copy(
+                update={
+                    "metadata": {
+                        "dataset_snapshot": (
+                            dataset_snapshot_identity().model_dump(
+                                mode="json"
+                            )
+                        )
+                    }
+                }
+            )
+        }
+    )
     specs_file = tmp_path / "specs.jsonl"
     write_prediction_specs_jsonl(specs_file, (spec,))
     operation_key = "pipeline-e2e-op"
 
     _mock_lm_success(monkeypatch)
     _mock_humaneval_task_step(monkeypatch)
-    scoring_workflow.load_humaneval_task_map.cache_clear()
 
     database_url = app_postgres_schema.database_url
     engine = create_engine(database_url)
