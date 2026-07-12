@@ -12,6 +12,7 @@ from sqlalchemy import create_engine, text
 from whetstone.publication import (
     ANALYSIS_BUNDLE_KEY,
     DETAIL_BUNDLE_KEY,
+    AnalysisBundleReader,
     analysis_projection_specs,
     detail_projection_specs,
     export_whetstone,
@@ -38,6 +39,19 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         )
         connection.execute(
             text(
+                "INSERT INTO whetstone_prediction_specs "
+                "(prediction_id, experiment_name, task_id, repetition_seed, "
+                "graph_digest, dimensions_digest, graph_layout, provider_kind, "
+                "endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, "
+                "dimensions, provider_configs, created_at) VALUES "
+                "('prediction', 'exp', 'task', 0, 'graph', 'dimensions', 'layout', "
+                "'provider', 'endpoint', 'model', 'throttle', '{}'::jsonb, "
+                "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
                 "INSERT INTO whetstone_experiment_acceptance_evaluations "
                 "(acceptance_id, experiment_name, acceptance_source_version, status, "
                 "generation_operation_key, generation_manifest_digest, "
@@ -56,16 +70,39 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         )
         connection.execute(
             text(
-                "INSERT INTO whetstone_prediction_specs "
-                "(prediction_id, experiment_name, task_id, repetition_seed, "
-                "graph_digest, dimensions_digest, graph_layout, provider_kind, "
-                "endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, "
-                "dimensions, provider_configs, created_at) VALUES "
-                "('prediction', 'exp', 'task', 0, 'graph', 'dimensions', 'layout', "
-                "'provider', 'endpoint', 'model', 'throttle', '{}'::jsonb, "
-                "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)"
+                "INSERT INTO whetstone_generation_runs "
+                "(generation_run_id, prediction_id, attempt_index, execution_recipe_digest, "
+                "platform_item_id, platform_attempt, status, terminal_node_id, summary, started_at, completed_at) "
+                "VALUES ('generation', 'prediction', 0, 'recipe', 'generation-item', 0, "
+                "'success', 'terminal', '{}'::jsonb, :now, :now)"
             ),
             {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO whetstone_node_attempts "
+                "(node_attempt_id, generation_run_id, prediction_id, node_id, attempt_index, status, "
+                "usage_cost, response_metadata, started_at, completed_at) VALUES "
+                "('node', 'generation', 'prediction', 'terminal', 0, 'success', "
+                "CAST(:usage_cost AS jsonb), '{}'::jsonb, :now, :now)"
+            ),
+            {
+                "now": now,
+                "usage_cost": '{"usage_metadata":{},"provider_cost":0.125}',
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO whetstone_score_attempts "
+                "(score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, "
+                "platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, "
+                "parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, "
+                "extracted_submission, metrics, per_test_results, started_at, completed_at) VALUES "
+                "('score', 'prediction', 'generation', 0, 'score-recipe', 'score-item', 0, 'score-profile', '1', "
+                "'parser-profile', '1', 'dataset', 'test', '{}'::jsonb, 'success', 'passed', 1.0, '{}'::jsonb, "
+                "CAST(:metrics AS jsonb), '[]'::jsonb, :now, :now)"
+            ),
+            {"now": now, "metrics": '{"realized_compression_ratio":0.5}'},
         )
 
     database = tmp_path / "analysis.duckdb"
@@ -104,4 +141,9 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         "detail_score_harness_failures",
         "detail_platform_attempts",
     }
+    prediction = AnalysisBundleReader.from_pin(database, analysis_pin).rows(
+        "predictions"
+    )[0]
+    assert prediction["provider_cost"] == "0.125"
+    assert prediction["compression_ratio"] == "0.5"
     engine.dispose()

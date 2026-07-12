@@ -155,9 +155,9 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 'whetstone' AS source, p.model,
                 COALESCE(s.submission_outcome, g.status, 'MISSING') AS result_state,
                 g.status AS generation_status, s.status AS scoring_status, s.score,
-                NULL::double precision AS provider_cost,
+                costs.provider_cost,
                 EXTRACT(EPOCH FROM (COALESCE(s.completed_at, g.completed_at) - COALESCE(s.started_at, g.started_at))) * 1000 AS latency_ms,
-                NULL::double precision AS compression_ratio,
+                NULLIF(s.metrics->>'realized_compression_ratio', '')::double precision AS compression_ratio,
                 COALESCE(h.failure->>'class', n.failure->>'class') AS failure_class,
                 p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
                 COALESCE(s.metrics, g.summary) AS summary_json
@@ -165,6 +165,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
               JOIN whetstone_experiments e ON e.experiment_name = p.experiment_name
               LEFT JOIN LATERAL (SELECT * FROM whetstone_generation_runs x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) g ON true
               LEFT JOIN LATERAL (SELECT * FROM whetstone_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) s ON true
+              LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id) costs ON true
               LEFT JOIN LATERAL (SELECT * FROM whetstone_score_harness_failures x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) h ON true
               LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id AND x.failure IS NOT NULL ORDER BY x.completed_at DESC LIMIT 1) n ON true
             """
@@ -286,12 +287,13 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
       SELECT p.prediction_id, p.experiment_name AS experiment_id, 'whetstone' AS source,
         COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind, p.task_id,
         p.repetition_seed AS sample_index, p.model, COALESCE(s.submission_outcome, g.status, 'MISSING') AS result_state,
-        g.status AS generation_status, s.status AS scoring_status, s.score, NULL::double precision AS provider_cost,
+        g.status AS generation_status, s.status AS scoring_status, s.score, costs.provider_cost,
         p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
         COALESCE(s.metrics, g.summary) AS summary_json
       FROM accepted_predictions p JOIN whetstone_experiments e ON e.experiment_name=p.experiment_name
       LEFT JOIN LATERAL (SELECT * FROM whetstone_generation_runs x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) g ON true
       LEFT JOIN LATERAL (SELECT * FROM whetstone_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.platform_attempt DESC LIMIT 1) s ON true
+      LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.prediction_id=p.prediction_id) costs ON true
     """
     )
     return (
