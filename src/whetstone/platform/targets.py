@@ -314,56 +314,67 @@ def _register_prediction_specs(
         .one()
     )
     experiment_name = str(operation["group_key"])
-    existing_relationship = (
-        connection.execute(
-            select(schema.experiment_operation_manifests).where(
-                schema.experiment_operation_manifests.c.experiment_name
-                == experiment_name,
-                schema.experiment_operation_manifests.c.workflow_role
-                == "generation",
+    current_specs = tuple(
+        PredictionSpecRecord.model_validate(item.spec) for item in items
+    )
+    for spec in current_specs:
+        if spec.experiment_name != experiment_name:
+            raise ValueError(
+                "prediction spec Experiment does not match the Operation group"
+            )
+    if not page.is_final_page:
+        return RegistrationResult(
+            items=tuple(
+                RegistrationItemResult(
+                    item_key=item.item_key,
+                    insert_status=ItemInsertStatus.INSERTED,
+                )
+                for item in items
             )
         )
-        .mappings()
-        .first()
+
+    connection.execute(
+        insert(schema.experiments)
+        .values(
+            db_io.experiment_row(
+                ExperimentRecord(experiment_name=experiment_name)
+            )
+        )
+        .on_conflict_do_nothing(index_elements=["experiment_name"])
     )
-    if existing_relationship is not None and (
-        existing_relationship["operation_key"] != operation_key
-        or existing_relationship["manifest_digest"] != page.manifest_digest
-        or dict(existing_relationship["target_ref"])
-        != _target_ref_from_operation(operation)
+    relationship_result = accept_operation_manifest(
+        connection,
+        experiment_name=experiment_name,
+        workflow_role="generation",
+        operation_key=operation_key,
+        manifest_digest=page.manifest_digest,
+        target_ref=_target_ref_from_operation(operation),
+    )
+    if (
+        relationship_result
+        is ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
     ):
         raise GenerationMembershipConflictError(
             "generation membership is already fixed by a different Manifest"
         )
-    if page.is_final_page:
-        connection.execute(
-            insert(schema.experiments)
-            .values(
-                db_io.experiment_row(
-                    ExperimentRecord(experiment_name=experiment_name)
-                )
-            )
-            .on_conflict_do_nothing(index_elements=["experiment_name"])
+
+    prior_specs = tuple(
+        PredictionSpecRecord.model_validate(row["spec"])
+        for row in connection.execute(
+            select(platform.items.c.spec)
+            .where(platform.items.c.operation_key == operation_key)
+            .order_by(platform.items.c.item_index)
+        ).mappings()
+    )
+    manifest_specs = prior_specs + current_specs
+    if len(manifest_specs) != int(operation["requested_count"]):
+        raise ValueError(
+            "final Generation page does not complete the Platform Manifest"
         )
-        relationship_result = accept_operation_manifest(
-            connection,
-            experiment_name=experiment_name,
-            workflow_role="generation",
-            operation_key=operation_key,
-            manifest_digest=page.manifest_digest,
-            target_ref=_target_ref_from_operation(operation),
-        )
-        if (
-            relationship_result
-            is ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
-        ):
-            raise GenerationMembershipConflictError(
-                "generation membership is already fixed by a different "
-                "Manifest"
-            )
+
     results: list[RegistrationItemResult] = []
-    for item in items:
-        spec = PredictionSpecRecord.model_validate(item.spec)
+    current_item_keys = {spec.prediction_id for spec in current_specs}
+    for spec in manifest_specs:
         if spec.experiment_name != experiment_name:
             raise ValueError(
                 "prediction spec Experiment does not match the Operation group"
@@ -402,11 +413,12 @@ def _register_prediction_specs(
                     f"spec: {spec.prediction_id!r}"
                 )
             status = ItemInsertStatus.ALREADY_PRESENT
-        results.append(
-            RegistrationItemResult(
-                item_key=item.item_key, insert_status=status
+        if spec.prediction_id in current_item_keys:
+            results.append(
+                RegistrationItemResult(
+                    item_key=spec.prediction_id, insert_status=status
+                )
             )
-        )
     return RegistrationResult(items=tuple(results))
 
 

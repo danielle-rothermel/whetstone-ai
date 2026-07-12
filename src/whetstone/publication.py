@@ -101,6 +101,45 @@ WITH current_acceptances AS (
     ON a.acceptance_id = e.current_acceptance_id
   WHERE e.current_acceptance_id IS NOT NULL
     AND a.acceptance_source_version = e.acceptance_source_version
+    AND jsonb_typeof(a.platform_cut) = 'array'
+    AND CASE
+      WHEN jsonb_typeof(a.platform_cut) = 'array'
+      THEN jsonb_array_length(a.platform_cut)
+      ELSE 0
+    END > 0
+    AND (
+      SELECT count(DISTINCT cut.value->>'operation_key')
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(a.platform_cut) = 'array'
+          THEN a.platform_cut
+          ELSE '[]'::jsonb
+        END
+      ) AS cut(value)
+    ) = CASE
+      WHEN jsonb_typeof(a.platform_cut) = 'array'
+      THEN jsonb_array_length(a.platform_cut)
+      ELSE 0
+    END
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(a.platform_cut) = 'array'
+          THEN a.platform_cut
+          ELSE '[]'::jsonb
+        END
+      ) AS cut(value)
+      LEFT JOIN whetstone_operations operation
+        ON operation.operation_key = cut.value->>'operation_key'
+      WHERE jsonb_typeof(cut.value) IS DISTINCT FROM 'object'
+        OR jsonb_typeof(cut.value->'operation_key') IS DISTINCT FROM 'string'
+        OR jsonb_typeof(cut.value->'platform_cut_version') IS DISTINCT FROM 'number'
+        OR operation.operation_key IS NULL
+        OR operation.platform_cut_version::text
+          IS DISTINCT FROM cut.value->>'platform_cut_version'
+        OR operation.status NOT IN ('succeeded', 'partial', 'failed', 'cancelled')
+    )
 ),
 accepted_predictions AS (
   SELECT p.*, e.acceptance_id,

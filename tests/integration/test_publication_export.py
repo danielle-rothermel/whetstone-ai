@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -16,12 +17,14 @@ from dr_code.humaneval import (
 )
 from dr_platform import (
     ExportReconciliationDependencies,
+    PlatformSchema,
+    SubmitOptions,
     pin_local_bundle,
     resolve_local_pin,
 )
 from dr_platform.export import ApplicationSnapshot
 from dr_platform.reconciliation_runtime import ReconcileOptions
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, insert, text
 
 from whetstone.optimization.copro import (
     select_best_candidate,
@@ -96,6 +99,45 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         "ratio_to_ground_truth"
     ]
     with engine.begin() as connection:
+        platform = PlatformSchema(prefix="whetstone")
+        connection.execute(
+            insert(platform.operations).values(
+                operation_key="op",
+                group_key="exp",
+                workflow_role="generation",
+                status="succeeded",
+                requested_count=1,
+                manifest_version=3,
+                manifest_digest="digest",
+                manifest_page_size=1,
+                manifest_page_count=1,
+                operation_execution_recipe_digest="recipe",
+                target_key="target",
+                target_version=1,
+                target_contract_digest="target-contract",
+                platform_cut_version=1,
+                registration_cursor=1,
+                retry_policy=SubmitOptions().retry_policy.model_dump(
+                    mode="json"
+                ),
+                inserted_count=1,
+                already_present_count=0,
+                enqueued_count=1,
+                workflow_already_present_count=0,
+                enqueue_failed_count=0,
+                active_count=0,
+                succeeded_count=1,
+                terminal_failed_count=0,
+                cancelled_count=0,
+                spec={},
+                metadata={},
+                created_at=now,
+                registration_completed_at=now,
+                updated_at=now,
+                completed_at=now,
+                change_seq=1,
+            )
+        )
         connection.execute(
             text(
                 "INSERT INTO whetstone_experiments "
@@ -131,10 +173,20 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
                 "missing_count, rejected_count, created_at) VALUES "
                 "('acceptance', 'exp', 1, 'ACCEPTED', 'op', 'digest', "
                 "'[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, "
-                "'digest', '{}'::jsonb, 'digest', '[]'::jsonb, 'digest', "
+                "'digest', CAST(:platform_cut AS jsonb), 'digest', '[]'::jsonb, 'digest', "
                 "'{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :now)"
             ),
-            {"now": now},
+            {
+                "now": now,
+                "platform_cut": json.dumps(
+                    [
+                        {
+                            "operation_key": "op",
+                            "platform_cut_version": 1,
+                        }
+                    ]
+                ),
+            },
         )
         connection.execute(
             text(

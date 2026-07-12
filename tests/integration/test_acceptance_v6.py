@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -11,6 +13,7 @@ from dr_platform.enqueue_runtime import (
     PhysicalEnqueueDisposition,
     PhysicalEnqueueOutcome,
 )
+from dr_platform.export import ApplicationSnapshot
 from sqlalchemy import create_engine, insert, select, update
 from typer.testing import CliRunner
 
@@ -33,6 +36,10 @@ from whetstone.platform.submission import (
     select_populated_scoring_generation_runs,
 )
 from whetstone.platform.targets import target_registry
+from whetstone.publication import (
+    analysis_projection_specs,
+    detail_projection_specs,
+)
 from whetstone.records import DatasetSnapshotIdentityPayload
 
 
@@ -268,6 +275,97 @@ def test_conflicting_generation_registration_rolls_back_specs(
 
 
 @pytest.mark.integration
+def test_interleaved_generation_pages_persist_only_winning_manifest_specs(
+    app_postgres_schema: Any,
+) -> None:
+    barrier = Barrier(2)
+    engine = create_engine(app_postgres_schema.database_url)
+    options = SubmitOptions(page_size=1)
+    manifests_and_sources = []
+    expected_ids: dict[str, set[str]] = {}
+    for operation_key, task_ids in (
+        ("generation-a", ("HumanEval/0", "HumanEval/1")),
+        ("generation-b", ("HumanEval/2", "HumanEval/3")),
+    ):
+        specs = tuple(
+            prediction_spec(
+                direct_graph(), experiment_name="exp", task_id=task_id
+            )
+            for task_id in task_ids
+        )
+        manifest, source = prepare_generation_manifest(
+            operation_key=operation_key,
+            experiment_name="exp",
+            specs=specs,
+            options=options,
+        )
+
+        class InterleavedSource:
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+                self.final_page_reads = 0
+
+            @property
+            def item_count(self) -> int:
+                return int(self.inner.item_count)
+
+            def read_items(
+                self, *, start_index: int, end_index: int
+            ) -> tuple[Any, ...]:
+                if start_index == 1:
+                    self.final_page_reads += 1
+                    if self.final_page_reads == 2:
+                        barrier.wait(timeout=10)
+                return self.inner.read_items(
+                    start_index=start_index, end_index=end_index
+                )
+
+        manifests_and_sources.append(
+            (operation_key, manifest, InterleavedSource(source))
+        )
+        expected_ids[operation_key] = {spec.prediction_id for spec in specs}
+
+    def register(candidate: tuple[str, Any, Any]) -> str:
+        operation_key, manifest, source = candidate
+        submit(
+            manifest,
+            source,
+            engine=engine,
+            resolver=target_registry(),
+            options=options,
+            schema=PlatformSchema(prefix="whetstone"),
+            queue_lookup=_QueueLookup(),
+            enqueue_adapter=_EnqueueAdapter(),
+        )
+        return operation_key
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(register, candidate)
+            for candidate in manifests_and_sources
+        ]
+        outcomes = []
+        for future in futures:
+            try:
+                outcomes.append(future.result(timeout=20))
+            except GenerationMembershipConflictError:
+                outcomes.append("conflict")
+
+    assert outcomes.count("conflict") == 1
+    with engine.connect() as connection:
+        winner = connection.execute(
+            select(schema.experiment_operation_manifests.c.operation_key)
+        ).scalar_one()
+        persisted_ids = set(
+            connection.execute(
+                select(schema.prediction_specs.c.prediction_id)
+            ).scalars()
+        )
+    assert persisted_ids == expected_ids[winner]
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_scoring_registration_rejects_forged_recipe_axes(
     app_postgres_schema: Any,
 ) -> None:
@@ -492,6 +590,23 @@ def test_selection_candidates_cut_current_read_and_cli(
     assert historical.platform_cut
     assert current.disposition is CurrentAcceptanceDisposition.CURRENT
 
+    projections = analysis_projection_specs() + detail_projection_specs()
+    with app_postgres_schema.engine.connect() as connection:
+        snapshot = ApplicationSnapshot(
+            source_database="test",
+            captured_at=datetime.now(UTC),
+            snapshot_seq=1,
+        )
+        fresh_rows = {
+            projection.member: projection.full_rebuild_builder(
+                connection, snapshot
+            )
+            for projection in projections
+            if projection.full_rebuild_builder is not None
+        }
+    assert len(fresh_rows["predictions"]) == 1
+    assert len(fresh_rows["score_attempts"]) == 1
+
     monkeypatch.setattr(
         operations,
         "_engine",
@@ -536,3 +651,7 @@ def test_selection_candidates_cut_current_read_and_cli(
         )
         stale = load_current_acceptance(connection, experiment_name="exp")
     assert stale.disposition is CurrentAcceptanceDisposition.STALE_PLATFORM_CUT
+    with app_postgres_schema.engine.connect() as connection:
+        for projection in projections:
+            assert projection.full_rebuild_builder is not None
+            assert projection.full_rebuild_builder(connection, snapshot) == ()
