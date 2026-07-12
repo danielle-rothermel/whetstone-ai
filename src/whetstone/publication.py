@@ -59,6 +59,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
             columns=(
                 "prediction_id",
                 "experiment_name",
+                "candidate_id",
                 "bundle_id",
                 "snapshot_seq",
             ),
@@ -139,14 +140,59 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
             columns=("prediction_id", "bundle_id", "snapshot_seq"),
             unique_key=("prediction_id",),
         ),
-        *(
-            ProjectionSpec(
-                member=member,
-                columns=("prediction_id", "bundle_id", "snapshot_seq"),
-                unique_key=("prediction_id",),
-                references=(root,),
-            )
-            for member in DETAIL_MEMBERS[1:]
+        ProjectionSpec(
+            member="detail_prediction_payloads",
+            columns=("prediction_id", "bundle_id", "snapshot_seq"),
+            unique_key=("prediction_id",), references=(root,),
+        ),
+        ProjectionSpec(
+            member="detail_generation_runs",
+            columns=(
+                "prediction_id",
+                "generation_run_id",
+                "bundle_id",
+                "snapshot_seq",
+            ),
+            unique_key=("generation_run_id",), references=(root,),
+        ),
+        ProjectionSpec(
+            member="detail_node_attempts",
+            columns=(
+                "prediction_id", "node_attempt_id", "bundle_id", "snapshot_seq"
+            ),
+            unique_key=("node_attempt_id",), references=(root,),
+        ),
+        ProjectionSpec(
+            member="detail_score_attempts",
+            columns=(
+                "prediction_id",
+                "score_attempt_id",
+                "bundle_id",
+                "snapshot_seq",
+            ),
+            unique_key=("score_attempt_id",), references=(root,),
+        ),
+        ProjectionSpec(
+            member="detail_score_harness_failures",
+            columns=(
+                "prediction_id",
+                "score_harness_failure_id",
+                "bundle_id",
+                "snapshot_seq",
+            ),
+            unique_key=("score_harness_failure_id",), references=(root,),
+        ),
+        ProjectionSpec(
+            member="detail_platform_attempts",
+            columns=(
+                "prediction_id",
+                "platform_item_id",
+                "platform_attempt",
+                "bundle_id",
+                "snapshot_seq",
+            ),
+            unique_key=("platform_item_id", "platform_attempt"),
+            references=(root,),
         ),
     )
 

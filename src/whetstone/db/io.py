@@ -22,7 +22,6 @@ from whetstone.records import (
     GenerationRunStatus,
     GenerationRunSummaryPayload,
     GraphSnapshotPayload,
-    HarnessFailureCausePayload,
     MetricsPayload,
     NodeAttemptRecord,
     NodeAttemptStatus,
@@ -202,6 +201,9 @@ def score_attempt_row(record: ScoreAttemptRecord) -> Row:
         "prediction_id": record.prediction_id,
         "generation_run_id": record.generation_run_id,
         "attempt_index": record.attempt_index,
+        "execution_recipe_digest": record.execution_recipe_digest,
+        "platform_item_id": record.platform_item_id,
+        "platform_attempt": record.platform_attempt,
         "scoring_profile_id": record.scoring_profile_id,
         "scoring_profile_version": record.scoring_profile_version,
         "parser_profile_id": record.parser_profile_id,
@@ -235,11 +237,7 @@ def score_harness_failure_row(record: ScoreHarnessFailureRecord) -> Row:
         "dataset_name": record.dataset_name,
         "dataset_split": record.dataset_split,
         "dataset_snapshot": _dump(record.dataset_snapshot),
-        "kind": record.kind,
-        "raw_submission": record.raw_submission,
-        "extracted_submission": _dump_optional(record.extracted_submission),
-        "cause": _dump(record.cause),
-        "failure_class": record.failure_class.value,
+        "failure": _dump(record),
         "started_at": record.started_at,
         "completed_at": record.completed_at,
     }
@@ -285,6 +283,9 @@ def generation_run_record_from_row(row: Row) -> GenerationRunRecord:
         generation_run_id=row["generation_run_id"],
         prediction_id=row["prediction_id"],
         attempt_index=row["attempt_index"],
+        execution_recipe_digest=row["execution_recipe_digest"],
+        platform_item_id=row["platform_item_id"],
+        platform_attempt=row["platform_attempt"],
         status=GenerationRunStatus(row["status"]),
         terminal_node_id=row["terminal_node_id"],
         terminal_output_node_id=row["terminal_output_node_id"],
@@ -325,6 +326,9 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
         prediction_id=row["prediction_id"],
         generation_run_id=row["generation_run_id"],
         attempt_index=row["attempt_index"],
+        execution_recipe_digest=row["execution_recipe_digest"],
+        platform_item_id=row["platform_item_id"],
+        platform_attempt=row["platform_attempt"],
         scoring_profile_id=row["scoring_profile_id"],
         scoring_profile_version=row["scoring_profile_version"],
         parser_profile_id=row["parser_profile_id"],
@@ -355,32 +359,7 @@ def score_attempt_record_from_row(row: Row) -> ScoreAttemptRecord:
 def score_harness_failure_record_from_row(
     row: Row,
 ) -> ScoreHarnessFailureRecord:
-    return ScoreHarnessFailureRecord(
-        score_attempt_id=row["score_attempt_id"],
-        prediction_id=row["prediction_id"],
-        generation_run_id=row["generation_run_id"],
-        attempt_index=row["attempt_index"],
-        scoring_profile_id=row["scoring_profile_id"],
-        scoring_profile_version=row["scoring_profile_version"],
-        parser_profile_id=row["parser_profile_id"],
-        parser_version=row["parser_version"],
-        dataset_name=row["dataset_name"],
-        dataset_split=row["dataset_split"],
-        dataset_snapshot=_load(
-            DatasetSnapshotIdentityPayload,
-            row["dataset_snapshot"],
-        ),
-        kind=row["kind"],
-        raw_submission=row["raw_submission"],
-        extracted_submission=_load_optional(
-            ExtractedSubmissionPayload,
-            row["extracted_submission"],
-        ),
-        cause=_load(HarnessFailureCausePayload, row["cause"]),
-        failure_class=FailureClass(row["failure_class"]),
-        started_at=row["started_at"],
-        completed_at=row["completed_at"],
-    )
+    return ScoreHarnessFailureRecord.model_validate(row["failure"])
 
 
 def insert_experiment(record: ExperimentRecord) -> Insert:

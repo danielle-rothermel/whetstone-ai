@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from threading import Event
+
 import typer
 from dbos import DBOS
 
@@ -59,8 +61,13 @@ def serve(
         dbos_system_database_url=dbos_system_database_url,
         worker_concurrency=worker_concurrency,
     )
+    typer.echo("Whetstone queues are registered.")
     try:
-        typer.echo("Whetstone queues are registered.")
+        # DBOS queue listeners need a live process; returning here destroys
+        # the runtime before a submitted workflow can be claimed.
+        Event().wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
     finally:
         shutdown_dbos_runtime()
 

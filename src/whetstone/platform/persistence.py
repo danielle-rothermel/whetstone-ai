@@ -11,7 +11,7 @@ from dr_graph import (
     TerminalError,
 )
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import null
+from sqlalchemy import null, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
@@ -120,6 +120,9 @@ def generation_run_from_row(row: Mapping[str, Any]) -> GenerationRunRecord:
         generation_run_id=row["generation_run_id"],
         prediction_id=row["prediction_id"],
         attempt_index=row["attempt_index"],
+        execution_recipe_digest=row["execution_recipe_digest"],
+        platform_item_id=row["platform_item_id"],
+        platform_attempt=row["platform_attempt"],
         status=row["status"],
         terminal_node_id=row["terminal_node_id"],
         terminal_output_node_id=row["terminal_output_node_id"],
@@ -158,6 +161,8 @@ def generation_run_record_from_result(
     spec: PredictionSpecRecord,
     generation_run_id: str,
     attempt_index: int,
+    execution_recipe_digest: str,
+    platform_item_id: str,
     result: GraphRunResult,
     started_at: datetime,
     completed_at: datetime,
@@ -167,6 +172,9 @@ def generation_run_record_from_result(
         generation_run_id=generation_run_id,
         prediction_id=spec.prediction_id,
         attempt_index=attempt_index,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
+        platform_attempt=attempt_index,
         status=status,
         terminal_node_id=result.terminal_node_id,
         terminal_output_node_id=(
@@ -242,16 +250,24 @@ def persist_generation_result(
     generation_run: GenerationRunRecord,
     node_attempts: Iterable[NodeAttemptRecord],
 ) -> None:
-    """Append rows with first-write-wins idempotency.
-
-    DBOS workflow replay may re-enter the persist step after a successful
-    first write. Inserts use ``ON CONFLICT DO NOTHING``, so replay keeps the
-    first persisted outcome rather than upserting corrected values.
-    Replay/output divergence therefore stays silent by design.
-    """
-    connection.execute(idempotent_insert_generation_run(generation_run))
+    """Append rows and reject a deterministic identity with changed truth."""
+    _insert_or_exact_reload(
+        connection,
+        statement=idempotent_insert_generation_run(generation_run),
+        table=schema.generation_runs,
+        key_column="generation_run_id",
+        key=generation_run.generation_run_id,
+        expected=io.generation_run_row(generation_run),
+    )
     for node_attempt in node_attempts:
-        connection.execute(idempotent_insert_node_attempt(node_attempt))
+        _insert_or_exact_reload(
+            connection,
+            statement=idempotent_insert_node_attempt(node_attempt),
+            table=schema.node_attempts,
+            key_column="node_attempt_id",
+            key=node_attempt.node_attempt_id,
+            expected=io.node_attempt_row(node_attempt),
+        )
 
 
 _NODE_ATTEMPT_NULLABLE_JSONB_COLUMNS = frozenset(
@@ -285,8 +301,14 @@ def persist_score_attempt(
     *,
     score_attempt: ScoreAttemptRecord,
 ) -> ScoreAttemptInsertResult:
-    result = connection.execute(idempotent_insert_score_attempt(score_attempt))
-    inserted_row = result.first()
+    inserted_row = _insert_or_exact_reload(
+        connection,
+        statement=idempotent_insert_score_attempt(score_attempt),
+        table=schema.score_attempts,
+        key_column="score_attempt_id",
+        key=score_attempt.score_attempt_id,
+        expected=io.score_attempt_row(score_attempt),
+    )
     status = (
         ScoreAttemptInsertStatus.INSERTED
         if inserted_row is not None
@@ -303,10 +325,14 @@ def persist_score_harness_failure(
     *,
     harness_failure: ScoreHarnessFailureRecord,
 ) -> ScoreAttemptInsertResult:
-    result = connection.execute(
-        idempotent_insert_score_harness_failure(harness_failure)
+    inserted_row = _insert_or_exact_reload(
+        connection,
+        statement=idempotent_insert_score_harness_failure(harness_failure),
+        table=schema.score_harness_failures,
+        key_column="score_harness_failure_id",
+        key=harness_failure.score_harness_failure_id,
+        expected=io.score_harness_failure_row(harness_failure),
     )
-    inserted_row = result.first()
     status = (
         ScoreAttemptInsertStatus.INSERTED
         if inserted_row is not None
@@ -324,6 +350,7 @@ def idempotent_insert_generation_run(record: GenerationRunRecord) -> Any:
         insert(schema.generation_runs)
         .values(io.generation_run_row(record))
         .on_conflict_do_nothing(index_elements=["generation_run_id"])
+        .returning(schema.generation_runs.c.generation_run_id)
     )
 
 
@@ -338,6 +365,7 @@ def idempotent_insert_node_attempt(record: NodeAttemptRecord) -> Any:
             )
         )
         .on_conflict_do_nothing(index_elements=["node_attempt_id"])
+        .returning(schema.node_attempts.c.node_attempt_id)
     )
 
 
@@ -368,25 +396,42 @@ def idempotent_insert_score_harness_failure(
                 ),
             )
         )
-        .on_conflict_do_nothing(index_elements=["score_attempt_id"])
-        .returning(schema.score_harness_failures.c.score_attempt_id)
+        .on_conflict_do_nothing(index_elements=["score_harness_failure_id"])
+        .returning(schema.score_harness_failures.c.score_harness_failure_id)
     )
+
+
+def _insert_or_exact_reload(
+    connection: Connection,
+    *,
+    statement: Any,
+    table: Any,
+    key_column: str,
+    key: str,
+    expected: Mapping[str, Any],
+) -> Any:
+    inserted = connection.execute(statement).first()
+    if inserted is not None:
+        return inserted
+    actual = connection.execute(
+        select(table).where(table.c[key_column] == key)
+    ).mappings().one()
+    if dict(actual) != dict(expected):
+        raise ValueError(
+            f"append-only identity collision for {key_column}={key}"
+        )
+    return None
 
 
 def terminal_submission_text(
     value: Any,
     *,
     status: GenerationRunStatus,
-) -> str:
-    if value is None and status not in {
-        GenerationRunStatus.SUCCESS,
-        GenerationRunStatus.PARTIAL,
-    }:
-        return ""
+) -> str | None:
+    if value is None:
+        return None
     if not isinstance(value, str):
         raise TypeError("terminal output must be a string submission")
-    if not value.strip():
-        raise ValueError("terminal output must be a non-empty submission")
     return value
 
 

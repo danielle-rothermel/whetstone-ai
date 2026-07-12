@@ -230,7 +230,10 @@ class GenerationRunSummaryPayload(BaseModel):
     execution_order: tuple[StrictStr, ...]
     terminal_node_id: StrictStr
     terminal_output: Any | None = None
-    terminal_submission_text: StrictStr
+    # Partial terminal outcomes are durable provenance even when no usable
+    # submission was produced.  Eligibility is decided by the persisted SQL
+    # selector, not by record construction.
+    terminal_submission_text: StrictStr | None = None
     terminal_error: GenerationTerminalErrorPayload | None = None
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
 
@@ -361,6 +364,9 @@ class GenerationRunRecord(BaseModel):
     generation_run_id: StrictStr
     prediction_id: StrictStr
     attempt_index: StrictInt
+    execution_recipe_digest: StrictStr
+    platform_item_id: StrictStr
+    platform_attempt: StrictInt
     status: GenerationRunStatus
     terminal_node_id: StrictStr
     terminal_output_node_id: StrictStr | None = None
@@ -370,7 +376,7 @@ class GenerationRunRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_run_shape(self) -> GenerationRunRecord:
-        if self.attempt_index < 0:
+        if self.attempt_index < 0 or self.platform_attempt < 0:
             raise ValueError("attempt_index must be non-negative")
         if self.summary.terminal_node_id != self.terminal_node_id:
             raise ValueError("summary terminal_node_id must match run")
@@ -453,6 +459,9 @@ class ScoreAttemptRecord(BaseModel):
     prediction_id: StrictStr
     generation_run_id: StrictStr
     attempt_index: StrictInt
+    execution_recipe_digest: StrictStr
+    platform_item_id: StrictStr
+    platform_attempt: StrictInt
     scoring_profile_id: StrictStr
     scoring_profile_version: StrictStr
     parser_profile_id: StrictStr
@@ -471,7 +480,7 @@ class ScoreAttemptRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_attempt_shape(self) -> ScoreAttemptRecord:
-        if self.attempt_index < 0:
+        if self.attempt_index < 0 or self.platform_attempt < 0:
             raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")
@@ -525,10 +534,14 @@ class HarnessFailureCausePayload(BaseModel):
 class ScoreHarnessFailureRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    score_harness_failure_id: StrictStr
     score_attempt_id: StrictStr
     prediction_id: StrictStr
     generation_run_id: StrictStr
     attempt_index: StrictInt
+    execution_recipe_digest: StrictStr
+    platform_item_id: StrictStr
+    platform_attempt: StrictInt
     scoring_profile_id: StrictStr
     scoring_profile_version: StrictStr
     parser_profile_id: StrictStr
@@ -546,7 +559,7 @@ class ScoreHarnessFailureRecord(BaseModel):
 
     @model_validator(mode="after")
     def validate_failure_shape(self) -> ScoreHarnessFailureRecord:
-        if self.attempt_index < 0:
+        if self.attempt_index < 0 or self.platform_attempt < 0:
             raise ValueError("attempt_index must be non-negative")
         if self.completed_at < self.started_at:
             raise ValueError("completed_at must not precede started_at")

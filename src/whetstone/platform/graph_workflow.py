@@ -129,10 +129,10 @@ def run_prediction_graph_workflow(
     prediction_id: str,
     attempt_index: int = 0,
     execution_recipe_digest: str = "",
+    platform_item_id: str = "",
 ) -> str:
-    database_url = resolve_application_database_url()
     spec = PredictionSpecRecord.model_validate(
-        load_prediction_spec_step(database_url, prediction_id)
+        load_prediction_spec_step(prediction_id)
     )
     generation_run_id = stable_generation_run_id(
         prediction_id=spec.prediction_id,
@@ -153,13 +153,11 @@ def run_prediction_graph_workflow(
         node_inputs_payload = dict(node_inputs)
         try:
             delay_seconds = throttle_preflight_step(
-                database_url,
                 spec_payload,
                 node_payload,
             )
             sleep_for_backoff_seconds(delay_seconds)
             result = execute_lm_node_step(
-                database_url,
                 spec_payload,
                 node_payload,
                 node_inputs_payload,
@@ -189,10 +187,11 @@ def run_prediction_graph_workflow(
         generation_completed_at_step(generation_run_id)
     )
     persist_generation_result_step(
-        database_url,
         spec.model_dump(mode="json"),
         generation_run_id,
         attempt_index,
+        execution_recipe_digest,
+        platform_item_id,
         graph_result.model_dump(mode="json"),
         [
             step_result.model_dump(mode="json")
@@ -268,10 +267,9 @@ def _start_prediction_graph_workflow_handle(
 
 @DBOS.step(name=LOAD_SPEC_STEP_NAME)
 def load_prediction_spec_step(
-    database_url: str,
     prediction_id: str,
 ) -> dict[str, Any]:
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             spec = load_prediction_spec(
@@ -308,19 +306,16 @@ def sleep_for_backoff_seconds(seconds: float) -> None:
 
 @DBOS.step(name=THROTTLE_PREFLIGHT_STEP_NAME)
 def throttle_preflight_step(
-    database_url: str,
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
 ) -> float:
     return provider_throttle_delay_seconds(
-        database_url,
         spec_payload,
         node_payload,
     )
 
 
 def provider_throttle_delay_seconds(
-    database_url: str,
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
 ) -> float:
@@ -328,7 +323,7 @@ def provider_throttle_delay_seconds(
         spec=PredictionSpecRecord.model_validate(spec_payload),
         node=NodeSpec.model_validate(node_payload),
     )
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             return throttle_delay_seconds(
@@ -349,7 +344,6 @@ def provider_throttle_delay_seconds(
     should_retry=should_retry_step,
 )
 def execute_lm_node_step(
-    database_url: str,
     spec_payload: dict[str, Any],
     node_payload: dict[str, Any],
     node_inputs: dict[str, Any],
@@ -379,7 +373,6 @@ def execute_lm_node_step(
             )
         if provider_ref is not None:
             record_throttle_failure_state(
-                database_url=database_url,
                 throttle_key=provider_ref.throttle_key,
                 error=error,
             )
@@ -387,7 +380,6 @@ def execute_lm_node_step(
     if result.status is NodeAttemptStatus.SUCCESS and provider_ref is not None:
         try:
             clear_throttle_backoff_state(
-                database_url=database_url,
                 throttle_key=provider_ref.throttle_key,
             )
         except Exception:
@@ -397,14 +389,13 @@ def execute_lm_node_step(
 
 def record_throttle_failure_state(
     *,
-    database_url: str,
     throttle_key: str,
     error: BaseException,
 ) -> None:
     from whetstone.eval_failures import summarize_exception
 
     summary = summarize_exception(error)
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             record_throttle_failure(
@@ -423,10 +414,9 @@ def record_throttle_failure_state(
 
 def clear_throttle_backoff_state(
     *,
-    database_url: str,
     throttle_key: str,
 ) -> None:
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             clear_throttle_backoff(
@@ -466,10 +456,11 @@ def node_step_error_result_step(
 
 @DBOS.step(name=PERSIST_RESULT_STEP_NAME)
 def persist_generation_result_step(
-    database_url: str,
     spec_payload: dict[str, Any],
     generation_run_id: str,
     attempt_index: int,
+    execution_recipe_digest: str,
+    platform_item_id: str,
     graph_result_payload: dict[str, Any],
     node_step_result_payloads: list[dict[str, Any]],
     started_at: str,
@@ -485,12 +476,14 @@ def persist_generation_result_step(
         spec=spec,
         generation_run_id=generation_run_id,
         attempt_index=attempt_index,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
         graph_result=graph_result,
         node_step_results=node_step_results,
         started_at=datetime.fromisoformat(started_at),
         completed_at=datetime.fromisoformat(completed_at),
     )
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             persist_generation_result(
@@ -507,6 +500,8 @@ def _records_for_persistence(
     spec: PredictionSpecRecord,
     generation_run_id: str,
     attempt_index: int,
+    execution_recipe_digest: str = "",
+    platform_item_id: str = "",
     graph_result: GraphRunResult,
     node_step_results: tuple[NodeStepResult, ...],
     started_at: datetime,
@@ -516,6 +511,8 @@ def _records_for_persistence(
         spec=spec,
         generation_run_id=generation_run_id,
         attempt_index=attempt_index,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
         result=graph_result,
         started_at=started_at,
         completed_at=completed_at,

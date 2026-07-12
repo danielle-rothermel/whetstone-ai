@@ -89,14 +89,15 @@ def run_score_submission_workflow(
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    execution_recipe_digest: str = "",
+    platform_item_id: str = "",
 ) -> dict[str, Any]:
     # DBOS persists this workflow's arguments.  Resolve connection state at
     # execution time so DSNs and credentials never enter replay payloads.
-    database_url = resolve_application_database_url()
     resolved_snapshot_path = require_dataset_snapshot_path(
         os.environ.get("WHETSTONE_HUMANEVAL_SNAPSHOT_PATH")
     )
-    target = load_scoring_target_step(database_url, generation_run_id)
+    target = load_scoring_target_step(generation_run_id)
     spec = PredictionSpecRecord.model_validate(target["spec"])
     generation_run = GenerationRunRecord.model_validate(
         target["generation_run"]
@@ -132,6 +133,8 @@ def run_score_submission_workflow(
         attempt_index=score_attempt_index,
         dataset_name=dataset_name,
         dataset_split=dataset_split,
+        execution_recipe_digest=execution_recipe_digest,
+        dataset_snapshot_identity=dataset_snapshot_payload,
     )
     started_at = datetime.fromisoformat(
         scoring_started_at_step(score_attempt_id)
@@ -147,9 +150,11 @@ def run_score_submission_workflow(
         dataset_split,
         dataset_snapshot_payload,
         started_at.isoformat(),
+        execution_recipe_digest,
+        platform_item_id,
     )
     insert_result = ScoreAttemptInsertResult.model_validate(
-        persist_score_result_step(database_url, score_result_payload)
+        persist_score_result_step(score_result_payload)
     )
     return ScoreSubmissionWorkflowResult(
         score_attempt_id=score_attempt_id,
@@ -159,10 +164,9 @@ def run_score_submission_workflow(
 
 @DBOS.step(name=LOAD_SCORING_TARGET_STEP_NAME)
 def load_scoring_target_step(
-    database_url: str,
     generation_run_id: str,
 ) -> dict[str, Any]:
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             generation_run = load_generation_run(
@@ -248,6 +252,8 @@ def score_submission_step(
     dataset_split: str,
     dataset_snapshot_payload: dict[str, Any],
     started_at: str,
+    execution_recipe_digest: str,
+    platform_item_id: str,
 ) -> dict[str, Any]:
     scoring_profile = HumanEvalScoringProfile.model_validate(
         scoring_profile_payload
@@ -270,16 +276,17 @@ def score_submission_step(
             dataset_snapshot_payload
         ),
         started_at=datetime.fromisoformat(started_at),
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
     )
     return record.model_dump(mode="json")
 
 
 @DBOS.step(name=PERSIST_SCORE_RESULT_STEP_NAME)
 def persist_score_result_step(
-    database_url: str,
     score_result_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    engine = create_engine(database_url)
+    engine = create_engine(resolve_application_database_url())
     try:
         with engine.begin() as connection:
             if score_result_payload.get("kind") == "harness_failure":
