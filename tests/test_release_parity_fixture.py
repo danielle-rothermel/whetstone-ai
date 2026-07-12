@@ -72,6 +72,9 @@ def _descriptor() -> ReleaseParityDescriptor:
         schema_version=1,
         run_id="a" * 32,
         fixture_sha256="b" * 64,
+        fixture_prediction_id=(
+            f"release_parity_{'a' * 32}_prediction_small_positive"
+        ),
         source_schema=f"whetstone_v6_release_{'a' * 32}",
         analysis={"local": analysis_local, "remote": analysis_remote},
         detail={"local": detail_local, "remote": detail_remote},

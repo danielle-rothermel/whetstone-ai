@@ -14,7 +14,7 @@ import json
 import os
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
@@ -59,6 +59,11 @@ _TRACE = Path(
 )
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
+
+
+def _fixture_prediction_id(run_id: str) -> str:
+    """The Detail identity is part of the reader contract, not an inference."""
+    return f"release_parity_{run_id}_prediction_small_positive"
 
 
 def _trace(event: str, **facts: object) -> None:
@@ -116,6 +121,7 @@ class LocalOnlyDescriptor(BaseModel):
     schema_version: Literal[2]
     run_id: NonEmpty
     fixture_sha256: NonEmpty
+    fixture_prediction_id: NonEmpty
     source_schema: NonEmpty
     public_key_ring_environment: Literal[
         "WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING"
@@ -130,6 +136,8 @@ class LocalOnlyDescriptor(BaseModel):
             raise ValueError("run_id is not a generated run identity")
         if _SHA256.fullmatch(self.fixture_sha256) is None:
             raise ValueError("fixture_sha256 must be a SHA-256 checksum")
+        if self.fixture_prediction_id != _fixture_prediction_id(self.run_id):
+            raise ValueError("fixture prediction is not owned by this run")
         if self.source_schema != f"whetstone_v6_release_{self.run_id}":
             raise ValueError("source_schema is not owned by this run")
         if not self.public_key_ids or len(set(self.public_key_ids)) != len(
@@ -168,6 +176,7 @@ class ReleaseParityDescriptor(BaseModel):
     schema_version: Literal[1]
     run_id: NonEmpty
     fixture_sha256: NonEmpty
+    fixture_prediction_id: NonEmpty
     source_schema: NonEmpty
     analysis: PlaneMap
     detail: PlaneMap
@@ -178,6 +187,8 @@ class ReleaseParityDescriptor(BaseModel):
             raise ValueError("run_id is not a generated run identity")
         if _SHA256.fullmatch(self.fixture_sha256) is None:
             raise ValueError("fixture_sha256 must be a SHA-256 checksum")
+        if self.fixture_prediction_id != _fixture_prediction_id(self.run_id):
+            raise ValueError("fixture prediction is not owned by this run")
         if self.source_schema != f"whetstone_v6_release_{self.run_id}":
             raise ValueError("source_schema is not owned by this run")
         for name, expected, bundle in (
@@ -449,8 +460,9 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
     # point values in the real publication surface.  The signed local bundle
     # is the cross-runtime canonicalization integration fixture.
     now = datetime(2026, 7, 12, 18, 45, 22, 961426, tzinfo=UTC)
+    exact_second = datetime(2026, 7, 12, 18, 45, 23, tzinfo=UTC)
     fixture = f"release_parity_{run_id}"
-    values = {"fixture": fixture, "now": now}
+    values = {"fixture": fixture, "now": now, "exact_second": exact_second}
     numeric_cases = (
         ("small_positive", 0.0000123),
         ("small_negative", -0.0000123),
@@ -503,6 +515,15 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
             values,
         )
+        # A second accepted experiment makes the frozen page-2/page-size-1
+        # inventory executable and carries the exact-second timestamp vector.
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiments (experiment_name, config_metadata, acceptance_source_version, current_acceptance_id, acceptance_updated_at, created_at)
+            VALUES (:fixture || '_page_two', '{"experiment_kind":"humaneval_encdec"}'::jsonb, 1, :fixture || '_page_two_acceptance', :exact_second, :exact_second)
+        """),
+            values,
+        )
         for repetition_seed, (suffix, numeric_value) in enumerate(
             numeric_cases
         ):
@@ -539,7 +560,7 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             connection.execute(
                 text("""
             INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
-            VALUES (:fixture || '_score_' || :suffix, :fixture || '_prediction_' || :suffix, :fixture || '_generation_' || :suffix, 0, 'score', :fixture || '_score_item_' || :suffix, 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', :numeric_value, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'numeric_vectors', jsonb_build_array(:json_small, :json_large), 'lossless_numeric_json', CAST(:lossless_numeric_json AS jsonb)), '[]'::jsonb, :now, :now)
+            VALUES (:fixture || '_score_' || :suffix, :fixture || '_prediction_' || :suffix, :fixture || '_generation_' || :suffix, 0, 'score', :fixture || '_score_item_' || :suffix, 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', :numeric_value, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'budget_ratio', '0.5', 'numeric_vectors', jsonb_build_array(:json_small, :json_large), 'lossless_numeric_json', CAST(:lossless_numeric_json AS jsonb)), '[]'::jsonb, :now, :now)
         """),
                 case_values,
             )
@@ -547,6 +568,13 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             text("""
             INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
             VALUES (:fixture || '_acceptance', :fixture, 1, 'ACCEPTED', 'operation', 'digest', '[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', jsonb_build_array(jsonb_build_object('operation_key', :fixture || '_operation', 'platform_cut_version', 1)), 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :now)
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
+            VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two', 1, 'ACCEPTED', 'operation', 'digest', '[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', jsonb_build_array(jsonb_build_object('operation_key', :fixture || '_operation', 'platform_cut_version', 1)), 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :exact_second)
         """),
             values,
         )
@@ -566,6 +594,32 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
                 case_values,
             )
+        # The second experiment must own an accepted prediction because the
+        # experiments projection excludes empty acceptances.
+        connection.execute(text("""
+            INSERT INTO whetstone_prediction_specs (prediction_id, experiment_name, task_id, repetition_seed, graph_digest, dimensions_digest, graph_layout, provider_kind, endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, dimensions, provider_configs, created_at)
+            VALUES (:fixture || '_page_two_prediction', :fixture || '_page_two', 'HumanEval/0', 0, 'graph', 'dimensions', 'layout', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{"kind":"code"}'::jsonb, '{"prompt":"complete"}'::jsonb, '{}'::jsonb, '{}'::jsonb, :exact_second)
+        """), values)
+        connection.execute(text("""
+            INSERT INTO whetstone_generation_runs (generation_run_id, prediction_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, status, terminal_node_id, terminal_output_node_id, summary, started_at, completed_at)
+            VALUES (:fixture || '_page_two_generation', :fixture || '_page_two_prediction', 0, 'recipe', :fixture || '_page_two_item', 0, 'success', 'terminal', 'terminal', '{"terminal_output":"return a+b"}'::jsonb, :exact_second, :exact_second)
+        """), values)
+        connection.execute(text("""
+            INSERT INTO whetstone_node_attempts (node_attempt_id, generation_run_id, prediction_id, node_id, attempt_index, status, provider_kind, endpoint_kind, model, throttle_key, provider_config, output, usage_cost, response_metadata, started_at, completed_at)
+            VALUES (:fixture || '_page_two_node', :fixture || '_page_two_generation', :fixture || '_page_two_prediction', 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, jsonb_build_object('provider_cost', 0.5), '{}'::jsonb, :exact_second, :exact_second)
+        """), values)
+        connection.execute(text("""
+            INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
+            VALUES (:fixture || '_page_two_score', :fixture || '_page_two_prediction', :fixture || '_page_two_generation', 0, 'score', :fixture || '_page_two_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 0.5, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'budget_ratio', '0.5'), '[]'::jsonb, :exact_second, :exact_second)
+        """), values)
+        connection.execute(text("""
+            INSERT INTO whetstone_experiment_acceptance_generation_members (acceptance_id, prediction_id, disposition, generation_run_id, generation_operation_key, platform_item_id, platform_attempt)
+            VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two_prediction', 'selected_success', :fixture || '_page_two_generation', 'operation', :fixture || '_page_two_item', 0)
+        """), values)
+        connection.execute(text("""
+            INSERT INTO whetstone_experiment_acceptance_scoring_members (acceptance_id, prediction_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, disposition, generation_run_id, score_attempt_id, accepted_scoring_ordinal)
+            VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two_prediction', 'humaneval', '1', 'python', '1', 'humaneval', 'test', 'accepted', :fixture || '_page_two_generation', :fixture || '_page_two_score', 1)
+        """), values)
     return hashlib.sha256(fixture.encode()).hexdigest()
 
 
@@ -704,6 +758,7 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             schema_version=SCHEMA_VERSION,
             run_id=run_id,
             fixture_sha256=fixture_sha256,
+            fixture_prediction_id=_fixture_prediction_id(run_id),
             source_schema=schema,
             analysis={
                 "local": LocalPlane(
@@ -798,7 +853,12 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             detail_fence.engine.dispose()
 
 
-def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
+def prepare_local(
+    descriptor_path: Path,
+    *,
+    _after_source_creation: Callable[[Engine], None] | None = None,
+    _retain_failed_resources: bool = False,
+) -> LocalOnlyDescriptor:
     """Materialize the exact signed Platform export without remote fences.
 
     Ownership is intentionally limited to the generated source schema and the
@@ -810,10 +870,23 @@ def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
     schema = f"whetstone_v6_release_{run_id}"
     analysis_path = descriptor_path.parent / f"{run_id}-analysis.duckdb"
     detail_path = descriptor_path.parent / f"{run_id}-detail.duckdb"
+    journal = RunJournal(
+        schema_version=SCHEMA_VERSION,
+        run_id=run_id,
+        source_schema=schema,
+        analysis_path=analysis_path.name,
+        detail_path=detail_path.name,
+        analysis_destination_id=f"whetstone-v6-analysis-{run_id}",
+        detail_destination_id=f"whetstone-v6-detail-{run_id}",
+    )
+    # Persist recovery authority before creating the source schema.
+    _write_journal(_journal_path(descriptor_path), journal)
     source: Engine | None = None
     try:
-        integrity = required_bundle_integrity_configuration()
         source = _new_source(schema)
+        if _after_source_creation is not None:
+            _after_source_creation(source)
+        integrity = required_bundle_integrity_configuration()
         fixture_sha256 = _seed_accepted_fixture(source, run_id)
         analysis, detail = export_whetstone(
             source,
@@ -853,6 +926,7 @@ def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
             schema_version=2,
             run_id=run_id,
             fixture_sha256=fixture_sha256,
+            fixture_prediction_id=_fixture_prediction_id(run_id),
             source_schema=schema,
             public_key_ring_environment="WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING",
             public_key_ids=tuple(sorted(integrity.public_key_ring)),
@@ -867,8 +941,8 @@ def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
         descriptor_path.write_text(descriptor.model_dump_json(indent=2))
         return descriptor
     except Exception:
-        for path in (analysis_path, detail_path):
-            path.unlink(missing_ok=True)
+        if not _retain_failed_resources:
+            _rollback_prepare(journal, descriptor_path.parent)
         raise
     finally:
         if source is not None:
@@ -878,22 +952,32 @@ def prepare_local(descriptor_path: Path) -> LocalOnlyDescriptor:
 def cleanup_local(descriptor_path: Path) -> None:
     """Remove only local-only fixture resources after validating ownership."""
 
-    descriptor = LocalOnlyDescriptor.model_validate_json(
-        descriptor_path.read_text()
-    )
-    descriptor.validate_contract()
+    try:
+        descriptor = LocalOnlyDescriptor.model_validate_json(
+            descriptor_path.read_text()
+        )
+        descriptor.validate_contract()
+        journal = _load_journal(descriptor_path)
+        if (descriptor.run_id != journal.run_id or descriptor.source_schema != journal.source_schema):
+            raise ValueError("descriptor does not match its run journal")
+        source_schema = descriptor.source_schema
+        paths = (descriptor.analysis.path, descriptor.detail.path)
+    except FileNotFoundError:
+        journal = _load_journal(descriptor_path)
+        source_schema = journal.source_schema
+        paths = (journal.analysis_path, journal.detail_path)
     admin = create_engine(_required_env("DATABASE_URL"))
     try:
         with admin.begin() as connection:
             connection.execute(
                 text(
-                    f'DROP SCHEMA IF EXISTS "{descriptor.source_schema}" CASCADE'
+                    f'DROP SCHEMA IF EXISTS "{source_schema}" CASCADE'
                 )
             )
     finally:
         admin.dispose()
-    for plane in (descriptor.analysis, descriptor.detail):
-        path = descriptor_path.parent / plane.path
+    for name in paths:
+        path = descriptor_path.parent / name
         path.unlink(missing_ok=True)
         path.with_name(path.name + ".lock").unlink(missing_ok=True)
 

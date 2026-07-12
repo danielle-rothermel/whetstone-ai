@@ -233,6 +233,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "result_state",
                 "generation_status",
                 "scoring_status",
+                "harness_failure_count",
                 "score",
                 "provider_cost",
                 "latency_ms",
@@ -256,6 +257,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 ("result_state", _TEXT),
                 ("generation_status", _TEXT),
                 ("scoring_status", _TEXT),
+                ("harness_failure_count", _INTEGER),
                 ("score", _NUMERIC),
                 ("provider_cost", _NUMERIC),
                 ("latency_ms", _NUMERIC),
@@ -277,7 +279,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind,
                 'whetstone' AS source, p.model,
                 COALESCE(s.submission_outcome, g.status, 'MISSING') AS result_state,
-                g.status AS generation_status, s.status AS scoring_status, s.score,
+                g.status AS generation_status, s.status AS scoring_status, COALESCE(failures.harness_failure_count, 0)::bigint AS harness_failure_count, s.score,
                 costs.provider_cost,
                 EXTRACT(EPOCH FROM (COALESCE(s.completed_at, g.completed_at) - COALESCE(s.started_at, g.started_at))) * 1000 AS latency_ms,
                 NULLIF(s.metrics->'compression'->'{PUBLISHED_COMPRESSION_METHOD}'->>'{PUBLISHED_COMPRESSION_SEMANTICS}', '')::double precision AS compression_ratio,
@@ -289,6 +291,7 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
               JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
               LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
               LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id) costs ON true
+              LEFT JOIN LATERAL (SELECT count(*) AS harness_failure_count FROM whetstone_score_harness_failures x WHERE x.prediction_id=p.prediction_id) failures ON true
               LEFT JOIN LATERAL (SELECT * FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id AND x.failure IS NOT NULL ORDER BY x.completed_at DESC LIMIT 1) n ON true
             """
             ),
@@ -462,13 +465,14 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
       SELECT p.prediction_id, p.experiment_name AS experiment_id, 'whetstone' AS source,
         COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind, p.task_id,
         p.repetition_seed AS sample_index, p.model, COALESCE(s.submission_outcome, g.status, 'MISSING') AS result_state,
-        g.status AS generation_status, s.status AS scoring_status, s.score, costs.provider_cost,
+        g.status AS generation_status, s.status AS scoring_status, COALESCE(failures.harness_failure_count, 0)::bigint AS harness_failure_count, s.score, costs.provider_cost,
         p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
         COALESCE(s.metrics, g.summary) AS summary_json
       FROM accepted_predictions p JOIN whetstone_experiments e ON e.experiment_name=p.experiment_name
       JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
       LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
       LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id) costs ON true
+      LEFT JOIN LATERAL (SELECT count(*) AS harness_failure_count FROM whetstone_score_harness_failures x WHERE x.prediction_id=p.prediction_id) failures ON true
     """
     )
     return (
@@ -485,6 +489,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 "result_state",
                 "generation_status",
                 "scoring_status",
+                "harness_failure_count",
                 "score",
                 "provider_cost",
                 "created_at",
@@ -504,6 +509,7 @@ def detail_projection_specs() -> tuple[ProjectionSpec, ...]:
                 ("result_state", _TEXT),
                 ("generation_status", _TEXT),
                 ("scoring_status", _TEXT),
+                ("harness_failure_count", _INTEGER),
                 ("score", _NUMERIC),
                 ("provider_cost", _NUMERIC),
                 ("created_at", _TIMESTAMP),

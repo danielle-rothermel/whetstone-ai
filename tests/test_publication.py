@@ -97,18 +97,17 @@ def test_analysis_inventory_is_exact_and_referentially_closed() -> None:
         tuple(column.name for column in spec.column_schema) == spec.columns
         for spec in specs
     )
-    assert by_member["predictions"].column_schema[4].type is (
+    prediction_types = {
+        column.name: column.type
+        for column in by_member["predictions"].column_schema
+    }
+    assert prediction_types["sample_index"] is ProjectionColumnType.INTEGER
+    assert prediction_types["harness_failure_count"] is (
         ProjectionColumnType.INTEGER
     )
-    assert by_member["predictions"].column_schema[11].type is (
-        ProjectionColumnType.NUMERIC
-    )
-    assert by_member["predictions"].column_schema[16].type is (
-        ProjectionColumnType.TIMESTAMP
-    )
-    assert by_member["predictions"].column_schema[18].type is (
-        ProjectionColumnType.JSON
-    )
+    assert prediction_types["score"] is ProjectionColumnType.NUMERIC
+    assert prediction_types["created_at"] is ProjectionColumnType.TIMESTAMP
+    assert prediction_types["summary_json"] is ProjectionColumnType.JSON
 
 
 def test_detail_inventory_is_root_cascaded() -> None:
