@@ -425,9 +425,9 @@ def _new_source(schema: str) -> Engine:
     try:
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-            connection.execute(
-                text(f'SET LOCAL search_path TO "{schema}", public')
-            )
+            # Migration discovery must not see an unrelated public table with
+            # the same name; this transaction owns only the run schema.
+            connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
             migration = cast(
                 Any,
                 importlib.import_module(
@@ -445,9 +445,20 @@ def _new_source(schema: str) -> Engine:
 
 def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
     """Seed one accepted, non-empty graph result; values never leave the DB."""
-    now = datetime.now(UTC)
+    # Keep a microsecond-bearing timestamp and adversarial-but-valid floating
+    # point values in the real publication surface.  The signed local bundle
+    # is the cross-runtime canonicalization integration fixture.
+    now = datetime(2026, 7, 12, 18, 45, 22, 961426, tzinfo=UTC)
     fixture = f"release_parity_{run_id}"
     values = {"fixture": fixture, "now": now}
+    numeric_cases = (
+        ("small_positive", 0.0000123),
+        ("small_negative", -0.0000123),
+        ("large", 1.234e16),
+        ("below_fixed_boundary", 0.00009999),
+        ("fixed_boundary", 0.0001),
+        ("large_boundary", 1e16),
+    )
     with source.begin() as connection:
         connection.execute(
             text(
@@ -480,34 +491,45 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
             values,
         )
-        connection.execute(
-            text("""
+        for repetition_seed, (suffix, numeric_value) in enumerate(
+            numeric_cases
+        ):
+            case_values = {
+                **values,
+                "suffix": suffix,
+                "numeric_value": numeric_value,
+                "json_small": 0.0000123,
+                "json_large": 1.234e16,
+                "repetition_seed": repetition_seed,
+            }
+            connection.execute(
+                text("""
             INSERT INTO whetstone_prediction_specs (prediction_id, experiment_name, task_id, repetition_seed, graph_digest, dimensions_digest, graph_layout, provider_kind, endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, dimensions, provider_configs, created_at)
-            VALUES (:fixture || '_prediction', :fixture, 'HumanEval/0', 0, 'graph', 'dimensions', 'layout', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{"kind":"code"}'::jsonb, '{"prompt":"complete"}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)
+            VALUES (:fixture || '_prediction_' || :suffix, :fixture, 'HumanEval/0', :repetition_seed, 'graph', 'dimensions', 'layout', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{"kind":"code"}'::jsonb, '{"prompt":"complete"}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)
         """),
-            values,
-        )
-        connection.execute(
-            text("""
+                case_values,
+            )
+            connection.execute(
+                text("""
             INSERT INTO whetstone_generation_runs (generation_run_id, prediction_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, status, terminal_node_id, terminal_output_node_id, summary, started_at, completed_at)
-            VALUES (:fixture || '_generation', :fixture || '_prediction', 0, 'recipe', :fixture || '_item', 0, 'success', 'terminal', 'terminal', '{"terminal_output":"return a+b"}'::jsonb, :now, :now)
+            VALUES (:fixture || '_generation_' || :suffix, :fixture || '_prediction_' || :suffix, 0, 'recipe', :fixture || '_item_' || :suffix, 0, 'success', 'terminal', 'terminal', '{"terminal_output":"return a+b"}'::jsonb, :now, :now)
         """),
-            values,
-        )
-        connection.execute(
-            text("""
+                case_values,
+            )
+            connection.execute(
+                text("""
             INSERT INTO whetstone_node_attempts (node_attempt_id, generation_run_id, prediction_id, node_id, attempt_index, status, provider_kind, endpoint_kind, model, throttle_key, provider_config, output, usage_cost, response_metadata, started_at, completed_at)
-            VALUES (:fixture || '_node', :fixture || '_generation', :fixture || '_prediction', 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, '{"provider_cost": 0.125}'::jsonb, '{}'::jsonb, :now, :now)
+            VALUES (:fixture || '_node_' || :suffix, :fixture || '_generation_' || :suffix, :fixture || '_prediction_' || :suffix, 'terminal', 0, 'success', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{}'::jsonb, '{"value":"return a+b"}'::jsonb, jsonb_build_object('provider_cost', :numeric_value), '{}'::jsonb, :now, :now)
         """),
-            values,
-        )
-        connection.execute(
-            text("""
+                case_values,
+            )
+            connection.execute(
+                text("""
             INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
-            VALUES (:fixture || '_score', :fixture || '_prediction', :fixture || '_generation', 0, 'score', :fixture || '_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 1, '{"code":"return a+b"}'::jsonb, '{"realized_compression_ratio": 0.5}'::jsonb, '[]'::jsonb, :now, :now)
+            VALUES (:fixture || '_score_' || :suffix, :fixture || '_prediction_' || :suffix, :fixture || '_generation_' || :suffix, 0, 'score', :fixture || '_score_item_' || :suffix, 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', :numeric_value, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'numeric_vectors', jsonb_build_array(:json_small, :json_large)), '[]'::jsonb, :now, :now)
         """),
-            values,
-        )
+                case_values,
+            )
         connection.execute(
             text("""
             INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
@@ -515,20 +537,22 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
             values,
         )
-        connection.execute(
-            text("""
+        for suffix, _numeric_value in numeric_cases:
+            case_values = {**values, "suffix": suffix}
+            connection.execute(
+                text("""
             INSERT INTO whetstone_experiment_acceptance_generation_members (acceptance_id, prediction_id, disposition, generation_run_id, generation_operation_key, platform_item_id, platform_attempt)
-            VALUES (:fixture || '_acceptance', :fixture || '_prediction', 'selected_success', :fixture || '_generation', 'operation', :fixture || '_item', 0)
+            VALUES (:fixture || '_acceptance', :fixture || '_prediction_' || :suffix, 'selected_success', :fixture || '_generation_' || :suffix, 'operation', :fixture || '_item_' || :suffix, 0)
         """),
-            values,
-        )
-        connection.execute(
-            text("""
+                case_values,
+            )
+            connection.execute(
+                text("""
             INSERT INTO whetstone_experiment_acceptance_scoring_members (acceptance_id, prediction_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, disposition, generation_run_id, score_attempt_id, accepted_scoring_ordinal)
-            VALUES (:fixture || '_acceptance', :fixture || '_prediction', 'humaneval', '1', 'python', '1', 'humaneval', 'test', 'accepted', :fixture || '_generation', :fixture || '_score', 1)
+            VALUES (:fixture || '_acceptance', :fixture || '_prediction_' || :suffix, 'humaneval', '1', 'python', '1', 'humaneval', 'test', 'accepted', :fixture || '_generation_' || :suffix, :fixture || '_score_' || :suffix, 1)
         """),
-            values,
-        )
+                case_values,
+            )
     return hashlib.sha256(fixture.encode()).hexdigest()
 
 
