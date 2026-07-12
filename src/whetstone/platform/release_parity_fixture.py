@@ -459,6 +459,18 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         ("fixed_boundary", 0.0001),
         ("large_boundary", 1e16),
     )
+    # PostgreSQL JSONB normalizes object keys and retains the final duplicate
+    # key. These raw JSON values therefore reach the signed artifact as the
+    # same last-wins structured value that Python json.loads/json.dumps uses.
+    lossless_numeric_json = (
+        '{"outer":{"positive":9007199254740993,'
+        '"negative":-9007199254740993,'
+        '"huge":1234567890123456789012345678901234567890},'
+        '"values":[1e0,1.25e-5,-0.0,1e16,1.234e16],'
+        '"unicode":{"\\ue000":"\\ud834\\udd1e",'
+        '"\\ud800\\udc00":"snowman: \\u2603"},'
+        '"duplicate":1,"duplicate":9007199254740993}'
+    )
     with source.begin() as connection:
         connection.execute(
             text(
@@ -500,6 +512,7 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
                 "numeric_value": numeric_value,
                 "json_small": 0.0000123,
                 "json_large": 1.234e16,
+                "lossless_numeric_json": lossless_numeric_json,
                 "repetition_seed": repetition_seed,
             }
             connection.execute(
@@ -526,7 +539,7 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             connection.execute(
                 text("""
             INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
-            VALUES (:fixture || '_score_' || :suffix, :fixture || '_prediction_' || :suffix, :fixture || '_generation_' || :suffix, 0, 'score', :fixture || '_score_item_' || :suffix, 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', :numeric_value, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'numeric_vectors', jsonb_build_array(:json_small, :json_large)), '[]'::jsonb, :now, :now)
+            VALUES (:fixture || '_score_' || :suffix, :fixture || '_prediction_' || :suffix, :fixture || '_generation_' || :suffix, 0, 'score', :fixture || '_score_item_' || :suffix, 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', :numeric_value, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'numeric_vectors', jsonb_build_array(:json_small, :json_large), 'lossless_numeric_json', CAST(:lossless_numeric_json AS jsonb)), '[]'::jsonb, :now, :now)
         """),
                 case_values,
             )
