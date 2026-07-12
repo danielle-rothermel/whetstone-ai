@@ -2,7 +2,7 @@
 
 ``recordable_jsonb`` is the one Postgres JSONB adapter exception in
 ``eval_failures``. Core classification and failure models should remain free of
-database, DBOS, and v0 workflow imports.
+database and DBOS workflow imports.
 """
 
 from __future__ import annotations

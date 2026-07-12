@@ -14,7 +14,6 @@ from whetstone.records.hashing import (
     stable_score_attempt_id,
 )
 from whetstone.records.limits import (
-    BATCH_SUBMIT_SPEC_MAX_BYTES,
     DOMAIN_PAYLOAD_MAX_BYTES,
     GRAPH_SNAPSHOT_MAX_BYTES,
     METRICS_MAX_BYTES,
@@ -46,7 +45,6 @@ from whetstone.records.models import (
     NodeAttemptStatus,
     NodeOutputPayload,
     PerTestResultPayload,
-    PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
     PythonLeakageMetricsPayload,
@@ -61,7 +59,6 @@ from whetstone.records.models import (
 )
 
 __all__ = [
-    "BATCH_SUBMIT_SPEC_MAX_BYTES",
     "DEFAULT_SCORE_DATASET_NAME",
     "DEFAULT_SCORE_DATASET_SPLIT",
     "DIMENSIONS_DIGEST_LENGTH",
@@ -97,7 +94,6 @@ __all__ = [
     "NodeAttemptStatus",
     "NodeOutputPayload",
     "PerTestResultPayload",
-    "PredictionProjectionRecord",
     "PredictionSpecRecord",
     "ProviderConfigRef",
     "PythonLeakageMetricsPayload",

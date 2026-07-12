@@ -7,7 +7,7 @@ from dr_code.humaneval import SubmissionOutcome
 from dr_graph import GraphRunStatus, NodeError, NodeOutput
 from dr_providers import FailureClass
 from pydantic import BaseModel
-from sqlalchemy import Select, and_, func, select
+from sqlalchemy import Select, select
 from sqlalchemy.sql.dml import Insert
 
 from whetstone.db import schema
@@ -28,7 +28,6 @@ from whetstone.records import (
     NodeAttemptStatus,
     NodeOutputPayload,
     PerTestResultPayload,
-    PredictionProjectionRecord,
     PredictionSpecRecord,
     ProviderConfigRef,
     ResponseMetadataPayload,
@@ -71,8 +70,6 @@ SCORE_HARNESS_FAILURE_JSONB_FIELDS = (
     "extracted_submission",
     "cause",
 )
-BATCH_SUBMIT_OPERATION_JSONB_FIELDS = ("spec", "metadata")
-BATCH_SUBMIT_ITEM_JSONB_FIELDS = ("enqueue_metadata", "failure")
 
 
 def node_output_payload_from_graph_output(
@@ -250,21 +247,6 @@ def score_harness_failure_row(record: ScoreHarnessFailureRecord) -> Row:
     return row
 
 
-def prediction_projection_row(record: PredictionProjectionRecord) -> Row:
-    return {
-        "prediction_id": record.prediction_id,
-        "generation_run_id": record.generation_run_id,
-        "score_attempt_id": record.score_attempt_id,
-        "projection_profile_id": record.projection_profile_id,
-        "projection_version": record.projection_version,
-        "selected_at": record.selected_at,
-        "selection_reason": record.selection_reason,
-    }
-
-
-
-
-
 def experiment_record_from_row(row: Row) -> ExperimentRecord:
     return ExperimentRecord(
         experiment_name=row["experiment_name"],
@@ -401,22 +383,6 @@ def score_harness_failure_record_from_row(
     )
 
 
-def prediction_projection_record_from_row(
-    row: Row,
-) -> PredictionProjectionRecord:
-    return PredictionProjectionRecord(
-        prediction_id=row["prediction_id"],
-        generation_run_id=row["generation_run_id"],
-        score_attempt_id=row["score_attempt_id"],
-        projection_profile_id=row["projection_profile_id"],
-        projection_version=row["projection_version"],
-        selected_at=row["selected_at"],
-        selection_reason=row["selection_reason"],
-    )
-
-
-
-
 def insert_experiment(record: ExperimentRecord) -> Insert:
     return schema.experiments.insert().values(experiment_row(record))
 
@@ -447,32 +413,10 @@ def insert_score_harness_failure(
     )
 
 
-def insert_prediction_projection(
-    record: PredictionProjectionRecord,
-) -> Insert:
-    return schema.prediction_projection.insert().values(
-        prediction_projection_row(record)
-    )
-
-
-
-
-
-
-
 def select_prediction_spec(prediction_id: str) -> Select[tuple[Any, ...]]:
     return select(schema.prediction_specs).where(
         schema.prediction_specs.c.prediction_id == prediction_id
     )
-
-
-def select_prediction_projections(
-    prediction_id: str,
-) -> Select[tuple[Any, ...]]:
-    return select(schema.prediction_projection).where(
-        schema.prediction_projection.c.prediction_id == prediction_id
-    )
-
 
 
 def _validate_jsonb_fields(row: Row, *fields: str) -> None:
@@ -569,128 +513,6 @@ def select_node_attempts_by_generation_run(
             schema.node_attempts.c.attempt_index,
         )
     )
-
-
-def select_rescore_submission_candidates(
-    *,
-    experiment_name: str,
-    generation_statuses: tuple[GenerationRunStatus, ...]
-    | list[GenerationRunStatus],
-    scoring_profile_id: str,
-    scoring_profile_version: str,
-    parser_profile_id: str,
-    parser_version: str,
-    score_attempt_index: int,
-    dataset_name: str,
-    dataset_split: str,
-    generation_attempt_index: int | None = None,
-    limit: int | None = None,
-    offset: int = 0,
-) -> Select[tuple[Any, ...]]:
-    matching_harness_failure = and_(
-        schema.score_harness_failures.c.generation_run_id
-        == schema.generation_runs.c.generation_run_id,
-        schema.score_harness_failures.c.scoring_profile_id
-        == scoring_profile_id,
-        schema.score_harness_failures.c.scoring_profile_version
-        == scoring_profile_version,
-        schema.score_harness_failures.c.parser_profile_id
-        == parser_profile_id,
-        schema.score_harness_failures.c.parser_version == parser_version,
-        schema.score_harness_failures.c.attempt_index >= score_attempt_index,
-        schema.score_harness_failures.c.dataset_name == dataset_name,
-        schema.score_harness_failures.c.dataset_split == dataset_split,
-    )
-    next_attempt_index = (
-        select(
-            func.coalesce(
-                func.max(schema.score_harness_failures.c.attempt_index) + 1,
-                score_attempt_index,
-            )
-        )
-        .where(matching_harness_failure)
-        .scalar_subquery()
-        .label("score_attempt_index")
-    )
-    matching_score_attempt = and_(
-        schema.score_attempts.c.generation_run_id
-        == schema.generation_runs.c.generation_run_id,
-        schema.score_attempts.c.scoring_profile_id == scoring_profile_id,
-        schema.score_attempts.c.scoring_profile_version
-        == scoring_profile_version,
-        schema.score_attempts.c.parser_profile_id == parser_profile_id,
-        schema.score_attempts.c.parser_version == parser_version,
-        schema.score_attempts.c.attempt_index == score_attempt_index,
-        schema.score_attempts.c.dataset_name == dataset_name,
-        schema.score_attempts.c.dataset_split == dataset_split,
-    )
-    statement = (
-        select(
-            schema.prediction_specs.c.prediction_id,
-            schema.generation_runs.c.generation_run_id,
-            schema.score_attempts.c.score_attempt_id.label(
-                "existing_score_attempt_id"
-            ),
-            next_attempt_index,
-        )
-        .select_from(
-            schema.generation_runs.join(
-                schema.prediction_specs,
-                schema.prediction_specs.c.prediction_id
-                == schema.generation_runs.c.prediction_id,
-            ).outerjoin(schema.score_attempts, matching_score_attempt)
-        )
-        .where(schema.prediction_specs.c.experiment_name == experiment_name)
-        .where(
-            schema.generation_runs.c.status.in_(
-                [status.value for status in generation_statuses]
-            )
-        )
-        .where(schema.score_attempts.c.score_attempt_id.is_(None))
-        .order_by(
-            schema.prediction_specs.c.prediction_id,
-            schema.generation_runs.c.generation_run_id,
-        )
-        .offset(offset)
-    )
-    if generation_attempt_index is not None:
-        statement = statement.where(
-            schema.generation_runs.c.attempt_index == generation_attempt_index
-        )
-    if limit is not None:
-        statement = statement.limit(limit)
-    return statement
-
-
-def count_rescore_submission_candidates(
-    *,
-    experiment_name: str,
-    generation_statuses: tuple[GenerationRunStatus, ...]
-    | list[GenerationRunStatus],
-    scoring_profile_id: str,
-    scoring_profile_version: str,
-    parser_profile_id: str,
-    parser_version: str,
-    score_attempt_index: int,
-    dataset_name: str,
-    dataset_split: str,
-    generation_attempt_index: int | None = None,
-) -> Select[tuple[int]]:
-    candidate_query = select_rescore_submission_candidates(
-        experiment_name=experiment_name,
-        generation_statuses=generation_statuses,
-        generation_attempt_index=generation_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        parser_profile_id=parser_profile_id,
-        parser_version=parser_version,
-        score_attempt_index=score_attempt_index,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-        limit=None,
-        offset=0,
-    )
-    return select(func.count()).select_from(candidate_query.subquery())
 
 
 def _dump(value: BaseModel) -> dict[str, Any]:

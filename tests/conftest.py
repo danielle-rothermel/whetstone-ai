@@ -16,7 +16,6 @@ from dbos import DBOS
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
-import tests.integration.dbos_test_workflows  # noqa: F401
 import whetstone.platform.graph_workflow
 import whetstone.platform.scoring_workflow  # noqa: F401
 from whetstone.db.migrations.url import normalize_postgresql_driver_url

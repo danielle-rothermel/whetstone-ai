@@ -1,20 +1,8 @@
 {
   "experiment_name": "direct-exp",
   "graph_layout": "direct",
-  "fair_order_seed": "seed-1",
-  "dataset": {
-    "name": "local/fixture",
-    "split": "test",
-    "snapshot_path": "../dr-code/tests/corpus/humanevalplus_snapshot.json",
-    "sample_seed": 7,
-    "sample_count": 2
-  },
+  "dataset": {"name": "local/fixture", "split": "test", "snapshot_path": "../dr-code/tests/corpus/humanevalplus_snapshot.json", "sample_seed": 7, "sample_count": 2},
   "repetition_seeds": [0, 1],
-  "dimensions_axes": [
-    {"temperature": 0.2},
-    {"temperature": 0.7}
-  ],
-  "providers": [
-    {"model": "gpt-test", "config_id": "main"}
-  ]
+  "dimensions_axes": [{"temperature": 0.2}, {"temperature": 0.7}],
+  "providers": [{"model": "gpt-test", "config_id": "main"}]
 }

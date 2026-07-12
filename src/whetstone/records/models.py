@@ -562,30 +562,9 @@ class ScoreHarnessFailureRecord(BaseModel):
             )
         if (
             self.extracted_submission is not None
-            and self.extracted_submission.parser_version
-            != self.parser_version
+            and self.extracted_submission.parser_version != self.parser_version
         ):
             raise ValueError(
                 "extracted_submission parser_version must match failure"
-            )
-        return self
-
-
-class PredictionProjectionRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prediction_id: StrictStr
-    generation_run_id: StrictStr | None = None
-    score_attempt_id: StrictStr | None = None
-    projection_profile_id: StrictStr
-    projection_version: StrictStr
-    selected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    selection_reason: StrictStr | None = None
-
-    @model_validator(mode="after")
-    def validate_selection(self) -> PredictionProjectionRecord:
-        if self.generation_run_id is None and self.score_attempt_id is None:
-            raise ValueError(
-                "projection requires generation_run_id or score_attempt_id"
             )
         return self
