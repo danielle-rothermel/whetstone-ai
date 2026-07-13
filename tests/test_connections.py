@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 from sqlalchemy.engine import URL
 from sqlalchemy.pool import NullPool
@@ -8,9 +10,11 @@ from whetstone.platform import connections, cutover_tooling
 from whetstone.platform.connections import (
     DatabaseBoundary,
     bind_schema,
+    bind_schema_strict,
     create_whetstone_engine,
     normalize_url,
     render_connection_url,
+    require_direct_endpoint,
 )
 
 
@@ -34,7 +38,8 @@ def test_postgres_connection_policy_preserves_encoded_url_parts(
     assert "p%2Fss%40word" in render_connection_url(url)
 
 
-def test_schema_binding_preserves_query_and_uses_explicit_rendering() -> None:
+def test_runtime_schema_binding_keeps_public_extension_fallback() -> None:
+    """Runtime paths need unqualified extension/function fallback to public."""
     bound = bind_schema(
         "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
         "run_owned",
@@ -49,6 +54,91 @@ def test_schema_binding_preserves_query_and_uses_explicit_rendering() -> None:
     assert "operator:p%2Fss@" in rendered
     assert "sslmode=require" in rendered
     assert "options=-c+search_path%3Drun_owned%2Cpublic" in rendered
+
+
+def test_strict_schema_binding_excludes_public() -> None:
+    """Migration/admin binding must never see same-named public relations."""
+    bound = bind_schema_strict(
+        "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
+        "run_owned",
+    )
+
+    assert bound.drivername == "postgresql+psycopg"
+    assert bound.query == {
+        "sslmode": "require",
+        "options": "-c search_path=run_owned",
+    }
+    rendered = render_connection_url(bound)
+    assert "operator:p%2Fss@" in rendered
+    assert "public" not in rendered
+    assert "options=-c+search_path%3Drun_owned" in rendered
+
+
+def test_strict_schema_binding_rejects_non_identifier_schema() -> None:
+    with pytest.raises(ValueError, match="SQL identifier"):
+        bind_schema_strict("postgresql://db.example/test", "bad-schema")
+
+
+@pytest.mark.parametrize("binder", [bind_schema, bind_schema_strict])
+def test_schema_binding_rejects_pooled_neon_endpoint(
+    binder: Callable[[str, str], URL],
+) -> None:
+    with pytest.raises(ValueError, match=r"direct \(unpooled\) Neon URL"):
+        binder(
+            "postgresql://operator:secret"
+            "@ep-cool-name-123456-pooler.us-east-2.aws.neon.tech/neondb"
+            "?sslmode=require",
+            "run_owned",
+        )
+
+
+def test_direct_neon_and_non_neon_pooler_hosts_are_accepted() -> None:
+    direct = bind_schema_strict(
+        "postgresql://operator:secret"
+        "@ep-cool-name-123456.us-east-2.aws.neon.tech/neondb",
+        "run_owned",
+    )
+    unrelated = bind_schema(
+        "postgresql://operator:secret@db-pooler.example.com/test",
+        "run_owned",
+    )
+
+    assert direct.host == "ep-cool-name-123456.us-east-2.aws.neon.tech"
+    assert unrelated.host == "db-pooler.example.com"
+
+
+def test_engine_policy_rejects_pooled_neon_endpoint() -> None:
+    with pytest.raises(ValueError, match=r"direct \(unpooled\) Neon URL"):
+        create_whetstone_engine(
+            "postgresql://operator:secret"
+            "@ep-cool-name-123456-pooler.us-east-2.aws.neon.tech/neondb",
+            boundary=DatabaseBoundary.NEON_POSTGRES,
+        )
+
+
+def test_engine_policy_accepts_direct_neon_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[URL] = []
+    marker = object()
+    monkeypatch.setattr(
+        connections,
+        "create_engine",
+        lambda url, **options: captured.append(url) or marker,
+    )
+
+    assert create_whetstone_engine(
+        "postgresql://operator:secret"
+        "@ep-cool-name-123456.us-east-2.aws.neon.tech/neondb",
+        boundary=DatabaseBoundary.NEON_POSTGRES,
+    ) is marker
+    assert captured[0].host == "ep-cool-name-123456.us-east-2.aws.neon.tech"
+
+
+def test_require_direct_endpoint_returns_normalized_url() -> None:
+    url = require_direct_endpoint("postgresql://db.example/test")
+
+    assert url.drivername == "postgresql+psycopg"
 
 
 def test_schema_binding_retains_existing_options() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -456,3 +457,71 @@ def test_store_binding_rejects_replaced_schema_marker(
 
     with pytest.raises(ValueError, match="ownership marker disagrees"):
         cutover_tooling.validate_store_state(descriptor_path)
+
+
+def test_stores_run_uses_explicit_schema_strategy_for_motherduck(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """MotherDuck rejects startup search_path; source/Neon stay bound."""
+    descriptor_path = tmp_path / "stores.json"
+    descriptor = _store_descriptor("acceptance_171", descriptor_path)
+    journal = _new_store_journal(descriptor)
+    descriptor_path.write_text(descriptor.model_dump_json())
+    (tmp_path / descriptor.journal_path).write_text(
+        journal.model_dump_json()
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "validate_store_state", lambda _path: descriptor
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_require_environment",
+        lambda name: f"postgresql://operator:pw@db.example/{name.lower()}",
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_require_schema_owner",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_require_dbos_owner",
+        lambda *_args, **_kwargs: None,
+    )
+    captured: dict[str, str] = {}
+
+    def record_run(command: list[str], *, env: dict[str, str], check: bool):
+        captured.update(env)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(cutover_tooling.subprocess, "run", record_run)
+
+    result = CliRunner().invoke(
+        APP,
+        [
+            "stores",
+            "run",
+            "--descriptor",
+            str(descriptor_path),
+            "--",
+            "echo",
+            "ok",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["MOTHERDUCK_DATABASE_URL"] == (
+        "postgresql://operator:pw@db.example/motherduck_database_url"
+    )
+    assert "options" not in captured["MOTHERDUCK_DATABASE_URL"]
+    assert captured["WHETSTONE_ANALYSIS_SCHEMA"] == (
+        descriptor.motherduck.schema_name
+    )
+    assert (
+        "search_path%3Dwhetstone_run_acceptance_171%2Cpublic"
+        in captured["DATABASE_URL"]
+    )
+    assert (
+        "search_path%3Dwhetstone_detail_acceptance_171%2Cpublic"
+        in captured["NEON_DATABASE_URL"]
+    )

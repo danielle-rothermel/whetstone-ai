@@ -10,6 +10,33 @@ Configure base admin URLs only in `DATABASE_URL`, `MOTHERDUCK_DATABASE_URL`,
 and `NEON_DATABASE_URL`. The descriptor contains names and ownership facts,
 never URLs or credentials.
 
+`stores prepare` migrates the fresh source schema through a strict
+run-schema-only binding: the migration connection's `search_path` contains
+exactly the run schema, is asserted before any DDL, and object ownership is
+proven afterward. Bound runtime commands (`stores run`) keep the
+`run_schema,public` fallback so unqualified extension functions still
+resolve; migrated run-schema tables shadow any same-named public tables.
+
+## MotherDuck: explicit schema, no startup binding
+
+MotherDuck's Postgres-wire endpoint rejects the startup `search_path`
+option (`FATAL: option is not allowed: search_path`), so the analysis
+boundary cannot use bound URLs. `stores run` therefore exports the base
+`MOTHERDUCK_DATABASE_URL` unchanged plus `WHETSTONE_ANALYSIS_SCHEMA` with
+the run-owned schema name. Consumers must schema-qualify their SQL or run
+`SET search_path TO "<schema>"` after connecting; both were verified live
+against MotherDuck. Provisioning and cleanup already use fully qualified
+names and are unaffected.
+
+## Direct (unpooled) Neon endpoint required
+
+`NEON_DATABASE_URL` must be the **direct** Neon endpoint. Pooled endpoints
+(`*-pooler.*.neon.tech`) reject the startup `search_path` option that every
+schema-bound Whetstone boundary depends on, so the connection policy fails
+fast when it sees one. The tooling never derives or rewrites hostnames:
+copy the direct connection string from the Neon console and store it with
+`mise run set-secret-env -- NEON_DATABASE_URL`.
+
 ## Secret-backed commands
 
 Store the hosted URLs with `mise run set-secret-env -- MOTHERDUCK_DATABASE_URL`
