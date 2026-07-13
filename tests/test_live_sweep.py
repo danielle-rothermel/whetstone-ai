@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
@@ -16,6 +17,7 @@ from dr_platform.status import AttemptExecutionState
 from sqlalchemy.engine import Engine
 from typer.testing import CliRunner
 
+from whetstone.db.io import node_attempt_row
 from whetstone.platform import live_sweep
 from whetstone.platform.live_sweep import (
     CellReconciliation,
@@ -23,11 +25,40 @@ from whetstone.platform.live_sweep import (
     reconcile_ledger,
     require_terminal_lifecycle,
 )
-from whetstone.records import GenerationRunStatus
+from whetstone.records import GenerationRunStatus, NodeAttemptRecord
 
 
 def _cell(cell_id: str) -> dict[str, str]:
     return {"cell_id": cell_id}
+
+
+def _persisted_success_node(
+    response_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    record = NodeAttemptRecord.model_validate(
+        {
+            "node_attempt_id": "node-attempt-a",
+            "generation_run_id": "run-a",
+            "prediction_id": "prediction-a",
+            "node_id": "generate",
+            "attempt_index": 0,
+            "status": "success",
+            "provider_config": {
+                "provider_kind": "openai",
+                "endpoint_kind": "responses",
+                "model": "gpt-5.4-nano",
+                "throttle_key": "openai:gpt-5.4-nano",
+            },
+            "output": {"values": {"text": "generated"}},
+            "response_metadata": {
+                "response_metadata": response_metadata,
+            },
+            "started_at": timestamp,
+            "completed_at": timestamp,
+        }
+    )
+    return node_attempt_row(record)
 
 
 def _scoring_target(
@@ -473,11 +504,8 @@ def test_typed_response_outcomes_remain_provider_outcomes(
 
 def test_successful_response_diagnostics_are_projected_safely() -> None:
     diagnostics = live_sweep._project_safe_diagnostics(
-        node={
-            "status": "success",
-            "model": "gpt-5.4-nano",
-            "output": {"values": {"text": "generated"}},
-            "response_metadata": {
+        node=_persisted_success_node(
+            {
                 "status": "PRIVATE_RAW_STATUS",
                 "diagnostics": {
                     "response_status": "completed",
@@ -489,9 +517,8 @@ def test_successful_response_diagnostics_are_projected_safely() -> None:
                     "output_text_len": 9,
                     "response_id_hash": "fedcba9876543210",
                 },
-            },
-            "failure": None,
-        },
+            }
+        ),
         score=None,
     )
 
@@ -502,6 +529,56 @@ def test_successful_response_diagnostics_are_projected_safely() -> None:
     assert diagnostics["output_text_len"] == 9
     assert diagnostics["response_id_hash"] == "fedcba9876543210"
     assert "PRIVATE" not in json.dumps(diagnostics, sort_keys=True)
+
+
+def test_legacy_flattened_response_status_uses_closed_allowlist() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "success",
+            "model": "gpt-5.4-nano",
+            "output": {"values": {"text": "generated"}},
+            "response_metadata": {"status": "completed"},
+            "failure": None,
+        },
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "completed"
+
+
+def test_private_raw_status_is_omitted_from_ledger_diagnostics(
+    tmp_path: Path,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_success_node({"status": "PRIVATE_RAW_STATUS"}),
+        score=None,
+    )
+    assert "response_status" not in diagnostics
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="succeeded",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification=None,
+                    diagnostics=diagnostics,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert "PRIVATE_RAW_STATUS" not in serialized
+    finally:
+        ledger.close()
 
 
 def test_legacy_cost_columns_are_removed_without_gating_intent(

@@ -411,8 +411,11 @@ def _project_safe_diagnostics(
     output_metadata = (
         output.get("metadata") if isinstance(output, Mapping) else None
     )
-    response_metadata = (
+    persisted_response_metadata = (
         node.get("response_metadata") if node is not None else None
+    )
+    response_metadata = _provider_response_metadata(
+        persisted_response_metadata
     )
     response_id = _allowlisted_string(output_metadata, "response_id")
     if response_id is None:
@@ -437,7 +440,11 @@ def _project_safe_diagnostics(
         allowed_values=_RESPONSE_STATUS_VALUES,
     )
     if response_status is None:
-        response_status = _allowlisted_string(response_metadata, "status")
+        response_status = _allowlisted_enum(
+            response_metadata,
+            "status",
+            allowed_values=_RESPONSE_STATUS_VALUES,
+        )
     diagnostic_response_id_hash = _allowlisted_response_id_hash(
         response_diagnostics
     )
@@ -489,6 +496,15 @@ def _project_safe_diagnostics(
         typed_failure_code=failure_code,
     )
     return diagnostics.as_dict()
+
+
+def _provider_response_metadata(payload: object) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    nested = payload.get("response_metadata")
+    if len(payload) == 1 and isinstance(nested, Mapping):
+        return cast(Mapping[str, Any], nested)
+    return cast(Mapping[str, Any], payload)
 
 
 def _response_diagnostics(
