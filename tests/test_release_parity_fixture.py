@@ -285,9 +285,14 @@ def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
         '--journal "$RUNNER_TEMP/release-parity/descriptor.json.journal.json"'
     )
     assert journal in workflow
-    action = "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
+    action = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
     assert action in workflow
-    assert "@v4" not in workflow
+    assert workflow.count("actions/upload-artifact@") == 1
+    retired_v3_action = (
+        "actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce"
+    )
+    assert retired_v3_action not in workflow
+    assert "actions/upload-artifact@v3" not in workflow
     assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY:" in workflow
     assert "Materialize ephemeral bundle integrity key" in workflow
     assert "Remove ephemeral bundle integrity key" in workflow
