@@ -54,9 +54,7 @@ _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SECRET = re.compile(r"(token|password|secret|dsn|url|authorization)", re.I)
-_TRACE = Path(
-    "/private/tmp/platform-v6-headless-whetstone-parity-v2-99.trace.txt"
-)
+_TRACE_ENVIRONMENT_VARIABLE = "WHETSTONE_RELEASE_PARITY_TRACE_PATH"
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 
@@ -67,11 +65,21 @@ def _fixture_prediction_id(run_id: str) -> str:
 
 
 def _trace(event: str, **facts: object) -> None:
-    """Write only stable, non-sensitive operational facts."""
+    """Optionally write stable, non-sensitive operational facts.
+
+    The release workflow can opt in to a runner-owned evidence path.  Unit
+    tests and library callers must not depend on an operator's `/private/tmp`
+    artifact being present.
+    """
+    trace_path = os.environ.get(_TRACE_ENVIRONMENT_VARIABLE)
+    if not trace_path:
+        return
     safe = {
         key: value for key, value in facts.items() if not _SECRET.search(key)
     }
-    with _TRACE.open("a") as stream:
+    path = Path(trace_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
         stream.write(
             json.dumps({"event": event, **safe}, sort_keys=True) + "\n"
         )
@@ -426,8 +434,10 @@ def _required_env(name: str) -> str:
 
 def _source_url(schema: str) -> str:
     base = make_url(_required_env("DATABASE_URL"))
-    return str(
-        base.update_query_dict({"options": f"-c search_path={schema},public"})
+    return base.update_query_dict(
+        {"options": f"-c search_path={schema},public"}
+    ).render_as_string(
+        hide_password=False
     )
 
 

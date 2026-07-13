@@ -6,10 +6,11 @@ from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import typer
+from dr_code.humaneval.sampling import write_human_eval_snapshot_rows
 from dr_platform.status import AttemptExecutionState
 from sqlalchemy.engine import Engine
 
@@ -25,6 +26,59 @@ from whetstone.records import GenerationRunStatus
 
 def _cell(cell_id: str) -> dict[str, str]:
     return {"cell_id": cell_id}
+
+
+def _portable_snapshot_campaign(
+    campaign_dir: Path,
+) -> dict[str, Any]:
+    locator = "snapshots/humanevalplus_snapshot.json"
+    snapshot_path = write_human_eval_snapshot_rows(
+        [
+            {
+                "task_id": "HumanEval/0",
+                "prompt": "def add_one(value):\n",
+                "canonical_solution": "    return value + 1\n",
+                "entry_point": "add_one",
+                "test": (
+                    "def check(candidate):\n"
+                    "    inputs = [(1,)]\n"
+                    "    results = [2]\n"
+                    "    for inp, expected in zip(inputs, results):\n"
+                    "        assertion(candidate(*inp), expected)\n"
+                ),
+            }
+        ],
+        snapshot_path=campaign_dir / locator,
+        dataset_name="local/fixture",
+    )
+    snapshot = live_sweep.load_humaneval_snapshot(
+        dataset_name="local/fixture",
+        dataset_split="test",
+        snapshot_path=snapshot_path,
+    )
+    (campaign_dir / "split-full.json").write_text(
+        json.dumps(
+            {
+                "name": "portable-fixture",
+                "dataset": {
+                    "name": "local/fixture",
+                    "split": "test",
+                    "snapshot_path": locator,
+                    "sample_seed": 0,
+                    "sample_count": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "snapshot": {
+            "path": locator,
+            "sha256": snapshot.identity.sha256,
+            "header": snapshot.identity.header.model_dump(mode="json"),
+            "task_count": 1,
+        }
+    }
 
 
 def test_ledger_reservation_is_idempotent_and_excludes_remaining(
@@ -158,6 +212,8 @@ def test_executable_artifact_binds_generated_spec_and_rejects_tamper(
     tmp_path: Path,
 ) -> None:
     source = Path("/private/tmp/platform-v6-live-sweep-161")
+    if not source.exists():
+        pytest.skip("locked operator campaign is not present")
     target = tmp_path / "campaign"
     shutil.copytree(source, target)
     _metadata, cells, _hash = live_sweep.validate_campaign(target)
@@ -168,6 +224,67 @@ def test_executable_artifact_binds_generated_spec_and_rejects_tamper(
     manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
     with pytest.raises(typer.BadParameter):
         live_sweep.validate_campaign(target)
+
+
+def test_campaign_snapshot_is_portable_and_injected_after_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = tmp_path / "original" / "campaign"
+    original.mkdir(parents=True)
+    metadata = _portable_snapshot_campaign(original)
+    moved = tmp_path / "moved" / "campaign"
+    moved.parent.mkdir()
+    original.rename(moved)
+    captured: dict[str, object] = {}
+
+    def capture_specs(
+        _path: Path, *, configs_root: Path, snapshot: object
+    ) -> tuple[()]:
+        captured["configs_root"] = configs_root
+        captured["snapshot"] = snapshot
+        return ()
+
+    monkeypatch.setattr(
+        live_sweep, "iter_experiment_specs_from_file", capture_specs
+    )
+
+    assert live_sweep._specs_for_cells(moved, metadata, []) == {}
+    assert captured["configs_root"] == moved
+    snapshot = captured["snapshot"]
+    assert isinstance(snapshot, live_sweep.HumanEvalSnapshot)
+    assert snapshot.identity.sha256 == metadata["snapshot"]["sha256"]
+
+
+def test_campaign_snapshot_rejects_locator_escape_and_content_tamper(
+    tmp_path: Path,
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    metadata = _portable_snapshot_campaign(campaign)
+    snapshot_metadata = metadata["snapshot"]
+    assert isinstance(snapshot_metadata, dict)
+    snapshot_metadata["path"] = "../outside.json"
+    with pytest.raises(ValueError, match="remain inside campaign"):
+        live_sweep._campaign_snapshot(campaign, metadata)
+
+    metadata = _portable_snapshot_campaign(campaign)
+    snapshot_metadata = metadata["snapshot"]
+    assert isinstance(snapshot_metadata, dict)
+    snapshot_path = campaign / str(snapshot_metadata["path"])
+    snapshot_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError):
+        live_sweep._campaign_snapshot(campaign, metadata)
+
+
+def test_dry_run_output_is_json_serializable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    live_sweep._emit(
+        "plan", cells=[_cell("a")], manifest_hash="manifest-a", execute=False
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["generation_ceiling_usd"] == "4.62"
 
 
 def test_ledger_requires_an_absolute_external_path(tmp_path: Path) -> None:
