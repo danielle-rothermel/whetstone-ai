@@ -15,6 +15,7 @@ from typing import Any, cast
 import pytest
 import typer
 from dr_code.humaneval.sampling import write_human_eval_snapshot_rows
+from dr_platform.reconciliation_runtime import ReconcileResult
 from dr_platform.status import AttemptExecutionState
 from sqlalchemy.engine import Engine
 from typer.testing import CliRunner
@@ -1302,6 +1303,104 @@ def test_live_sweep_cli_has_no_estimates_option(
     assert "--estimates" not in help_result.output
     assert rejected.exit_code != 0
     assert "No such option" in rejected.output
+
+
+def _reconcile_result(**overrides: int) -> ReconcileResult:
+    fields: dict[str, int] = {
+        "recovered_call_started_count": 0,
+        "observed_count": 0,
+        "changed_count": 0,
+        "enqueue_reset_count": 0,
+        "execution_retry_count": 0,
+        "missing_count": 0,
+        "replacement_enqueue_count": 0,
+        "pending_enqueue_count": 0,
+    }
+    fields.update(overrides)
+    return ReconcileResult(**fields)
+
+
+def _patch_reconcile_command_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    results: Iterator[ReconcileResult],
+    calls: list[dict[str, Any]],
+) -> None:
+    @contextmanager
+    def fake_runtime() -> Iterator[SimpleNamespace]:
+        yield SimpleNamespace(
+            queue_lookup=object(),
+            enqueue_adapter=object(),
+            workflow_observer=object(),
+        )
+
+    def fake_reconcile(_engine: Engine, **kwargs: Any) -> ReconcileResult:
+        calls.append(kwargs)
+        return next(results)
+
+    monkeypatch.setattr(
+        live_sweep, "_platform_enqueue_runtime", fake_runtime
+    )
+    monkeypatch.setattr(
+        live_sweep, "_InProcessDbosApi", lambda: SimpleNamespace()
+    )
+    monkeypatch.setattr(live_sweep, "reconcile", fake_reconcile)
+    monkeypatch.setattr(live_sweep, "target_registry", lambda: object())
+    monkeypatch.setattr(
+        live_sweep,
+        "create_engine",
+        lambda _url: SimpleNamespace(dispose=lambda: None),
+    )
+    monkeypatch.setattr(
+        live_sweep, "resolve_application_database_url", lambda: "sqlite://"
+    )
+
+
+def test_reconcile_execute_stops_on_first_zero_mutation_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    # The second cycle observes attempts but mutates nothing: non-mutating
+    # observed_count must never keep the loop alive.
+    results = iter(
+        [
+            _reconcile_result(observed_count=12, changed_count=12),
+            _reconcile_result(observed_count=12),
+        ]
+    )
+    _patch_reconcile_command_runtime(monkeypatch, results, calls)
+
+    result = CliRunner().invoke(live_sweep.APP, ["reconcile", "--execute"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["command"] == "reconcile"
+    assert payload["execute"] is True
+    assert [cycle["changed_count"] for cycle in payload["cycles"]] == [12, 0]
+    assert len(calls) == 2
+    assert all(
+        call["schema"] is live_sweep.PLATFORM_SCHEMA for call in calls
+    )
+
+
+def test_reconcile_execute_is_bounded_by_max_cycles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def always_mutating() -> Iterator[ReconcileResult]:
+        while True:
+            yield _reconcile_result(observed_count=1, changed_count=1)
+
+    _patch_reconcile_command_runtime(monkeypatch, always_mutating(), calls)
+
+    result = CliRunner().invoke(
+        live_sweep.APP, ["reconcile", "--execute", "--max-cycles", "3"]
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload["cycles"]) == 3
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize(
