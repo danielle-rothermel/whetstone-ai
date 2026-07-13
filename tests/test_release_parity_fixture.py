@@ -15,6 +15,7 @@ from whetstone.platform.release_parity_fixture import (
     RunJournal,
     _cleanup_descriptor_or_journal,
     _journal_path,
+    _source_url,
     _trace,
     _write_journal,
     verify_evidence,
@@ -252,6 +253,21 @@ def test_trace_is_opt_in_and_uses_a_test_owned_path(
         "event": "fixture_test",
         "run_id": "a" * 32,
     }
+
+
+def test_source_url_preserves_credentials_at_connection_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://fixture:encoded%2Fpassword@db.example/source",
+    )
+
+    source_url = _source_url("run_owned")
+
+    assert "fixture:encoded%2Fpassword@db.example" in source_url
+    assert "***" not in source_url
+    assert "search_path%3Drun_owned%2Cpublic" in source_url
 
 
 def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
