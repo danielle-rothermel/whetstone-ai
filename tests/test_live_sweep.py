@@ -863,21 +863,6 @@ def _fake_enqueue_runtime() -> Iterator[SimpleNamespace]:
     )
 
 
-def test_registered_queue_lookup_resolves_member_queues_through_dbos(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Admission needs the database-backed Queue object, never a bare name."""
-    resolved = object()
-    monkeypatch.setattr(
-        live_sweep,
-        "DBOS",
-        SimpleNamespace(retrieve_queue=lambda name: resolved),
-    )
-    lookup = live_sweep._RegisteredQueueLookup(names=frozenset({"member"}))
-    assert lookup.retrieve_queue("member") is resolved
-    assert lookup.retrieve_queue("other") is None
-
-
 def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -919,7 +904,7 @@ def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
         live_sweep, "resolve_application_database_url", lambda: "sqlite://"
     )
     monkeypatch.setattr(
-        live_sweep, "_platform_enqueue_runtime", _fake_enqueue_runtime
+        live_sweep, "platform_enqueue_runtime", _fake_enqueue_runtime
     )
     submissions: list[tuple[live_sweep.ScoringTargetSpec, ...]] = []
     monkeypatch.setattr(
@@ -1338,10 +1323,10 @@ def _patch_reconcile_command_runtime(
         return next(results)
 
     monkeypatch.setattr(
-        live_sweep, "_platform_enqueue_runtime", fake_runtime
+        live_sweep, "platform_enqueue_runtime", fake_runtime
     )
     monkeypatch.setattr(
-        live_sweep, "_InProcessDbosApi", lambda: SimpleNamespace()
+        live_sweep, "InProcessDbosApi", lambda: SimpleNamespace()
     )
     monkeypatch.setattr(live_sweep, "reconcile", fake_reconcile)
     monkeypatch.setattr(live_sweep, "target_registry", lambda: object())

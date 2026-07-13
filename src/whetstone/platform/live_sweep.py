@@ -21,11 +21,9 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, cast
-from uuid import uuid4
 
 import typer
-from dbos import DBOS, DBOSClient
-from dbos._dbos import _get_dbos_instance
+from dbos import DBOSClient
 from dr_platform import (
     AttemptRecord,
     EligibilityReference,
@@ -36,8 +34,6 @@ from dr_platform import (
     request_next_attempt,
 )
 from dr_platform.enqueue_runtime import (
-    DbosEnqueueAdapter,
-    DbosWorkflowObserver,
     enqueue_pending_page,
     enqueue_replacement_page,
     recover_call_started_page,
@@ -57,12 +53,11 @@ from whetstone.platform.dataset_snapshot import (
     HumanEvalSnapshot,
     load_humaneval_snapshot,
 )
-from whetstone.platform.runtime import (
-    build_whetstone_dbos_config,
-    dbos_config,
-    resolve_application_database_url,
-    shutdown_dbos_runtime,
+from whetstone.platform.enqueue_runtime import (
+    InProcessDbosApi,
+    platform_enqueue_runtime,
 )
+from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
     load_model_config_fragment,
@@ -74,10 +69,7 @@ from whetstone.platform.submission import (
     submit_scoring_targets,
 )
 from whetstone.platform.targets import (
-    GENERATION_QUEUE_NAME,
-    SCORING_QUEUE_NAME,
     ScoringTargetSpec,
-    register_execution_queues,
     target_registry,
 )
 from whetstone.records import (
@@ -2111,96 +2103,6 @@ def _complete_generation_members(
     return members
 
 
-class _InProcessDbosApi:
-    """DBOSClient-shaped facade over the launched in-process DBOS.
-
-    ``DBOSClient`` cannot open SQLite system databases (it applies pool
-    keyword arguments SQLite rejects), so the lifecycle reader runs over the
-    already-launched runtime instead.  ``DbosLifecycleReader`` needs exactly
-    ``list_workflows`` and ``_sys_db.engine``; ``_get_dbos_instance`` is a
-    private dbos API pinned by the dbos 2.26 dependency.
-    """
-
-    def __init__(self) -> None:
-        self._sys_db = _get_dbos_instance()._sys_db
-
-    def list_workflows(self, **kwargs: Any) -> list[Any]:
-        return DBOS.list_workflows(**kwargs)
-
-
-@dataclass(frozen=True)
-class _RegisteredQueueLookup:
-    """In-process admission for exactly the queues whetstone registers.
-
-    Kernel admission requires a database-backed queue object exposing
-    ``database_backed_queue`` and ``priority_enabled``; a bare name fails
-    closed.  ``DBOSClient`` cannot open SQLite system databases, so the
-    queue is resolved through the launched in-process runtime instead.
-    """
-
-    names: frozenset[str]
-
-    def retrieve_queue(self, name: str) -> object | None:
-        if name not in self.names:
-            return None
-        return DBOS.retrieve_queue(name)
-
-
-@dataclass(frozen=True)
-class _EnqueueRuntime:
-    queue_lookup: _RegisteredQueueLookup
-    enqueue_adapter: DbosEnqueueAdapter
-    workflow_observer: DbosWorkflowObserver
-
-
-@contextmanager
-def _platform_enqueue_runtime() -> Iterator[_EnqueueRuntime]:
-    """DBOS runtime that can enqueue but never consumes execution queues.
-
-    ``DbosEnqueueAdapter`` requires a launched in-process DBOS, and DBOS
-    2.26 gives a launched process two consumption paths that must both be
-    closed explicitly.  A process that never calls ``listen_queues`` polls
-    every registered queue, so ``DBOS.listen_queues([])`` pins the listen
-    set to nothing before launch.  Launch recovery re-executes PENDING
-    workflows owned by this process's executor ID, and the worker runs as
-    the default executor ``local``, so a unique per-invocation executor ID
-    makes recovery a no-op here.  Worker pickup of the enqueued workflows
-    requires an equal computed application version, which holds exactly
-    when the worker serves the same workflow sources as this checkout
-    (both processes register the identical workflow set via
-    ``whetstone.platform.targets``); restart the worker after deploys that
-    touch workflow code.
-    """
-    config = build_whetstone_dbos_config(
-        database_url=resolve_application_database_url(),
-        system_database_url=None,
-        generation_concurrency=1,
-        scoring_concurrency=1,
-    )
-    runtime_config = dbos_config(config, app_name="whetstone")
-    runtime_config["executor_id"] = f"whetstone-enqueue-{uuid4().hex}"
-    try:
-        DBOS(config=runtime_config)
-        DBOS.listen_queues([])
-        DBOS.launch()
-        # never_update: create the queues if absent, but never clobber the
-        # worker-owned configuration in the shared system database.
-        register_execution_queues(
-            worker_concurrency=1, on_conflict="never_update"
-        )
-        yield _EnqueueRuntime(
-            queue_lookup=_RegisteredQueueLookup(
-                names=frozenset(
-                    {GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME}
-                )
-            ),
-            enqueue_adapter=DbosEnqueueAdapter(),
-            workflow_observer=DbosWorkflowObserver(),
-        )
-    finally:
-        shutdown_dbos_runtime()
-
-
 def _submit(
     campaign_dir: Path,
     metadata: dict[str, Any],
@@ -2213,7 +2115,7 @@ def _submit(
         by_operation: dict[str, list[dict[str, Any]]] = {}
         for cell in cells:
             by_operation.setdefault(_cell_operation_key(cell), []).append(cell)
-        with _platform_enqueue_runtime() as runtime:
+        with platform_enqueue_runtime() as runtime:
             for operation_key, shard_cells in by_operation.items():
                 prediction_ids = {
                     str(cell["cell_id"]): specs[
@@ -2593,7 +2495,7 @@ def submit_scoring(
             return
         if frozen.status != "submitting":
             raise RuntimeError("frozen scoring intent has an invalid status")
-        with _platform_enqueue_runtime() as runtime:
+        with platform_enqueue_runtime() as runtime:
             submit_scoring_targets(
                 engine,
                 operation_key=frozen.operation_key,
@@ -2757,9 +2659,9 @@ def reconcile_kernel(
             )
             return
         cycles: list[dict[str, Any]] = []
-        with _platform_enqueue_runtime() as runtime:
+        with platform_enqueue_runtime() as runtime:
             reader = DbosLifecycleReader(
-                cast("DBOSClient", _InProcessDbosApi())
+                cast("DBOSClient", InProcessDbosApi())
             )
             for _ in range(max_cycles):
                 result = reconcile(
@@ -2821,7 +2723,7 @@ def recover_enqueues(
             )
             return
         rounds: list[dict[str, int]] = []
-        with _platform_enqueue_runtime() as runtime:
+        with platform_enqueue_runtime() as runtime:
             for _ in range(max_rounds):
                 counts = {
                     "pending": len(
