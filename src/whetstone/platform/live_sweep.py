@@ -38,6 +38,10 @@ from sqlalchemy.engine import Engine
 
 from whetstone.db import schema as whetstone_schema
 from whetstone.lm.boundary import OUTPUT_FIELD_TEXT
+from whetstone.platform.dataset_snapshot import (
+    HumanEvalSnapshot,
+    load_humaneval_snapshot,
+)
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
@@ -45,7 +49,10 @@ from whetstone.platform.spec_builder import (
 )
 from whetstone.platform.submission import submit_prediction_specs
 from whetstone.platform.targets import target_registry
-from whetstone.records import GenerationRunStatus
+from whetstone.records import (
+    DatasetSnapshotIdentityPayload,
+    GenerationRunStatus,
+)
 
 APP = typer.Typer(no_args_is_help=True)
 EXPECTED_CELLS = 5_904
@@ -1118,7 +1125,7 @@ def validate_campaign(
         ):
             raise typer.BadParameter("model fragment does not match campaign")
     try:
-        _specs_for_cells(campaign_dir, cells)
+        _specs_for_cells(campaign_dir, metadata, cells)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     return metadata, cells, manifest_hash
@@ -1151,12 +1158,60 @@ def _operation_key(metadata: dict[str, Any], suffix: str) -> str:
     return f"{metadata['campaign']}-generation-{suffix}"
 
 
+def _campaign_snapshot(
+    campaign_dir: Path, metadata: Mapping[str, Any]
+) -> HumanEvalSnapshot:
+    """Load the content-bound snapshot shipped inside the campaign."""
+    snapshot_metadata = metadata.get("snapshot")
+    if not isinstance(snapshot_metadata, Mapping):
+        raise ValueError("campaign snapshot metadata is missing")
+    locator = snapshot_metadata.get("path")
+    if not isinstance(locator, str) or not locator:
+        raise ValueError("campaign snapshot path must be a relative locator")
+    relative_path = Path(locator)
+    if relative_path.is_absolute():
+        raise ValueError("campaign snapshot path must be a relative locator")
+    campaign_root = campaign_dir.resolve()
+    snapshot_path = (campaign_root / relative_path).resolve()
+    if not snapshot_path.is_relative_to(campaign_root):
+        raise ValueError("campaign snapshot path must remain inside campaign")
+
+    split = _load_json(campaign_dir / "split-full.json")
+    dataset = split.get("dataset")
+    if (
+        not isinstance(dataset, Mapping)
+        or dataset.get("snapshot_path") != locator
+    ):
+        raise ValueError(
+            "campaign snapshot locator does not match locked split"
+        )
+    expected_identity = DatasetSnapshotIdentityPayload.model_validate(
+        {
+            "sha256": snapshot_metadata.get("sha256"),
+            "header": snapshot_metadata.get("header"),
+        }
+    )
+    snapshot = load_humaneval_snapshot(
+        dataset_name=expected_identity.header.dataset_id,
+        dataset_split=str(dataset.get("split", "")),
+        snapshot_path=snapshot_path,
+        expected_identity=expected_identity,
+    )
+    if snapshot_metadata.get("task_count") != len(snapshot.rows):
+        raise ValueError("campaign snapshot task count does not match bytes")
+    return snapshot
+
+
 def _specs_for_cells(
-    campaign_dir: Path, cells: list[dict[str, Any]]
+    campaign_dir: Path,
+    metadata: Mapping[str, Any],
+    cells: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    snapshot = _campaign_snapshot(campaign_dir, metadata)
     specs = iter_experiment_specs_from_file(
         campaign_dir / "requested-full-matrix-specification.json",
         configs_root=campaign_dir,
+        snapshot=snapshot,
     )
     expected = {
         (
@@ -1243,7 +1298,9 @@ def _emit(
                 "dry_run": not execute,
                 "dispatch": execute,
                 "cell_count": len(cells),
-                "generation_ceiling_usd": GENERATION_CEILING_USD,
+                "generation_ceiling_usd": _decimal_text(
+                    GENERATION_CEILING_USD
+                ),
                 "manifest_sha256": manifest_hash,
                 "ledger": ledger.summary() if ledger else {},
             },
@@ -1260,7 +1317,7 @@ def _submit(
     *,
     suffix: str,
 ) -> None:
-    specs = _specs_for_cells(campaign_dir, cells)
+    specs = _specs_for_cells(campaign_dir, metadata, cells)
     engine = create_engine(resolve_application_database_url())
     try:
         for cell in cells:
