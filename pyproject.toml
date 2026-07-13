@@ -36,6 +36,7 @@ dependencies = [
 [project.scripts]
 whetstone-publish = "whetstone.platform.publication:main"
 whetstone-live-sweep = "whetstone.platform.live_sweep:main"
+whetstone-cutover = "whetstone.platform.cutover_tooling:main"
 whetstone-copro = "whetstone.optimization.copro_operator:main"
 
 [dependency-groups]
