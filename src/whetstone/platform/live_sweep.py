@@ -13,19 +13,35 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from sqlalchemy import create_engine
+from dr_platform import (
+    AttemptRecord,
+    EligibilityReference,
+    NextAttemptReason,
+    NextAttemptRequest,
+    list_attempts,
+    request_next_attempt,
+)
+from dr_platform.items import item_id
+from dr_platform.status import AttemptExecutionState
+from dr_serialize import sha256_json_digest
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine
 
+from whetstone.db import schema as whetstone_schema
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
     load_model_config_fragment,
 )
 from whetstone.platform.submission import submit_prediction_specs
+from whetstone.platform.targets import target_registry
+from whetstone.records import GenerationRunStatus
 
 APP = typer.Typer(no_args_is_help=True)
 EXPECTED_CELLS = 5_904
@@ -33,9 +49,273 @@ CANARY_CELLS = 12
 GENERATION_CEILING_USD = 4.62
 MAX_RETRIES_PER_CELL = 2
 
+_PLATFORM_TERMINAL_FAILURES = frozenset(
+    {
+        AttemptExecutionState.ERROR,
+        AttemptExecutionState.RECOVERY_EXHAUSTED,
+        AttemptExecutionState.CANCELLED,
+        AttemptExecutionState.MISSING,
+    }
+)
+_PLATFORM_IN_FLIGHT = frozenset(
+    {
+        AttemptExecutionState.NOT_STARTED,
+        AttemptExecutionState.ACTIVE,
+        AttemptExecutionState.CANCEL_REQUESTED,
+    }
+)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+@dataclass(frozen=True)
+class CellReconciliation:
+    """Read-only cross-store facts for one immutable manifest cell."""
+
+    cell_id: str
+    status: str
+    platform_attempt: int | None
+    retry_count: int
+    actual_cost: float | None
+    provider_tokens: dict[str, int]
+    error_classification: str | None
+    score_status: str | None = None
+
+
+def _attempt_facts(
+    engine: Engine, operation_key: str
+) -> dict[tuple[str, int], AttemptRecord]:
+    """Page the public Platform inspector; never read Platform tables here."""
+    cursor: tuple[str, int] | None = None
+    observations: dict[tuple[str, int], AttemptRecord] = {}
+    while True:
+        page = list_attempts(
+            operation_key,
+            engine=engine,
+            cursor=cursor,
+            limit=100,
+        )
+        if not page:
+            return observations
+        for observation in page:
+            attempt = observation.attempt
+            observations[(attempt.item_id, attempt.attempt)] = attempt
+        last = page[-1].attempt
+        cursor = (last.item_id, last.attempt)
+
+
+def _node_cost_facts(
+    engine: Engine,
+    *,
+    prediction_id: str,
+    platform_item_id: str,
+    platform_attempt: int,
+) -> tuple[GenerationRunStatus | None, float | None, dict[str, int]]:
+    """Return terminal Whetstone run state and durable node costs only."""
+    with engine.connect() as connection:
+        generation = (
+            connection.execute(
+                select(whetstone_schema.generation_runs).where(
+                    whetstone_schema.generation_runs.c.prediction_id
+                    == prediction_id,
+                    whetstone_schema.generation_runs.c.platform_item_id
+                    == platform_item_id,
+                    whetstone_schema.generation_runs.c.platform_attempt
+                    == platform_attempt,
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if generation is None:
+            return None, None, {}
+        node_rows = connection.execute(
+            select(whetstone_schema.node_attempts.c.usage_cost).where(
+                whetstone_schema.node_attempts.c.generation_run_id
+                == generation["generation_run_id"]
+            )
+        ).scalars()
+        costs: list[float] = []
+        tokens: dict[str, int] = {}
+        saw_node_attempt = False
+        for usage in node_rows:
+            saw_node_attempt = True
+            payload = usage or {}
+            cost = payload.get("provider_cost")
+            if cost is None:
+                return GenerationRunStatus(generation["status"]), None, tokens
+            costs.append(float(cost))
+            for key in ("input_tokens", "output_tokens", "total_tokens"):
+                value = payload.get("usage_metadata", {}).get(key)
+                if isinstance(value, int) and value >= 0:
+                    tokens[key] = tokens.get(key, 0) + value
+    if not saw_node_attempt:
+        return GenerationRunStatus(generation["status"]), None, tokens
+    return GenerationRunStatus(generation["status"]), sum(costs), tokens
+
+
+def _score_terminal_status(
+    engine: Engine,
+    *,
+    prediction_id: str,
+    platform_item_id: str,
+    platform_attempt: int,
+) -> str | None:
+    """Read the terminal scoring record using the generation stable keys."""
+    with engine.connect() as connection:
+        generation_run_id = connection.execute(
+            select(whetstone_schema.generation_runs.c.generation_run_id).where(
+                whetstone_schema.generation_runs.c.prediction_id
+                == prediction_id,
+                whetstone_schema.generation_runs.c.platform_item_id
+                == platform_item_id,
+                whetstone_schema.generation_runs.c.platform_attempt
+                == platform_attempt,
+            )
+        ).scalar_one_or_none()
+        if generation_run_id is None:
+            return None
+        score = connection.execute(
+            select(whetstone_schema.score_attempts.c.status).where(
+                whetstone_schema.score_attempts.c.prediction_id
+                == prediction_id,
+                whetstone_schema.score_attempts.c.generation_run_id
+                == generation_run_id,
+                whetstone_schema.score_attempts.c.platform_item_id
+                == platform_item_id,
+                whetstone_schema.score_attempts.c.platform_attempt
+                == platform_attempt,
+            )
+        ).scalar_one_or_none()
+        if score is not None:
+            return f"score_{score}"
+        harness = connection.execute(
+            select(
+                whetstone_schema.score_harness_failures.c.score_attempt_id
+            ).where(
+                whetstone_schema.score_harness_failures.c.prediction_id
+                == prediction_id,
+                whetstone_schema.score_harness_failures.c.generation_run_id
+                == generation_run_id,
+                whetstone_schema.score_harness_failures.c.platform_item_id
+                == platform_item_id,
+                whetstone_schema.score_harness_failures.c.platform_attempt
+                == platform_attempt,
+            )
+        ).scalar_one_or_none()
+    return "score_harness_failure" if harness is not None else None
+
+
+def reconcile_ledger(
+    ledger: SweepLedger,
+    *,
+    engine: Engine,
+) -> list[CellReconciliation]:
+    """Reconcile stable IDs, retaining reservations for unknown cost."""
+    by_operation = {
+        str(row["operation_key"])
+        for row in ledger.rows()
+        if row["operation_key"] is not None
+    }
+    platform = {
+        operation_key: _attempt_facts(engine, operation_key)
+        for operation_key in by_operation
+    }
+    facts: list[CellReconciliation] = []
+    for row in ledger.rows():
+        cell_id = str(row["cell_id"])
+        retry_count = int(row["retry_count"])
+        operation_key = row["operation_key"]
+        prediction_id = row["prediction_id"]
+        platform_item_id = row["platform_item_id"]
+        platform_attempt = row["platform_attempt"]
+        if any(
+            value is None
+            for value in (
+                operation_key,
+                prediction_id,
+                platform_item_id,
+                platform_attempt,
+            )
+        ):
+            facts.append(
+                CellReconciliation(
+                    cell_id=cell_id,
+                    status="orphan_reservation",
+                    platform_attempt=None,
+                    retry_count=retry_count,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification="missing_stable_submission_identity",
+                )
+            )
+            continue
+        attempt = platform[str(operation_key)].get(
+            (str(platform_item_id), int(platform_attempt))
+        )
+        if attempt is None:
+            facts.append(
+                CellReconciliation(
+                    cell_id=cell_id,
+                    status="unknown",
+                    platform_attempt=int(platform_attempt),
+                    retry_count=retry_count,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification="platform_attempt_not_observed",
+                )
+            )
+            continue
+        run_status, actual_cost, tokens = _node_cost_facts(
+            engine,
+            prediction_id=str(prediction_id),
+            platform_item_id=str(platform_item_id),
+            platform_attempt=int(platform_attempt),
+        )
+        score_status = _score_terminal_status(
+            engine,
+            prediction_id=str(prediction_id),
+            platform_item_id=str(platform_item_id),
+            platform_attempt=int(platform_attempt),
+        )
+        if run_status in {
+            GenerationRunStatus.ERROR,
+            GenerationRunStatus.BLOCKED,
+        }:
+            status, error = "typed_failure", f"generation_{run_status.value}"
+        elif attempt.execution_state in _PLATFORM_TERMINAL_FAILURES:
+            status, error = (
+                "typed_failure",
+                f"platform_{attempt.execution_state.value}",
+            )
+        elif (
+            attempt.execution_state is AttemptExecutionState.SUCCEEDED
+            and run_status
+            in {GenerationRunStatus.SUCCESS, GenerationRunStatus.PARTIAL}
+        ):
+            status, error = "succeeded", None
+        elif attempt.execution_state in _PLATFORM_IN_FLIGHT:
+            status, error = "in_flight", None
+        elif attempt.execution_state is AttemptExecutionState.SUCCEEDED:
+            status, error = "incomplete", "missing_terminal_generation_run"
+        else:
+            status, error = "unknown", "unrecognized_platform_lifecycle"
+        facts.append(
+            CellReconciliation(
+                cell_id=cell_id,
+                status=status,
+                platform_attempt=int(platform_attempt),
+                retry_count=retry_count,
+                actual_cost=actual_cost,
+                provider_tokens=tokens,
+                error_classification=error,
+                score_status=score_status,
+            )
+        )
+    ledger.reconciliation(facts)
+    return facts
 
 
 def _load_json(path: Path) -> Any:
@@ -69,9 +349,11 @@ class SweepLedger:
               estimated_cost REAL NOT NULL, reserved_cost REAL,
               actual_cost REAL, operation_key TEXT, prediction_id TEXT,
               platform_item_id TEXT, platform_attempt INTEGER,
+              attempt_ids_json TEXT NOT NULL DEFAULT '[]',
               status TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0,
               retry_of_attempt INTEGER, error_classification TEXT,
-              provider_tokens_json TEXT, created_at TEXT NOT NULL,
+              provider_tokens_json TEXT, score_status TEXT,
+              created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL, PRIMARY KEY (manifest_hash, cell_id)
             );
             CREATE TABLE IF NOT EXISTS sweep_events (
@@ -81,6 +363,20 @@ class SweepLedger:
             );
             """
         )
+        self._ensure_column("attempt_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("score_status", "TEXT")
+
+    def _ensure_column(self, name: str, definition: str) -> None:
+        columns = {
+            str(row[1])
+            for row in self.connection.execute(
+                "PRAGMA table_info(sweep_cells)"
+            )
+        }
+        if name not in columns:
+            self.connection.execute(
+                f"ALTER TABLE sweep_cells ADD COLUMN {name} {definition}"
+            )
 
     def close(self) -> None:
         self.connection.close()
@@ -164,11 +460,16 @@ class SweepLedger:
                 cell_id = str(cell["cell_id"])
                 connection.execute(
                     "UPDATE sweep_cells SET status='submitted',"
-                    "operation_key=?,prediction_id=?,updated_at=? "
+                    "operation_key=?,prediction_id=?,platform_item_id=?,"
+                    "platform_attempt=0,attempt_ids_json='[0]',updated_at=? "
                     "WHERE manifest_hash=? AND cell_id=?",
                     (
                         operation_key,
                         prediction_ids.get(cell_id),
+                        item_id(
+                            operation_key=operation_key,
+                            item_key=prediction_ids[cell_id],
+                        ),
                         _now(),
                         self.manifest_hash,
                         cell_id,
@@ -202,7 +503,112 @@ class SweepLedger:
                 "actual_usd": actual,
             }
             for status, count, reserved, actual in rows
+        } | {
+            "manifest_mismatch": {
+                "count": self.connection.execute(
+                    "SELECT COUNT(*) FROM sweep_cells WHERE manifest_hash!=?",
+                    (self.manifest_hash,),
+                ).fetchone()[0],
+                "reserved_usd": 0,
+                "actual_usd": 0,
+            }
         }
+
+    def rows(self) -> list[sqlite3.Row]:
+        self.connection.row_factory = sqlite3.Row
+        return self.connection.execute(
+            "SELECT * FROM sweep_cells WHERE manifest_hash=? ORDER BY cell_id",
+            (self.manifest_hash,),
+        ).fetchall()
+
+    def reconciliation(self, facts: list[CellReconciliation]) -> None:
+        with self._transaction() as connection:
+            for fact in facts:
+                connection.execute(
+                    "UPDATE sweep_cells SET status=?,actual_cost=?,"
+                    "reserved_cost=CASE WHEN ? IS NULL THEN reserved_cost "
+                    "ELSE NULL END,"
+                    "error_classification=?,provider_tokens_json=?,"
+                    "score_status=?,"
+                    "updated_at=? "
+                    "WHERE manifest_hash=? AND cell_id=?",
+                    (
+                        fact.status,
+                        fact.actual_cost,
+                        fact.actual_cost,
+                        fact.error_classification,
+                        json.dumps(fact.provider_tokens, sort_keys=True),
+                        fact.score_status,
+                        _now(),
+                        self.manifest_hash,
+                        fact.cell_id,
+                    ),
+                )
+
+    def claim_retry(self, fact: CellReconciliation) -> bool:
+        if fact.status not in {"typed_failure", "incomplete"}:
+            return False
+        if (
+            fact.platform_attempt is None
+            or fact.retry_count >= MAX_RETRIES_PER_CELL
+        ):
+            return False
+        with self._transaction() as connection:
+            result = connection.execute(
+                "UPDATE sweep_cells SET status='retrying',retry_of_attempt=?,"
+                "updated_at=? WHERE manifest_hash=? AND cell_id=? "
+                "AND retry_count<? AND status IN "
+                "('typed_failure','incomplete','retrying')",
+                (
+                    fact.platform_attempt,
+                    _now(),
+                    self.manifest_hash,
+                    fact.cell_id,
+                    MAX_RETRIES_PER_CELL,
+                ),
+            )
+            return result.rowcount == 1
+
+    def retried(
+        self,
+        *,
+        cell_id: str,
+        source_attempt: int,
+        created_attempt: int | None,
+    ) -> None:
+        if created_attempt is None:
+            return
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT retry_of_attempt,retry_count,attempt_ids_json "
+                "FROM sweep_cells "
+                "WHERE manifest_hash=? AND cell_id=?",
+                (self.manifest_hash, cell_id),
+            ).fetchone()
+            if row is None:
+                raise ValueError("retry cell disappeared from ledger")
+            attempts = json.loads(str(row[2]))
+            is_new_attempt = created_attempt not in attempts
+            if is_new_attempt:
+                attempts.append(created_attempt)
+            retry_count = int(row[1])
+            if is_new_attempt:
+                retry_count += 1
+            connection.execute(
+                "UPDATE sweep_cells SET status='submitted',retry_count=?,"
+                "retry_of_attempt=?,platform_attempt=?,attempt_ids_json=?,"
+                "updated_at=? "
+                "WHERE manifest_hash=? AND cell_id=?",
+                (
+                    retry_count,
+                    source_attempt,
+                    created_attempt,
+                    json.dumps(attempts),
+                    _now(),
+                    self.manifest_hash,
+                    cell_id,
+                ),
+            )
 
 
 def validate_campaign(
@@ -479,25 +885,93 @@ def submit_retry(
         Path, typer.Argument(exists=True, file_okay=False)
     ],
     execute: Annotated[bool, typer.Option("--execute")] = False,
+    ledger_path: Annotated[Path | None, typer.Option("--ledger")] = None,
+    owner_approved: Annotated[bool, typer.Option("--owner-approved")] = False,
 ) -> None:
-    """Fail closed until typed attempt-to-cell reconciliation is available."""
-    validate_campaign(campaign_dir)
-    if execute:
+    """Request at most two typed next Attempts after explicit approval."""
+    _metadata, _cells, manifest_hash = validate_campaign(campaign_dir)
+    if ledger_path is None:
+        if execute:
+            raise typer.BadParameter("--execute requires an absolute --ledger")
+        typer.echo(
+            json.dumps(
+                {
+                    "command": "submit-retry",
+                    "dry_run": True,
+                    "dispatch": False,
+                    "cell_count": 0,
+                    "reason": "no ledger supplied",
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    if execute and not owner_approved:
         raise typer.BadParameter(
-            "retry needs typed Platform/Whetstone reconciliation; "
-            "no cells selected"
+            "--execute requires explicit --owner-approved retry authority"
         )
-    typer.echo(
-        json.dumps(
-            {
-                "command": "submit-retry",
-                "dry_run": True,
-                "dispatch": False,
-                "cell_count": 0,
-            },
-            sort_keys=True,
+    ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
+    engine = create_engine(resolve_application_database_url())
+    try:
+        facts = reconcile_ledger(ledger, engine=engine)
+        selected = [
+            fact
+            for fact in facts
+            if fact.status in {"typed_failure", "incomplete"}
+            and fact.retry_count < MAX_RETRIES_PER_CELL
+            and fact.platform_attempt is not None
+        ]
+        if execute:
+            for fact in selected:
+                if fact.platform_attempt is None:
+                    continue
+                if not ledger.claim_retry(fact):
+                    continue
+                row = next(
+                    row
+                    for row in ledger.rows()
+                    if row["cell_id"] == fact.cell_id
+                )
+                request_key = sha256_json_digest(
+                    {
+                        "manifest_hash": manifest_hash,
+                        "cell_id": fact.cell_id,
+                        "source_attempt": fact.platform_attempt,
+                        "classification": fact.error_classification,
+                    }
+                )
+                result = request_next_attempt(
+                    NextAttemptRequest(
+                        item_id=str(row["platform_item_id"]),
+                        source_attempt=fact.platform_attempt,
+                        request_key=request_key,
+                        reason=NextAttemptReason.DOMAIN_OUTCOME,
+                        eligibility=EligibilityReference(
+                            kind="whetstone_live_sweep",
+                            record_id=fact.cell_id,
+                            digest=request_key,
+                        ),
+                        requested_by="whetstone-live-sweep-owner-approved",
+                        max_attempts=MAX_RETRIES_PER_CELL + 1,
+                    ),
+                    engine=engine,
+                    resolver=target_registry(),
+                )
+                ledger.retried(
+                    cell_id=fact.cell_id,
+                    source_attempt=fact.platform_attempt,
+                    created_attempt=result.created_attempt,
+                )
+        _emit(
+            "submit-retry",
+            cells=[{"cell_id": fact.cell_id} for fact in selected],
+            manifest_hash=manifest_hash,
+            execute=execute,
+            ledger=ledger,
         )
-    )
+    finally:
+        engine.dispose()
+        ledger.close()
 
 
 @APP.command()
@@ -514,7 +988,9 @@ def status(
         )
         return
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
+    engine = create_engine(resolve_application_database_url())
     try:
+        reconcile_ledger(ledger, engine=engine)
         _emit(
             "status",
             cells=cells,
@@ -523,6 +999,7 @@ def status(
             ledger=ledger,
         )
     finally:
+        engine.dispose()
         ledger.close()
 
 
