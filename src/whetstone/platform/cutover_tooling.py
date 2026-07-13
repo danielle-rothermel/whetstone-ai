@@ -32,6 +32,11 @@ _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _OWNERSHIP_TABLE = "whetstone_cutover_ownership"
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 Sha256 = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+DatabaseEnvironment = Literal[
+    "DATABASE_URL",
+    "MOTHERDUCK_DATABASE_URL",
+    "NEON_DATABASE_URL",
+]
 
 APP = typer.Typer(no_args_is_help=True)
 ESTIMATES = typer.Typer(no_args_is_help=True)
@@ -300,7 +305,7 @@ class StoreBoundary(BaseModel):
         extra="forbid", frozen=True, populate_by_name=True
     )
 
-    environment: StrictStr
+    environment: DatabaseEnvironment
     schema_name: StrictStr = Field(alias="schema")
 
 
@@ -358,19 +363,30 @@ def _bound_url(value: str, schema: str) -> str:
     ).render_as_string(hide_password=False)
 
 
-def _require_environment(name: str) -> str:
+def _require_environment(name: DatabaseEnvironment) -> str:
     value = os.environ.get(name)
     if not value:
         raise ValueError(f"{name} is required")
     return value
 
 
-def _sqlalchemy_engine(url: str) -> Engine:
-    return create_engine(normalize_postgresql_driver_url(url))
+def _sqlalchemy_engine(
+    url: str, *, environment: DatabaseEnvironment
+) -> Engine:
+    normalized = normalize_postgresql_driver_url(url)
+    options = (
+        {"use_native_hstore": False}
+        if environment == "MOTHERDUCK_DATABASE_URL"
+        and make_url(normalized).get_backend_name() == "postgresql"
+        else {}
+    )
+    return create_engine(normalized, **options)
 
 
-def _schema_exists(url: str, schema: str) -> bool:
-    engine = _sqlalchemy_engine(url)
+def _schema_exists(
+    url: str, schema: str, *, environment: DatabaseEnvironment
+) -> bool:
+    engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.connect() as connection:
             return bool(
@@ -407,11 +423,16 @@ def _new_store_journal(descriptor: StoreDescriptor) -> StoreJournal:
 
 
 def _create_schema(
-    url: str, schema: str, *, run_id: str, descriptor_sha256: str
+    url: str,
+    schema: str,
+    *,
+    environment: DatabaseEnvironment,
+    run_id: str,
+    descriptor_sha256: str,
 ) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
-    engine = _sqlalchemy_engine(url)
+    engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -450,8 +471,10 @@ def _create_schema(
         engine.dispose()
 
 
-def _schema_owner(url: str, schema: str) -> tuple[str, str] | None:
-    engine = _sqlalchemy_engine(url)
+def _schema_owner(
+    url: str, schema: str, *, environment: DatabaseEnvironment
+) -> tuple[str, str] | None:
+    engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.connect() as connection:
             exists = connection.execute(
@@ -478,17 +501,23 @@ def _require_schema_owner(
     url: str,
     schema: str,
     *,
+    environment: DatabaseEnvironment,
     run_id: str,
     descriptor_sha256: str,
 ) -> None:
-    if _schema_owner(url, schema) != (run_id, descriptor_sha256):
+    if _schema_owner(url, schema, environment=environment) != (
+        run_id,
+        descriptor_sha256,
+    ):
         raise ValueError(f"schema ownership marker disagrees: {schema}")
 
 
-def _drop_schema(url: str, schema: str) -> None:
+def _drop_schema(
+    url: str, schema: str, *, environment: DatabaseEnvironment
+) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
-    engine = _sqlalchemy_engine(url)
+    engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
@@ -596,10 +625,15 @@ def _owned_resources_preflight(
         descriptor.neon,
     ):
         url = _require_environment(boundary.environment)
-        if _schema_exists(url, boundary.schema_name):
+        if _schema_exists(
+            url,
+            boundary.schema_name,
+            environment=boundary.environment,
+        ):
             _require_schema_owner(
                 url,
                 boundary.schema_name,
+                environment=boundary.environment,
                 run_id=descriptor.run_id,
                 descriptor_sha256=descriptor_sha256,
             )
@@ -625,14 +659,23 @@ def _cleanup_owned_resources(
         descriptor.source,
     ):
         url = _require_environment(boundary.environment)
-        if _schema_exists(url, boundary.schema_name):
+        if _schema_exists(
+            url,
+            boundary.schema_name,
+            environment=boundary.environment,
+        ):
             _require_schema_owner(
                 url,
                 boundary.schema_name,
+                environment=boundary.environment,
                 run_id=descriptor.run_id,
                 descriptor_sha256=descriptor_sha256,
             )
-            _drop_schema(url, boundary.schema_name)
+            _drop_schema(
+                url,
+                boundary.schema_name,
+                environment=boundary.environment,
+            )
     dbos_path = base_dir / descriptor.dbos_path
     if dbos_path.exists():
         _require_dbos_owner(
@@ -654,7 +697,11 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
     boundaries = (descriptor.source, descriptor.motherduck, descriptor.neon)
     for boundary in boundaries:
         url = _require_environment(boundary.environment)
-        if _schema_exists(url, boundary.schema_name):
+        if _schema_exists(
+            url,
+            boundary.schema_name,
+            environment=boundary.environment,
+        ):
             raise ValueError(
                 f"refusing schema collision: {boundary.schema_name}"
             )
@@ -669,6 +716,7 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
             _create_schema(
                 _require_environment(boundary.environment),
                 boundary.schema_name,
+                environment=boundary.environment,
                 run_id=run_id,
                 descriptor_sha256=journal.descriptor_sha256,
             )
@@ -706,13 +754,18 @@ def validate_store_state(descriptor_path: Path) -> StoreDescriptor:
         descriptor.neon,
     ):
         url = _require_environment(boundary.environment)
-        if not _schema_exists(url, boundary.schema_name):
+        if not _schema_exists(
+            url,
+            boundary.schema_name,
+            environment=boundary.environment,
+        ):
             raise ValueError(
                 f"missing run-owned schema: {boundary.schema_name}"
             )
         _require_schema_owner(
             url,
             boundary.schema_name,
+            environment=boundary.environment,
             run_id=descriptor.run_id,
             descriptor_sha256=journal.descriptor_sha256,
         )
@@ -775,6 +828,7 @@ def stores_run(
         _require_schema_owner(
             url,
             boundary.schema_name,
+            environment=boundary.environment,
             run_id=facts.run_id,
             descriptor_sha256=journal.descriptor_sha256,
         )
@@ -854,7 +908,9 @@ def stores_verify_cleanup(
         raise ValueError("cleanup journal is not complete")
     for boundary in (facts.source, facts.motherduck, facts.neon):
         if _schema_exists(
-            _require_environment(boundary.environment), boundary.schema_name
+            _require_environment(boundary.environment),
+            boundary.schema_name,
+            environment=boundary.environment,
         ):
             raise ValueError(
                 f"run-owned schema remains: {boundary.schema_name}"

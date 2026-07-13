@@ -12,6 +12,7 @@ from whetstone.platform import cutover_tooling
 from whetstone.platform.cutover_tooling import (
     APP,
     EXPECTED_CELLS,
+    DatabaseEnvironment,
     _bound_url,
     _create_dbos_marker,
     _initialize_dbos_store,
@@ -149,51 +150,98 @@ def test_bound_url_normalizes_driver_and_preserves_encoded_credentials_query(
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("value", "environment", "expected", "expected_options"),
     [
         (
             "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
+            "DATABASE_URL",
             "postgresql+psycopg://operator:p%2Fss@db.example/test"
             "?sslmode=require",
+            {},
         ),
         (
             "postgresql+psycopg://operator:p%2Fss@db.example/test"
             "?sslmode=require",
+            "NEON_DATABASE_URL",
             "postgresql+psycopg://operator:p%2Fss@db.example/test"
             "?sslmode=require",
+            {},
+        ),
+        (
+            "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
+            "MOTHERDUCK_DATABASE_URL",
+            "postgresql+psycopg://operator:p%2Fss@db.example/test"
+            "?sslmode=require",
+            {"use_native_hstore": False},
         ),
         (
             "duckdb:///md:warehouse?motherduck_token=token%2Fvalue",
+            "MOTHERDUCK_DATABASE_URL",
             "duckdb:///md:warehouse?motherduck_token=token%2Fvalue",
+            {},
         ),
     ],
 )
 def test_sqlalchemy_engine_normalizes_only_postgres_urls(
     value: str,
+    environment: DatabaseEnvironment,
     expected: str,
+    expected_options: dict[str, bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: list[str] = []
+    captured: list[tuple[str, dict[str, object]]] = []
     marker = object()
     monkeypatch.setattr(
         cutover_tooling,
         "create_engine",
-        lambda url: captured.append(str(url)) or marker,
+        lambda url, **options: captured.append((str(url), options)) or marker,
     )
 
-    assert cutover_tooling._sqlalchemy_engine(value) is marker
-    assert captured == [expected]
+    assert (
+        cutover_tooling._sqlalchemy_engine(
+            value, environment=environment
+        )
+        is marker
+    )
+    assert captured == [(expected, expected_options)]
 
 
 def test_sqlalchemy_engine_selects_installed_psycopg_driver() -> None:
     engine = cutover_tooling._sqlalchemy_engine(
-        "postgresql://operator:placeholder@db.example/test?sslmode=require"
+        "postgresql://operator:placeholder@db.example/test?sslmode=require",
+        environment="DATABASE_URL",
     )
     try:
         assert engine.url.drivername == "postgresql+psycopg"
         assert engine.dialect.driver == "psycopg"
     finally:
         engine.dispose()
+
+
+def test_bound_motherduck_engine_disables_only_native_hstore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, object]]] = []
+    marker = object()
+    monkeypatch.setattr(
+        cutover_tooling,
+        "create_engine",
+        lambda url, **options: captured.append((str(url), options)) or marker,
+    )
+    bound = _bound_url(
+        "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
+        "analysis_schema",
+    )
+
+    assert (
+        cutover_tooling._sqlalchemy_engine(
+            bound, environment="MOTHERDUCK_DATABASE_URL"
+        )
+        is marker
+    )
+    assert captured == [(bound, {"use_native_hstore": False})]
+    assert "operator:p%2Fss@" in bound
+    assert "sslmode=require" in bound
 
 
 def test_bound_url_preserves_non_postgres_motherduck_semantics() -> None:
@@ -269,7 +317,9 @@ def test_journal_recovers_complete_descriptor_when_descriptor_is_absent(
         cutover_tooling, "_require_environment", lambda _name: "database-url"
     )
     monkeypatch.setattr(
-        cutover_tooling, "_schema_exists", lambda *_args: False
+        cutover_tooling,
+        "_schema_exists",
+        lambda *_args, **_kwargs: False,
     )
 
     result = CliRunner().invoke(
@@ -336,16 +386,20 @@ def test_cleanup_preflights_all_markers_before_any_drop(
     monkeypatch.setattr(
         cutover_tooling, "_require_environment", lambda _name: "database-url"
     )
-    monkeypatch.setattr(cutover_tooling, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_schema_exists",
+        lambda *_args, **_kwargs: True,
+    )
     monkeypatch.setattr(
         cutover_tooling,
         "_schema_owner",
-        lambda *_args: ("replacement", "b" * 64),
+        lambda *_args, **_kwargs: ("replacement", "b" * 64),
     )
     monkeypatch.setattr(
         cutover_tooling,
         "_drop_schema",
-        lambda _url, schema: dropped.append(schema),
+        lambda _url, schema, **_kwargs: dropped.append(schema),
     )
 
     with pytest.raises(ValueError, match="ownership marker disagrees"):
@@ -367,11 +421,15 @@ def test_store_binding_rejects_replaced_schema_marker(
     monkeypatch.setattr(
         cutover_tooling, "_require_environment", lambda _name: "database-url"
     )
-    monkeypatch.setattr(cutover_tooling, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_schema_exists",
+        lambda *_args, **_kwargs: True,
+    )
     monkeypatch.setattr(
         cutover_tooling,
         "_schema_owner",
-        lambda *_args: ("replacement", "b" * 64),
+        lambda *_args, **_kwargs: ("replacement", "b" * 64),
     )
 
     with pytest.raises(ValueError, match="ownership marker disagrees"):
