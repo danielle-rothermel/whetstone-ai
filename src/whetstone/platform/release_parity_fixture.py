@@ -59,6 +59,8 @@ _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SECRET = re.compile(r"(token|password|secret|dsn|url|authorization)", re.I)
 _TRACE_ENVIRONMENT_VARIABLE = "WHETSTONE_RELEASE_PARITY_TRACE_PATH"
+_OWNERSHIP_TABLE = "whetstone_release_parity_ownership"
+ResourceState = Literal["not_started", "intent", "owned", "cleaned"]
 
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 
@@ -261,12 +263,17 @@ class CleanupProof(BaseModel):
     source_schema_absent: bool
     local_files_absent: bool
     destinations: Mapping[NonEmpty, Mapping[NonEmpty, StrictInt]]
+    cleanup_complete: bool = True
 
     def validate_against(self, descriptor: ReleaseParityDescriptor) -> None:
         _reject_secrets(self.model_dump(mode="json"))
         if self.run_id != descriptor.run_id:
             raise ValueError("cleanup proof belongs to another run")
-        if not self.source_schema_absent or not self.local_files_absent:
+        if (
+            not self.cleanup_complete
+            or not self.source_schema_absent
+            or not self.local_files_absent
+        ):
             raise ValueError("cleanup proof is not zero-state")
         expected = {
             _remote(descriptor.analysis).destination_id,
@@ -321,7 +328,9 @@ class RunJournal(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1]
+    # v1 records are recovery input only.  They never acquire v2 marker
+    # authority merely by being read or rewritten.
+    schema_version: Literal[1, 2]
     run_id: NonEmpty
     source_schema: NonEmpty
     analysis_path: NonEmpty
@@ -330,6 +339,13 @@ class RunJournal(BaseModel):
     detail_destination_id: NonEmpty
     analysis_bundle_id: str = ""
     detail_bundle_id: str = ""
+    ownership_digest: str = ""
+    source_state: ResourceState = "not_started"
+    analysis_state: ResourceState = "not_started"
+    detail_state: ResourceState = "not_started"
+    local_state: ResourceState = "not_started"
+    cleanup_complete: bool = False
+    cleaned_at: str | None = None
 
     def validate_contract(self) -> None:
         _reject_secrets(self.model_dump(mode="json"))
@@ -344,6 +360,49 @@ class RunJournal(BaseModel):
         }
         if any(getattr(self, key) != value for key, value in expected.items()):
             raise ValueError("journal contains an unrelated cleanup identity")
+        if self.schema_version == 2:
+            if _SHA256.fullmatch(self.ownership_digest) is None:
+                raise ValueError("journal ownership digest is invalid")
+            for name in ("source", "analysis", "detail", "local"):
+                _validate_resource_state(getattr(self, f"{name}_state"))
+
+
+def _validate_resource_state(state: ResourceState) -> None:
+    if state not in {"not_started", "intent", "owned", "cleaned"}:
+        raise ValueError("journal resource state is invalid")
+
+
+def _new_journal(
+    *,
+    run_id: str,
+    source_schema: str,
+    analysis_path: str,
+    detail_path: str,
+    analysis_destination_id: str,
+    detail_destination_id: str,
+) -> RunJournal:
+    identity = {
+        "run_id": run_id,
+        "source_schema": source_schema,
+        "analysis_path": analysis_path,
+        "detail_path": detail_path,
+        "analysis_destination_id": analysis_destination_id,
+        "detail_destination_id": detail_destination_id,
+    }
+    return RunJournal(
+        schema_version=2,
+        run_id=run_id,
+        source_schema=source_schema,
+        analysis_path=analysis_path,
+        detail_path=detail_path,
+        analysis_destination_id=analysis_destination_id,
+        detail_destination_id=detail_destination_id,
+        ownership_digest=hashlib.sha256(
+            json.dumps(
+                identity, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest(),
+    )
 
 
 def _journal_path(descriptor_path: Path) -> Path:
@@ -352,7 +411,9 @@ def _journal_path(descriptor_path: Path) -> Path:
 
 def _write_journal(path: Path, journal: RunJournal) -> None:
     journal.validate_contract()
-    path.write_text(journal.model_dump_json(indent=2))
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(journal.model_dump_json(indent=2))
+    os.replace(temporary, path)
 
 
 def _load_journal(descriptor_path: Path) -> RunJournal:
@@ -361,6 +422,30 @@ def _load_journal(descriptor_path: Path) -> RunJournal:
     )
     journal.validate_contract()
     return journal
+
+
+def _checkpoint(
+    path: Path,
+    journal: RunJournal,
+    name: Literal["source", "analysis", "detail", "local"],
+    state: ResourceState,
+    **updates: str,
+) -> RunJournal:
+    """Persist one monotonic resource transition before/after its side effect."""
+    current = getattr(journal, f"{name}_state")
+    allowed: dict[str, set[str]] = {
+        "not_started": {"intent"},
+        "intent": {"owned", "cleaned"},
+        "owned": {"cleaned"},
+        "cleaned": set(),
+    }
+    if journal.schema_version != 2 or state not in allowed[current]:
+        raise ValueError(
+            f"invalid journal transition: {name} {current} -> {state}"
+        )
+    changed = journal.model_copy(update={f"{name}_state": state, **updates})
+    _write_journal(path, changed)
+    return changed
 
 
 def _descriptor_matches_journal(
@@ -442,7 +527,14 @@ def _source_url(schema: str) -> str:
     )
 
 
-def _new_source(schema: str) -> Engine:
+def _new_source(
+    schema: str,
+    *,
+    run_id: str | None = None,
+    ownership_digest: str | None = None,
+) -> Engine:
+    if (run_id is None) != (ownership_digest is None):
+        raise ValueError("source ownership identity must be complete")
     admin = create_whetstone_engine(
         _required_env("DATABASE_URL"),
         boundary=DatabaseBoundary.SOURCE_ADMIN,
@@ -450,6 +542,39 @@ def _new_source(schema: str) -> Engine:
     try:
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
+            if run_id is not None and ownership_digest is not None:
+                connection.execute(
+                    text(
+                        f'CREATE TABLE "{schema}"."{_OWNERSHIP_TABLE}" ('
+                        "marker_id SMALLINT PRIMARY KEY "
+                        "CONSTRAINT release_marker_singleton CHECK (marker_id = 1), "
+                        "run_id TEXT NOT NULL, ownership_digest TEXT NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        f'INSERT INTO "{schema}"."{_OWNERSHIP_TABLE}" '
+                        "(marker_id, run_id, ownership_digest) "
+                        "VALUES (1, :run_id, :digest)"
+                    ),
+                    {"run_id": run_id, "digest": ownership_digest},
+                )
+                connection.execute(
+                    text(
+                        f'CREATE FUNCTION "{schema}".'
+                        '"reject_release_marker_mutation"() RETURNS trigger '
+                        "LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION "
+                        "'release ownership marker is immutable'; END $$"
+                    )
+                )
+                connection.execute(
+                    text(
+                        f'CREATE TRIGGER "release_marker_is_immutable" BEFORE '
+                        f'UPDATE OR DELETE ON "{schema}"."{_OWNERSHIP_TABLE}" '
+                        f'FOR EACH ROW EXECUTE FUNCTION "{schema}".'
+                        '"reject_release_marker_mutation"()'
+                    )
+                )
             # Migration discovery must not see an unrelated public table with
             # the same name; this transaction owns only the run schema.
             connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
@@ -468,6 +593,34 @@ def _new_source(schema: str) -> Engine:
     return create_whetstone_engine(
         source_url, boundary=DatabaseBoundary.SOURCE_SCHEMA
     )
+
+
+def _source_marker_state(connection: Any, journal: RunJournal) -> bool:
+    """Return whether the source exists; reject a replaced v2 schema."""
+    exists = connection.execute(
+        text(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name=:schema"
+        ),
+        {"schema": journal.source_schema},
+    ).one_or_none()
+    if exists is None:
+        return False
+    if journal.schema_version != 2:
+        raise ValueError(
+            "v1 journal cannot prove source schema ownership; operator action required"
+        )
+    try:
+        row = connection.execute(
+            text(
+                f'SELECT run_id, ownership_digest FROM "{journal.source_schema}".'
+                f'"{_OWNERSHIP_TABLE}" WHERE marker_id=1'
+            )
+        ).one_or_none()
+    except Exception as error:
+        raise ValueError("source ownership marker is unreadable") from error
+    if row != (journal.run_id, journal.ownership_digest):
+        raise ValueError("source ownership marker disagrees")
+    return True
 
 
 def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
@@ -524,8 +677,7 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             ),
             values,
         )
-        connection.execute(
-            text("""
+        connection.execute(text("""
             INSERT INTO whetstone_experiments (experiment_name, config_metadata, acceptance_source_version, current_acceptance_id, acceptance_updated_at, created_at)
             VALUES (:fixture, '{"experiment_kind":"humaneval_encdec"}'::jsonb, 1, :fixture || '_acceptance', :now, :now)
         """),
@@ -588,18 +740,12 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             text("""
             INSERT INTO whetstone_score_harness_failures (score_harness_failure_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, score_attempt_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, failure, started_at, completed_at)
             VALUES (:fixture || '_harness_failure_small_positive', :fixture || '_prediction_small_positive', :fixture || '_generation_small_positive', 1, 'score-harness-failure', :fixture || '_score_failure_item_small_positive', 1, :fixture || '_score_small_positive', 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{"exception_type":"RuntimeError","message":"fixture harness failure"}'::jsonb, :now, :now)
-        """),
-            values,
-        )
-        connection.execute(
-            text("""
+        """), values)
+        connection.execute(text("""
             INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
             VALUES (:fixture || '_acceptance', :fixture, 1, 'ACCEPTED', 'operation', 'digest', '[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', jsonb_build_array(jsonb_build_object('operation_key', :fixture || '_operation', 'platform_cut_version', 1)), 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :now)
-        """),
-            values,
-        )
-        connection.execute(
-            text("""
+        """), values)
+        connection.execute(text("""
             INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
             VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two', 1, 'ACCEPTED', 'operation', 'digest', '[]'::jsonb, 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', jsonb_build_array(jsonb_build_object('operation_key', :fixture || '_operation', 'platform_cut_version', 1)), 'digest', '[]'::jsonb, 'digest', '{}'::jsonb, 'digest', '{}'::jsonb, 'digest', 1, 1, 0, 0, :exact_second)
         """),
@@ -630,7 +776,8 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         )
         # The second experiment must own an accepted prediction because the
         # experiments projection excludes empty acceptances.
-        connection.execute(text("""
+        connection.execute(
+            text("""
             INSERT INTO whetstone_prediction_specs (prediction_id, experiment_name, task_id, repetition_seed, graph_digest, dimensions_digest, graph_layout, provider_kind, endpoint_kind, model, throttle_key, task_snapshot, graph_snapshot, dimensions, provider_configs, created_at)
             VALUES (:fixture || '_page_two_prediction', :fixture || '_page_two', 'HumanEval/0', 0, 'graph', 'dimensions', 'layout', 'openai', 'responses', 'fixture-model', 'fixture-throttle', '{"kind":"code"}'::jsonb, '{"prompt":"complete"}'::jsonb, '{}'::jsonb, '{}'::jsonb, :exact_second)
         """), values)
@@ -646,14 +793,20 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
             INSERT INTO whetstone_score_attempts (score_attempt_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, dataset_snapshot, status, submission_outcome, score, extracted_submission, metrics, per_test_results, started_at, completed_at)
             VALUES (:fixture || '_page_two_score', :fixture || '_page_two_prediction', :fixture || '_page_two_generation', 0, 'score', :fixture || '_page_two_score_item', 0, 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{}'::jsonb, 'success', 'passed', 0.5, '{"code":"return a+b"}'::jsonb, jsonb_build_object('compression', jsonb_build_object('gzip', jsonb_build_object('ratio_to_ground_truth', 0.5)), 'budget_ratio', '0.5'), '[]'::jsonb, :exact_second, :exact_second)
         """), values)
-        connection.execute(text("""
+        connection.execute(
+            text("""
             INSERT INTO whetstone_experiment_acceptance_generation_members (acceptance_id, prediction_id, disposition, generation_run_id, generation_operation_key, platform_item_id, platform_attempt)
             VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two_prediction', 'selected_success', :fixture || '_page_two_generation', 'operation', :fixture || '_page_two_item', 0)
-        """), values)
-        connection.execute(text("""
+        """),
+            values,
+        )
+        connection.execute(
+            text("""
             INSERT INTO whetstone_experiment_acceptance_scoring_members (acceptance_id, prediction_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, disposition, generation_run_id, score_attempt_id, accepted_scoring_ordinal)
             VALUES (:fixture || '_page_two_acceptance', :fixture || '_page_two_prediction', 'humaneval', '1', 'python', '1', 'humaneval', 'test', 'accepted', :fixture || '_page_two_generation', :fixture || '_page_two_score', 1)
-        """), values)
+        """),
+            values,
+        )
     return hashlib.sha256(fixture.encode()).hexdigest()
 
 
@@ -723,8 +876,7 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         f"whetstone-v6-detail-{run_id}",
     )
     journal_path = _journal_path(descriptor_path)
-    journal = RunJournal(
-        schema_version=SCHEMA_VERSION,
+    journal = _new_journal(
         run_id=run_id,
         source_schema=schema,
         analysis_path=analysis_path.name,
@@ -740,22 +892,29 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
     detail_fence: PostgresPublicationFence | None = None
     try:
         integrity = required_bundle_integrity_configuration()
-        source = _new_source(schema)
+        journal = _checkpoint(journal_path, journal, "source", "intent")
+        source = _new_source(
+            schema, run_id=run_id, ownership_digest=journal.ownership_digest
+        )
+        journal = _checkpoint(journal_path, journal, "source", "owned")
+        journal = _checkpoint(journal_path, journal, "analysis", "intent")
         analysis_fence = _fence(
             _required_env("MOTHERDUCK_DATABASE_URL"),
             analysis_id,
             "motherduck",
             integrity=integrity,
         )
+        fixture_sha256 = _seed_accepted_fixture(source, run_id)
+        analysis_fence.ensure_schema()
+        journal = _checkpoint(journal_path, journal, "detail", "intent")
         detail_fence = _fence(
             _required_env("NEON_DATABASE_URL"),
             detail_id,
             "neon",
             integrity=integrity,
         )
-        fixture_sha256 = _seed_accepted_fixture(source, run_id)
-        analysis_fence.ensure_schema()
         detail_fence.ensure_schema()
+        journal = _checkpoint(journal_path, journal, "local", "intent")
         analysis, detail = export_whetstone(
             source,
             reconciliation=_reconciliation(source),
@@ -765,13 +924,21 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             analysis_remote_destinations=(analysis_fence,),
             detail_remote_destinations=(detail_fence,),
         )
-        journal = journal.model_copy(
-            update={
-                "analysis_bundle_id": str(getattr(analysis, "bundle_id", "")),
-                "detail_bundle_id": str(getattr(detail, "bundle_id", "")),
-            }
+        journal = _checkpoint(
+            journal_path,
+            journal,
+            "analysis",
+            "owned",
+            analysis_bundle_id=str(getattr(analysis, "bundle_id", "")),
         )
-        _write_journal(journal_path, journal)
+        journal = _checkpoint(
+            journal_path,
+            journal,
+            "detail",
+            "owned",
+            detail_bundle_id=str(getattr(detail, "bundle_id", "")),
+        )
+        journal = _checkpoint(journal_path, journal, "local", "owned")
         if [item.status for item in analysis.destinations] != [
             "PROMOTED",
             "PROMOTED",
@@ -867,15 +1034,6 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         )
         descriptor.validate_contract()
         descriptor_path.write_text(descriptor.model_dump_json(indent=2))
-        journal = journal.model_copy(
-            update={
-                "analysis_bundle_id": _remote(
-                    descriptor.analysis
-                ).pin.bundle_id,
-                "detail_bundle_id": _remote(descriptor.detail).pin.bundle_id,
-            }
-        )
-        _write_journal(journal_path, journal)
         _trace(
             "prepare_succeeded",
             run_id=run_id,
@@ -884,7 +1042,9 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         )
         return descriptor
     except Exception:
-        _rollback_prepare(journal, descriptor_path.parent)
+        _rollback_prepare(
+            journal, descriptor_path.parent, _journal_path(descriptor_path)
+        )
         raise
     finally:
         if source is not None:
@@ -912,8 +1072,7 @@ def prepare_local(
     schema = f"whetstone_v6_release_{run_id}"
     analysis_path = descriptor_path.parent / f"{run_id}-analysis.duckdb"
     detail_path = descriptor_path.parent / f"{run_id}-detail.duckdb"
-    journal = RunJournal(
-        schema_version=SCHEMA_VERSION,
+    journal = _new_journal(
         run_id=run_id,
         source_schema=schema,
         analysis_path=analysis_path.name,
@@ -925,10 +1084,21 @@ def prepare_local(
     _write_journal(_journal_path(descriptor_path), journal)
     source: Engine | None = None
     try:
-        source = _new_source(schema)
+        journal = _checkpoint(
+            _journal_path(descriptor_path), journal, "source", "intent"
+        )
+        source = _new_source(
+            schema, run_id=run_id, ownership_digest=journal.ownership_digest
+        )
+        journal = _checkpoint(
+            _journal_path(descriptor_path), journal, "source", "owned"
+        )
         if _after_source_creation is not None:
             _after_source_creation(source)
         integrity = required_bundle_integrity_configuration()
+        journal = _checkpoint(
+            _journal_path(descriptor_path), journal, "local", "intent"
+        )
         fixture_sha256 = _seed_accepted_fixture(source, run_id)
         analysis, detail = export_whetstone(
             source,
@@ -981,14 +1151,126 @@ def prepare_local(
         )
         descriptor.validate_contract()
         descriptor_path.write_text(descriptor.model_dump_json(indent=2))
+        journal = _checkpoint(
+            _journal_path(descriptor_path), journal, "local", "owned"
+        )
         return descriptor
     except Exception:
         if not _retain_failed_resources:
-            _rollback_prepare(journal, descriptor_path.parent)
+            _rollback_prepare(
+                journal, descriptor_path.parent, _journal_path(descriptor_path)
+            )
         raise
     finally:
         if source is not None:
             source.dispose()
+
+
+def _applicable(
+    journal: RunJournal, name: Literal["source", "analysis", "detail", "local"]
+) -> bool:
+    if journal.schema_version == 2:
+        return getattr(journal, f"{name}_state") != "not_started"
+    # A v1 journal records a source identity and, only after publication, a
+    # remote bundle identity.  It is deliberately not promoted to v2 proof.
+    return (
+        name == "source"
+        or (
+            name in {"analysis", "detail"}
+            and bool(getattr(journal, f"{name}_bundle_id"))
+        )
+        or name == "local"
+    )
+
+
+def _source_preflight(journal: RunJournal) -> bool:
+    if not _applicable(journal, "source"):
+        return False
+    admin = create_whetstone_engine(
+        _required_env("DATABASE_URL"), boundary=DatabaseBoundary.SOURCE_ADMIN
+    )
+    try:
+        with admin.connect() as connection:
+            return _source_marker_state(connection, journal)
+    finally:
+        admin.dispose()
+
+
+def _remote_preflight(
+    fence: PostgresPublicationFence,
+    journal: RunJournal,
+    name: Literal["analysis", "detail"],
+) -> bool:
+    """Validate the current run-local remote identity before any delete.
+
+    v1 only has a bundle ID, so it is intentionally rejected when the remote
+    still exists: that record is not equivalent to the v2 durable marker.
+    """
+    bundle = ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
+    destination = getattr(journal, f"{name}_destination_id")
+    expected = getattr(journal, f"{name}_bundle_id")
+    with fence.engine.connect() as connection:
+        rows = {
+            "state": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    {"destination": destination, "bundle": bundle},
+                ).scalar_one()
+            ),
+            "bundle": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    {"destination": destination, "bundle": bundle},
+                ).scalar_one()
+            ),
+            "pin": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._pins_table} WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    {"destination": destination, "bundle": bundle},
+                ).scalar_one()
+            ),
+        }
+        if not any(rows.values()):
+            return False
+        if journal.schema_version == 1:
+            raise ValueError(
+                "v1 journal cannot prove remote ownership; operator action required"
+            )
+        records = [
+            (str(row[0]), str(row[1]))
+            for row in connection.execute(
+                text(
+                    f"SELECT bundle_id, owner FROM {fence._bundles_table} "
+                    "WHERE destination_id=:destination AND bundle_key=:bundle"
+                ),
+                {"destination": destination, "bundle": bundle},
+            ).all()
+        ]
+        ids = {bundle_id for bundle_id, _owner in records}
+        state = connection.execute(
+            text(
+                f"SELECT bundle_id FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle"
+            ),
+            {"destination": destination, "bundle": bundle},
+        ).scalar_one_or_none()
+        # The fence persists the signed immutable bundle record with the
+        # generated run ID as owner.  In the checkpoint crash window, a sole
+        # matching record supplies the bundle identity without guessing.
+        marker = expected or (next(iter(ids)) if len(ids) == 1 else "")
+        if (
+            not marker
+            or ids != {marker}
+            or state != marker
+            or {owner for _bundle_id, owner in records} != {journal.run_id}
+        ):
+            raise ValueError("remote ownership marker disagrees")
+    return True
 
 
 def cleanup_local(descriptor_path: Path) -> None:
@@ -1000,7 +1282,10 @@ def cleanup_local(descriptor_path: Path) -> None:
         )
         descriptor.validate_contract()
         journal = _load_journal(descriptor_path)
-        if (descriptor.run_id != journal.run_id or descriptor.source_schema != journal.source_schema):
+        if (
+            descriptor.run_id != journal.run_id
+            or descriptor.source_schema != journal.source_schema
+        ):
             raise ValueError("descriptor does not match its run journal")
         source_schema = descriptor.source_schema
         paths = (descriptor.analysis.path, descriptor.detail.path)
@@ -1008,123 +1293,41 @@ def cleanup_local(descriptor_path: Path) -> None:
         journal = _load_journal(descriptor_path)
         source_schema = journal.source_schema
         paths = (journal.analysis_path, journal.detail_path)
-    admin = create_whetstone_engine(
-        _required_env("DATABASE_URL"),
-        boundary=DatabaseBoundary.SOURCE_ADMIN,
-    )
-    try:
-        with admin.begin() as connection:
-            connection.execute(
-                text(
-                    f'DROP SCHEMA IF EXISTS "{source_schema}" CASCADE'
-                )
-            )
-    finally:
-        admin.dispose()
-    for name in paths:
-        path = descriptor_path.parent / name
-        path.unlink(missing_ok=True)
-        path.with_name(path.name + ".lock").unlink(missing_ok=True)
-
-
-def _rollback_prepare(journal: RunJournal, directory: Path) -> None:
-    """Best-effort rollback retains the journal for a later always-cleanup."""
-    for name in (journal.analysis_path, journal.detail_path):
-        path = directory / name
-        path.unlink(missing_ok=True)
-        path.with_name(path.name + ".lock").unlink(missing_ok=True)
-    for url_name, destination, bundle, bundle_id, kind in (
-        (
-            "MOTHERDUCK_DATABASE_URL",
-            journal.analysis_destination_id,
-            ANALYSIS_BUNDLE_KEY,
-            journal.analysis_bundle_id,
-            "motherduck",
-        ),
-        (
-            "NEON_DATABASE_URL",
-            journal.detail_destination_id,
-            DETAIL_BUNDLE_KEY,
-            journal.detail_bundle_id,
-            "neon",
-        ),
-    ):
-        if bundle_id and os.environ.get(url_name):
-            try:
-                fence = _fence(_required_env(url_name), destination, kind)
-                try:
-                    with fence.engine.begin() as connection:
-                        manifest = connection.execute(
-                            text(
-                                f"SELECT manifest_json FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
-                            ),
-                            {
-                                "destination": destination,
-                                "bundle": bundle,
-                                "bundle_id": bundle_id,
-                            },
-                        ).scalar_one_or_none()
-                        if manifest is not None:
-                            for facts in json.loads(str(manifest)).get(
-                                "members", []
-                            ):
-                                schema, table = (
-                                    facts["schema_name"],
-                                    facts["table_name"],
-                                )
-                                if _IDENTIFIER.fullmatch(
-                                    schema
-                                ) and _IDENTIFIER.fullmatch(table):
-                                    connection.execute(
-                                        text(
-                                            f'DROP TABLE IF EXISTS "{schema}"."{table}"'
-                                        )
-                                    )
-                        params = {
-                            "destination": destination,
-                            "bundle": bundle,
-                            "bundle_id": bundle_id,
-                        }
-                        connection.execute(
-                            text(
-                                f"DELETE FROM {fence._pins_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
-                            ),
-                            params,
-                        )
-                        connection.execute(
-                            text(
-                                f"DELETE FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
-                            ),
-                            params,
-                        )
-                        connection.execute(
-                            text(
-                                f"DELETE FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle AND bundle_id=:bundle_id"
-                            ),
-                            params,
-                        )
-                finally:
-                    fence.engine.dispose()
-            except Exception:
-                _trace(
-                    "prepare_remote_rollback_deferred", run_id=journal.run_id
-                )
-    try:
+    if _applicable(journal, "source"):
+        # Preflight validates the marker before the source is ever dropped.
+        _source_preflight(journal)
         admin = create_whetstone_engine(
             _required_env("DATABASE_URL"),
             boundary=DatabaseBoundary.SOURCE_ADMIN,
         )
         try:
             with admin.begin() as connection:
-                connection.execute(
-                    text(
-                        f'DROP SCHEMA IF EXISTS "{journal.source_schema}" CASCADE'
+                if _source_marker_state(connection, journal):
+                    connection.execute(
+                        text(f'DROP SCHEMA "{source_schema}" CASCADE')
                     )
-                )
         finally:
             admin.dispose()
+    for name in paths:
+        path = descriptor_path.parent / name
+        path.unlink(missing_ok=True)
+        path.with_name(path.name + ".lock").unlink(missing_ok=True)
+
+
+def _rollback_prepare(
+    journal: RunJournal, directory: Path, journal_path: Path
+) -> None:
+    """Best-effort rollback retains the journal for a later always-cleanup."""
+    # Reuse the regular all-marker preflight.  A failed automatic rollback
+    # leaves the journal unchanged for an operator to retry safely.
+    descriptor_name = journal_path.name.removesuffix(".journal.json")
+    try:
+        cleanup(
+            directory / descriptor_name,
+            directory / ".release-parity-rollback-proof.json",
+            journal_path,
+        )
     except Exception:
-        # The journal is intentionally retained as evidence and recovery input.
         _trace("prepare_rollback_deferred", run_id=journal.run_id)
 
 
@@ -1323,60 +1526,75 @@ def cleanup(
     else:
         journal = _load_journal(descriptor_path)
     descriptor = _cleanup_descriptor_or_journal(descriptor_path, journal)
-    analysis = _remote(descriptor.analysis) if descriptor else None
-    detail = _remote(descriptor.detail) if descriptor else None
-    analysis_fence = _fence(
-        _required_env("MOTHERDUCK_DATABASE_URL"),
-        journal.analysis_destination_id,
-        "motherduck",
+    zero = dict.fromkeys(
+        ("state_rows", "bundle_rows", "pin_rows", "physical_candidates"), 0
     )
-    detail_fence = _fence(
-        _required_env("NEON_DATABASE_URL"),
-        journal.detail_destination_id,
-        "neon",
-    )
+    fences: dict[str, PostgresPublicationFence] = {}
+    source_exists = False
     try:
-        destinations = {
-            journal.analysis_destination_id: _delete_remote(
-                analysis_fence, analysis
-            )
-            if analysis
-            else _delete_journal_remote(analysis_fence, journal, "analysis"),
-            journal.detail_destination_id: _delete_remote(detail_fence, detail)
-            if detail
-            else _delete_journal_remote(detail_fence, journal, "detail"),
-        }
-    finally:
-        analysis_fence.engine.dispose()
-        detail_fence.engine.dispose()
-    admin = create_whetstone_engine(
-        _required_env("DATABASE_URL"),
-        boundary=DatabaseBoundary.SOURCE_ADMIN,
-    )
-    try:
-        with admin.begin() as connection:
-            connection.execute(
-                text(
-                    f'DROP SCHEMA IF EXISTS "{journal.source_schema}" CASCADE'
+        # All applicable markers are observed before any DROP/DELETE.  The
+        # state guard intentionally means a never-started secret is untouched.
+        source_exists = _source_preflight(journal)
+        for name, environment, kind in (
+            ("analysis", "MOTHERDUCK_DATABASE_URL", "motherduck"),
+            ("detail", "NEON_DATABASE_URL", "neon"),
+        ):
+            if _applicable(journal, cast(Any, name)):
+                fence = _fence(
+                    _required_env(environment),
+                    getattr(journal, f"{name}_destination_id"),
+                    cast(Any, kind),
                 )
+                fences[name] = fence
+                _remote_preflight(fence, journal, cast(Any, name))
+
+        destinations: dict[str, Mapping[str, int]] = {}
+        for name in ("analysis", "detail"):
+            destination = getattr(journal, f"{name}_destination_id")
+            if name in fences:
+                destinations[destination] = _delete_journal_remote(
+                    fences[name], journal, cast(Any, name)
+                )
+            else:
+                destinations[destination] = zero
+        if source_exists:
+            admin = create_whetstone_engine(
+                _required_env("DATABASE_URL"),
+                boundary=DatabaseBoundary.SOURCE_ADMIN,
             )
-        with admin.connect() as connection:
-            absent = (
-                connection.execute(
-                    text(
-                        "SELECT 1 FROM information_schema.schemata WHERE schema_name=:schema"
-                    ),
-                    {"schema": journal.source_schema},
-                ).one_or_none()
-                is None
+            try:
+                with admin.begin() as connection:
+                    # Recheck inside the destructive transaction after the
+                    # complete preflight, closing the replacement race.
+                    if _source_marker_state(connection, journal):
+                        connection.execute(
+                            text(
+                                f'DROP SCHEMA "{journal.source_schema}" CASCADE'
+                            )
+                        )
+            finally:
+                admin.dispose()
+        if _applicable(journal, "source"):
+            admin = create_whetstone_engine(
+                _required_env("DATABASE_URL"),
+                boundary=DatabaseBoundary.SOURCE_ADMIN,
             )
+            try:
+                with admin.connect() as connection:
+                    absent = not _source_marker_state(connection, journal)
+            finally:
+                admin.dispose()
+        else:
+            absent = True
     finally:
-        admin.dispose()
+        for fence in fences.values():
+            fence.engine.dispose()
     files = [journal.analysis_path, journal.detail_path]
-    for name in files:
-        path = descriptor_path.parent / name
-        path.unlink(missing_ok=True)
-        path.with_name(path.name + ".lock").unlink(missing_ok=True)
+    if _applicable(journal, "local"):
+        for name in files:
+            path = descriptor_path.parent / name
+            path.unlink(missing_ok=True)
+            path.with_name(path.name + ".lock").unlink(missing_ok=True)
     proof = CleanupProof(
         schema_version=SCHEMA_VERSION,
         run_id=journal.run_id,
@@ -1385,6 +1603,7 @@ def cleanup(
             not (descriptor_path.parent / name).exists() for name in files
         ),
         destinations=destinations,
+        cleanup_complete=True,
     )
     if descriptor is not None:
         proof.validate_against(descriptor)
@@ -1395,6 +1614,17 @@ def cleanup(
     ):
         raise ValueError("journal recovery cleanup proof is not zero-state")
     proof_path.write_text(proof.model_dump_json(indent=2))
+    if journal.schema_version == 2:
+        actual_journal_path = journal_path or _journal_path(descriptor_path)
+        for name in ("source", "analysis", "detail", "local"):
+            if getattr(journal, f"{name}_state") in {"intent", "owned"}:
+                journal = _checkpoint(
+                    actual_journal_path, journal, cast(Any, name), "cleaned"
+                )
+        journal = journal.model_copy(
+            update={"cleanup_complete": True, "cleaned_at": datetime.now(UTC).isoformat()}
+        )
+        _write_journal(actual_journal_path, journal)
     _trace(
         "cleanup_succeeded", run_id=journal.run_id, recovery=descriptor is None
     )
@@ -1412,6 +1642,15 @@ def verify_evidence(
     journal.validate_contract()
     proof = CleanupProof.model_validate_json(proof_path.read_text())
     descriptor = _cleanup_descriptor_or_journal(descriptor_path, journal)
+    if not proof.cleanup_complete:
+        raise ValueError("cleanup proof is incomplete")
+    if journal.schema_version == 2 and journal.cleanup_complete is not True:
+        raise ValueError("cleanup journal is incomplete")
+    if journal.schema_version == 2 and any(
+        getattr(journal, f"{name}_state") not in {"not_started", "cleaned"}
+        for name in ("source", "analysis", "detail", "local")
+    ):
+        raise ValueError("cleanup journal is incomplete")
     if descriptor is not None:
         proof.validate_against(descriptor)
     elif (

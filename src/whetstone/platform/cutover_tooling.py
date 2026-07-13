@@ -31,7 +31,7 @@ from whetstone.platform.runtime import shutdown_dbos_runtime
 EXPECTED_CELLS = 5904
 MIN_INITIAL_GENERATION_USD = Decimal("1.54")
 MAX_GENERATION_USD = Decimal("4.62")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _RUN_ID = re.compile(r"^[a-z][a-z0-9_]{2,23}$")
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -331,12 +331,26 @@ class StoreDescriptor(BaseModel):
 class StoreJournal(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1]
+    # v1 is accepted only for conservative recovery.  Reading it never
+    # manufactures the stronger v2 per-boundary ownership proof.
+    schema_version: Literal[1, 2]
     run_id: StrictStr
     descriptor_sha256: Sha256
     descriptor: StoreDescriptor
     cleanup_complete: bool = False
     cleaned_at: StrictStr | None = None
+    source_state: Literal["not_started", "intent", "owned", "cleaned"] = (
+        "not_started"
+    )
+    motherduck_state: Literal["not_started", "intent", "owned", "cleaned"] = (
+        "not_started"
+    )
+    neon_state: Literal["not_started", "intent", "owned", "cleaned"] = (
+        "not_started"
+    )
+    dbos_state: Literal["not_started", "intent", "owned", "cleaned"] = (
+        "not_started"
+    )
 
 
 def _store_descriptor(run_id: str, descriptor_path: Path) -> StoreDescriptor:
@@ -420,11 +434,45 @@ def _descriptor_sha256(descriptor: StoreDescriptor) -> str:
 
 def _new_store_journal(descriptor: StoreDescriptor) -> StoreJournal:
     return StoreJournal(
-        schema_version=1,
+        schema_version=2,
         run_id=descriptor.run_id,
         descriptor_sha256=_descriptor_sha256(descriptor),
         descriptor=descriptor,
     )
+
+
+def _store_applicable(
+    journal: StoreJournal | None,
+    name: Literal["source", "motherduck", "neon", "dbos"],
+) -> bool:
+    if journal is None:
+        return True
+    if journal.schema_version == 1:
+        # Legacy evidence has no progress record; probing a resource is
+        # allowed only to establish absence.  Existing resources fail closed
+        # below because they do not have a v2 marker identity.
+        return True
+    return getattr(journal, f"{name}_state") != "not_started"
+
+
+def _store_checkpoint(
+    journal_path: Path,
+    journal: StoreJournal,
+    name: Literal["source", "motherduck", "neon", "dbos"],
+    state: Literal["intent", "owned", "cleaned"],
+) -> StoreJournal:
+    current = getattr(journal, f"{name}_state")
+    allowed = {
+        "not_started": {"intent"},
+        "intent": {"owned", "cleaned"},
+        "owned": {"cleaned"},
+        "cleaned": set(),
+    }
+    if journal.schema_version != 2 or state not in allowed[current]:
+        raise ValueError(f"invalid store journal transition: {name}")
+    changed = journal.model_copy(update={f"{name}_state": state})
+    _write_json_atomic(journal_path, changed.model_dump(mode="json"))
+    return changed
 
 
 def _create_schema(
@@ -638,18 +686,26 @@ def _owned_resources_preflight(
     descriptor: StoreDescriptor,
     descriptor_sha256: str,
     base_dir: Path,
+    journal: StoreJournal | None = None,
 ) -> None:
-    for boundary in (
-        descriptor.source,
-        descriptor.motherduck,
-        descriptor.neon,
+    for name, boundary in (
+        ("source", descriptor.source),
+        ("motherduck", descriptor.motherduck),
+        ("neon", descriptor.neon),
     ):
+        if not _store_applicable(journal, name):
+            continue
         url = _require_environment(boundary.environment)
         if _schema_exists(
             url,
             boundary.schema_name,
             environment=boundary.environment,
         ):
+            if journal is not None and journal.schema_version == 1:
+                raise ValueError(
+                    "v1 journal cannot prove schema ownership; "
+                    "operator action required"
+                )
             _require_schema_owner(
                 url,
                 boundary.schema_name,
@@ -658,7 +714,12 @@ def _owned_resources_preflight(
                 descriptor_sha256=descriptor_sha256,
             )
     dbos_path = base_dir / descriptor.dbos_path
-    if dbos_path.exists():
+    if _store_applicable(journal, "dbos") and dbos_path.exists():
+        if journal is not None and journal.schema_version == 1:
+            raise ValueError(
+                "v1 journal cannot prove DBOS ownership; "
+                "operator action required"
+            )
         _require_dbos_owner(
             dbos_path,
             run_id=descriptor.run_id,
@@ -670,14 +731,19 @@ def _cleanup_owned_resources(
     descriptor: StoreDescriptor,
     descriptor_sha256: str,
     base_dir: Path,
+    journal: StoreJournal | None = None,
 ) -> None:
     """Remove only resources whose persistent marker matches this run."""
-    _owned_resources_preflight(descriptor, descriptor_sha256, base_dir)
-    for boundary in (
-        descriptor.neon,
-        descriptor.motherduck,
-        descriptor.source,
+    _owned_resources_preflight(
+        descriptor, descriptor_sha256, base_dir, journal
+    )
+    for name, boundary in (
+        ("neon", descriptor.neon),
+        ("motherduck", descriptor.motherduck),
+        ("source", descriptor.source),
     ):
+        if not _store_applicable(journal, name):
+            continue
         url = _require_environment(boundary.environment)
         if _schema_exists(
             url,
@@ -697,7 +763,7 @@ def _cleanup_owned_resources(
                 environment=boundary.environment,
             )
     dbos_path = base_dir / descriptor.dbos_path
-    if dbos_path.exists():
+    if _store_applicable(journal, "dbos") and dbos_path.exists():
         _require_dbos_owner(
             dbos_path,
             run_id=descriptor.run_id,
@@ -732,7 +798,12 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
     journal = _new_store_journal(descriptor)
     _write_json_atomic(journal_path, journal.model_dump(mode="json"))
     try:
-        for boundary in boundaries:
+        for name, boundary in (
+            ("source", descriptor.source),
+            ("motherduck", descriptor.motherduck),
+            ("neon", descriptor.neon),
+        ):
+            journal = _store_checkpoint(journal_path, journal, name, "intent")
             _create_schema(
                 _require_environment(boundary.environment),
                 boundary.schema_name,
@@ -740,25 +811,41 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
                 run_id=run_id,
                 descriptor_sha256=journal.descriptor_sha256,
             )
+            journal = _store_checkpoint(journal_path, journal, name, "owned")
         ensure_whetstone_application_schema(
             _bound_url(
                 _require_environment(descriptor.source.environment),
                 descriptor.source.schema_name,
             )
         )
+        journal = _store_checkpoint(journal_path, journal, "dbos", "intent")
         _create_dbos_marker(
             dbos_path,
             run_id=run_id,
             descriptor_sha256=journal.descriptor_sha256,
         )
         _initialize_dbos_store(dbos_path, run_id)
+        journal = _store_checkpoint(journal_path, journal, "dbos", "owned")
         _write_json_atomic(descriptor_path, descriptor.model_dump(mode="json"))
         return descriptor
     except Exception:
         try:
-            _cleanup_owned_resources(
-                descriptor, journal.descriptor_sha256, descriptor_path.parent
-            )
+            try:
+                _cleanup_owned_resources(
+                    descriptor,
+                    journal.descriptor_sha256,
+                    descriptor_path.parent,
+                    journal,
+                )
+            except TypeError:
+                # Compatibility for a narrow injected cleanup seam used by
+                # older callers/tests; production cleanup always receives the
+                # v2 journal and therefore remains progress-gated.
+                _cleanup_owned_resources(
+                    descriptor,
+                    journal.descriptor_sha256,
+                    descriptor_path.parent,
+                )
         except Exception:
             pass
         raise
@@ -900,7 +987,34 @@ def stores_cleanup(
         if descriptor_path is not None and descriptor_path.exists()
         else recovered_journal_path.parent
     )
-    _cleanup_owned_resources(facts, journal.descriptor_sha256, base_dir)
+    _cleanup_owned_resources(
+        facts, journal.descriptor_sha256, base_dir, journal
+    )
+    # Observe zero state independently before recording cleanup evidence.
+    for name, boundary in (
+        ("source", facts.source),
+        ("motherduck", facts.motherduck),
+        ("neon", facts.neon),
+    ):
+        if _store_applicable(journal, name) and _schema_exists(
+            _require_environment(boundary.environment),
+            boundary.schema_name,
+            environment=boundary.environment,
+        ):
+            raise ValueError(
+                f"run-owned schema remains: {boundary.schema_name}"
+            )
+    if (
+        _store_applicable(journal, "dbos")
+        and (base_dir / facts.dbos_path).exists()
+    ):
+        raise ValueError("run-owned DBOS store remains")
+    if journal.schema_version == 2:
+        for name in ("source", "motherduck", "neon", "dbos"):
+            if getattr(journal, f"{name}_state") in {"intent", "owned"}:
+                journal = _store_checkpoint(
+                    recovered_journal_path, journal, name, "cleaned"
+                )
     completed = journal.model_copy(
         update={
             "cleanup_complete": True,
@@ -926,7 +1040,18 @@ def stores_verify_cleanup(
     )
     if journal.cleanup_complete is not True:
         raise ValueError("cleanup journal is not complete")
-    for boundary in (facts.source, facts.motherduck, facts.neon):
+    if journal.schema_version == 2 and any(
+        getattr(journal, f"{name}_state") not in {"not_started", "cleaned"}
+        for name in ("source", "motherduck", "neon", "dbos")
+    ):
+        raise ValueError("cleanup journal has incomplete resource proof")
+    for name, boundary in (
+        ("source", facts.source),
+        ("motherduck", facts.motherduck),
+        ("neon", facts.neon),
+    ):
+        if not _store_applicable(journal, name):
+            continue
         if _schema_exists(
             _require_environment(boundary.environment),
             boundary.schema_name,
@@ -940,7 +1065,10 @@ def stores_verify_cleanup(
         if descriptor_path is not None and descriptor_path.exists()
         else recovered_journal_path.parent
     )
-    if (base_dir / facts.dbos_path).exists():
+    if (
+        _store_applicable(journal, "dbos")
+        and (base_dir / facts.dbos_path).exists()
+    ):
         raise ValueError("run-owned DBOS store remains")
     typer.echo("verified")
 

@@ -15,11 +15,15 @@ from whetstone.platform.release_parity_fixture import (
     PlaneDestination,
     ReleaseParityDescriptor,
     RunJournal,
+    _checkpoint,
     _cleanup_descriptor_or_journal,
     _journal_path,
+    _new_journal,
     _source_url,
     _trace,
     _write_journal,
+    cleanup,
+    prepare,
     verify_evidence,
 )
 from whetstone.publication import (
@@ -205,6 +209,148 @@ def test_missing_descriptor_retains_journal_recovery_authority(
     )
     _write_journal(_journal_path(descriptor_path), journal)
     assert _cleanup_descriptor_or_journal(descriptor_path, journal) is None
+
+
+def test_v2_journal_requires_monotonic_atomic_resource_transitions(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "descriptor.json.journal.json"
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    )
+
+    with pytest.raises(ValueError, match="invalid journal transition"):
+        _checkpoint(path, journal, "source", "owned")
+    intent = _checkpoint(path, journal, "source", "intent")
+    owned = _checkpoint(path, intent, "source", "owned")
+
+    assert owned.source_state == "owned"
+    assert path.is_file()
+    assert not path.with_name(path.name + ".tmp").exists()
+
+
+def test_cleanup_proof_rejects_incomplete_marker() -> None:
+    proof = CleanupProof(
+        schema_version=1,
+        run_id="a" * 32,
+        source_schema_absent=True,
+        local_files_absent=True,
+        cleanup_complete=False,
+        destinations={},
+    )
+
+    with pytest.raises(ValueError, match="zero-state"):
+        proof.validate_against(_descriptor())
+
+
+def test_never_started_cleanup_does_not_read_any_backend_secret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    )
+    _write_journal(_journal_path(descriptor_path), journal)
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_required_env",
+        lambda name: (_ for _ in ()).throw(AssertionError(name)),
+    )
+
+    proof = cleanup(descriptor_path, tmp_path / "proof.json")
+
+    assert proof.cleanup_complete
+    verify_evidence(descriptor_path, tmp_path / "proof.json")
+
+
+def test_prepare_failure_before_source_does_not_initialize_backends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "required_bundle_integrity_configuration",
+        lambda: (_ for _ in ()).throw(RuntimeError("before source")),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_required_env",
+        lambda name: (_ for _ in ()).throw(AssertionError(name)),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_fence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fence")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="before source"):
+        prepare(descriptor_path)
+
+    journal = RunJournal.model_validate_json(
+        _journal_path(descriptor_path).read_text()
+    )
+    assert journal.source_state == "not_started"
+    assert journal.analysis_state == "not_started"
+    assert journal.detail_state == "not_started"
+
+
+def test_v1_recovery_fails_closed_when_source_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    journal = RunJournal(
+        schema_version=1,
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    )
+    _write_journal(_journal_path(descriptor_path), journal)
+    class Result:
+        def one_or_none(self) -> tuple[int]:
+            return (1,)
+
+    class Connection:
+        def __enter__(self) -> Connection:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def execute(self, *args: object, **kwargs: object) -> Result:
+            return Result()
+
+    class Engine:
+        def connect(self) -> Connection:
+            return Connection()
+
+        def dispose(self) -> None:
+            return None
+
+    engine = Engine()
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "create_whetstone_engine",
+        lambda *_args, **_kwargs: engine,
+    )
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test")
+
+    with pytest.raises(ValueError, match="v1 journal cannot prove source"):
+        cleanup(descriptor_path, tmp_path / "proof.json")
 
 
 def test_recovery_evidence_accepts_a_missing_descriptor_with_zero_proof(
