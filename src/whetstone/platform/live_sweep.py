@@ -24,7 +24,8 @@ from typing import Annotated, Any, cast
 from uuid import uuid4
 
 import typer
-from dbos import DBOS
+from dbos import DBOS, DBOSClient
+from dbos._dbos import _get_dbos_instance
 from dr_platform import (
     AttemptRecord,
     EligibilityReference,
@@ -42,6 +43,7 @@ from dr_platform.enqueue_runtime import (
     recover_call_started_page,
 )
 from dr_platform.items import item_id
+from dr_platform.reconciliation_runtime import DbosLifecycleReader, reconcile
 from dr_platform.status import AttemptExecutionState
 from dr_providers import FailureClass
 from dr_serialize import sha256_json_digest
@@ -2109,6 +2111,23 @@ def _complete_generation_members(
     return members
 
 
+class _InProcessDbosApi:
+    """DBOSClient-shaped facade over the launched in-process DBOS.
+
+    ``DBOSClient`` cannot open SQLite system databases (it applies pool
+    keyword arguments SQLite rejects), so the lifecycle reader runs over the
+    already-launched runtime instead.  ``DbosLifecycleReader`` needs exactly
+    ``list_workflows`` and ``_sys_db.engine``; ``_get_dbos_instance`` is a
+    private dbos API pinned by the dbos 2.26 dependency.
+    """
+
+    def __init__(self) -> None:
+        self._sys_db = _get_dbos_instance()._sys_db
+
+    def list_workflows(self, **kwargs: Any) -> list[Any]:
+        return DBOS.list_workflows(**kwargs)
+
+
 @dataclass(frozen=True)
 class _RegisteredQueueLookup:
     """In-process admission for exactly the queues whetstone registers.
@@ -2708,6 +2727,69 @@ def submit_retry(
     finally:
         engine.dispose()
         ledger.close()
+
+
+@APP.command("reconcile")
+def reconcile_kernel(
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+    max_cycles: Annotated[int, typer.Option(min=1, max=100)] = 20,
+) -> None:
+    """Apply authoritative DBOS lifecycle to kernel Attempt state."""
+    engine = create_engine(resolve_application_database_url())
+    try:
+        if not execute:
+            attempts = PLATFORM_SCHEMA.item_attempts
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    select(attempts.c.execution_state, func.count())
+                    .group_by(attempts.c.execution_state)
+                    .order_by(attempts.c.execution_state)
+                ).all()
+            typer.echo(
+                json.dumps(
+                    {
+                        "command": "reconcile",
+                        "execute": False,
+                        "attempts": {str(s): int(n) for s, n in rows},
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
+        cycles: list[dict[str, Any]] = []
+        with _platform_enqueue_runtime() as runtime:
+            reader = DbosLifecycleReader(
+                cast("DBOSClient", _InProcessDbosApi())
+            )
+            for _ in range(max_cycles):
+                result = reconcile(
+                    engine,
+                    resolver=target_registry(),
+                    queue_lookup=runtime.queue_lookup,
+                    schema=PLATFORM_SCHEMA,
+                    reader=reader,
+                    recovery_observer=runtime.workflow_observer,
+                    enqueue_adapter=runtime.enqueue_adapter,
+                )
+                cycles.append(result.model_dump(mode="json"))
+                mutated = (
+                    result.recovered_call_started_count
+                    + result.changed_count
+                    + result.enqueue_reset_count
+                    + result.execution_retry_count
+                    + result.replacement_enqueue_count
+                    + result.pending_enqueue_count
+                )
+                if mutated == 0:
+                    break
+        typer.echo(
+            json.dumps(
+                {"command": "reconcile", "execute": True, "cycles": cycles},
+                sort_keys=True,
+            )
+        )
+    finally:
+        engine.dispose()
 
 
 @APP.command("recover-enqueues")
