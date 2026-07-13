@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -30,11 +31,13 @@ from dr_platform import (
 )
 from dr_platform.items import item_id
 from dr_platform.status import AttemptExecutionState
+from dr_providers import FailureClass
 from dr_serialize import sha256_json_digest
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
 from whetstone.db import schema as whetstone_schema
+from whetstone.lm.boundary import OUTPUT_FIELD_TEXT
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
@@ -65,6 +68,57 @@ _PLATFORM_IN_FLIGHT = frozenset(
         AttemptExecutionState.CANCEL_REQUESTED,
     }
 )
+
+
+class AdapterDisposition(StrEnum):
+    """Allowlisted outcome of the durable node-adapter boundary."""
+
+    SUCCESS = "success"
+    MISSING_OUTPUT = "missing_output"
+    BLANK_OUTPUT = "blank_output"
+    PARSE_FAILURE = "parse_failure"
+    PROVIDER_FAILURE = "provider_failure"
+    FAILURE = "failure"
+
+
+class TypedFailureCode(StrEnum):
+    """Stable, non-message failure codes available in existing records."""
+
+    EMPTY_GENERATION = "empty_generation"
+    PREDICTION_PARSE = "prediction_parse"
+    PROVIDER_RESPONSE_PARSE = "provider_response_parse"
+    PROVIDER_FAILURE = "provider_failure"
+    UNCLASSIFIED = "unclassified"
+
+
+@dataclass(frozen=True)
+class LiveSweepDiagnostics:
+    """The complete ledger-safe node diagnostic allowlist.
+
+    This deliberately contains no raw node output, response metadata, failure
+    message, failure metadata, request data, or provider configuration.
+    """
+
+    response_id_hash: str | None
+    returned_model: str | None
+    finish_reason: str | None
+    node_status: str | None
+    expected_output_field: str
+    output_field_present: bool
+    output_nonblank: bool
+    parser_profile: str | None
+    parser_version: str | None
+    adapter_disposition: AdapterDisposition | None
+    typed_failure_class: FailureClass | None
+    typed_failure_code: TypedFailureCode | None
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the fixed ledger representation without unavailable facts."""
+        return {
+            key: value.value if isinstance(value, StrEnum) else value
+            for key, value in self.__dict__.items()
+            if value is not None
+        }
 
 
 def _now() -> str:
@@ -244,6 +298,7 @@ def _safe_diagnostics(
                     whetstone_schema.node_attempts.c.status,
                     whetstone_schema.node_attempts.c.model,
                     whetstone_schema.node_attempts.c.output,
+                    whetstone_schema.node_attempts.c.response_metadata,
                     whetstone_schema.node_attempts.c.failure,
                 )
                 .where(
@@ -275,38 +330,160 @@ def _safe_diagnostics(
             .mappings()
             .first()
         )
-    result: dict[str, Any] = {}
-    if node:
-        output = node["output"] or {}
-        metadata = (
-            output.get("metadata", {}) if isinstance(output, dict) else {}
+    return _project_safe_diagnostics(
+        node=dict(node) if node is not None else None,
+        score=dict(score) if score is not None else None,
+    )
+
+
+def _project_safe_diagnostics(
+    *,
+    node: Mapping[str, Any] | None,
+    score: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project one node row through the fixed payload-free diagnostic model."""
+    output = node.get("output") if node is not None else None
+    output_metadata = (
+        output.get("metadata") if isinstance(output, Mapping) else None
+    )
+    response_metadata = (
+        node.get("response_metadata") if node is not None else None
+    )
+    response_id = _allowlisted_string(output_metadata, "response_id")
+    if response_id is None:
+        response_id = _allowlisted_string(response_metadata, "id")
+    model = _allowlisted_string(output_metadata, "model")
+    if model is None:
+        model = _allowlisted_string(response_metadata, "model")
+    if model is None and node is not None:
+        model = _allowlisted_string(node, "model")
+    finish_reason = _allowlisted_string(output_metadata, "finish_reason")
+    if finish_reason is None:
+        finish_reason = _allowlisted_string(response_metadata, "finish_reason")
+    output_field_present, output_nonblank = _output_field_facts(output)
+    failure = node.get("failure") if node is not None else None
+    disposition, failure_class, failure_code = _adapter_facts(
+        node_status=_allowlisted_string(node, "status"),
+        failure=failure,
+        output_field_present=output_field_present,
+        output_nonblank=output_nonblank,
+    )
+    diagnostics = LiveSweepDiagnostics(
+        response_id_hash=(
+            hashlib.sha256(response_id.encode()).hexdigest()
+            if response_id is not None
+            else None
+        ),
+        returned_model=model,
+        finish_reason=finish_reason,
+        node_status=_allowlisted_string(node, "status"),
+        expected_output_field=OUTPUT_FIELD_TEXT,
+        output_field_present=output_field_present,
+        output_nonblank=output_nonblank,
+        parser_profile=_allowlisted_string(score, "parser_profile_id"),
+        parser_version=_allowlisted_string(score, "parser_version"),
+        adapter_disposition=disposition,
+        typed_failure_class=failure_class,
+        typed_failure_code=failure_code,
+    )
+    return diagnostics.as_dict()
+
+
+def _allowlisted_string(
+    payload: Mapping[str, Any] | None, key: str
+) -> str | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _output_field_facts(output: object) -> tuple[bool, bool]:
+    """Report key presence and useful content without map truthiness."""
+    if not isinstance(output, Mapping):
+        return False, False
+    values = output.get("values")
+    if not isinstance(values, Mapping) or OUTPUT_FIELD_TEXT not in values:
+        return False, False
+    value = values.get(OUTPUT_FIELD_TEXT)
+    if isinstance(value, str):
+        return True, bool(value.strip())
+    if isinstance(value, Mapping | tuple | list | set):
+        return True, bool(value)
+    return True, value is not None
+
+
+def _adapter_facts(
+    *,
+    node_status: str | None,
+    failure: object,
+    output_field_present: bool,
+    output_nonblank: bool,
+) -> tuple[
+    AdapterDisposition | None,
+    FailureClass | None,
+    TypedFailureCode | None,
+]:
+    """Classify only stable Whetstone/dr-providers failure taxonomy fields."""
+    if node_status == "success":
+        if not output_field_present:
+            return AdapterDisposition.MISSING_OUTPUT, None, None
+        if not output_nonblank:
+            return AdapterDisposition.BLANK_OUTPUT, None, None
+        return AdapterDisposition.SUCCESS, None, None
+    if node_status != "error":
+        return None, None, None
+    failure_mapping = failure if isinstance(failure, Mapping) else {}
+    raw_class = failure_mapping.get("failure_class")
+    failure_class = (
+        FailureClass(raw_class)
+        if isinstance(raw_class, str)
+        and raw_class in {item.value for item in FailureClass}
+        else None
+    )
+    error_type = failure_mapping.get("error_type")
+    underlying_type = failure_mapping.get("underlying_exception_type")
+    type_names = {
+        value.rsplit(".", 1)[-1]
+        for value in (error_type, underlying_type)
+        if isinstance(value, str)
+    }
+    if "EmptyGenerationError" in type_names:
+        return (
+            AdapterDisposition.BLANK_OUTPUT,
+            failure_class,
+            TypedFailureCode.EMPTY_GENERATION,
         )
-        response_id = metadata.get("response_id")
-        result.update(
-            {
-                "node_status": node["status"],
-                "returned_model": metadata.get("model") or node["model"],
-                "finish_reason": metadata.get("finish_reason"),
-                "response_id_sha256": hashlib.sha256(
-                    str(response_id).encode()
-                ).hexdigest()
-                if response_id
-                else None,
-                "output_present": bool(output.get("values"))
-                if isinstance(output, dict)
-                else False,
-                "typed_failure": bool(node["failure"]),
-            }
+    if "PredictionParseError" in type_names:
+        return (
+            AdapterDisposition.PARSE_FAILURE,
+            failure_class,
+            TypedFailureCode.PREDICTION_PARSE,
         )
-    if score:
-        result.update(
-            {
-                "parser_profile": score["parser_profile_id"],
-                "parser_version": score["parser_version"],
-                "parser_classification": score["status"],
-            }
+    if "ProviderResponseParseError" in type_names:
+        return (
+            AdapterDisposition.PARSE_FAILURE,
+            failure_class,
+            TypedFailureCode.PROVIDER_RESPONSE_PARSE,
         )
-    return {key: value for key, value in result.items() if value is not None}
+    metadata = failure_mapping.get("metadata")
+    if (
+        "ProviderFailureError" in type_names
+        or (
+            isinstance(metadata, Mapping)
+            and "provider_failure" in metadata
+        )
+    ):
+        return (
+            AdapterDisposition.PROVIDER_FAILURE,
+            failure_class,
+            TypedFailureCode.PROVIDER_FAILURE,
+        )
+    return (
+        AdapterDisposition.FAILURE,
+        failure_class,
+        TypedFailureCode.UNCLASSIFIED,
+    )
 
 
 def reconcile_ledger(

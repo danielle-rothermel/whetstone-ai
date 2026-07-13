@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -174,6 +175,147 @@ def test_ledger_requires_an_absolute_external_path(tmp_path: Path) -> None:
         SweepLedger(Path("live-sweep.sqlite3"), manifest_hash="manifest-a")
 
 
+@pytest.mark.parametrize(
+    ("values", "present", "nonblank", "disposition"),
+    [
+        ({"text": ""}, True, False, "blank_output"),
+        ({"text": " \t\n "}, True, False, "blank_output"),
+        ({"other": "generated"}, False, False, "missing_output"),
+        ({"text": {"code": "generated"}}, True, True, "success"),
+        ({"text": {}}, True, False, "blank_output"),
+    ],
+)
+def test_safe_diagnostics_reports_output_key_and_nonblank_semantics(
+    values: dict[str, object],
+    present: bool,
+    nonblank: bool,
+    disposition: str,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "success",
+            "model": "gpt-5.4",
+            "output": {"values": values},
+            "response_metadata": {},
+            "failure": None,
+        },
+        score=None,
+    )
+
+    assert diagnostics["expected_output_field"] == "text"
+    assert diagnostics["output_field_present"] is present
+    assert diagnostics["output_nonblank"] is nonblank
+    assert diagnostics["adapter_disposition"] == disposition
+
+
+@pytest.mark.parametrize(
+    ("failure", "disposition", "code"),
+    [
+        (
+            {
+                "failure_class": "permanent",
+                "error_type": (
+                    "whetstone.eval_failures.exceptions."
+                    "PredictionParseError"
+                ),
+            },
+            "parse_failure",
+            "prediction_parse",
+        ),
+        (
+            {
+                "failure_class": "transient",
+                "error_type": (
+                    "whetstone.eval_failures.exceptions."
+                    "TransientFailureError"
+                ),
+                "metadata": {"provider_failure": {"message": "secret"}},
+            },
+            "provider_failure",
+            "provider_failure",
+        ),
+    ],
+)
+def test_safe_diagnostics_uses_typed_failure_taxonomy(
+    failure: dict[str, object], disposition: str, code: str
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "error",
+            "model": "gpt-5.4",
+            "output": None,
+            "response_metadata": {},
+            "failure": failure,
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == disposition
+    assert diagnostics["typed_failure_code"] == code
+    assert diagnostics["typed_failure_class"] == failure["failure_class"]
+
+
+def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
+    secret = "Bearer secret-token"
+    prompt = "the private prompt"
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "success",
+            "model": "gpt-5.4",
+            "output": {
+                "values": {"text": "generated", "prompt": prompt},
+                "metadata": {
+                    "response_id": "response-123",
+                    "model": "gpt-5.4",
+                    "finish_reason": "stop",
+                    "authorization": secret,
+                    "base_url": "https://api.example.test/v1",
+                },
+            },
+            "response_metadata": {
+                "headers": {"Authorization": secret},
+                "url": "https://api.example.test/v1?api_key=secret",
+                "prompt": prompt,
+                "encoded_secret": "Bearer%20secret-token",
+            },
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": (
+                    "whetstone.eval_failures.exceptions."
+                    "EmptyGenerationError"
+                ),
+                "message": secret,
+                "metadata": {"prompt": prompt, "headers": secret},
+            },
+        },
+        score={
+            "parser_profile_id": "humaneval",
+            "parser_version": "v1",
+            "status": "success",
+        },
+    )
+
+    serialized = json.dumps(diagnostics, sort_keys=True)
+    assert diagnostics["response_id_hash"] == sha256(
+        b"response-123"
+    ).hexdigest()
+    assert diagnostics["returned_model"] == "gpt-5.4"
+    assert diagnostics["finish_reason"] == "stop"
+    assert diagnostics["parser_profile"] == "humaneval"
+    assert diagnostics["parser_version"] == "v1"
+    for forbidden in (
+        secret,
+        prompt,
+        "Bearer%20secret-token",
+        "api.example.test",
+        "authorization",
+        "headers",
+        "base_url",
+        "response-123",
+    ):
+        assert forbidden not in serialized
+
+
 def test_reconciliation_uses_persisted_platform_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,6 +363,70 @@ def test_reconciliation_uses_persisted_platform_identity(
         assert facts[0].status == "succeeded"
         assert facts[0].actual_cost == Decimal("0.07")
         assert ledger.summary()["succeeded"]["actual_usd"] == 0.07
+    finally:
+        ledger.close()
+
+
+def test_reconciliation_persists_allowlisted_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.reserve([_cell("a")], {"a": Decimal("0.10")})
+        ledger.submitted(
+            [_cell("a")],
+            operation_key="operation-a",
+            prediction_ids={"a": "prediction-a"},
+        )
+        row = ledger.rows()[0]
+        observed = SimpleNamespace(
+            item_id=row["platform_item_id"],
+            attempt=0,
+            execution_state=AttemptExecutionState.SUCCEEDED,
+        )
+        monkeypatch.setattr(
+            live_sweep,
+            "_attempt_facts",
+            lambda _engine, _operation: {(observed.item_id, 0): observed},
+        )
+        monkeypatch.setattr(
+            live_sweep,
+            "_node_cost_facts",
+            lambda _engine, **_kwargs: (
+                GenerationRunStatus.SUCCESS,
+                Decimal("0.07"),
+                {},
+            ),
+        )
+        monkeypatch.setattr(
+            live_sweep,
+            "_score_terminal_status",
+            lambda _engine, **_kwargs: None,
+        )
+        diagnostics = live_sweep._project_safe_diagnostics(
+            node={
+                "status": "success",
+                "model": "gpt-5.4",
+                "output": {"values": {"text": "generated"}},
+                "response_metadata": {},
+                "failure": None,
+            },
+            score=None,
+        )
+        monkeypatch.setattr(
+            live_sweep,
+            "_safe_diagnostics",
+            lambda *_args, **_kwargs: diagnostics,
+        )
+
+        reconcile_ledger(ledger, engine=cast("Engine", object()))
+
+        persisted = json.loads(str(ledger.rows()[0]["diagnostics_json"]))
+        assert persisted == diagnostics
+        assert persisted["output_nonblank"] is True
+        assert persisted["adapter_disposition"] == "success"
     finally:
         ledger.close()
 
