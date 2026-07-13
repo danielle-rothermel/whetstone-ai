@@ -133,19 +133,19 @@ def select_populated_scoring_generation_runs(
         .where(schema.experiments.c.experiment_name == experiment_name)
         .with_for_update()
     ).scalar_one()
-    generation_relationship = (
+    generation_operation_keys = tuple(
         connection.execute(
-            select(schema.experiment_operation_manifests).where(
+            select(
+                schema.experiment_operation_manifests.c.operation_key
+            ).where(
                 schema.experiment_operation_manifests.c.experiment_name
                 == experiment_name,
                 schema.experiment_operation_manifests.c.workflow_role
                 == "generation",
             )
-        )
-        .mappings()
-        .first()
+        ).scalars()
     )
-    if generation_relationship is None:
+    if not generation_operation_keys:
         return ()
     platform = PlatformSchema(prefix="whetstone")
     rows = connection.execute(
@@ -173,8 +173,7 @@ def select_populated_scoring_generation_runs(
         )
         .where(
             schema.prediction_specs.c.experiment_name == experiment_name,
-            platform.items.c.operation_key
-            == generation_relationship["operation_key"],
+            platform.items.c.operation_key.in_(generation_operation_keys),
             platform.item_attempts.c.execution_state == "succeeded",
             platform.item_attempts.c.dbos_status == "SUCCESS",
             or_(

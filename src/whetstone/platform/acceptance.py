@@ -57,6 +57,7 @@ class GenerationDisposition(StrEnum):
     MISSING = "missing"
     REJECTED = "rejected"
     SELECTED_SUCCESS = "selected_success"
+    TYPED_FAILURE = "typed_failure"
 
 
 class GenerationCandidateDisposition(StrEnum):
@@ -147,6 +148,7 @@ def accept_operation_manifest(
     manifest_digest: str,
     target_ref: dict[str, Any],
     selection_digest: str | None = None,
+    generation_member_keys: tuple[str, ...] | None = None,
 ) -> ManifestRelationshipResult:
     """Accept one Generation Manifest and ordered Scoring Manifests."""
     experiment = (
@@ -183,11 +185,60 @@ def accept_operation_manifest(
     )
     if exact is not None:
         return ManifestRelationshipResult.ALREADY_ACCEPTED
-    if workflow_role == "generation" and existing:
-        return ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
-    ordinal: int | None = None
+    generation_ordinal: int | None = None
+    scoring_ordinal: int | None = None
+    if workflow_role == "generation":
+        platform = PlatformSchema(prefix="whetstone")
+        existing_operation_keys = [
+            str(row["operation_key"])
+            for row in existing
+            if row["workflow_role"] == "generation"
+        ]
+        if existing_operation_keys:
+            existing_members = set(
+                connection.execute(
+                    select(platform.items.c.item_key).where(
+                        platform.items.c.operation_key.in_(
+                            existing_operation_keys
+                        )
+                    )
+                ).scalars()
+            )
+            candidate_members = set(generation_member_keys or ())
+            if not candidate_members:
+                candidate_members = set(
+                    connection.execute(
+                        select(platform.items.c.item_key).where(
+                            platform.items.c.operation_key == operation_key
+                        )
+                    ).scalars()
+                )
+            if existing_members & candidate_members:
+                return (
+                    ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
+                )
+        generation_ordinal = (
+            int(
+                connection.execute(
+                    select(
+                        func.coalesce(
+                            func.max(
+                                schema.experiment_operation_manifests.c.accepted_generation_ordinal
+                            ),
+                            0,
+                        )
+                    ).where(
+                        schema.experiment_operation_manifests.c.experiment_name
+                        == experiment_name,
+                        schema.experiment_operation_manifests.c.workflow_role
+                        == "generation",
+                    )
+                ).scalar_one()
+            )
+            + 1
+        )
     if workflow_role == "scoring":
-        ordinal = (
+        scoring_ordinal = (
             int(
                 connection.execute(
                     select(
@@ -216,7 +267,8 @@ def accept_operation_manifest(
             selection_digest=selection_digest,
             target_ref=target_ref,
             accepted_at=datetime.now(UTC),
-            accepted_scoring_ordinal=ordinal,
+            accepted_generation_ordinal=generation_ordinal,
+            accepted_scoring_ordinal=scoring_ordinal,
         )
     )
     connection.execute(
@@ -234,7 +286,7 @@ def accept_operation_manifest(
 
 def _load_relationships(
     connection: Connection, experiment_name: str
-) -> tuple[Any, list[Any]]:
+) -> tuple[list[Any], list[Any]]:
     relationships = (
         connection.execute(
             select(schema.experiment_operation_manifests)
@@ -243,7 +295,8 @@ def _load_relationships(
                 == experiment_name
             )
             .order_by(
-                schema.experiment_operation_manifests.c.accepted_scoring_ordinal
+                schema.experiment_operation_manifests.c.accepted_generation_ordinal,
+                schema.experiment_operation_manifests.c.accepted_scoring_ordinal,
             )
         )
         .mappings()
@@ -252,12 +305,9 @@ def _load_relationships(
     generations = [
         row for row in relationships if row["workflow_role"] == "generation"
     ]
-    if len(generations) != 1:
-        raise ValueError(
-            "strict acceptance requires exactly one accepted Generation "
-            "Manifest"
-        )
-    return generations[0], [
+    if not generations:
+        raise ValueError("acceptance requires a Generation Manifest")
+    return generations, [
         row for row in relationships if row["workflow_role"] == "scoring"
     ]
 
@@ -300,116 +350,148 @@ def _lock_platform_cut(
 def _generation_inputs(
     connection: Connection,
     *,
-    relationship: Any,
+    relationships: list[Any],
     platform: PlatformSchema,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    predictions = list(
-        connection.execute(
-            select(platform.items.c.item_key)
-            .where(
-                platform.items.c.operation_key == relationship["operation_key"]
-            )
-            .order_by(platform.items.c.item_index)
-        ).scalars()
-    )
     members: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
-    for prediction_id in predictions:
-        rows = (
+    seen_predictions: set[str] = set()
+    for relationship in relationships:
+        predictions = list(
             connection.execute(
-                select(
-                    schema.generation_runs,
-                    platform.item_attempts.c.execution_state.label(
-                        "platform_execution_state"
-                    ),
-                    platform.item_attempts.c.dbos_status.label(
-                        "platform_dbos_status"
-                    ),
-                )
-                .join(
-                    platform.items,
-                    platform.items.c.item_id
-                    == schema.generation_runs.c.platform_item_id,
-                )
-                .join(
-                    platform.item_attempts,
-                    (
-                        platform.item_attempts.c.item_id
-                        == schema.generation_runs.c.platform_item_id
-                    )
-                    & (
-                        platform.item_attempts.c.attempt
-                        == schema.generation_runs.c.platform_attempt
-                    ),
-                )
+                select(platform.items.c.item_key)
                 .where(
-                    schema.generation_runs.c.prediction_id == prediction_id,
                     platform.items.c.operation_key
-                    == relationship["operation_key"],
+                    == relationship["operation_key"]
                 )
-                .order_by(
-                    schema.generation_runs.c.platform_attempt.desc(),
-                    schema.generation_runs.c.generation_run_id,
-                )
+                .order_by(platform.items.c.item_index)
+            ).scalars()
+        )
+        overlap = seen_predictions.intersection(
+            str(value) for value in predictions
+        )
+        if overlap:
+            raise ValueError(
+                "a prediction belongs to multiple Generation Manifests"
             )
-            .mappings()
-            .all()
-        )
-        selected = next(
-            (
-                row
-                for row in rows
-                if row["status"] == GenerationRunStatus.SUCCESS.value
-            ),
-            None,
-        )
-        members.append(
-            {
-                "prediction_id": prediction_id,
-                "disposition": (
-                    GenerationDisposition.SELECTED_SUCCESS.value
-                    if selected is not None
-                    else GenerationDisposition.MISSING.value
-                    if not rows
-                    else GenerationDisposition.REJECTED.value
+        seen_predictions.update(str(value) for value in predictions)
+        for prediction_id in predictions:
+            rows = (
+                connection.execute(
+                    select(
+                        schema.generation_runs,
+                        platform.item_attempts.c.execution_state.label(
+                            "platform_execution_state"
+                        ),
+                        platform.item_attempts.c.dbos_status.label(
+                            "platform_dbos_status"
+                        ),
+                    )
+                    .join(
+                        platform.items,
+                        platform.items.c.item_id
+                        == schema.generation_runs.c.platform_item_id,
+                    )
+                    .join(
+                        platform.item_attempts,
+                        (
+                            platform.item_attempts.c.item_id
+                            == schema.generation_runs.c.platform_item_id
+                        )
+                        & (
+                            platform.item_attempts.c.attempt
+                            == schema.generation_runs.c.platform_attempt
+                        ),
+                    )
+                    .where(
+                        schema.generation_runs.c.prediction_id
+                        == prediction_id,
+                        platform.items.c.operation_key
+                        == relationship["operation_key"],
+                    )
+                    .order_by(
+                        schema.generation_runs.c.platform_attempt.desc(),
+                        schema.generation_runs.c.generation_run_id,
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            selected = next(
+                (
+                    row
+                    for row in rows
+                    if row["status"] == GenerationRunStatus.SUCCESS.value
                 ),
-                "generation_run_id": (
-                    selected["generation_run_id"] if selected else None
+                None,
+            )
+            typed_failure = next(
+                (
+                    row
+                    for row in rows
+                    if row["status"]
+                    in {
+                        GenerationRunStatus.ERROR.value,
+                        GenerationRunStatus.BLOCKED.value,
+                    }
                 ),
-                "generation_operation_key": relationship["operation_key"],
-                "platform_item_id": selected["platform_item_id"]
-                if selected
-                else None,
-                "platform_attempt": selected["platform_attempt"]
-                if selected
-                else None,
-            }
-        )
-        for row in rows:
-            if (
-                selected is not None
-                and row["generation_run_id"] == selected["generation_run_id"]
-            ):
-                disposition = GenerationCandidateDisposition.SELECTED
-            elif row["status"] == GenerationRunStatus.SUCCESS.value:
-                disposition = GenerationCandidateDisposition.SUPERSEDED_SUCCESS
-            else:
-                disposition = GenerationCandidateDisposition.REJECTED
-            candidates.append(
+                None,
+            )
+            member_run = selected or typed_failure
+            members.append(
                 {
                     "prediction_id": prediction_id,
-                    "generation_run_id": row["generation_run_id"],
-                    "disposition": disposition.value,
+                    "disposition": (
+                        GenerationDisposition.SELECTED_SUCCESS.value
+                        if selected is not None
+                        else GenerationDisposition.TYPED_FAILURE.value
+                        if typed_failure is not None
+                        else GenerationDisposition.MISSING.value
+                        if not rows
+                        else GenerationDisposition.REJECTED.value
+                    ),
+                    "generation_run_id": (
+                        member_run["generation_run_id"] if member_run else None
+                    ),
                     "generation_operation_key": relationship["operation_key"],
-                    "platform_item_id": row["platform_item_id"],
-                    "platform_attempt": row["platform_attempt"],
-                    "status": row["status"],
-                    "platform_execution_state": row[
-                        "platform_execution_state"
-                    ],
-                    "platform_dbos_status": row["platform_dbos_status"],
+                    "platform_item_id": (
+                        member_run["platform_item_id"] if member_run else None
+                    ),
+                    "platform_attempt": (
+                        member_run["platform_attempt"] if member_run else None
+                    ),
                 }
             )
+            for row in rows:
+                if (
+                    member_run is not None
+                    and row["generation_run_id"]
+                    == member_run["generation_run_id"]
+                ):
+                    disposition = GenerationCandidateDisposition.SELECTED
+                elif row["status"] == GenerationRunStatus.SUCCESS.value:
+                    disposition = (
+                        GenerationCandidateDisposition.SUPERSEDED_SUCCESS
+                    )
+                else:
+                    disposition = GenerationCandidateDisposition.REJECTED
+                candidates.append(
+                    {
+                        "prediction_id": prediction_id,
+                        "generation_run_id": row["generation_run_id"],
+                        "disposition": disposition.value,
+                        "generation_operation_key": relationship[
+                            "operation_key"
+                        ],
+                        "platform_item_id": row["platform_item_id"],
+                        "platform_attempt": row["platform_attempt"],
+                        "status": row["status"],
+                        "platform_execution_state": row[
+                            "platform_execution_state"
+                        ],
+                        "platform_dbos_status": row["platform_dbos_status"],
+                    }
+                )
     return members, candidates
 
 
@@ -705,14 +787,14 @@ def evaluate_strict_acceptance(
             schema.experiments.c.experiment_name == experiment_name
         )
     ).scalar_one()
-    generation_relationship, scoring_relationships = _load_relationships(
+    generation_relationships, scoring_relationships = _load_relationships(
         connection, experiment_name
     )
     platform = PlatformSchema(prefix="whetstone")
     platform_cut = _lock_platform_cut(
         connection,
         operation_keys=[
-            generation_relationship["operation_key"],
+            *(row["operation_key"] for row in generation_relationships),
             *(row["operation_key"] for row in scoring_relationships),
         ],
         platform=platform,
@@ -739,7 +821,7 @@ def evaluate_strict_acceptance(
         )
     generation_members, generation_candidates = _generation_inputs(
         connection,
-        relationship=generation_relationship,
+        relationships=generation_relationships,
         platform=platform,
     )
     profiles = _profile_payloads(required_profiles)
@@ -751,16 +833,55 @@ def evaluate_strict_acceptance(
         platform=platform,
     )
     expected = len(scoring_members)
-    accepted = sum(row["disposition"] == "accepted" for row in scoring_members)
-    missing = sum(
-        row["disposition"].startswith("missing_") for row in scoring_members
+    accounted_generation_failures = {
+        row["prediction_id"]
+        for row in generation_members
+        if row["disposition"] == GenerationDisposition.TYPED_FAILURE.value
+    }
+    accounted_scoring_failures = {
+        row["prediction_id"]
+        for row in scoring_members
+        if row["disposition"] == ScoringDisposition.REJECTED.value
+        and any(
+            candidate["prediction_id"] == row["prediction_id"]
+            and candidate["generation_run_id"] == row["generation_run_id"]
+            and candidate["disposition"]
+            == ScoringCandidateDisposition.REJECTED.value
+            and candidate["candidate_kind"] == "score_harness_failure"
+            for candidate in scoring_candidates
+        )
+    }
+    accounted_prediction_ids = (
+        accounted_generation_failures | accounted_scoring_failures
     )
-    rejected = sum(row["disposition"] == "rejected" for row in scoring_members)
+    accepted = sum(
+        row["disposition"] == "accepted"
+        or row["prediction_id"] in accounted_prediction_ids
+        for row in scoring_members
+    )
+    missing = sum(
+        row["disposition"].startswith("missing_")
+        and row["prediction_id"] not in accounted_prediction_ids
+        for row in scoring_members
+    )
+    rejected = sum(
+        row["disposition"] == "rejected"
+        and row["prediction_id"] not in accounted_prediction_ids
+        for row in scoring_members
+    )
     status = (
         AcceptanceStatus.ACCEPTED
         if expected > 0 and accepted == expected
         else AcceptanceStatus.PARTIAL
     )
+    generation_relationship_payload = [
+        {
+            "accepted_generation_ordinal": row["accepted_generation_ordinal"],
+            "operation_key": row["operation_key"],
+            "manifest_digest": row["manifest_digest"],
+        }
+        for row in generation_relationships
+    ]
     scoring_relationship_payload = [
         {
             "accepted_scoring_ordinal": row["accepted_scoring_ordinal"],
@@ -782,10 +903,9 @@ def evaluate_strict_acceptance(
     identity = {
         "experiment_name": experiment_name,
         "acceptance_source_version": source_version,
-        "generation_operation_key": generation_relationship["operation_key"],
-        "generation_manifest_digest": generation_relationship[
-            "manifest_digest"
-        ],
+        "generation_relationships_digest": _digest(
+            generation_relationship_payload
+        ),
         "scoring_relationships_digest": _digest(scoring_relationship_payload),
         "selected_scoring_candidates_digest": _digest(
             selected_scoring_candidates
@@ -808,8 +928,15 @@ def evaluate_strict_acceptance(
             experiment_name=experiment_name,
             acceptance_source_version=source_version,
             status=status.value,
-            generation_operation_key=generation_relationship["operation_key"],
-            generation_manifest_digest=generation_relationship[
+            generation_relationships=generation_relationship_payload,
+            generation_relationships_digest=_digest(
+                generation_relationship_payload
+            ),
+            # Retained for readers on the v6 baseline; the vector is authority.
+            generation_operation_key=generation_relationships[0][
+                "operation_key"
+            ],
+            generation_manifest_digest=generation_relationships[0][
                 "manifest_digest"
             ],
             scoring_relationships=scoring_relationship_payload,

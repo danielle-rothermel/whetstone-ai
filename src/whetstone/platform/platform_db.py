@@ -30,15 +30,20 @@ def ensure_whetstone_application_schema(database_url: str) -> None:
     engine = create_engine(resolved)
     try:
         with engine.begin() as connection:
-            migration = cast(
-                Any,
-                importlib.import_module(
-                    "whetstone.db.migrations.versions."
-                    "20260712_0001_whetstone_baseline"
-                ),
-            )
-            migration.op = Operations(MigrationContext.configure(connection))
-            migration.upgrade()
+            for module_name in (
+                "20260712_0001_whetstone_baseline",
+                "20260713_0002_generation_manifest_shards",
+            ):
+                migration = cast(
+                    Any,
+                    importlib.import_module(
+                        f"whetstone.db.migrations.versions.{module_name}"
+                    ),
+                )
+                migration.op = Operations(
+                    MigrationContext.configure(connection)
+                )
+                migration.upgrade()
         upgrade_platform_schema(resolved, prefix="whetstone")
     finally:
         engine.dispose()

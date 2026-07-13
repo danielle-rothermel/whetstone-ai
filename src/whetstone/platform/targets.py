@@ -342,22 +342,37 @@ def _register_prediction_specs(
         )
         .on_conflict_do_nothing(index_elements=["experiment_name"])
     )
-    relationship_result = accept_operation_manifest(
-        connection,
-        experiment_name=experiment_name,
-        workflow_role="generation",
-        operation_key=operation_key,
-        manifest_digest=page.manifest_digest,
-        target_ref=_target_ref_from_operation(operation),
+    accepted_generation_operations = tuple(
+        connection.execute(
+            select(
+                schema.experiment_operation_manifests.c.operation_key
+            ).where(
+                schema.experiment_operation_manifests.c.experiment_name
+                == experiment_name,
+                schema.experiment_operation_manifests.c.workflow_role
+                == "generation",
+                schema.experiment_operation_manifests.c.operation_key
+                != operation_key,
+            )
+        ).scalars()
     )
-    if (
-        relationship_result
-        is ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
-    ):
-        raise GenerationMembershipConflictError(
-            "generation membership is already fixed by a different Manifest"
+    if accepted_generation_operations:
+        existing_members = set(
+            connection.execute(
+                select(platform.items.c.item_key).where(
+                    platform.items.c.operation_key.in_(
+                        accepted_generation_operations
+                    )
+                )
+            ).scalars()
         )
-
+        duplicate_members = existing_members.intersection(
+            spec.prediction_id for spec in current_specs
+        )
+        if duplicate_members:
+            raise GenerationMembershipConflictError(
+                "a prediction is already fixed in another Generation Manifest"
+            )
     prior_specs = tuple(
         PredictionSpecRecord.model_validate(row["spec"])
         for row in connection.execute(
@@ -370,6 +385,32 @@ def _register_prediction_specs(
     if len(manifest_specs) != int(operation["requested_count"]):
         raise ValueError(
             "final Generation page does not complete the Platform Manifest"
+        )
+    if accepted_generation_operations:
+        duplicate_members = existing_members.intersection(
+            spec.prediction_id for spec in manifest_specs
+        )
+        if duplicate_members:
+            raise GenerationMembershipConflictError(
+                "a prediction is already fixed in another Generation Manifest"
+            )
+    relationship_result = accept_operation_manifest(
+        connection,
+        experiment_name=experiment_name,
+        workflow_role="generation",
+        operation_key=operation_key,
+        manifest_digest=page.manifest_digest,
+        target_ref=_target_ref_from_operation(operation),
+        generation_member_keys=tuple(
+            spec.prediction_id for spec in manifest_specs
+        ),
+    )
+    if (
+        relationship_result
+        is ManifestRelationshipResult.GENERATION_MEMBERSHIP_CONFLICT
+    ):
+        raise GenerationMembershipConflictError(
+            "generation membership is already fixed by a different Manifest"
         )
 
     results: list[RegistrationItemResult] = []

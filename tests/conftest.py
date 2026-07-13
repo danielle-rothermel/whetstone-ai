@@ -72,6 +72,7 @@ def _apply_v1_migrations(
 ) -> None:
     migration_modules = (
         "whetstone.db.migrations.versions.20260712_0001_whetstone_baseline",
+        "whetstone.db.migrations.versions.20260713_0002_generation_manifest_shards",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)

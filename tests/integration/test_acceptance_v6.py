@@ -172,6 +172,7 @@ def _insert_generation_run(
     generation_run_id: str,
     platform_item_id: str,
     platform_attempt: int,
+    status: str = "success",
 ) -> None:
     now = datetime.now(UTC)
     connection.execute(
@@ -182,7 +183,7 @@ def _insert_generation_run(
             execution_recipe_digest=f"recipe-{platform_attempt}",
             platform_item_id=platform_item_id,
             platform_attempt=platform_attempt,
-            status="success",
+            status=status,
             terminal_node_id="terminal",
             terminal_output_node_id="terminal",
             summary={
@@ -231,8 +232,38 @@ def _insert_score_attempt(
     )
 
 
+def _insert_harness_failure(
+    connection: Any,
+    *,
+    target: ScoringTargetSpec,
+    platform_item_id: str,
+) -> None:
+    now = datetime.now(UTC)
+    connection.execute(
+        insert(schema.score_harness_failures).values(
+            score_harness_failure_id=f"harness-{target.generation_run_id}",
+            prediction_id=target.prediction_id,
+            generation_run_id=target.generation_run_id,
+            attempt_index=0,
+            execution_recipe_digest=f"recipe-{target.generation_run_id}",
+            platform_item_id=platform_item_id,
+            platform_attempt=0,
+            score_attempt_id=f"score-{target.generation_run_id}",
+            scoring_profile_id=target.scoring_profile_id,
+            scoring_profile_version=target.scoring_profile_version,
+            parser_profile_id=target.parser_profile_id,
+            parser_version=target.parser_version,
+            dataset_name=target.dataset_name,
+            dataset_split=target.dataset_split,
+            failure={"kind": "synthetic_harness_failure"},
+            started_at=now,
+            completed_at=now,
+        )
+    )
+
+
 @pytest.mark.integration
-def test_conflicting_generation_registration_rolls_back_specs(
+def test_generation_shards_register_and_duplicate_members_roll_back(
     app_postgres_schema: Any,
 ) -> None:
     first = prediction_spec(direct_graph(), experiment_name="exp")
@@ -244,38 +275,61 @@ def test_conflicting_generation_registration_rolls_back_specs(
         operation_key="generation",
         specs=(first,),
     )
+    _submit_generation(
+        app_postgres_schema.engine,
+        operation_key="generation",
+        specs=(first,),
+    )
     with app_postgres_schema.engine.connect() as connection:
         source_version = connection.execute(
             select(schema.experiments.c.acceptance_source_version)
         ).scalar_one()
 
+    _submit_generation(
+        app_postgres_schema.engine,
+        operation_key="generation-second-shard",
+        specs=(second,),
+    )
     with pytest.raises(GenerationMembershipConflictError):
         _submit_generation(
             app_postgres_schema.engine,
-            operation_key="generation-conflict",
+            operation_key="generation-duplicate-member",
             specs=(second,),
         )
 
     with app_postgres_schema.engine.connect() as connection:
-        assert (
+        assert set(
             connection.execute(
-                select(schema.prediction_specs.c.prediction_id).where(
-                    schema.prediction_specs.c.prediction_id
-                    == second.prediction_id
-                )
-            ).scalar_one_or_none()
-            is None
-        )
+                select(schema.prediction_specs.c.prediction_id)
+            ).scalars()
+        ) == {first.prediction_id, second.prediction_id}
         assert (
             connection.execute(
                 select(schema.experiments.c.acceptance_source_version)
             ).scalar_one()
-            == source_version
+            == source_version + 1
         )
+        platform = PlatformSchema(prefix="whetstone")
+        assert set(
+            connection.execute(
+                select(platform.item_attempts.c.item_id)
+            ).scalars()
+        ) == {
+            connection.execute(
+                select(platform.items.c.item_id).where(
+                    platform.items.c.operation_key == "generation"
+                )
+            ).scalar_one(),
+            connection.execute(
+                select(platform.items.c.item_id).where(
+                    platform.items.c.operation_key == "generation-second-shard"
+                )
+            ).scalar_one(),
+        }
 
 
 @pytest.mark.integration
-def test_interleaved_generation_pages_persist_only_winning_manifest_specs(
+def test_interleaved_generation_shards_persist_all_unique_specs(
     app_postgres_schema: Any,
 ) -> None:
     barrier = Barrier(2)
@@ -351,18 +405,146 @@ def test_interleaved_generation_pages_persist_only_winning_manifest_specs(
             except GenerationMembershipConflictError:
                 outcomes.append("conflict")
 
-    assert outcomes.count("conflict") == 1
+    assert sorted(outcomes) == ["generation-a", "generation-b"]
     with engine.connect() as connection:
-        winner = connection.execute(
-            select(schema.experiment_operation_manifests.c.operation_key)
-        ).scalar_one()
+        operations = set(
+            connection.execute(
+                select(schema.experiment_operation_manifests.c.operation_key)
+            ).scalars()
+        )
         persisted_ids = set(
             connection.execute(
                 select(schema.prediction_specs.c.prediction_id)
             ).scalars()
         )
-    assert persisted_ids == expected_ids[winner]
+    assert operations == {"generation-a", "generation-b"}
+    assert (
+        persisted_ids
+        == expected_ids["generation-a"] | expected_ids["generation-b"]
+    )
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_mixed_terminal_failures_promote_only_when_every_cell_is_accounted(
+    app_postgres_schema: Any,
+) -> None:
+    specs = tuple(
+        prediction_spec(
+            direct_graph(), experiment_name="exp", task_id=f"HumanEval/{index}"
+        )
+        for index in range(3)
+    )
+    snapshot = {
+        "sha256": "a" * 64,
+        "header": {
+            "schema_version": 1,
+            "dataset_id": "evalplus/humanevalplus",
+            "hf_revision": "frozen",
+            "overrides_digest": "b" * 64,
+        },
+    }
+    for spec in specs:
+        spec.task.metadata["dataset_snapshot"] = snapshot
+    _submit_generation(
+        app_postgres_schema.engine,
+        operation_key="generation-canary",
+        specs=specs[:2],
+    )
+    _submit_generation(
+        app_postgres_schema.engine,
+        operation_key="generation-second",
+        specs=specs[2:],
+    )
+    platform = PlatformSchema(prefix="whetstone")
+    run_ids = [f"run-{index}" for index in range(3)]
+    with app_postgres_schema.engine.begin() as connection:
+        generation_items = {
+            row["item_key"]: row["item_id"]
+            for row in connection.execute(select(platform.items)).mappings()
+        }
+        for index, spec in enumerate(specs):
+            _insert_generation_run(
+                connection,
+                prediction_id=spec.prediction_id,
+                generation_run_id=run_ids[index],
+                platform_item_id=generation_items[spec.prediction_id],
+                platform_attempt=0,
+                status="error" if index == 1 else "success",
+            )
+        _terminalize_operation(connection, "generation-canary")
+        _terminalize_operation(connection, "generation-second")
+    targets = tuple(
+        _target(specs[index].prediction_id, run_ids[index], snapshot)
+        for index in (0, 2)
+    )
+    _submit_scoring(
+        app_postgres_schema.engine,
+        operation_key="scoring",
+        targets=targets,
+    )
+    profile = RequiredScoringProfile(
+        scoring_profile_id=targets[0].scoring_profile_id,
+        scoring_profile_version=targets[0].scoring_profile_version,
+        parser_profile_id=targets[0].parser_profile_id,
+        parser_version=targets[0].parser_version,
+        dataset_name=targets[0].dataset_name,
+        dataset_split=targets[0].dataset_split,
+    )
+    with app_postgres_schema.engine.begin() as connection:
+        scoring_items = {
+            row["item_key"]: row["item_id"]
+            for row in connection.execute(
+                select(platform.items).where(
+                    platform.items.c.operation_key == "scoring"
+                )
+            ).mappings()
+        }
+        _insert_score_attempt(
+            connection,
+            target=targets[0],
+            platform_item_id=scoring_items[targets[0].item_key],
+        )
+        _insert_harness_failure(
+            connection,
+            target=targets[1],
+            platform_item_id=scoring_items[targets[1].item_key],
+        )
+        _terminalize_operation(connection, "scoring")
+        result = evaluate_strict_acceptance(
+            connection,
+            experiment_name="exp",
+            required_profiles=(profile,),
+        )
+
+    assert result.disposition is AcceptanceDisposition.PROMOTED
+    assert result.expected_count == 3
+    assert result.accepted_count == 3
+    assert result.missing_count == 0
+    assert result.rejected_count == 0
+    snapshot_cut = ApplicationSnapshot(
+        source_database="test",
+        captured_at=datetime.now(UTC),
+        snapshot_seq=1,
+    )
+    projections = analysis_projection_specs() + detail_projection_specs()
+    with app_postgres_schema.engine.connect() as connection:
+        rows = {
+            projection.member: projection.full_rebuild_builder(
+                connection, snapshot_cut
+            )
+            for projection in projections
+            if projection.full_rebuild_builder is not None
+        }
+    assert len(rows["predictions"]) == 3
+    generation_failure = next(
+        row
+        for row in rows["predictions"]
+        if row["prediction_id"] == specs[1].prediction_id
+    )
+    assert generation_failure["generation_status"] == "error"
+    assert generation_failure["score"] is None
+    assert len(rows["detail_score_harness_failures"]) == 1
 
 
 @pytest.mark.integration

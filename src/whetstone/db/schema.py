@@ -407,6 +407,7 @@ experiment_operation_manifests = Table(
     Column("selection_digest", Text),
     Column("target_ref", JSONB, nullable=False),
     Column("accepted_at", DateTime(timezone=True), nullable=False),
+    Column("accepted_generation_ordinal", Integer),
     Column("accepted_scoring_ordinal", Integer),
     UniqueConstraint(
         "experiment_name",
@@ -417,8 +418,9 @@ experiment_operation_manifests = Table(
     ),
 )
 Index(
-    "uq_whetstone_one_generation_manifest",
+    "uq_whetstone_generation_manifest_ordinal",
     experiment_operation_manifests.c.experiment_name,
+    experiment_operation_manifests.c.accepted_generation_ordinal,
     unique=True,
     postgresql_where=experiment_operation_manifests.c.workflow_role
     == "generation",
@@ -450,6 +452,15 @@ experiment_acceptance_evaluations = Table(
     ),
     Column("acceptance_source_version", Integer, nullable=False),
     Column("status", Text, nullable=False),
+    Column(
+        "generation_relationships", JSONB, nullable=False, server_default="[]"
+    ),
+    Column(
+        "generation_relationships_digest",
+        Text,
+        nullable=False,
+        server_default="",
+    ),
     Column("generation_operation_key", Text, nullable=False),
     Column("generation_manifest_digest", Text, nullable=False),
     Column("scoring_relationships", JSONB, nullable=False),

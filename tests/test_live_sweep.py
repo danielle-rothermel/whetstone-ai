@@ -30,6 +30,51 @@ def _cell(cell_id: str) -> dict[str, str]:
     return {"cell_id": cell_id}
 
 
+def _scoring_target(
+    *, prediction_id: str = "prediction-a", generation_run_id: str = "run-a"
+) -> live_sweep.ScoringTargetSpec:
+    return live_sweep.ScoringTargetSpec.model_validate(
+        {
+            "prediction_id": prediction_id,
+            "generation_run_id": generation_run_id,
+            "scoring_profile_id": "humaneval",
+            "scoring_profile_version": "v1",
+            "parser_profile_id": "humaneval-best-effort",
+            "parser_version": "v1",
+            "dataset_name": "evalplus/humanevalplus",
+            "dataset_split": "test",
+            "dataset_snapshot": {
+                "sha256": "a" * 64,
+                "header": {
+                    "schema_version": 1,
+                    "dataset_id": "evalplus/humanevalplus",
+                    "hf_revision": "frozen",
+                    "overrides_digest": "b" * 64,
+                },
+            },
+        }
+    )
+
+
+def _scoring_item_ids(
+    operation_key: str, targets: tuple[live_sweep.ScoringTargetSpec, ...]
+) -> list[str]:
+    return [
+        live_sweep.item_id(
+            operation_key=operation_key, item_key=target.item_key
+        )
+        for target in targets
+    ]
+
+
+def _scoring_selection_digest(
+    targets: tuple[live_sweep.ScoringTargetSpec, ...],
+) -> str:
+    return live_sweep.sha256_json_digest(
+        [target.model_dump(mode="json") for target in targets]
+    )
+
+
 def test_bounded_page_requires_terminal_lifecycle() -> None:
     fact = CellReconciliation(
         cell_id="a",
@@ -142,6 +187,228 @@ def test_ledger_intent_is_idempotent_and_excludes_remaining(
         ledger.close()
 
 
+def test_generation_shards_are_bounded_stable_and_exhaustive() -> None:
+    cells = [_cell(f"cell-{index:03d}") for index in range(217)]
+    canary_ids = [str(cell["cell_id"]) for cell in cells[:12]]
+
+    first = live_sweep._generation_shards(
+        campaign="campaign", cells=cells, canary_ids=canary_ids
+    )
+    second = live_sweep._generation_shards(
+        campaign="campaign", cells=cells, canary_ids=canary_ids
+    )
+
+    assert first == second
+    assert [len(shard["cell_ids"]) for shard in first] == [12, 100, 100, 5]
+    assert [cell_id for shard in first for cell_id in shard["cell_ids"]] == [
+        *canary_ids,
+        *(str(cell["cell_id"]) for cell in cells[12:]),
+    ]
+    assert len({shard["operation_key"] for shard in first}) == 4
+
+
+def _write_relock_campaign(campaign: Path) -> None:
+    campaign.mkdir()
+    cells = [
+        {
+            "cell_id": f"canary-{index}",
+            "task_id": "HumanEval/0",
+            "repetition_seed": 0,
+            "prediction_id": f"prediction-canary-{index}",
+        }
+        for index in range(12)
+    ] + [
+        {
+            "cell_id": "remaining",
+            "task_id": "HumanEval/1",
+            "repetition_seed": 0,
+            "prediction_id": "prediction-remaining",
+        }
+    ]
+    manifest = campaign / "manifest.jsonl"
+    manifest.write_text(
+        "".join(json.dumps(cell, sort_keys=True) + "\n" for cell in cells),
+        encoding="utf-8",
+    )
+    (campaign / "campaign-metadata.json").write_text(
+        json.dumps({"campaign": "campaign"}), encoding="utf-8"
+    )
+    (campaign / "canary-12-cells.json").write_text(
+        json.dumps({"cell_ids": [cell["cell_id"] for cell in cells[:12]]}),
+        encoding="utf-8",
+    )
+    (campaign / "manifest-index.json").write_text(
+        json.dumps(
+            {"manifest_sha256": sha256(manifest.read_bytes()).hexdigest()}
+        ),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.parametrize("crash_after_fsync", range(1, 7))
+def test_relock_recovers_after_every_durability_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    crash_after_fsync: int,
+) -> None:
+    campaign = tmp_path / "campaign"
+    _write_relock_campaign(campaign)
+    real_fsync_directory = live_sweep._fsync_directory
+    fsyncs = 0
+
+    def crash_after(path: Path) -> None:
+        nonlocal fsyncs
+        real_fsync_directory(path)
+        fsyncs += 1
+        if fsyncs == crash_after_fsync:
+            raise RuntimeError("injected relock crash")
+
+    monkeypatch.setattr(live_sweep, "_fsync_directory", crash_after)
+    crashed = CliRunner().invoke(
+        live_sweep.APP, ["relock-generation-shards", str(campaign)]
+    )
+    assert crashed.exit_code == 1
+    monkeypatch.setattr(
+        live_sweep, "_fsync_directory", real_fsync_directory
+    )
+
+    recovered = CliRunner().invoke(
+        live_sweep.APP, ["relock-generation-shards", str(campaign)]
+    )
+    assert recovered.exit_code == 0, recovered.output
+    pointer_before = (campaign / "generation-lock.json").read_bytes()
+    manifest, shards, index = live_sweep._locked_generation_paths(campaign)
+    pointer = json.loads(pointer_before)
+    assert pointer["sha256"] == {
+        manifest.name: sha256(manifest.read_bytes()).hexdigest(),
+        shards.name: sha256(shards.read_bytes()).hexdigest(),
+        index.name: sha256(index.read_bytes()).hexdigest(),
+    }
+
+    repeated = CliRunner().invoke(
+        live_sweep.APP, ["relock-generation-shards", str(campaign)]
+    )
+    assert repeated.exit_code == 0, repeated.output
+    assert (campaign / "generation-lock.json").read_bytes() == pointer_before
+
+
+def test_relock_pointer_is_authoritative_over_legacy_files(
+    tmp_path: Path,
+) -> None:
+    campaign = tmp_path / "campaign"
+    _write_relock_campaign(campaign)
+    first = CliRunner().invoke(
+        live_sweep.APP, ["relock-generation-shards", str(campaign)]
+    )
+    assert first.exit_code == 0, first.output
+    authoritative_manifest = live_sweep._locked_generation_paths(campaign)[0]
+    (campaign / "manifest.jsonl").write_text("corrupt legacy file\n")
+
+    second = CliRunner().invoke(
+        live_sweep.APP, ["relock-generation-shards", str(campaign)]
+    )
+
+    assert second.exit_code == 0, second.output
+    assert live_sweep._locked_generation_paths(campaign)[0] == (
+        authoritative_manifest
+    )
+
+
+def test_scoring_intent_is_replay_safe_and_snapshot_bound(
+    tmp_path: Path,
+) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    intent = {
+        "operation_key": "scoring-a",
+        "generation_cut_digest": "cut-a",
+        "selection_digest": _scoring_selection_digest(
+            (_scoring_target(),)
+        ),
+        "snapshot_sha256": "a" * 64,
+        "scoring_profile_id": "humaneval",
+        "scoring_profile_version": "v1",
+        "parser_profile_id": "humaneval-best-effort",
+        "parser_version": "v1",
+        "item_ids": _scoring_item_ids("scoring-a", (_scoring_target(),)),
+        "targets": (_scoring_target(),),
+    }
+    try:
+        ledger.scoring_intent(**intent)
+        ledger.scoring_intent(**intent)
+        with pytest.raises(ValueError, match="identity changed"):
+            ledger.scoring_intent(
+                operation_key="scoring-a",
+                generation_cut_digest="cut-a",
+                selection_digest=_scoring_selection_digest(
+                    (_scoring_target(),)
+                ),
+                snapshot_sha256="b" * 64,
+                scoring_profile_id="humaneval",
+                scoring_profile_version="v1",
+                parser_profile_id="humaneval-best-effort",
+                parser_version="v1",
+                item_ids=_scoring_item_ids(
+                    "scoring-a", (_scoring_target(),)
+                ),
+                targets=(_scoring_target(),),
+            )
+        with pytest.raises(ValueError, match="identity changed"):
+            ledger.scoring_intent(
+                operation_key="scoring-b",
+                generation_cut_digest="cut-a",
+                selection_digest=_scoring_selection_digest(
+                    (_scoring_target(),)
+                ),
+                snapshot_sha256="a" * 64,
+                scoring_profile_id="humaneval",
+                scoring_profile_version="v1",
+                parser_profile_id="humaneval-best-effort",
+                parser_version="v1",
+                item_ids=_scoring_item_ids(
+                    "scoring-b", (_scoring_target(),)
+                ),
+                targets=(_scoring_target(),),
+            )
+        count = ledger.connection.execute(
+            "SELECT COUNT(*) FROM sweep_scoring_operations"
+        ).fetchone()[0]
+        assert count == 1
+    finally:
+        ledger.close()
+
+
+def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "error",
+            "model": "gpt-5.4-nano",
+            "output": None,
+            "response_metadata": {},
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": "whetstone.eval_failures.PermanentFailureError",
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "metadata": {
+                    "provider_failure": {
+                        "code": "response_parse_error",
+                        "metadata": {"response_status": "completed"},
+                    }
+                },
+            },
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "parse_failure"
+    assert diagnostics["typed_failure_code"] == "provider_response_parse"
+    assert diagnostics["response_status"] == "completed"
+    assert diagnostics["output_field_present"] is False
+
+
 def test_legacy_cost_columns_are_removed_without_gating_intent(
     tmp_path: Path,
 ) -> None:
@@ -210,6 +477,116 @@ def test_remaining_never_resubmits_typed_failure(tmp_path: Path) -> None:
         ledger.close()
 
 
+@pytest.mark.parametrize("status", ["in_flight", "incomplete"])
+def test_scoring_cut_rejects_nonterminal_or_unreconciled_member(
+    tmp_path: Path, status: str
+) -> None:
+    cell = {
+        "cell_id": "cell-a",
+        "prediction_id": "prediction-a",
+        "operation_key": "generation-a",
+        "platform_item_id": "item-a",
+        "generation_shard_ordinal": 1,
+    }
+    ledger = SweepLedger(tmp_path / "ledger.sqlite3", manifest_hash="manifest")
+    try:
+        ledger.record_intent([cell])
+        ledger.submission_intent(
+            [cell],
+            operation_key="generation-a",
+            prediction_ids={"cell-a": "prediction-a"},
+        )
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    "cell-a", status, 0, 0, None, {}, None
+                )
+            ]
+        )
+        with pytest.raises(RuntimeError, match="fully reconciled"):
+            live_sweep._complete_generation_members([cell], ledger)
+    finally:
+        ledger.close()
+
+
+def test_scoring_cut_rejects_partial_member_inventory(tmp_path: Path) -> None:
+    cells = [
+        {"cell_id": "cell-a", "prediction_id": "prediction-a"},
+        {"cell_id": "cell-b", "prediction_id": "prediction-b"},
+    ]
+    ledger = SweepLedger(tmp_path / "ledger.sqlite3", manifest_hash="manifest")
+    try:
+        ledger.record_intent([cells[0]])
+        with pytest.raises(RuntimeError, match="every locked"):
+            live_sweep._complete_generation_members(cells, ledger)
+    finally:
+        ledger.close()
+
+
+def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    ledger_path = tmp_path / "ledger.sqlite3"
+    target = _scoring_target()
+    ledger = SweepLedger(ledger_path, manifest_hash="manifest-a")
+    try:
+        ledger.scoring_intent(
+            operation_key="scoring-a",
+            generation_cut_digest="cut-a",
+            selection_digest=_scoring_selection_digest((target,)),
+            snapshot_sha256="a" * 64,
+            scoring_profile_id="humaneval",
+            scoring_profile_version="v1",
+            parser_profile_id="humaneval-best-effort",
+            parser_version="v1",
+            item_ids=_scoring_item_ids("scoring-a", (target,)),
+            targets=(target,),
+        )
+    finally:
+        ledger.close()
+    monkeypatch.setattr(
+        live_sweep,
+        "validate_campaign",
+        lambda _path: (
+            {"campaign": "campaign", "snapshot": {"sha256": "a" * 64}},
+            [{"cell_id": "cell-a", "prediction_id": "prediction-a"}],
+            "manifest-a",
+        ),
+    )
+    monkeypatch.setattr(
+        live_sweep,
+        "create_engine",
+        lambda _url: SimpleNamespace(dispose=lambda: None),
+    )
+    monkeypatch.setattr(
+        live_sweep, "resolve_application_database_url", lambda: "sqlite://"
+    )
+    submissions: list[tuple[live_sweep.ScoringTargetSpec, ...]] = []
+    monkeypatch.setattr(
+        live_sweep,
+        "submit_scoring_targets",
+        lambda _engine, **kwargs: submissions.append(tuple(kwargs["targets"])),
+    )
+    arguments = [
+        "submit-scoring",
+        str(campaign),
+        "--execute",
+        "--ledger",
+        str(ledger_path),
+    ]
+    runner = CliRunner()
+
+    replay = runner.invoke(live_sweep.APP, arguments)
+    duplicate = runner.invoke(live_sweep.APP, arguments)
+
+    assert replay.exit_code == 0, replay.output
+    assert duplicate.exit_code == 0, duplicate.output
+    assert submissions == [(target,)]
+    assert json.loads(duplicate.output)["dispatch"] is False
+
+
 def test_sqlite_intent_replays_after_platform_commit_before_local_ack(
     tmp_path: Path,
 ) -> None:
@@ -269,7 +646,7 @@ def test_executable_artifact_binds_generated_spec_and_rejects_tamper(
     shutil.copytree(source, target)
     _metadata, cells, _hash = live_sweep.validate_campaign(target)
     assert len(cells) == 5_904
-    manifest = target / "manifest.jsonl"
+    manifest = live_sweep._locked_generation_paths(target)[0]
     rows = [json.loads(line) for line in manifest.read_text().splitlines()]
     rows[0]["prediction_id"] = "tampered"
     manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
@@ -379,6 +756,170 @@ def test_submit_canary_executes_without_estimate_artifact(
     assert submitted == cells
 
 
+def test_submit_remaining_fresh_ledger_never_records_canary_shard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    canary = [
+        {
+            "cell_id": f"canary-{index}",
+            "generation_shard_ordinal": 1,
+            "operation_key": "canary-operation",
+        }
+        for index in range(12)
+    ]
+    remaining = [
+        {
+            "cell_id": "remaining",
+            "generation_shard_ordinal": 2,
+            "operation_key": "remaining-operation",
+        }
+    ]
+    # Deliberately put the canary after paid work: position is not the gate.
+    cells = remaining + canary
+    submitted: list[str] = []
+    monkeypatch.setattr(
+        live_sweep,
+        "validate_campaign",
+        lambda _path: ({"campaign": "test"}, cells, "manifest-a"),
+    )
+
+    def fake_submit(
+        _path: Path,
+        _metadata: dict[str, Any],
+        selected: list[dict[str, Any]],
+        ledger: SweepLedger,
+    ) -> None:
+        submitted.extend(str(cell["cell_id"]) for cell in selected)
+        for cell in selected:
+            cell_id = str(cell["cell_id"])
+            ledger.submitted(
+                [cell],
+                operation_key=str(cell["operation_key"]),
+                prediction_ids={cell_id: f"prediction-{cell_id}"},
+            )
+
+    monkeypatch.setattr(live_sweep, "_submit", fake_submit)
+    monkeypatch.setattr(
+        live_sweep,
+        "reconcile_ledger",
+        lambda ledger, *, engine: [
+            CellReconciliation(
+                str(row["cell_id"]), "succeeded", 0, 0, None, {}, None
+            )
+            for row in ledger.rows()
+        ],
+    )
+    monkeypatch.setattr(
+        live_sweep,
+        "create_engine",
+        lambda _url: SimpleNamespace(dispose=lambda: None),
+    )
+    monkeypatch.setattr(
+        live_sweep, "resolve_application_database_url", lambda: "sqlite://"
+    )
+
+    result = CliRunner().invoke(
+        live_sweep.APP,
+        [
+            "submit-remaining",
+            str(campaign),
+            "--execute",
+            "--ledger",
+            str(tmp_path / "ledger.sqlite3"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert submitted == ["remaining"]
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        assert [str(row["cell_id"]) for row in ledger.rows()] == ["remaining"]
+    finally:
+        ledger.close()
+
+
+def test_submit_remaining_replays_only_prejournaled_canary_intent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    cells = [
+        {
+            "cell_id": f"canary-{index}",
+            "generation_shard_ordinal": 1,
+            "operation_key": "canary-operation",
+        }
+        for index in range(12)
+    ]
+    prediction_ids = {
+        str(cell["cell_id"]): f"prediction-{cell['cell_id']}"
+        for cell in cells
+    }
+    ledger_path = tmp_path / "ledger.sqlite3"
+    ledger = SweepLedger(ledger_path, manifest_hash="manifest-a")
+    try:
+        ledger.record_intent(cells)
+    finally:
+        ledger.close()
+    submitted: list[str] = []
+    monkeypatch.setattr(
+        live_sweep,
+        "validate_campaign",
+        lambda _path: ({"campaign": "test"}, cells, "manifest-a"),
+    )
+
+    def fake_submit(
+        _path: Path,
+        _metadata: dict[str, Any],
+        selected: list[dict[str, Any]],
+        ledger: SweepLedger,
+    ) -> None:
+        submitted.extend(str(cell["cell_id"]) for cell in selected)
+        ledger.submitted(
+            selected,
+            operation_key="canary-operation",
+            prediction_ids=prediction_ids,
+        )
+
+    monkeypatch.setattr(live_sweep, "_submit", fake_submit)
+    monkeypatch.setattr(
+        live_sweep,
+        "reconcile_ledger",
+        lambda ledger, *, engine: [
+            CellReconciliation(
+                str(row["cell_id"]), "succeeded", 0, 0, None, {}, None
+            )
+            for row in ledger.rows()
+        ],
+    )
+    monkeypatch.setattr(
+        live_sweep,
+        "create_engine",
+        lambda _url: SimpleNamespace(dispose=lambda: None),
+    )
+    monkeypatch.setattr(
+        live_sweep, "resolve_application_database_url", lambda: "sqlite://"
+    )
+
+    result = CliRunner().invoke(
+        live_sweep.APP,
+        [
+            "submit-remaining",
+            str(campaign),
+            "--execute",
+            "--ledger",
+            str(ledger_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert submitted == [str(cell["cell_id"]) for cell in cells]
+
+
 @pytest.mark.parametrize(
     "command", ["submit-canary", "submit-remaining", "submit-retry"]
 )
@@ -419,7 +960,19 @@ def test_remaining_pages_gate_only_on_terminal_lifecycle(
 ) -> None:
     campaign = tmp_path / "campaign"
     campaign.mkdir()
-    cells = [_cell(f"cell-{index}") for index in range(3)]
+    cells = [
+        {
+            "cell_id": "canary",
+            "generation_shard_ordinal": 1,
+        },
+        *[
+            {
+                "cell_id": f"cell-{index}",
+                "generation_shard_ordinal": 2 + index,
+            }
+            for index in range(3)
+        ],
+    ]
     submitted: list[str] = []
     monkeypatch.setattr(
         live_sweep,
@@ -539,8 +1092,7 @@ def test_safe_diagnostics_reports_output_key_and_nonblank_semantics(
             {
                 "failure_class": "permanent",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "PredictionParseError"
+                    "whetstone.eval_failures.exceptions.PredictionParseError"
                 ),
             },
             "parse_failure",
@@ -550,8 +1102,7 @@ def test_safe_diagnostics_reports_output_key_and_nonblank_semantics(
             {
                 "failure_class": "transient",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "TransientFailureError"
+                    "whetstone.eval_failures.exceptions.TransientFailureError"
                 ),
                 "metadata": {"provider_failure": {"message": "secret"}},
             },
@@ -605,8 +1156,7 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
             "failure": {
                 "failure_class": "permanent",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "EmptyGenerationError"
+                    "whetstone.eval_failures.exceptions.EmptyGenerationError"
                 ),
                 "message": secret,
                 "metadata": {"prompt": prompt, "headers": secret},
@@ -620,9 +1170,9 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
     )
 
     serialized = json.dumps(diagnostics, sort_keys=True)
-    assert diagnostics["response_id_hash"] == sha256(
-        b"response-123"
-    ).hexdigest()
+    assert (
+        diagnostics["response_id_hash"] == sha256(b"response-123").hexdigest()
+    )
     assert diagnostics["returned_model"] == "gpt-5.4"
     assert diagnostics["finish_reason"] == "stop"
     assert diagnostics["parser_profile"] == "humaneval"

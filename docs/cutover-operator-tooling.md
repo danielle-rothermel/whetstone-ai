@@ -31,6 +31,23 @@ whetstone-cutover stores run --descriptor /absolute/operator/stores.json -- \
 terminal lifecycle (`succeeded`, `typed_failure`, or `incomplete`) for every
 cell in that page before recording the next. Observed provider cost and tokens
 are telemetry: missing cost is reported explicitly and never blocks dispatch.
+It never creates canary intent: a fresh ledger starts only locked non-canary
+shards. If `submit-canary` was interrupted after journaling its immutable
+canary intent, `submit-remaining` may replay that exact locked pending canary
+operation before continuing; it never synthesizes canary intent itself.
+
+Run `submit-scoring` only after Generation reconciliation. The command rejects
+until every locked shard relationship and member is present, terminal, and
+fully reconciled. Its first successful invocation journals one complete
+campaign cut, including the exact serialized scoring targets, before dispatch.
+An interrupted `submitting` intent replays those stored targets; once marked
+`submitted`, later invocations are no-ops and cannot derive another cut.
+
+`relock-generation-shards` writes a content-addressed artifact set under
+`generation-locks/`, fsyncs every file and directory, and then atomically
+switches `generation-lock.json`. The pointer is authoritative after it exists;
+an interrupted relock can be rerun deterministically without repairing a mixed
+set of top-level legacy files.
 
 Cleanup is fail-closed and ownership-checked:
 

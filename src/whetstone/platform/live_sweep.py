@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -19,7 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 import typer
 from dr_platform import (
@@ -37,6 +38,7 @@ from dr_serialize import sha256_json_digest
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
+from whetstone.db import io as db_io
 from whetstone.db import schema as whetstone_schema
 from whetstone.lm.boundary import OUTPUT_FIELD_TEXT
 from whetstone.platform.dataset_snapshot import (
@@ -48,8 +50,13 @@ from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
     load_model_config_fragment,
 )
-from whetstone.platform.submission import submit_prediction_specs
-from whetstone.platform.targets import target_registry
+from whetstone.platform.submission import (
+    scoring_target_for_generation_run,
+    select_populated_scoring_generation_runs,
+    submit_prediction_specs,
+    submit_scoring_targets,
+)
+from whetstone.platform.targets import ScoringTargetSpec, target_registry
 from whetstone.records import (
     DatasetSnapshotIdentityPayload,
     GenerationRunStatus,
@@ -59,6 +66,10 @@ APP = typer.Typer(no_args_is_help=True)
 EXPECTED_CELLS = 5_904
 CANARY_CELLS = 12
 MAX_RETRIES_PER_CELL = 2
+GENERATION_SHARD_SIZE = 100
+GENERATION_SHARDS_FILE = "generation-manifest-shards.json"
+GENERATION_LOCK_POINTER_FILE = "generation-lock.json"
+GENERATION_LOCKS_DIRECTORY = "generation-locks"
 
 _PLATFORM_TERMINAL_FAILURES = frozenset(
     {
@@ -109,6 +120,7 @@ class LiveSweepDiagnostics:
     response_id_hash: str | None
     returned_model: str | None
     finish_reason: str | None
+    response_status: str | None
     node_status: str | None
     expected_output_field: str
     output_field_present: bool
@@ -146,6 +158,22 @@ class CellReconciliation:
     error_classification: str | None
     score_status: str | None = None
     diagnostics: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class FrozenScoringIntent:
+    """The one immutable scoring cut journaled for a campaign manifest."""
+
+    operation_key: str
+    generation_cut_digest: str
+    selection_digest: str
+    snapshot_sha256: str
+    scoring_profile_id: str
+    scoring_profile_version: str
+    parser_profile_id: str
+    parser_version: str
+    targets: tuple[ScoringTargetSpec, ...]
+    status: str
 
 
 def _attempt_facts(
@@ -249,32 +277,32 @@ def _score_terminal_status(
         if generation_run_id is None:
             return None
         score = connection.execute(
-            select(whetstone_schema.score_attempts.c.status).where(
+            select(whetstone_schema.score_attempts.c.status)
+            .where(
                 whetstone_schema.score_attempts.c.prediction_id
                 == prediction_id,
                 whetstone_schema.score_attempts.c.generation_run_id
                 == generation_run_id,
-                whetstone_schema.score_attempts.c.platform_item_id
-                == platform_item_id,
-                whetstone_schema.score_attempts.c.platform_attempt
-                == platform_attempt,
             )
+            .order_by(
+                whetstone_schema.score_attempts.c.platform_attempt.desc()
+            )
+            .limit(1)
         ).scalar_one_or_none()
         if score is not None:
             return f"score_{score}"
         harness = connection.execute(
-            select(
-                whetstone_schema.score_harness_failures.c.score_attempt_id
-            ).where(
+            select(whetstone_schema.score_harness_failures.c.score_attempt_id)
+            .where(
                 whetstone_schema.score_harness_failures.c.prediction_id
                 == prediction_id,
                 whetstone_schema.score_harness_failures.c.generation_run_id
                 == generation_run_id,
-                whetstone_schema.score_harness_failures.c.platform_item_id
-                == platform_item_id,
-                whetstone_schema.score_harness_failures.c.platform_attempt
-                == platform_attempt,
             )
+            .order_by(
+                whetstone_schema.score_harness_failures.c.platform_attempt.desc()
+            )
+            .limit(1)
         ).scalar_one_or_none()
     return "score_harness_failure" if harness is not None else None
 
@@ -368,8 +396,24 @@ def _project_safe_diagnostics(
     finish_reason = _allowlisted_string(output_metadata, "finish_reason")
     if finish_reason is None:
         finish_reason = _allowlisted_string(response_metadata, "finish_reason")
+    response_status = _allowlisted_string(response_metadata, "status")
     output_field_present, output_nonblank = _output_field_facts(output)
     failure = node.get("failure") if node is not None else None
+    if response_status is None and isinstance(failure, Mapping):
+        failure_metadata = failure.get("metadata")
+        provider_failure = (
+            failure_metadata.get("provider_failure")
+            if isinstance(failure_metadata, Mapping)
+            else None
+        )
+        provider_metadata = (
+            provider_failure.get("metadata")
+            if isinstance(provider_failure, Mapping)
+            else None
+        )
+        response_status = _allowlisted_string(
+            provider_metadata, "response_status"
+        )
     disposition, failure_class, failure_code = _adapter_facts(
         node_status=_allowlisted_string(node, "status"),
         failure=failure,
@@ -384,6 +428,7 @@ def _project_safe_diagnostics(
         ),
         returned_model=model,
         finish_reason=finish_reason,
+        response_status=response_status,
         node_status=_allowlisted_string(node, "status"),
         expected_output_field=OUTPUT_FIELD_TEXT,
         output_field_present=output_field_present,
@@ -476,6 +521,22 @@ def _adapter_facts(
             TypedFailureCode.PROVIDER_RESPONSE_PARSE,
         )
     metadata = failure_mapping.get("metadata")
+    provider_failure = (
+        metadata.get("provider_failure")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    provider_failure_code = (
+        provider_failure.get("code")
+        if isinstance(provider_failure, Mapping)
+        else None
+    )
+    if provider_failure_code == "response_parse_error":
+        return (
+            AdapterDisposition.PARSE_FAILURE,
+            failure_class,
+            TypedFailureCode.PROVIDER_RESPONSE_PARSE,
+        )
     if "ProviderFailureError" in type_names or (
         isinstance(metadata, Mapping) and "provider_failure" in metadata
     ):
@@ -682,6 +743,222 @@ def _cell_operation_key(cell: Mapping[str, Any]) -> str:
     return value
 
 
+def _canonical_json_bytes(value: object) -> bytes:
+    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def _atomic_write(path: Path, payload: bytes) -> None:
+    temporary = path.with_name(f".{path.name}.relock-{os.getpid()}.tmp")
+    with temporary.open("wb") as destination:
+        destination.write(payload)
+        destination.flush()
+        os.fsync(destination.fileno())
+    temporary.replace(path)
+    _fsync_directory(path.parent)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _locked_generation_paths(campaign_dir: Path) -> tuple[Path, Path, Path]:
+    pointer_path = campaign_dir / GENERATION_LOCK_POINTER_FILE
+    if not pointer_path.is_file():
+        return (
+            campaign_dir / "manifest.jsonl",
+            campaign_dir / GENERATION_SHARDS_FILE,
+            campaign_dir / "manifest-index.json",
+        )
+    pointer = _load_json(pointer_path)
+    if pointer.get("schema_version") != 1:
+        raise typer.BadParameter("unsupported Generation lock pointer")
+    generation = pointer.get("generation")
+    if not isinstance(generation, str) or not generation:
+        raise typer.BadParameter("Generation lock pointer has no generation")
+    generation_root = (
+        campaign_dir / GENERATION_LOCKS_DIRECTORY / generation
+    ).resolve()
+    locks_root = (campaign_dir / GENERATION_LOCKS_DIRECTORY).resolve()
+    if not generation_root.is_relative_to(locks_root):
+        raise typer.BadParameter("Generation lock pointer escapes campaign")
+    paths = (
+        generation_root / "manifest.jsonl",
+        generation_root / GENERATION_SHARDS_FILE,
+        generation_root / "manifest-index.json",
+    )
+    expected_hashes = pointer.get("sha256")
+    if not isinstance(expected_hashes, Mapping):
+        raise typer.BadParameter("Generation lock pointer has no hash set")
+    for path in paths:
+        expected_hash = expected_hashes.get(path.name)
+        if not path.is_file() or expected_hash != _sha256(path):
+            raise typer.BadParameter(
+                "Generation lock pointer references an incomplete artifact set"
+            )
+    return paths
+
+
+def _write_generation_file(path: Path, payload: bytes) -> None:
+    if path.is_file():
+        if path.read_bytes() != payload:
+            raise typer.BadParameter(
+                "content-addressed Generation artifact is inconsistent"
+            )
+        return
+    _atomic_write(path, payload)
+
+
+def _generation_shards(
+    *, campaign: str, cells: list[dict[str, Any]], canary_ids: list[str]
+) -> list[dict[str, Any]]:
+    by_id = {str(cell["cell_id"]): cell for cell in cells}
+    if len(by_id) != len(cells) or len(set(canary_ids)) != CANARY_CELLS:
+        raise ValueError("campaign cell and canary identities must be unique")
+    if any(cell_id not in by_id for cell_id in canary_ids):
+        raise ValueError("canary contains a cell outside the manifest")
+    remaining_ids = [
+        str(cell["cell_id"])
+        for cell in cells
+        if str(cell["cell_id"]) not in set(canary_ids)
+    ]
+    member_groups = [canary_ids] + [
+        remaining_ids[start : start + GENERATION_SHARD_SIZE]
+        for start in range(0, len(remaining_ids), GENERATION_SHARD_SIZE)
+    ]
+    shards: list[dict[str, Any]] = []
+    for ordinal, member_ids in enumerate(member_groups, start=1):
+        members_digest = sha256_json_digest(cast(Any, member_ids))
+        operation_key = (
+            f"{campaign}-generation-shard-{ordinal:03d}-{members_digest[:16]}"
+        )
+        shards.append(
+            {
+                "ordinal": ordinal,
+                "kind": "canary" if ordinal == 1 else "remaining",
+                "operation_key": operation_key,
+                "members_digest": members_digest,
+                "cell_ids": member_ids,
+            }
+        )
+    return shards
+
+
+@APP.command("relock-generation-shards")
+def relock_generation_shards(
+    campaign_dir: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False)
+    ],
+) -> None:
+    """Publish bounded shards as one crash-consistent artifact generation."""
+    metadata = _load_json(campaign_dir / "campaign-metadata.json")
+    manifest_path, _, index_path = _locked_generation_paths(
+        campaign_dir
+    )
+    cells = [
+        json.loads(line)
+        for line in manifest_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    index = _load_json(index_path)
+    current_manifest_hash = hashlib.sha256(
+        manifest_path.read_bytes()
+    ).hexdigest()
+    if index.get("manifest_sha256") != current_manifest_hash:
+        raise typer.BadParameter(
+            "refusing to re-lock a manifest that does not match its index"
+        )
+    canary = _load_json(campaign_dir / "canary-12-cells.json")
+    canary_ids = [str(value) for value in canary.get("cell_ids", [])]
+    expected_canary_ids = [
+        str(cell["cell_id"])
+        for cell in cells
+        if cell.get("task_id") == "HumanEval/0"
+        and cell.get("repetition_seed") == 0
+    ]
+    if canary_ids != expected_canary_ids:
+        raise typer.BadParameter(
+            "canary selection does not match the locked deterministic rule"
+        )
+    shards = _generation_shards(
+        campaign=str(metadata["campaign"]),
+        cells=cells,
+        canary_ids=canary_ids,
+    )
+    by_cell = {
+        cell_id: shard for shard in shards for cell_id in shard["cell_ids"]
+    }
+    for cell in cells:
+        shard = by_cell[str(cell["cell_id"])]
+        cell["generation_shard_ordinal"] = shard["ordinal"]
+        cell["operation_key"] = shard["operation_key"]
+        cell["platform_item_id"] = item_id(
+            operation_key=shard["operation_key"],
+            item_key=str(cell["prediction_id"]),
+        )
+    manifest_bytes = b"".join(
+        (json.dumps(cell, sort_keys=True) + "\n").encode() for cell in cells
+    )
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+    shard_artifact = {
+        "schema_version": 1,
+        "campaign": metadata["campaign"],
+        "manifest_sha256": manifest_hash,
+        "shard_size": GENERATION_SHARD_SIZE,
+        "shards": shards,
+    }
+    shard_bytes = _canonical_json_bytes(shard_artifact)
+    index["manifest_sha256"] = manifest_hash
+    index["generation_shards_sha256"] = hashlib.sha256(shard_bytes).hexdigest()
+    index["generation_shard_count"] = len(shards)
+    index_bytes = _canonical_json_bytes(index)
+    generation = sha256_json_digest(
+        {
+            "schema_version": 1,
+            "manifest_sha256": manifest_hash,
+            "generation_shards_sha256": index["generation_shards_sha256"],
+            "manifest_index_sha256": hashlib.sha256(index_bytes).hexdigest(),
+        }
+    )
+    generation_dir = campaign_dir / GENERATION_LOCKS_DIRECTORY / generation
+    generation_dir.mkdir(parents=True, exist_ok=True)
+    _fsync_directory(generation_dir.parent)
+    artifacts = {
+        "manifest.jsonl": manifest_bytes,
+        GENERATION_SHARDS_FILE: shard_bytes,
+        "manifest-index.json": index_bytes,
+    }
+    for name, payload in artifacts.items():
+        _write_generation_file(generation_dir / name, payload)
+    _fsync_directory(generation_dir)
+    pointer = {
+        "schema_version": 1,
+        "generation": generation,
+        "sha256": {
+            name: hashlib.sha256(payload).hexdigest()
+            for name, payload in artifacts.items()
+        },
+    }
+    _atomic_write(
+        campaign_dir / GENERATION_LOCK_POINTER_FILE,
+        _canonical_json_bytes(pointer),
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "generation": generation,
+                "manifest_sha256": manifest_hash,
+                "generation_shards_sha256": index["generation_shards_sha256"],
+                "generation_shard_count": len(shards),
+            },
+            sort_keys=True,
+        )
+    )
+
+
 class SweepLedger:
     """Run-scoped, WAL-backed journal of durable submission lifecycle."""
 
@@ -703,6 +980,8 @@ class SweepLedger:
         self._ensure_column("attempt_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("score_status", "TEXT")
         self._ensure_column("diagnostics_json", "TEXT")
+        self._ensure_scoring_targets_column()
+        self._ensure_single_scoring_operation()
 
     def _create_tables(self) -> None:
         self.connection.execute(
@@ -727,6 +1006,22 @@ class SweepLedger:
               id INTEGER PRIMARY KEY, manifest_hash TEXT NOT NULL,
               cell_id TEXT NOT NULL, event TEXT NOT NULL,
               detail_json TEXT NOT NULL, created_at TEXT NOT NULL
+            )
+            """
+        )
+        self.connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sweep_scoring_operations (
+              manifest_hash TEXT NOT NULL, operation_key TEXT NOT NULL,
+              generation_cut_digest TEXT NOT NULL,
+              selection_digest TEXT NOT NULL, snapshot_sha256 TEXT NOT NULL,
+              scoring_profile_id TEXT NOT NULL,
+              scoring_profile_version TEXT NOT NULL,
+              parser_profile_id TEXT NOT NULL, parser_version TEXT NOT NULL,
+              item_ids_json TEXT NOT NULL, targets_json TEXT NOT NULL,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+              PRIMARY KEY (manifest_hash, operation_key)
             )
             """
         )
@@ -788,6 +1083,35 @@ class SweepLedger:
             self.connection.execute(
                 f"ALTER TABLE sweep_cells ADD COLUMN {name} {definition}"
             )
+
+    def _ensure_scoring_targets_column(self) -> None:
+        columns = {
+            str(row[1])
+            for row in self.connection.execute(
+                "PRAGMA table_info(sweep_scoring_operations)"
+            )
+        }
+        if "targets_json" not in columns:
+            self.connection.execute(
+                "ALTER TABLE sweep_scoring_operations ADD COLUMN "
+                "targets_json TEXT"
+            )
+
+    def _ensure_single_scoring_operation(self) -> None:
+        duplicate = self.connection.execute(
+            "SELECT manifest_hash FROM sweep_scoring_operations "
+            "GROUP BY manifest_hash HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError(
+                "ledger has multiple scoring intents and cannot be replayed "
+                "safely"
+            )
+        self.connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_sweep_scoring_manifest ON "
+            "sweep_scoring_operations(manifest_hash)"
+        )
 
     def close(self) -> None:
         self.connection.close()
@@ -928,7 +1252,7 @@ class SweepLedger:
             str(row[0])
             for row in self.connection.execute(
                 "SELECT cell_id FROM sweep_cells WHERE manifest_hash=? "
-                "AND status='submitting'",
+                "AND status IN ('pending','submitting')",
                 (self.manifest_hash,),
             ).fetchall()
         }
@@ -1002,6 +1326,131 @@ class SweepLedger:
             "SELECT * FROM sweep_cells WHERE manifest_hash=? ORDER BY cell_id",
             (self.manifest_hash,),
         ).fetchall()
+
+    def scoring_intent(
+        self,
+        *,
+        operation_key: str,
+        generation_cut_digest: str,
+        selection_digest: str,
+        snapshot_sha256: str,
+        scoring_profile_id: str,
+        scoring_profile_version: str,
+        parser_profile_id: str,
+        parser_version: str,
+        item_ids: list[str],
+        targets: tuple[ScoringTargetSpec, ...],
+    ) -> FrozenScoringIntent:
+        """Atomically journal the complete scoring identity before enqueue."""
+        now = _now()
+        targets_json = json.dumps(
+            [target.model_dump(mode="json") for target in targets],
+            sort_keys=True,
+        )
+        values = (
+            self.manifest_hash,
+            operation_key,
+            generation_cut_digest,
+            selection_digest,
+            snapshot_sha256,
+            scoring_profile_id,
+            scoring_profile_version,
+            parser_profile_id,
+            parser_version,
+            json.dumps(item_ids),
+            targets_json,
+            "submitting",
+            now,
+            now,
+        )
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO sweep_scoring_operations("
+                "manifest_hash,operation_key,generation_cut_digest,"
+                "selection_digest,snapshot_sha256,scoring_profile_id,"
+                "scoring_profile_version,parser_profile_id,parser_version,"
+                "item_ids_json,targets_json,status,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                values,
+            )
+            existing = connection.execute(
+                "SELECT operation_key,generation_cut_digest,selection_digest,"
+                "snapshot_sha256,scoring_profile_id,scoring_profile_version,"
+                "parser_profile_id,parser_version,item_ids_json,targets_json "
+                "FROM sweep_scoring_operations WHERE manifest_hash=?",
+                (self.manifest_hash,),
+            ).fetchone()
+            if existing is None or tuple(existing) != values[1:11]:
+                raise ValueError(
+                    "scoring operation identity changed on replay"
+                )
+        frozen = self.scoring_operation()
+        if frozen is None:
+            raise RuntimeError("scoring intent was not persisted")
+        return frozen
+
+    def scoring_operation(self) -> FrozenScoringIntent | None:
+        row = self.connection.execute(
+            "SELECT operation_key,generation_cut_digest,selection_digest,"
+            "snapshot_sha256,scoring_profile_id,scoring_profile_version,"
+            "parser_profile_id,parser_version,item_ids_json,targets_json,"
+            "status FROM "
+            "sweep_scoring_operations WHERE manifest_hash=?",
+            (self.manifest_hash,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row[9] is None:
+            raise ValueError(
+                "legacy scoring intent has no replayable frozen targets"
+            )
+        targets = tuple(
+            ScoringTargetSpec.model_validate(value)
+            for value in json.loads(str(row[9]))
+        )
+        identity_is_valid = (
+            sha256_json_digest(
+                [target.model_dump(mode="json") for target in targets]
+            )
+            == row[2]
+            and json.loads(str(row[8]))
+            == [
+                item_id(operation_key=str(row[0]), item_key=target.item_key)
+                for target in targets
+            ]
+            and {target.dataset_snapshot.sha256 for target in targets}
+            == {str(row[3])}
+            and {target.scoring_profile_id for target in targets}
+            == {str(row[4])}
+            and {target.scoring_profile_version for target in targets}
+            == {str(row[5])}
+            and {target.parser_profile_id for target in targets}
+            == {str(row[6])}
+            and {target.parser_version for target in targets}
+            == {str(row[7])}
+        )
+        if not targets or not identity_is_valid:
+            raise ValueError("frozen scoring intent is corrupt")
+        return FrozenScoringIntent(
+            operation_key=str(row[0]),
+            generation_cut_digest=str(row[1]),
+            selection_digest=str(row[2]),
+            snapshot_sha256=str(row[3]),
+            scoring_profile_id=str(row[4]),
+            scoring_profile_version=str(row[5]),
+            parser_profile_id=str(row[6]),
+            parser_version=str(row[7]),
+            targets=targets,
+            status=str(row[10]),
+        )
+
+    def scoring_submitted(self, *, operation_key: str) -> None:
+        with self._transaction() as connection:
+            connection.execute(
+                "UPDATE sweep_scoring_operations SET status='submitted',"
+                "updated_at=? WHERE manifest_hash=? AND operation_key=?",
+                (_now(), self.manifest_hash, operation_key),
+            )
 
     def reconciliation(self, facts: list[CellReconciliation]) -> None:
         with self._transaction() as connection:
@@ -1097,9 +1546,11 @@ def validate_campaign(
     campaign_dir: Path,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     metadata = _load_json(campaign_dir / "campaign-metadata.json")
-    manifest_path = campaign_dir / "manifest.jsonl"
+    manifest_path, shards_path, index_path = _locked_generation_paths(
+        campaign_dir
+    )
     manifest_hash = _sha256(manifest_path)
-    index = _load_json(campaign_dir / "manifest-index.json")
+    index = _load_json(index_path)
     if index.get("manifest_sha256") != manifest_hash:
         raise typer.BadParameter("manifest hash does not match locked index")
     cells = [
@@ -1107,6 +1558,59 @@ def validate_campaign(
         for line in manifest_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if not shards_path.is_file():
+        raise typer.BadParameter(
+            "campaign has no locked Generation Manifest shards; run "
+            "relock-generation-shards"
+        )
+    shards_bytes = shards_path.read_bytes()
+    if (
+        index.get("generation_shards_sha256")
+        != hashlib.sha256(shards_bytes).hexdigest()
+    ):
+        raise typer.BadParameter("Generation shard hash does not match index")
+    shard_artifact = json.loads(shards_bytes)
+    if shard_artifact.get("manifest_sha256") != manifest_hash:
+        raise typer.BadParameter("Generation shards bind a different manifest")
+    shards = shard_artifact.get("shards")
+    if not isinstance(shards, list) or len(shards) != index.get(
+        "generation_shard_count"
+    ):
+        raise typer.BadParameter("Generation shard inventory is incomplete")
+    canary = _load_json(campaign_dir / "canary-12-cells.json")
+    expected_shards = _generation_shards(
+        campaign=str(metadata["campaign"]),
+        cells=cells,
+        canary_ids=[str(value) for value in canary.get("cell_ids", [])],
+    )
+    if shards != expected_shards:
+        raise typer.BadParameter("Generation shards are not deterministic")
+    shard_members = [
+        (str(cell_id), shard)
+        for shard in shards
+        for cell_id in shard.get("cell_ids", [])
+    ]
+    if len(shard_members) != len(cells) or len(
+        {cell_id for cell_id, _ in shard_members}
+    ) != len(cells):
+        raise typer.BadParameter("each campaign cell must belong to one shard")
+    shard_by_cell = dict(shard_members)
+    for cell in cells:
+        cell_id = str(cell["cell_id"])
+        shard = shard_by_cell.get(cell_id)
+        if (
+            shard is None
+            or cell.get("operation_key") != shard.get("operation_key")
+            or cell.get("generation_shard_ordinal") != shard.get("ordinal")
+            or cell.get("platform_item_id")
+            != item_id(
+                operation_key=str(shard.get("operation_key")),
+                item_key=str(cell.get("prediction_id")),
+            )
+        ):
+            raise typer.BadParameter(
+                "cell identity does not match locked shard"
+            )
     baseline = _load_json(campaign_dir / "legacy-baseline-tasks.json")
     baseline_by_task = {row["task_id"]: row for row in baseline}
     if len(baseline_by_task) != 164:
@@ -1291,13 +1795,14 @@ def _emit(
     manifest_hash: str,
     execute: bool,
     ledger: SweepLedger | None = None,
+    dispatch: bool | None = None,
 ) -> None:
     typer.echo(
         json.dumps(
             {
                 "command": command,
                 "dry_run": not execute,
-                "dispatch": execute,
+                "dispatch": execute if dispatch is None else dispatch,
                 "cell_count": len(cells),
                 "manifest_sha256": manifest_hash,
                 "ledger": ledger.summary() if ledger else {},
@@ -1305,6 +1810,92 @@ def _emit(
             sort_keys=True,
         )
     )
+
+
+def _bounded_submission_groups(
+    cells: list[dict[str, Any]], *, fallback_size: int
+) -> list[list[dict[str, Any]]]:
+    if cells and all("operation_key" in cell for cell in cells):
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for cell in cells:
+            groups.setdefault(_cell_operation_key(cell), []).append(cell)
+        return list(groups.values())
+    return [
+        cells[start : start + fallback_size]
+        for start in range(0, len(cells), fallback_size)
+    ]
+
+
+def _non_canary_cells(cells: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    ordinals = {cell.get("generation_shard_ordinal") for cell in cells}
+    if not ordinals or any(
+        isinstance(ordinal, bool) or not isinstance(ordinal, int)
+        for ordinal in ordinals
+    ):
+        raise ValueError("campaign cells have no locked shard ordinal")
+    if 1 not in ordinals:
+        raise ValueError("campaign cells have no locked canary shard")
+    return [cell for cell in cells if cell["generation_shard_ordinal"] != 1]
+
+
+def _expected_generation_operations(
+    cells: list[dict[str, Any]],
+) -> list[str]:
+    by_ordinal: dict[int, str] = {}
+    for cell in cells:
+        ordinal = cell.get("generation_shard_ordinal")
+        if isinstance(ordinal, bool) or not isinstance(ordinal, int):
+            raise RuntimeError("campaign member has no locked shard ordinal")
+        operation_key = _cell_operation_key(cell)
+        existing = by_ordinal.setdefault(ordinal, operation_key)
+        if existing != operation_key:
+            raise RuntimeError("locked shard ordinal has multiple operations")
+    return [by_ordinal[ordinal] for ordinal in sorted(by_ordinal)]
+
+
+def _complete_generation_members(
+    cells: list[dict[str, Any]], ledger: SweepLedger
+) -> list[dict[str, Any]]:
+    """Return the exact terminal member cut or reject before scoring IDs."""
+    rows = {str(row["cell_id"]): row for row in ledger.rows()}
+    expected_ids = {str(cell["cell_id"]) for cell in cells}
+    if set(rows) != expected_ids:
+        raise RuntimeError(
+            "scoring requires every locked Generation member in the ledger"
+        )
+    locked_predictions = {
+        str(cell["cell_id"]): str(cell["prediction_id"]) for cell in cells
+    }
+    blocked: list[str] = []
+    members: list[dict[str, Any]] = []
+    for cell in cells:
+        cell_id = str(cell["cell_id"])
+        row = rows[cell_id]
+        if (
+            row["status"] not in {"succeeded", "typed_failure"}
+            or row["prediction_id"] != locked_predictions[cell_id]
+            or row["operation_key"] != _cell_operation_key(cell)
+            or row["platform_item_id"] != cell.get("platform_item_id")
+            or row["platform_attempt"] is None
+        ):
+            blocked.append(cell_id)
+        members.append(
+            {
+                "cell_id": cell_id,
+                "prediction_id": row["prediction_id"],
+                "operation_key": row["operation_key"],
+                "platform_item_id": row["platform_item_id"],
+                "platform_attempt": row["platform_attempt"],
+                "status": row["status"],
+                "error_classification": row["error_classification"],
+            }
+        )
+    if blocked:
+        raise RuntimeError(
+            "scoring requires every locked Generation member to be terminal "
+            f"and fully reconciled ({', '.join(blocked[:5])})"
+        )
+    return members
 
 
 def _submit(
@@ -1316,15 +1907,18 @@ def _submit(
     specs = _specs_for_cells(campaign_dir, metadata, cells)
     engine = create_engine(resolve_application_database_url())
     try:
+        by_operation: dict[str, list[dict[str, Any]]] = {}
         for cell in cells:
-            cell_id = str(cell["cell_id"])
-            spec = specs[cell_id]
-            operation_key = _cell_operation_key(cell)
-            prediction_ids = {cell_id: spec.prediction_id}
-            # This commit is deliberately before the external call. Replaying
-            # this deterministic single-cell operation is idempotent.
+            by_operation.setdefault(_cell_operation_key(cell), []).append(cell)
+        for operation_key, shard_cells in by_operation.items():
+            prediction_ids = {
+                str(cell["cell_id"]): specs[str(cell["cell_id"])].prediction_id
+                for cell in shard_cells
+            }
+            # One FULL-synchronous SQLite transaction fixes every member ID
+            # before Platform can register or enqueue the immutable shard.
             ledger.submission_intent(
-                [cell],
+                shard_cells,
                 operation_key=operation_key,
                 prediction_ids=prediction_ids,
             )
@@ -1332,14 +1926,17 @@ def _submit(
                 engine,
                 operation_key=operation_key,
                 experiment_name=metadata["campaign"],
-                specs=[spec],
+                specs=[specs[str(cell["cell_id"])] for cell in shard_cells],
                 metadata={
                     "manifest_sha256": ledger.manifest_hash,
+                    "generation_shard_ordinal": shard_cells[0][
+                        "generation_shard_ordinal"
+                    ],
                     "operator": "whetstone-live-sweep",
                 },
             )
             ledger.submitted(
-                [cell],
+                shard_cells,
                 operation_key=operation_key,
                 prediction_ids=prediction_ids,
             )
@@ -1387,7 +1984,9 @@ def submit_canary(
         raise typer.BadParameter("--execute requires an absolute --ledger")
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
     try:
-        recorded = ledger.record_intent(selected)
+        ledger.record_intent(selected)
+        pending = ledger.pending_submission(selected)
+        recorded = selected if pending else []
         if recorded:
             _submit(campaign_dir, metadata, recorded, ledger)
         _emit(
@@ -1412,10 +2011,11 @@ def submit_remaining(
 ) -> None:
     """Submit cells not already recorded in the durable ledger."""
     metadata, cells, manifest_hash = validate_campaign(campaign_dir)
+    non_canary_cells = _non_canary_cells(cells)
     if not execute:
         _emit(
             "submit-remaining",
-            cells=cells[CANARY_CELLS:],
+            cells=non_canary_cells,
             manifest_hash=manifest_hash,
             execute=False,
         )
@@ -1426,8 +2026,23 @@ def submit_remaining(
     try:
         submitted: list[dict[str, Any]] = []
         pending = ledger.pending_submission(cells)
-        for start in range(0, len(pending), page_size):
-            page = pending[start : start + page_size]
+        pending_operations = {
+            _cell_operation_key(cell)
+            for cell in pending
+            if "operation_key" in cell
+        }
+        replay_cells = [
+            cell
+            for cell in cells
+            if (not pending_operations and cell in pending)
+            or (
+                "operation_key" in cell
+                and _cell_operation_key(cell) in pending_operations
+            )
+        ]
+        for page in _bounded_submission_groups(
+            replay_cells, fallback_size=page_size
+        ):
             _submit(
                 campaign_dir,
                 metadata,
@@ -1453,11 +2068,13 @@ def submit_remaining(
                 )
             finally:
                 engine.dispose()
-        remaining = ledger.selected_remaining(cells)
-        for start in range(0, len(remaining), page_size):
-            recorded = ledger.record_intent(
-                remaining[start : start + page_size]
-            )
+        # A pending canary operation can only originate from a durable intent
+        # written by submit-canary. New intent here is always non-canary.
+        remaining = ledger.selected_remaining(non_canary_cells)
+        for page in _bounded_submission_groups(
+            remaining, fallback_size=page_size
+        ):
+            recorded = ledger.record_intent(page)
             if recorded:
                 _submit(
                     campaign_dir,
@@ -1482,6 +2099,221 @@ def submit_remaining(
             ledger=ledger,
         )
     finally:
+        ledger.close()
+
+
+@APP.command("submit-scoring")
+def submit_scoring(
+    campaign_dir: Annotated[
+        Path, typer.Argument(exists=True, file_okay=False)
+    ],
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+    ledger_path: Annotated[Path | None, typer.Option("--ledger")] = None,
+    scoring_profile_id: Annotated[str, typer.Option()] = "humaneval",
+    scoring_profile_version: Annotated[str, typer.Option()] = "v1",
+) -> None:
+    """Freeze once, then replay only the complete campaign scoring cut."""
+    metadata, cells, manifest_hash = validate_campaign(campaign_dir)
+    if not execute:
+        _emit(
+            "submit-scoring",
+            cells=cells,
+            manifest_hash=manifest_hash,
+            execute=False,
+        )
+        return
+    if ledger_path is None:
+        raise typer.BadParameter("--execute requires an absolute --ledger")
+    ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
+    engine = create_engine(resolve_application_database_url())
+    try:
+        frozen = ledger.scoring_operation()
+        if frozen is None:
+            reconcile_ledger(ledger, engine=engine)
+            generation_members = _complete_generation_members(cells, ledger)
+            with engine.begin() as connection:
+                runs = select_populated_scoring_generation_runs(
+                    connection, experiment_name=str(metadata["campaign"])
+                )
+                specs = {
+                    str(row["prediction_id"]): (
+                        db_io.prediction_spec_record_from_row(dict(row))
+                    )
+                    for row in connection.execute(
+                        select(whetstone_schema.prediction_specs).where(
+                            whetstone_schema.prediction_specs.c.experiment_name
+                            == metadata["campaign"]
+                        )
+                    ).mappings()
+                }
+                generation_relationships = [
+                    dict(row)
+                    for row in connection.execute(
+                        select(
+                            whetstone_schema.experiment_operation_manifests.c.operation_key,
+                            whetstone_schema.experiment_operation_manifests.c.manifest_digest,
+                            whetstone_schema.experiment_operation_manifests.c.accepted_generation_ordinal,
+                        )
+                        .where(
+                            whetstone_schema.experiment_operation_manifests.c.experiment_name
+                            == metadata["campaign"],
+                            whetstone_schema.experiment_operation_manifests.c.workflow_role
+                            == "generation",
+                        )
+                        .order_by(
+                            whetstone_schema.experiment_operation_manifests.c.accepted_generation_ordinal
+                        )
+                    ).mappings()
+                ]
+            relationship_keys = [
+                str(row["operation_key"]) for row in generation_relationships
+            ]
+            if relationship_keys != _expected_generation_operations(cells):
+                raise RuntimeError(
+                    "scoring requires every locked Generation shard "
+                    "relationship"
+                )
+            succeeded_predictions = {
+                str(member["prediction_id"])
+                for member in generation_members
+                if member["status"] == "succeeded"
+            }
+            runs_by_prediction = {run.prediction_id: run for run in runs}
+            if set(runs_by_prediction) != succeeded_predictions:
+                raise RuntimeError(
+                    "scoreable Generation runs do not match the reconciled cut"
+                )
+            if not succeeded_predictions.issubset(specs):
+                raise RuntimeError(
+                    "reconciled Generation cut has missing prediction specs"
+                )
+            targets = tuple(
+                scoring_target_for_generation_run(
+                    spec=specs[prediction_id],
+                    generation_run=runs_by_prediction[prediction_id],
+                    scoring_profile_id=scoring_profile_id,
+                    scoring_profile_version=scoring_profile_version,
+                )
+                for prediction_id in sorted(succeeded_predictions)
+            )
+            if not targets:
+                raise RuntimeError(
+                    "complete Generation cut has no populated run to score"
+                )
+            snapshots = {target.dataset_snapshot.sha256 for target in targets}
+            if snapshots != {str(metadata["snapshot"]["sha256"])}:
+                raise RuntimeError(
+                    "scoring targets do not bind the campaign snapshot"
+                )
+            generation_run_ids = {
+                run.prediction_id: run.generation_run_id for run in runs
+            }
+            generation_cut_digest = sha256_json_digest(
+                cast(
+                    Any,
+                    {
+                        "manifest_sha256": manifest_hash,
+                        "generation_relationships": generation_relationships,
+                        "generation_members": [
+                            member
+                            | {
+                                "generation_run_id": generation_run_ids.get(
+                                    str(member["prediction_id"])
+                                )
+                            }
+                            for member in generation_members
+                        ],
+                    },
+                )
+            )
+            selection_digest = sha256_json_digest(
+                [target.model_dump(mode="json") for target in targets]
+            )
+            first = targets[0]
+            scoring_identity_digest = sha256_json_digest(
+                {
+                    "manifest_sha256": manifest_hash,
+                    "generation_cut_digest": generation_cut_digest,
+                    "scoring_profile_id": first.scoring_profile_id,
+                    "scoring_profile_version": first.scoring_profile_version,
+                    "parser_profile_id": first.parser_profile_id,
+                    "parser_version": first.parser_version,
+                    "snapshot_sha256": first.dataset_snapshot.sha256,
+                }
+            )
+            operation_key = (
+                f"{metadata['campaign']}-scoring-"
+                f"{scoring_identity_digest[:24]}"
+            )
+            frozen = ledger.scoring_intent(
+                operation_key=operation_key,
+                generation_cut_digest=generation_cut_digest,
+                selection_digest=selection_digest,
+                snapshot_sha256=first.dataset_snapshot.sha256,
+                scoring_profile_id=first.scoring_profile_id,
+                scoring_profile_version=first.scoring_profile_version,
+                parser_profile_id=first.parser_profile_id,
+                parser_version=first.parser_version,
+                item_ids=[
+                    item_id(
+                        operation_key=operation_key, item_key=target.item_key
+                    )
+                    for target in targets
+                ],
+                targets=targets,
+            )
+        if (
+            frozen.scoring_profile_id != scoring_profile_id
+            or frozen.scoring_profile_version != scoring_profile_version
+        ):
+            raise RuntimeError(
+                "requested scoring profile differs from frozen campaign intent"
+            )
+        if frozen.status == "submitted":
+            _emit(
+                "submit-scoring",
+                cells=[],
+                manifest_hash=manifest_hash,
+                execute=True,
+                ledger=ledger,
+                dispatch=False,
+            )
+            return
+        if frozen.status != "submitting":
+            raise RuntimeError("frozen scoring intent has an invalid status")
+        submit_scoring_targets(
+            engine,
+            operation_key=frozen.operation_key,
+            experiment_name=str(metadata["campaign"]),
+            targets=frozen.targets,
+            source_generation_operation_key=(
+                f"sharded:{frozen.generation_cut_digest}"
+            ),
+            metadata={
+                "manifest_sha256": manifest_hash,
+                "generation_cut_digest": frozen.generation_cut_digest,
+                "snapshot_sha256": frozen.snapshot_sha256,
+                "operator": "whetstone-live-sweep",
+            },
+        )
+        ledger.scoring_submitted(operation_key=frozen.operation_key)
+        target_predictions = {
+            target.prediction_id for target in frozen.targets
+        }
+        _emit(
+            "submit-scoring",
+            cells=[
+                cell
+                for cell in cells
+                if str(cell["prediction_id"])
+                in target_predictions
+            ],
+            manifest_hash=manifest_hash,
+            execute=True,
+            ledger=ledger,
+        )
+    finally:
+        engine.dispose()
         ledger.close()
 
 
