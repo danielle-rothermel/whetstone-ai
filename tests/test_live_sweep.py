@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
@@ -16,6 +17,7 @@ from dr_platform.status import AttemptExecutionState
 from sqlalchemy.engine import Engine
 from typer.testing import CliRunner
 
+from whetstone.db.io import node_attempt_row
 from whetstone.platform import live_sweep
 from whetstone.platform.live_sweep import (
     CellReconciliation,
@@ -23,11 +25,68 @@ from whetstone.platform.live_sweep import (
     reconcile_ledger,
     require_terminal_lifecycle,
 )
-from whetstone.records import GenerationRunStatus
+from whetstone.records import GenerationRunStatus, NodeAttemptRecord
 
 
 def _cell(cell_id: str) -> dict[str, str]:
     return {"cell_id": cell_id}
+
+
+def _persisted_success_node(
+    response_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    record = NodeAttemptRecord.model_validate(
+        {
+            "node_attempt_id": "node-attempt-a",
+            "generation_run_id": "run-a",
+            "prediction_id": "prediction-a",
+            "node_id": "generate",
+            "attempt_index": 0,
+            "status": "success",
+            "provider_config": {
+                "provider_kind": "openai",
+                "endpoint_kind": "responses",
+                "model": "gpt-5.4-nano",
+                "throttle_key": "openai:gpt-5.4-nano",
+            },
+            "output": {"values": {"text": "generated"}},
+            "response_metadata": {
+                "response_metadata": response_metadata,
+            },
+            "started_at": timestamp,
+            "completed_at": timestamp,
+        }
+    )
+    return node_attempt_row(record)
+
+
+def _persisted_failure_node(
+    provider_failure: dict[str, Any],
+) -> dict[str, Any]:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    record = NodeAttemptRecord.model_validate(
+        {
+            "node_attempt_id": "node-attempt-a",
+            "generation_run_id": "run-a",
+            "prediction_id": "prediction-a",
+            "node_id": "generate",
+            "attempt_index": 0,
+            "status": "error",
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": "whetstone.eval_failures.PermanentFailureError",
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "message": "provider failure",
+                "metadata": {"provider_failure": provider_failure},
+            },
+            "started_at": timestamp,
+            "completed_at": timestamp,
+        }
+    )
+    return node_attempt_row(record)
 
 
 def _scoring_target(
@@ -395,7 +454,11 @@ def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
                 "metadata": {
                     "provider_failure": {
                         "code": "response_parse_error",
-                        "metadata": {"response_status": "completed"},
+                        "metadata": {
+                            "diagnostics": {
+                                "response_status": "completed"
+                            }
+                        },
                     }
                 },
             },
@@ -407,6 +470,272 @@ def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
     assert diagnostics["typed_failure_code"] == "provider_response_parse"
     assert diagnostics["response_status"] == "completed"
     assert diagnostics["output_field_present"] is False
+
+
+@pytest.mark.parametrize(
+    "provider_code",
+    [
+        "response_refusal",
+        "response_incomplete_no_text",
+        "response_failed",
+        "response_no_text",
+    ],
+)
+def test_typed_response_outcomes_remain_provider_outcomes(
+    provider_code: str,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "error",
+            "model": "gpt-5.4-nano",
+            "output": None,
+            "response_metadata": {},
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": (
+                    "whetstone.eval_failures.PermanentFailureError"
+                ),
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "metadata": {
+                    "provider_failure": {
+                        "code": provider_code,
+                        "metadata": {
+                            "diagnostics": {
+                                "response_status": "incomplete",
+                                "incomplete_reason": "max_output_tokens",
+                                "output_item_types": {"message": 1},
+                                "content_part_types": {"refusal": 1},
+                                "output_text_len": 0,
+                                "refusal_len": 12,
+                                "response_id_hash": "0123456789abcdef",
+                            }
+                        },
+                    }
+                },
+            },
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "provider_failure"
+    assert diagnostics["typed_failure_code"] == provider_code
+    assert diagnostics["response_status"] == "incomplete"
+    assert diagnostics["incomplete_reason"] == "max_output_tokens"
+    assert diagnostics["output_item_types"] == {"message": 1}
+    assert diagnostics["content_part_types"] == {"refusal": 1}
+    assert diagnostics["output_text_len"] == 0
+    assert diagnostics["refusal_len"] == 12
+    assert diagnostics["response_id_hash"] == "0123456789abcdef"
+
+
+def test_successful_response_diagnostics_are_projected_safely() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_success_node(
+            {
+                "status": "PRIVATE_RAW_STATUS",
+                "diagnostics": {
+                    "response_status": "completed",
+                    "output_item_types": {
+                        "message": 1,
+                        "PRIVATE_ITEM_TYPE": 2,
+                    },
+                    "content_part_types": {"output_text": 1},
+                    "output_text_len": 9,
+                    "response_id_hash": "fedcba9876543210",
+                },
+            }
+        ),
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "success"
+    assert diagnostics["response_status"] == "completed"
+    assert diagnostics["output_item_types"] == {"message": 1}
+    assert diagnostics["content_part_types"] == {"output_text": 1}
+    assert diagnostics["output_text_len"] == 9
+    assert diagnostics["response_id_hash"] == "fedcba9876543210"
+    assert "PRIVATE" not in json.dumps(diagnostics, sort_keys=True)
+
+
+def test_legacy_flattened_response_status_uses_closed_allowlist() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "success",
+            "model": "gpt-5.4-nano",
+            "output": {"values": {"text": "generated"}},
+            "response_metadata": {"status": "completed"},
+            "failure": None,
+        },
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "completed"
+
+
+def test_private_raw_status_is_omitted_from_ledger_diagnostics(
+    tmp_path: Path,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_success_node({"status": "PRIVATE_RAW_STATUS"}),
+        score=None,
+    )
+    assert "response_status" not in diagnostics
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="succeeded",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification=None,
+                    diagnostics=diagnostics,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert "PRIVATE_RAW_STATUS" not in serialized
+    finally:
+        ledger.close()
+
+
+def test_success_and_failure_hashes_use_provider_truncated_digest(
+    tmp_path: Path,
+) -> None:
+    response_id = "resp-correlation-1"
+    truncated_digest = sha256(response_id.encode()).hexdigest()[:16]
+
+    success = live_sweep._project_safe_diagnostics(
+        node=_persisted_success_node(
+            {"id": response_id, "status": "completed"}
+        ),
+        score=None,
+    )
+    failure = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "response_failed",
+                "metadata": {
+                    "diagnostics": {
+                        "response_status": "failed",
+                        "response_id_hash": truncated_digest,
+                    }
+                },
+            }
+        ),
+        score=None,
+    )
+
+    assert success["response_id_hash"] == truncated_digest
+    assert failure["response_id_hash"] == truncated_digest
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="succeeded",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification=None,
+                    diagnostics=success,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert truncated_digest in serialized
+        assert sha256(response_id.encode()).hexdigest() not in serialized
+        assert response_id not in serialized
+    finally:
+        ledger.close()
+
+
+def test_legacy_flat_failure_status_recovers_via_closed_allowlist() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "provider_http_error",
+                "metadata": {"response_status": "failed"},
+            }
+        ),
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "failed"
+
+
+def test_nested_diagnostics_status_wins_over_legacy_flat_key() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "response_failed",
+                "metadata": {
+                    "response_status": "cancelled",
+                    "diagnostics": {"response_status": "incomplete"},
+                },
+            }
+        ),
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "incomplete"
+
+
+def test_legacy_flat_raw_status_is_omitted_from_ledger(
+    tmp_path: Path,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "provider_http_error",
+                "metadata": {"response_status": "PRIVATE_RAW_STATUS"},
+            }
+        ),
+        score=None,
+    )
+    assert "response_status" not in diagnostics
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="typed_failure",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification="permanent",
+                    diagnostics=diagnostics,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert "PRIVATE_RAW_STATUS" not in serialized
+    finally:
+        ledger.close()
 
 
 def test_legacy_cost_columns_are_removed_without_gating_intent(
@@ -1171,7 +1500,8 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
 
     serialized = json.dumps(diagnostics, sort_keys=True)
     assert (
-        diagnostics["response_id_hash"] == sha256(b"response-123").hexdigest()
+        diagnostics["response_id_hash"]
+        == sha256(b"response-123").hexdigest()[:16]
     )
     assert diagnostics["returned_model"] == "gpt-5.4"
     assert diagnostics["finish_reason"] == "stop"

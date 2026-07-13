@@ -47,10 +47,10 @@ dev = [
 # dr-* libs are not on PyPI. Paid-work dependencies use an exact reviewed rev;
 # branch sources remain reproducible through uv.lock.
 [tool.uv.sources]
-dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "ee150481d6f9d3035f130e1baf2987056e9f1ab2" }
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
 dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "a38359243e6d69b7888814619182b06751dba6ee" }
-dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }
+dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 
 [build-system]

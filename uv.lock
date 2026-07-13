@@ -504,7 +504,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?rev=ee150481d6f9d3035f130e1baf2987056e9f1ab2#ee150481d6f9d3035f130e1baf2987056e9f1ab2" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?rev=ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b#ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" }
 dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
@@ -537,7 +537,7 @@ dependencies = [
 [[package]]
 name = "dr-providers"
 version = "0.2.0"
-source = { git = "https://github.com/danielle-rothermel/dr-providers?branch=main#9fad2c7f078a6b624b0b228de3811edf8d636e10" }
+source = { git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29#befbef782f249c6a517f34fb6965d4e10b74cf29" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
@@ -3122,10 +3122,10 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=ee150481d6f9d3035f130e1baf2987056e9f1ab2" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=a38359243e6d69b7888814619182b06751dba6ee" },
-    { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?branch=main" },
+    { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },
     { name = "matplotlib", specifier = ">=3.11.0" },
