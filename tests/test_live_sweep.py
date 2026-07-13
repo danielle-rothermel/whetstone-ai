@@ -303,6 +303,7 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
     assert diagnostics["finish_reason"] == "stop"
     assert diagnostics["parser_profile"] == "humaneval"
     assert diagnostics["parser_version"] == "v1"
+    assert diagnostics["parser_status"] == "success"
     for forbidden in (
         secret,
         prompt,
@@ -413,7 +414,11 @@ def test_reconciliation_persists_allowlisted_diagnostics(
                 "response_metadata": {},
                 "failure": None,
             },
-            score=None,
+            score={
+                "parser_profile_id": "humaneval",
+                "parser_version": "v1",
+                "status": "success",
+            },
         )
         monkeypatch.setattr(
             live_sweep,
@@ -426,6 +431,7 @@ def test_reconciliation_persists_allowlisted_diagnostics(
         persisted = json.loads(str(ledger.rows()[0]["diagnostics_json"]))
         assert persisted == diagnostics
         assert persisted["output_nonblank"] is True
+        assert persisted["parser_status"] == "success"
         assert persisted["adapter_disposition"] == "success"
     finally:
         ledger.close()

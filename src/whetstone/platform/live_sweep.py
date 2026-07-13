@@ -108,6 +108,7 @@ class LiveSweepDiagnostics:
     output_nonblank: bool
     parser_profile: str | None
     parser_version: str | None
+    parser_status: str | None
     adapter_disposition: AdapterDisposition | None
     typed_failure_class: FailureClass | None
     typed_failure_code: TypedFailureCode | None
@@ -382,6 +383,7 @@ def _project_safe_diagnostics(
         output_nonblank=output_nonblank,
         parser_profile=_allowlisted_string(score, "parser_profile_id"),
         parser_version=_allowlisted_string(score, "parser_version"),
+        parser_status=_allowlisted_string(score, "status"),
         adapter_disposition=disposition,
         typed_failure_class=failure_class,
         typed_failure_code=failure_code,
