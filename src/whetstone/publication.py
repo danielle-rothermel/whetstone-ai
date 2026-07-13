@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -840,6 +841,7 @@ def export_whetstone(
     detail_destination_path: str | Path | None = None,
     analysis_remote_destinations: Sequence[Any] = (),
     detail_remote_destinations: Sequence[Any] = (),
+    run_id: str | None = None,
 ) -> tuple[ExportResult, ExportResult]:
     """Run the one public platform export verb for both Whetstone bundles."""
 
@@ -852,6 +854,7 @@ def export_whetstone(
             projections=analysis_projection_specs(),
             source_change_sequence="whetstone_change_seq",
             integrity_signer=integrity_signer,
+            run_id=run_id or uuid.uuid4().hex,
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,
@@ -866,6 +869,7 @@ def export_whetstone(
             projections=detail_projection_specs(),
             source_change_sequence="whetstone_change_seq",
             integrity_signer=integrity_signer,
+            run_id=run_id or uuid.uuid4().hex,
         ),
         reconciliation=reconciliation,
         schema=PLATFORM_SCHEMA,

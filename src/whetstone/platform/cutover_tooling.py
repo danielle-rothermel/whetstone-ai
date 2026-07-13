@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sqlite3
 import subprocess
 from datetime import UTC, datetime
@@ -15,7 +16,14 @@ from typing import Annotated, Any, Literal
 
 import typer
 from dbos import DBOS
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -336,6 +344,7 @@ class StoreJournal(BaseModel):
     schema_version: Literal[1, 2]
     run_id: StrictStr
     descriptor_sha256: Sha256
+    ownership_nonce: StrictStr = ""
     descriptor: StoreDescriptor
     cleanup_complete: bool = False
     cleaned_at: StrictStr | None = None
@@ -351,6 +360,14 @@ class StoreJournal(BaseModel):
     dbos_state: Literal["not_started", "intent", "owned", "cleaned"] = (
         "not_started"
     )
+
+    @model_validator(mode="after")
+    def require_v2_capability(self) -> StoreJournal:
+        if self.schema_version == 2 and _SHA256.fullmatch(
+            self.ownership_nonce
+        ) is None:
+            raise ValueError("v2 store journal ownership nonce is invalid")
+        return self
 
 
 def _store_descriptor(run_id: str, descriptor_path: Path) -> StoreDescriptor:
@@ -437,6 +454,7 @@ def _new_store_journal(descriptor: StoreDescriptor) -> StoreJournal:
         schema_version=2,
         run_id=descriptor.run_id,
         descriptor_sha256=_descriptor_sha256(descriptor),
+        ownership_nonce=secrets.token_hex(32),
         descriptor=descriptor,
     )
 
@@ -482,6 +500,7 @@ def _create_schema(
     environment: DatabaseEnvironment,
     run_id: str,
     descriptor_sha256: str,
+    ownership_nonce: str,
 ) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
@@ -489,6 +508,8 @@ def _create_schema(
         raise ValueError("invalid marker run ID")
     if _SHA256.fullmatch(descriptor_sha256) is None:
         raise ValueError("invalid marker descriptor digest")
+    if _SHA256.fullmatch(ownership_nonce) is None:
+        raise ValueError("invalid marker ownership nonce")
     engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.begin() as connection:
@@ -504,16 +525,23 @@ def _create_schema(
                     "descriptor_sha256 TEXT NOT NULL "
                     "CONSTRAINT ownership_digest_locked "
                     "CHECK (descriptor_sha256 = "
-                    f"'{descriptor_sha256}'))"
+                    f"'{descriptor_sha256}'), "
+                    "ownership_nonce TEXT NOT NULL "
+                    "CONSTRAINT ownership_nonce_locked "
+                    f"CHECK (ownership_nonce = '{ownership_nonce}'))"
                 )
             )
             connection.execute(
                 text(
                     f'INSERT INTO "{schema}"."{_OWNERSHIP_TABLE}" '
-                    "(marker_id, run_id, descriptor_sha256) "
-                    "VALUES (1, :run_id, :digest)"
+                    "(marker_id, run_id, descriptor_sha256, ownership_nonce) "
+                    "VALUES (1, :run_id, :digest, :nonce)"
                 ),
-                {"run_id": run_id, "digest": descriptor_sha256},
+                {
+                    "run_id": run_id,
+                    "digest": descriptor_sha256,
+                    "nonce": ownership_nonce,
+                },
             )
             if environment != "MOTHERDUCK_DATABASE_URL":
                 connection.execute(
@@ -539,7 +567,7 @@ def _create_schema(
 
 def _schema_owner(
     url: str, schema: str, *, environment: DatabaseEnvironment
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.connect() as connection:
@@ -554,13 +582,14 @@ def _schema_owner(
                 return None
             row = connection.execute(
                 text(
-                    f'SELECT run_id, descriptor_sha256 FROM "{schema}".'
+                    "SELECT run_id, descriptor_sha256, ownership_nonce "
+                    f'FROM "{schema}".'
                     f'"{_OWNERSHIP_TABLE}"'
                 )
             ).one_or_none()
             if row is None:
                 return None
-            return str(row[0]), str(row[1])
+            return str(row[0]), str(row[1]), str(row[2])
     finally:
         engine.dispose()
 
@@ -572,10 +601,12 @@ def _require_schema_owner(
     environment: DatabaseEnvironment,
     run_id: str,
     descriptor_sha256: str,
+    ownership_nonce: str,
 ) -> None:
     if _schema_owner(url, schema, environment=environment) != (
         run_id,
         descriptor_sha256,
+        ownership_nonce,
     ):
         raise ValueError(f"schema ownership marker disagrees: {schema}")
 
@@ -588,6 +619,50 @@ def _drop_schema(
     engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.begin() as connection:
+            connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
+    finally:
+        engine.dispose()
+
+
+def _drop_owned_schema(
+    url: str,
+    schema: str,
+    *,
+    environment: DatabaseEnvironment,
+    run_id: str,
+    descriptor_sha256: str,
+    ownership_nonce: str,
+) -> None:
+    """Revalidate the v2 capability and drop under one transaction."""
+    if _IDENTIFIER.fullmatch(schema) is None:
+        raise ValueError("invalid generated schema")
+    engine = _sqlalchemy_engine(url, environment=environment)
+    try:
+        with engine.begin() as connection:
+            exists = connection.execute(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.schemata "
+                    "WHERE schema_name=:schema)"
+                ),
+                {"schema": schema},
+            ).scalar_one()
+            if not exists:
+                return
+            try:
+                row = connection.execute(
+                    text(
+                        f'SELECT run_id, descriptor_sha256, ownership_nonce '
+                        f'FROM "{schema}"."{_OWNERSHIP_TABLE}"'
+                    )
+                ).one_or_none()
+            except Exception as error:
+                raise ValueError(
+                    f"schema ownership marker is unreadable: {schema}"
+                ) from error
+            if row != (run_id, descriptor_sha256, ownership_nonce):
+                raise ValueError(
+                    f"schema ownership marker disagrees: {schema}"
+                )
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
     finally:
         engine.dispose()
@@ -609,18 +684,19 @@ def _initialize_dbos_store(path: Path, run_id: str) -> None:
 
 
 def _create_dbos_marker(
-    path: Path, *, run_id: str, descriptor_sha256: str
+    path: Path, *, run_id: str, descriptor_sha256: str, ownership_nonce: str
 ) -> None:
     connection = sqlite3.connect(path)
     try:
         connection.execute(
             f"CREATE TABLE {_OWNERSHIP_TABLE} ("
-            "run_id TEXT PRIMARY KEY, descriptor_sha256 TEXT NOT NULL)"
+            "run_id TEXT PRIMARY KEY, descriptor_sha256 TEXT NOT NULL, "
+            "ownership_nonce TEXT NOT NULL)"
         )
         connection.execute(
             f"INSERT INTO {_OWNERSHIP_TABLE} "
-            "(run_id, descriptor_sha256) VALUES (?, ?)",
-            (run_id, descriptor_sha256),
+            "(run_id, descriptor_sha256, ownership_nonce) VALUES (?, ?, ?)",
+            (run_id, descriptor_sha256, ownership_nonce),
         )
         for operation in ("UPDATE", "DELETE"):
             connection.execute(
@@ -634,19 +710,24 @@ def _create_dbos_marker(
 
 
 def _require_dbos_owner(
-    path: Path, *, run_id: str, descriptor_sha256: str
+    path: Path,
+    *,
+    run_id: str,
+    descriptor_sha256: str,
+    ownership_nonce: str,
 ) -> None:
     try:
         connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
         try:
             row = connection.execute(
-                f"SELECT run_id, descriptor_sha256 FROM {_OWNERSHIP_TABLE}"
+                "SELECT run_id, descriptor_sha256, ownership_nonce "
+                f"FROM {_OWNERSHIP_TABLE}"
             ).fetchone()
         finally:
             connection.close()
     except sqlite3.Error as error:
         raise ValueError("DBOS ownership marker is unreadable") from error
-    if row != (run_id, descriptor_sha256):
+    if row != (run_id, descriptor_sha256, ownership_nonce):
         raise ValueError("DBOS ownership marker disagrees")
 
 
@@ -688,6 +769,11 @@ def _owned_resources_preflight(
     base_dir: Path,
     journal: StoreJournal | None = None,
 ) -> None:
+    ownership_nonce = (
+        journal.ownership_nonce
+        if journal is not None and journal.schema_version == 2
+        else ""
+    )
     for name, boundary in (
         ("source", descriptor.source),
         ("motherduck", descriptor.motherduck),
@@ -696,11 +782,21 @@ def _owned_resources_preflight(
         if not _store_applicable(journal, name):
             continue
         url = _require_environment(boundary.environment)
-        if _schema_exists(
+        exists = _schema_exists(
             url,
             boundary.schema_name,
             environment=boundary.environment,
+        )
+        if (
+            not exists
+            and journal is not None
+            and journal.schema_version == 2
+            and getattr(journal, f"{name}_state") == "owned"
         ):
+            raise ValueError(
+                f"owned schema marker is missing: {boundary.schema_name}"
+            )
+        if exists:
             if journal is not None and journal.schema_version == 1:
                 raise ValueError(
                     "v1 journal cannot prove schema ownership; "
@@ -712,8 +808,17 @@ def _owned_resources_preflight(
                 environment=boundary.environment,
                 run_id=descriptor.run_id,
                 descriptor_sha256=descriptor_sha256,
+                ownership_nonce=ownership_nonce,
             )
     dbos_path = base_dir / descriptor.dbos_path
+    if (
+        _store_applicable(journal, "dbos")
+        and not dbos_path.exists()
+        and journal is not None
+        and journal.schema_version == 2
+        and journal.dbos_state == "owned"
+    ):
+        raise ValueError("owned DBOS marker is missing")
     if _store_applicable(journal, "dbos") and dbos_path.exists():
         if journal is not None and journal.schema_version == 1:
             raise ValueError(
@@ -724,6 +829,7 @@ def _owned_resources_preflight(
             dbos_path,
             run_id=descriptor.run_id,
             descriptor_sha256=descriptor_sha256,
+            ownership_nonce=ownership_nonce,
         )
 
 
@@ -750,17 +856,15 @@ def _cleanup_owned_resources(
             boundary.schema_name,
             environment=boundary.environment,
         ):
-            _require_schema_owner(
+            if journal is None or journal.schema_version != 2:
+                raise ValueError("v2 store journal is required for cleanup")
+            _drop_owned_schema(
                 url,
                 boundary.schema_name,
                 environment=boundary.environment,
                 run_id=descriptor.run_id,
                 descriptor_sha256=descriptor_sha256,
-            )
-            _drop_schema(
-                url,
-                boundary.schema_name,
-                environment=boundary.environment,
+                ownership_nonce=journal.ownership_nonce,
             )
     dbos_path = base_dir / descriptor.dbos_path
     if _store_applicable(journal, "dbos") and dbos_path.exists():
@@ -768,6 +872,7 @@ def _cleanup_owned_resources(
             dbos_path,
             run_id=descriptor.run_id,
             descriptor_sha256=descriptor_sha256,
+            ownership_nonce=(journal.ownership_nonce if journal else ""),
         )
         dbos_path.unlink()
 
@@ -780,20 +885,7 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
         or (descriptor_path.parent / descriptor.journal_path).exists()
     ):
         raise ValueError("descriptor or journal already exists")
-    boundaries = (descriptor.source, descriptor.motherduck, descriptor.neon)
-    for boundary in boundaries:
-        url = _require_environment(boundary.environment)
-        if _schema_exists(
-            url,
-            boundary.schema_name,
-            environment=boundary.environment,
-        ):
-            raise ValueError(
-                f"refusing schema collision: {boundary.schema_name}"
-            )
     dbos_path = descriptor_path.parent / descriptor.dbos_path
-    if dbos_path.exists():
-        raise ValueError("refusing DBOS path collision")
     journal_path = descriptor_path.parent / descriptor.journal_path
     journal = _new_store_journal(descriptor)
     _write_json_atomic(journal_path, journal.model_dump(mode="json"))
@@ -804,25 +896,36 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
             ("neon", descriptor.neon),
         ):
             journal = _store_checkpoint(journal_path, journal, name, "intent")
+            url = _require_environment(boundary.environment)
+            if _schema_exists(
+                url,
+                boundary.schema_name,
+                environment=boundary.environment,
+            ):
+                raise ValueError(
+                    f"refusing schema collision: {boundary.schema_name}"
+                )
             _create_schema(
-                _require_environment(boundary.environment),
+                url,
                 boundary.schema_name,
                 environment=boundary.environment,
                 run_id=run_id,
                 descriptor_sha256=journal.descriptor_sha256,
+                ownership_nonce=journal.ownership_nonce,
             )
             journal = _store_checkpoint(journal_path, journal, name, "owned")
-        ensure_whetstone_application_schema(
-            _bound_url(
-                _require_environment(descriptor.source.environment),
-                descriptor.source.schema_name,
-            )
-        )
+            if name == "source":
+                ensure_whetstone_application_schema(
+                    _bound_url(url, descriptor.source.schema_name)
+                )
         journal = _store_checkpoint(journal_path, journal, "dbos", "intent")
+        if dbos_path.exists():
+            raise ValueError("refusing DBOS path collision")
         _create_dbos_marker(
             dbos_path,
             run_id=run_id,
             descriptor_sha256=journal.descriptor_sha256,
+            ownership_nonce=journal.ownership_nonce,
         )
         _initialize_dbos_store(dbos_path, run_id)
         journal = _store_checkpoint(journal_path, journal, "dbos", "owned")
@@ -875,6 +978,7 @@ def validate_store_state(descriptor_path: Path) -> StoreDescriptor:
             environment=boundary.environment,
             run_id=descriptor.run_id,
             descriptor_sha256=journal.descriptor_sha256,
+            ownership_nonce=journal.ownership_nonce,
         )
     dbos_path = descriptor_path.parent / descriptor.dbos_path
     if not dbos_path.is_file() or dbos_path.stat().st_size == 0:
@@ -883,6 +987,7 @@ def validate_store_state(descriptor_path: Path) -> StoreDescriptor:
         dbos_path,
         run_id=descriptor.run_id,
         descriptor_sha256=journal.descriptor_sha256,
+        ownership_nonce=journal.ownership_nonce,
     )
     return descriptor
 
@@ -938,6 +1043,7 @@ def stores_run(
             environment=boundary.environment,
             run_id=facts.run_id,
             descriptor_sha256=journal.descriptor_sha256,
+            ownership_nonce=journal.ownership_nonce,
         )
         environment[name] = _bound_url(url, boundary.schema_name)
     dbos_path = descriptor.parent / facts.dbos_path
@@ -945,6 +1051,7 @@ def stores_run(
         dbos_path,
         run_id=facts.run_id,
         descriptor_sha256=journal.descriptor_sha256,
+        ownership_nonce=journal.ownership_nonce,
     )
     environment["DBOS_SYSTEM_DATABASE_URL"] = "sqlite:///" + str(
         dbos_path.resolve()

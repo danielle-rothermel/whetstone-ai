@@ -18,6 +18,7 @@ from whetstone.platform.cutover_tooling import (
     _bound_url,
     _create_dbos_marker,
     _create_schema,
+    _drop_owned_schema,
     _initialize_dbos_store,
     _new_store_journal,
     _require_dbos_owner,
@@ -285,6 +286,7 @@ def test_schema_marker_uses_backend_specific_immutability(
         cutover_tooling, "_sqlalchemy_engine", lambda *_args, **_kwargs: engine
     )
     digest = "a" * 64
+    nonce = "b" * 64
 
     _create_schema(
         "postgresql://operator:encoded%2Fsecret@db.example/test",
@@ -292,6 +294,7 @@ def test_schema_marker_uses_backend_specific_immutability(
         environment=environment,
         run_id="acceptance_171",
         descriptor_sha256=digest,
+        ownership_nonce=nonce,
     )
 
     statements = "\n".join(
@@ -300,6 +303,7 @@ def test_schema_marker_uses_backend_specific_immutability(
     assert "CHECK (marker_id = 1)" in statements
     assert "CHECK (run_id = 'acceptance_171')" in statements
     assert f"CHECK (descriptor_sha256 = '{digest}')" in statements
+    assert f"CHECK (ownership_nonce = '{nonce}')" in statements
     assert ("LANGUAGE plpgsql" in statements) is expect_trigger
     assert ("CREATE TRIGGER" in statements) is expect_trigger
     assert "encoded%2Fsecret" not in statements
@@ -318,6 +322,7 @@ def test_invalid_marker_identity_is_rejected_before_engine_creation(
             environment="MOTHERDUCK_DATABASE_URL",
             run_id="unsafe'run",
             descriptor_sha256="a" * 64,
+            ownership_nonce="b" * 64,
         )
 
     engine.assert_not_called()
@@ -379,6 +384,14 @@ def test_prepare_failure_after_partial_marker_uses_journal_cleanup(
         "_schema_exists",
         lambda *_args, **_kwargs: False,
     )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "ensure_whetstone_application_schema",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_bound_url", lambda *_args, **_kwargs: "bound"
+    )
 
     def fail_after_motherduck_marker(
         _url: str,
@@ -411,6 +424,89 @@ def test_prepare_failure_after_partial_marker_uses_journal_cleanup(
     assert len(cleaned[0][1]) == 64
     assert cleaned[0][2] == tmp_path
     assert (tmp_path / "stores.json.journal.json").is_file()
+
+
+def test_source_initialization_failure_never_accesses_later_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "stores.json"
+    environments: list[DatabaseEnvironment] = []
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_require_environment",
+        lambda name: environments.append(name) or "postgresql://db/test",
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_schema_exists", lambda *_args, **_kwargs: False
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_create_schema", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "ensure_whetstone_application_schema",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("source migration")),
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_cleanup_owned_resources", lambda *_args: None
+    )
+
+    with pytest.raises(RuntimeError, match="source migration"):
+        cutover_tooling.prepare_stores(descriptor_path, "acceptance_171")
+
+    journal = cutover_tooling.StoreJournal.model_validate_json(
+        (tmp_path / "stores.json.journal.json").read_text()
+    )
+    assert environments == ["DATABASE_URL"]
+    assert journal.source_state == "owned"
+    assert journal.motherduck_state == "not_started"
+    assert journal.neon_state == "not_started"
+
+
+def test_store_journals_use_fresh_cleanup_capabilities(tmp_path: Path) -> None:
+    descriptor = _store_descriptor("acceptance_171", tmp_path / "stores.json")
+
+    first = _new_store_journal(descriptor)
+    second = _new_store_journal(descriptor)
+
+    assert first.ownership_nonce != second.ownership_nonce
+    assert len(first.ownership_nonce) == 64
+
+    payload = first.model_dump(mode="json")
+    payload.pop("ownership_nonce")
+    with pytest.raises(ValueError, match="ownership nonce"):
+        cutover_tooling.StoreJournal.model_validate(payload)
+
+
+def test_cutover_drop_rejects_marker_replacement_inside_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exists = MagicMock()
+    exists.scalar_one.return_value = True
+    replaced = MagicMock()
+    replaced.one_or_none.return_value = ("replacement", "c" * 64, "d" * 64)
+    connection = MagicMock()
+    connection.execute.side_effect = [exists, replaced]
+    engine = MagicMock()
+    engine.begin.return_value.__enter__.return_value = connection
+    monkeypatch.setattr(
+        cutover_tooling, "_sqlalchemy_engine", lambda *_args, **_kwargs: engine
+    )
+
+    with pytest.raises(ValueError, match="marker disagrees"):
+        _drop_owned_schema(
+            "postgresql://db/test",
+            "owned_schema",
+            environment="DATABASE_URL",
+            run_id="acceptance_171",
+            descriptor_sha256="a" * 64,
+            ownership_nonce="b" * 64,
+        )
+
+    statements = [
+        str(call.args[0]) for call in connection.execute.call_args_list
+    ]
+    assert not any("DROP SCHEMA" in statement for statement in statements)
 
 
 def test_dbos_store_is_initialized_not_just_touched(tmp_path: Path) -> None:
@@ -452,6 +548,19 @@ def test_journal_recovers_complete_descriptor_when_descriptor_is_absent(
     )
 
     assert result.exit_code == 0
+    replay = CliRunner().invoke(
+        APP,
+        [
+            "stores",
+            "cleanup",
+            "--journal",
+            str(journal_path),
+            "--execute",
+            "--confirm",
+            descriptor.run_id,
+        ],
+    )
+    assert replay.exit_code == 0
     verify = CliRunner().invoke(
         APP,
         ["stores", "verify-cleanup", "--journal", str(journal_path)],
@@ -465,12 +574,19 @@ def test_dbos_ownership_marker_is_persistent_and_immutable(
 ) -> None:
     path = tmp_path / "dbos.sqlite3"
     digest = "a" * 64
+    nonce = "b" * 64
     _create_dbos_marker(
-        path, run_id="acceptance_171", descriptor_sha256=digest
+        path,
+        run_id="acceptance_171",
+        descriptor_sha256=digest,
+        ownership_nonce=nonce,
     )
 
     _require_dbos_owner(
-        path, run_id="acceptance_171", descriptor_sha256=digest
+        path,
+        run_id="acceptance_171",
+        descriptor_sha256=digest,
+        ownership_nonce=nonce,
     )
     with (
         sqlite3.connect(path) as connection,
@@ -491,6 +607,7 @@ def test_dbos_replacement_without_marker_is_rejected(tmp_path: Path) -> None:
             path,
             run_id="acceptance_171",
             descriptor_sha256="a" * 64,
+            ownership_nonce="b" * 64,
         )
 
 
@@ -521,6 +638,51 @@ def test_cleanup_preflights_all_markers_before_any_drop(
     with pytest.raises(ValueError, match="ownership marker disagrees"):
         cutover_tooling._cleanup_owned_resources(
             descriptor, "a" * 64, tmp_path
+        )
+
+    assert dropped == []
+
+
+def test_later_cutover_marker_mismatch_prevents_every_drop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = _store_descriptor("acceptance_171", tmp_path / "stores.json")
+    journal = _new_store_journal(descriptor).model_copy(
+        update={
+            "source_state": "owned",
+            "motherduck_state": "owned",
+            "neon_state": "owned",
+        }
+    )
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        cutover_tooling, "_require_environment", lambda name: f"url:{name}"
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_schema_exists", lambda *_args, **_kwargs: True
+    )
+
+    def owner(
+        _url: str, schema: str, **_kwargs: object
+    ) -> tuple[str, str, str]:
+        if schema == descriptor.neon.schema_name:
+            return descriptor.run_id, journal.descriptor_sha256, "0" * 64
+        return (
+            descriptor.run_id,
+            journal.descriptor_sha256,
+            journal.ownership_nonce,
+        )
+
+    monkeypatch.setattr(cutover_tooling, "_schema_owner", owner)
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_drop_owned_schema",
+        lambda _url, schema, **_kwargs: dropped.append(schema),
+    )
+
+    with pytest.raises(ValueError, match="marker disagrees"):
+        cutover_tooling._cleanup_owned_resources(
+            descriptor, journal.descriptor_sha256, tmp_path, journal
         )
 
     assert dropped == []

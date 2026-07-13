@@ -46,12 +46,14 @@ def test_opt_in_motherduck_marker_constraints_reject_replacement() -> None:
     run_id = f"probe_{suffix}"
     schema = f"whetstone_marker_probe_{suffix}"
     digest = "a" * 64
+    nonce = "b" * 64
     _create_schema(
         url,
         schema,
         environment="MOTHERDUCK_DATABASE_URL",
         run_id=run_id,
         descriptor_sha256=digest,
+        ownership_nonce=nonce,
     )
     try:
         engine = _sqlalchemy_engine(
@@ -74,6 +76,7 @@ def test_opt_in_motherduck_marker_constraints_reject_replacement() -> None:
             environment="MOTHERDUCK_DATABASE_URL",
             run_id=run_id,
             descriptor_sha256=digest,
+            ownership_nonce=nonce,
         )
     finally:
         _drop_schema(

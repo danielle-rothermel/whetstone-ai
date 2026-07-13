@@ -8,13 +8,16 @@ payload.  The command obtains all connection strings from its environment.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib
 import json
 import os
 import re
+import secrets
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast
@@ -28,6 +31,12 @@ from dr_platform import (
     PostgresPublicationFence,
     pin_local_bundle,
     resolve_local_pin,
+)
+from dr_platform.publication import (
+    RemoteBundleManifest,
+    SignedBundleIntegrityPayload,
+    _verify_spki_ed25519,
+    integrity_message,
 )
 from dr_platform.reconciliation_runtime import ReconcileOptions
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
@@ -340,6 +349,11 @@ class RunJournal(BaseModel):
     analysis_bundle_id: str = ""
     detail_bundle_id: str = ""
     ownership_digest: str = ""
+    # This capability is generated before the first boundary is touched.  A
+    # recreated schema/table with only deterministic run facts cannot acquire
+    # cleanup authority, including on MotherDuck where table triggers are not
+    # available.
+    ownership_nonce: str = ""
     source_state: ResourceState = "not_started"
     analysis_state: ResourceState = "not_started"
     detail_state: ResourceState = "not_started"
@@ -363,6 +377,8 @@ class RunJournal(BaseModel):
         if self.schema_version == 2:
             if _SHA256.fullmatch(self.ownership_digest) is None:
                 raise ValueError("journal ownership digest is invalid")
+            if _SHA256.fullmatch(self.ownership_nonce) is None:
+                raise ValueError("journal ownership nonce is invalid")
             for name in ("source", "analysis", "detail", "local"):
                 _validate_resource_state(getattr(self, f"{name}_state"))
 
@@ -402,6 +418,7 @@ def _new_journal(
                 identity, sort_keys=True, separators=(",", ":")
             ).encode()
         ).hexdigest(),
+        ownership_nonce=secrets.token_hex(32),
     )
 
 
@@ -532,8 +549,12 @@ def _new_source(
     *,
     run_id: str | None = None,
     ownership_digest: str | None = None,
+    ownership_nonce: str | None = None,
 ) -> Engine:
-    if (run_id is None) != (ownership_digest is None):
+    ownership_identity = (run_id, ownership_digest, ownership_nonce)
+    if any(value is None for value in ownership_identity) and not all(
+        value is None for value in ownership_identity
+    ):
         raise ValueError("source ownership identity must be complete")
     admin = create_whetstone_engine(
         _required_env("DATABASE_URL"),
@@ -542,22 +563,31 @@ def _new_source(
     try:
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
-            if run_id is not None and ownership_digest is not None:
+            if (
+                run_id is not None
+                and ownership_digest is not None
+                and ownership_nonce is not None
+            ):
                 connection.execute(
                     text(
                         f'CREATE TABLE "{schema}"."{_OWNERSHIP_TABLE}" ('
                         "marker_id SMALLINT PRIMARY KEY "
                         "CONSTRAINT release_marker_singleton CHECK (marker_id = 1), "
-                        "run_id TEXT NOT NULL, ownership_digest TEXT NOT NULL)"
+                        "run_id TEXT NOT NULL, ownership_digest TEXT NOT NULL, "
+                        "ownership_nonce TEXT NOT NULL)"
                     )
                 )
                 connection.execute(
                     text(
                         f'INSERT INTO "{schema}"."{_OWNERSHIP_TABLE}" '
-                        "(marker_id, run_id, ownership_digest) "
-                        "VALUES (1, :run_id, :digest)"
+                        "(marker_id, run_id, ownership_digest, ownership_nonce) "
+                        "VALUES (1, :run_id, :digest, :nonce)"
                     ),
-                    {"run_id": run_id, "digest": ownership_digest},
+                    {
+                        "run_id": run_id,
+                        "digest": ownership_digest,
+                        "nonce": ownership_nonce,
+                    },
                 )
                 connection.execute(
                     text(
@@ -612,13 +642,17 @@ def _source_marker_state(connection: Any, journal: RunJournal) -> bool:
     try:
         row = connection.execute(
             text(
-                f'SELECT run_id, ownership_digest FROM "{journal.source_schema}".'
+                f'SELECT run_id, ownership_digest, ownership_nonce FROM "{journal.source_schema}".'
                 f'"{_OWNERSHIP_TABLE}" WHERE marker_id=1'
             )
         ).one_or_none()
     except Exception as error:
         raise ValueError("source ownership marker is unreadable") from error
-    if row != (journal.run_id, journal.ownership_digest):
+    if row != (
+        journal.run_id,
+        journal.ownership_digest,
+        journal.ownership_nonce,
+    ):
         raise ValueError("source ownership marker disagrees")
     return True
 
@@ -894,9 +928,14 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
         integrity = required_bundle_integrity_configuration()
         journal = _checkpoint(journal_path, journal, "source", "intent")
         source = _new_source(
-            schema, run_id=run_id, ownership_digest=journal.ownership_digest
+            schema,
+            run_id=run_id,
+            ownership_digest=journal.ownership_digest,
+            ownership_nonce=journal.ownership_nonce,
         )
         journal = _checkpoint(journal_path, journal, "source", "owned")
+        fixture_sha256 = _seed_accepted_fixture(source, run_id)
+        journal = _checkpoint(journal_path, journal, "local", "intent")
         journal = _checkpoint(journal_path, journal, "analysis", "intent")
         analysis_fence = _fence(
             _required_env("MOTHERDUCK_DATABASE_URL"),
@@ -904,8 +943,30 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             "motherduck",
             integrity=integrity,
         )
-        fixture_sha256 = _seed_accepted_fixture(source, run_id)
         analysis_fence.ensure_schema()
+        # Publish analysis to durable ownership before the detail boundary is
+        # even resolved.  This keeps an analysis failure from reading Neon.
+        analysis, _local_detail = export_whetstone(
+            source,
+            reconciliation=_reconciliation(source),
+            integrity_signer=integrity.signer,
+            destination_path=analysis_path,
+            detail_destination_path=detail_path,
+            analysis_remote_destinations=(analysis_fence,),
+            run_id=journal.ownership_nonce,
+        )
+        if [item.status for item in analysis.destinations] != ["PROMOTED"]:
+            raise RuntimeError("analysis publication did not promote")
+        analysis_bundle_id = str(getattr(analysis, "bundle_id", ""))
+        if not analysis_bundle_id:
+            raise RuntimeError("analysis publication lacks a bundle identity")
+        journal = _checkpoint(
+            journal_path,
+            journal,
+            "analysis",
+            "owned",
+            analysis_bundle_id=analysis_bundle_id,
+        )
         journal = _checkpoint(journal_path, journal, "detail", "intent")
         detail_fence = _fence(
             _required_env("NEON_DATABASE_URL"),
@@ -914,39 +975,30 @@ def prepare(descriptor_path: Path) -> ReleaseParityDescriptor:
             integrity=integrity,
         )
         detail_fence.ensure_schema()
-        journal = _checkpoint(journal_path, journal, "local", "intent")
-        analysis, detail = export_whetstone(
+        # The second export refreshes only the local Detail file and promotes
+        # only Detail; it never republishes the already-owned analysis fence.
+        _local_analysis, detail = export_whetstone(
             source,
             reconciliation=_reconciliation(source),
             integrity_signer=integrity.signer,
             destination_path=analysis_path,
             detail_destination_path=detail_path,
-            analysis_remote_destinations=(analysis_fence,),
             detail_remote_destinations=(detail_fence,),
+            run_id=journal.ownership_nonce,
         )
-        journal = _checkpoint(
-            journal_path,
-            journal,
-            "analysis",
-            "owned",
-            analysis_bundle_id=str(getattr(analysis, "bundle_id", "")),
-        )
+        if [item.status for item in detail.destinations] != ["PROMOTED"]:
+            raise RuntimeError("detail publication did not promote")
+        detail_bundle_id = str(getattr(detail, "bundle_id", ""))
+        if not detail_bundle_id:
+            raise RuntimeError("detail publication lacks a bundle identity")
         journal = _checkpoint(
             journal_path,
             journal,
             "detail",
             "owned",
-            detail_bundle_id=str(getattr(detail, "bundle_id", "")),
+            detail_bundle_id=detail_bundle_id,
         )
         journal = _checkpoint(journal_path, journal, "local", "owned")
-        if [item.status for item in analysis.destinations] != [
-            "PROMOTED",
-            "PROMOTED",
-        ] or [item.status for item in detail.destinations] != [
-            "PROMOTED",
-            "PROMOTED",
-        ]:
-            raise RuntimeError("publication did not promote every destination")
         analysis_local_pin = pin_local_bundle(
             analysis_path,
             bundle_key=ANALYSIS_BUNDLE_KEY,
@@ -1088,7 +1140,10 @@ def prepare_local(
             _journal_path(descriptor_path), journal, "source", "intent"
         )
         source = _new_source(
-            schema, run_id=run_id, ownership_digest=journal.ownership_digest
+            schema,
+            run_id=run_id,
+            ownership_digest=journal.ownership_digest,
+            ownership_nonce=journal.ownership_nonce,
         )
         journal = _checkpoint(
             _journal_path(descriptor_path), journal, "source", "owned"
@@ -1191,86 +1246,142 @@ def _source_preflight(journal: RunJournal) -> bool:
     )
     try:
         with admin.connect() as connection:
-            return _source_marker_state(connection, journal)
+            exists = _source_marker_state(connection, journal)
+            if (
+                not exists
+                and journal.schema_version == 2
+                and journal.source_state == "owned"
+            ):
+                raise ValueError("owned source marker is missing")
+            return exists
     finally:
         admin.dispose()
+
+
+@dataclass(frozen=True)
+class _RemoteCleanupRecord:
+    bundle_id: str | None
+    owner: str
+    manifest_json: str | None
+    integrity_key_id: str | None
+    integrity_payload_json: str | None
+    integrity_signature: str | None
+    pin_ids: tuple[str, ...]
+
+
+def _remote_cleanup_record(
+    fence: PostgresPublicationFence,
+    journal: RunJournal,
+    name: Literal["analysis", "detail"],
+    *,
+    connection: Any,
+    lock: bool = False,
+) -> _RemoteCleanupRecord | None:
+    """Return one exact nonce-owned, signed remote cleanup capability."""
+    bundle = ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
+    destination = getattr(journal, f"{name}_destination_id")
+    expected = getattr(journal, f"{name}_bundle_id")
+    suffix = " FOR UPDATE" if lock else ""
+    params = {"destination": destination, "bundle": bundle}
+    state = connection.execute(
+        text(
+            f"SELECT bundle_id, owner FROM {fence._table} "
+            "WHERE destination_id=:destination AND bundle_key=:bundle"
+            + suffix
+        ),
+        params,
+    ).one_or_none()
+    records = connection.execute(
+        text(
+            f"SELECT bundle_id, snapshot_seq, manifest_json, status, owner, "
+            "integrity_key_id, integrity_payload_json, integrity_signature "
+            f"FROM {fence._bundles_table} WHERE destination_id=:destination "
+            "AND bundle_key=:bundle" + suffix
+        ),
+        params,
+    ).all()
+    pins = connection.execute(
+        text(
+            f"SELECT pin_id, bundle_id FROM {fence._pins_table} "
+            "WHERE destination_id=:destination AND bundle_key=:bundle" + suffix
+        ),
+        params,
+    ).all()
+    if state is None and not records and not pins:
+        if getattr(journal, f"{name}_state") == "owned":
+            raise ValueError(f"owned {name} marker is missing")
+        return None
+    if journal.schema_version == 1:
+        raise ValueError(
+            "v1 journal cannot prove remote ownership; operator action required"
+        )
+    if len(records) > 1:
+        raise ValueError("remote ownership marker is ambiguous")
+    if not records:
+        if state != (None, journal.ownership_nonce) or pins:
+            raise ValueError("remote ownership marker disagrees")
+        return _RemoteCleanupRecord(
+            bundle_id=None,
+            owner=journal.ownership_nonce,
+            manifest_json=None,
+            integrity_key_id=None,
+            integrity_payload_json=None,
+            integrity_signature=None,
+            pin_ids=(),
+        )
+    row = records[0]
+    bundle_id = str(row[0])
+    if (
+        (expected and expected != bundle_id)
+        or state != (bundle_id, journal.ownership_nonce)
+        or str(row[3]) != "PROMOTED"
+        or str(row[4]) != journal.ownership_nonce
+        or any(str(pin[1]) != bundle_id for pin in pins)
+    ):
+        raise ValueError("remote ownership marker disagrees")
+    try:
+        payload = SignedBundleIntegrityPayload.model_validate_json(str(row[6]))
+        manifest = RemoteBundleManifest.model_validate_json(str(row[2]))
+        encoded_key = fence.public_key_ring[str(row[5])]
+        signature_valid = _verify_spki_ed25519(
+            base64.b64decode(encoded_key, validate=True),
+            integrity_message(payload),
+            base64.b64decode(str(row[7]), validate=True),
+        )
+    except Exception as error:
+        raise ValueError("remote ownership marker is unreadable") from error
+    if (
+        not signature_valid
+        or payload.destination_id != destination
+        or payload.bundle_key != bundle
+        or payload.bundle_id != bundle_id
+        or payload.snapshot_seq != int(row[1])
+        or tuple(payload.members) != tuple(manifest.members)
+    ):
+        raise ValueError("remote ownership signature disagrees")
+    physical = fence._with_physical_digests(connection, manifest)
+    if tuple(physical.members) != tuple(payload.members):
+        raise ValueError("remote physical marker disagrees")
+    return _RemoteCleanupRecord(
+        bundle_id=bundle_id,
+        owner=journal.ownership_nonce,
+        manifest_json=str(row[2]),
+        integrity_key_id=str(row[5]),
+        integrity_payload_json=str(row[6]),
+        integrity_signature=str(row[7]),
+        pin_ids=tuple(sorted(str(pin[0]) for pin in pins)),
+    )
 
 
 def _remote_preflight(
     fence: PostgresPublicationFence,
     journal: RunJournal,
     name: Literal["analysis", "detail"],
-) -> bool:
-    """Validate the current run-local remote identity before any delete.
-
-    v1 only has a bundle ID, so it is intentionally rejected when the remote
-    still exists: that record is not equivalent to the v2 durable marker.
-    """
-    bundle = ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
-    destination = getattr(journal, f"{name}_destination_id")
-    expected = getattr(journal, f"{name}_bundle_id")
+) -> _RemoteCleanupRecord | None:
     with fence.engine.connect() as connection:
-        rows = {
-            "state": int(
-                connection.execute(
-                    text(
-                        f"SELECT count(*) FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle"
-                    ),
-                    {"destination": destination, "bundle": bundle},
-                ).scalar_one()
-            ),
-            "bundle": int(
-                connection.execute(
-                    text(
-                        f"SELECT count(*) FROM {fence._bundles_table} WHERE destination_id=:destination AND bundle_key=:bundle"
-                    ),
-                    {"destination": destination, "bundle": bundle},
-                ).scalar_one()
-            ),
-            "pin": int(
-                connection.execute(
-                    text(
-                        f"SELECT count(*) FROM {fence._pins_table} WHERE destination_id=:destination AND bundle_key=:bundle"
-                    ),
-                    {"destination": destination, "bundle": bundle},
-                ).scalar_one()
-            ),
-        }
-        if not any(rows.values()):
-            return False
-        if journal.schema_version == 1:
-            raise ValueError(
-                "v1 journal cannot prove remote ownership; operator action required"
-            )
-        records = [
-            (str(row[0]), str(row[1]))
-            for row in connection.execute(
-                text(
-                    f"SELECT bundle_id, owner FROM {fence._bundles_table} "
-                    "WHERE destination_id=:destination AND bundle_key=:bundle"
-                ),
-                {"destination": destination, "bundle": bundle},
-            ).all()
-        ]
-        ids = {bundle_id for bundle_id, _owner in records}
-        state = connection.execute(
-            text(
-                f"SELECT bundle_id FROM {fence._table} WHERE destination_id=:destination AND bundle_key=:bundle"
-            ),
-            {"destination": destination, "bundle": bundle},
-        ).scalar_one_or_none()
-        # The fence persists the signed immutable bundle record with the
-        # generated run ID as owner.  In the checkpoint crash window, a sole
-        # matching record supplies the bundle identity without guessing.
-        marker = expected or (next(iter(ids)) if len(ids) == 1 else "")
-        if (
-            not marker
-            or ids != {marker}
-            or state != marker
-            or {owner for _bundle_id, owner in records} != {journal.run_id}
-        ):
-            raise ValueError("remote ownership marker disagrees")
-    return True
+        return _remote_cleanup_record(
+            fence, journal, name, connection=connection
+        )
 
 
 def cleanup_local(descriptor_path: Path) -> None:
@@ -1470,49 +1581,110 @@ def _delete_journal_remote(
     fence: PostgresPublicationFence,
     journal: RunJournal,
     name: Literal["analysis", "detail"],
+    record: _RemoteCleanupRecord | None,
 ) -> Mapping[str, int]:
-    """Delete only bundle identities under this run's unique destination."""
+    """Condition deletion on the exact preflight record in one transaction."""
     destination = getattr(journal, f"{name}_destination_id")
     bundle = ANALYSIS_BUNDLE_KEY if name == "analysis" else DETAIL_BUNDLE_KEY
-    with fence.engine.connect() as connection:
-        values = connection.execute(
-            text(
-                f"SELECT DISTINCT bundle_id FROM {fence._bundles_table} "
-                "WHERE destination_id=:destination AND bundle_key=:bundle"
-            ),
-            {"destination": destination, "bundle": bundle},
-        ).scalars()
-        bundle_ids = [str(value) for value in values]
-    expected_id = getattr(journal, f"{name}_bundle_id")
-    if expected_id and expected_id not in bundle_ids:
-        bundle_ids.append(expected_id)
-    observations = [
-        _delete_remote(
-            fence,
-            PlaneDestination(
-                destination_id=destination,
-                bundle_key=bundle,
-                pin=PinIdentity(
-                    pin_id=f"{journal.run_id}-{name}-recovery",
-                    bundle_id=bundle_id,
-                    expires_at_ms=0,
-                ),
-                snapshot_seq=0,
-                members={},
-                member_counts={},
-                member_checksums={},
-            ),
-        )
-        for bundle_id in bundle_ids
-    ]
-    if not observations:
-        return dict.fromkeys(
-            ("state_rows", "bundle_rows", "pin_rows", "physical_candidates"),
-            0,
-        )
-    return {
-        key: sum(item[key] for item in observations) for key in observations[0]
+    params = {
+        "destination": destination,
+        "bundle": bundle,
+        "owner": journal.ownership_nonce,
+        "bundle_id": record.bundle_id if record else None,
     }
+    if record is not None:
+        with fence.engine.begin() as connection:
+            current = _remote_cleanup_record(
+                fence, journal, name, connection=connection, lock=True
+            )
+            if current != record:
+                raise ValueError("remote ownership changed after preflight")
+            if record.bundle_id is not None:
+                assert record.manifest_json is not None
+                manifest = RemoteBundleManifest.model_validate_json(
+                    record.manifest_json
+                )
+                for member in manifest.members:
+                    connection.execute(
+                        text(
+                            f'DROP TABLE "{member.schema_name}".'
+                            f'"{member.table_name}"'
+                        )
+                    )
+                for pin_id in record.pin_ids:
+                    deleted = connection.execute(
+                        text(
+                            f"DELETE FROM {fence._pins_table} "
+                            "WHERE destination_id=:destination "
+                            "AND bundle_key=:bundle AND pin_id=:pin "
+                            "AND bundle_id=:bundle_id RETURNING pin_id"
+                        ),
+                        {**params, "pin": pin_id},
+                    ).one_or_none()
+                    if deleted != (pin_id,):
+                        raise ValueError("remote pin changed during cleanup")
+                deleted = connection.execute(
+                    text(
+                        f"DELETE FROM {fence._bundles_table} "
+                        "WHERE destination_id=:destination "
+                        "AND bundle_key=:bundle AND bundle_id=:bundle_id "
+                        "AND owner=:owner AND integrity_signature=:signature "
+                        "RETURNING bundle_id"
+                    ),
+                    {**params, "signature": record.integrity_signature},
+                ).one_or_none()
+                if deleted != (record.bundle_id,):
+                    raise ValueError("remote bundle changed during cleanup")
+            deleted = connection.execute(
+                text(
+                    f"DELETE FROM {fence._table} "
+                    "WHERE destination_id=:destination "
+                    "AND bundle_key=:bundle AND owner=:owner AND "
+                    + (
+                        "bundle_id=:bundle_id"
+                        if record.bundle_id is not None
+                        else "bundle_id IS NULL"
+                    )
+                    + " RETURNING destination_id"
+                ),
+                params,
+            ).one_or_none()
+            if deleted != (destination,):
+                raise ValueError("remote state changed during cleanup")
+    with fence.engine.connect() as connection:
+        values = {
+            "state_rows": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._table} "
+                        "WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    params,
+                ).scalar_one()
+            ),
+            "bundle_rows": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._bundles_table} "
+                        "WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    params,
+                ).scalar_one()
+            ),
+            "pin_rows": int(
+                connection.execute(
+                    text(
+                        f"SELECT count(*) FROM {fence._pins_table} "
+                        "WHERE destination_id=:destination AND bundle_key=:bundle"
+                    ),
+                    params,
+                ).scalar_one()
+            ),
+            "physical_candidates": 0,
+        }
+    if any(values.values()):
+        raise ValueError("remote cleanup did not reach zero state")
+    return values
 
 
 def cleanup(
@@ -1530,11 +1702,17 @@ def cleanup(
         ("state_rows", "bundle_rows", "pin_rows", "physical_candidates"), 0
     )
     fences: dict[str, PostgresPublicationFence] = {}
+    remote_records: dict[str, _RemoteCleanupRecord | None] = {}
     source_exists = False
     try:
         # All applicable markers are observed before any DROP/DELETE.  The
         # state guard intentionally means a never-started secret is untouched.
         source_exists = _source_preflight(journal)
+        integrity = (
+            required_bundle_integrity_configuration()
+            if any(_applicable(journal, name) for name in ("analysis", "detail"))
+            else None
+        )
         for name, environment, kind in (
             ("analysis", "MOTHERDUCK_DATABASE_URL", "motherduck"),
             ("detail", "NEON_DATABASE_URL", "neon"),
@@ -1544,16 +1722,22 @@ def cleanup(
                     _required_env(environment),
                     getattr(journal, f"{name}_destination_id"),
                     cast(Any, kind),
+                    integrity=integrity,
                 )
                 fences[name] = fence
-                _remote_preflight(fence, journal, cast(Any, name))
+                remote_records[name] = _remote_preflight(
+                    fence, journal, cast(Any, name)
+                )
 
         destinations: dict[str, Mapping[str, int]] = {}
         for name in ("analysis", "detail"):
             destination = getattr(journal, f"{name}_destination_id")
             if name in fences:
                 destinations[destination] = _delete_journal_remote(
-                    fences[name], journal, cast(Any, name)
+                    fences[name],
+                    journal,
+                    cast(Any, name),
+                    remote_records[name],
                 )
             else:
                 destinations[destination] = zero

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from types import SimpleNamespace
+from typing import Any, Literal, cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -270,6 +272,8 @@ def test_never_started_cleanup_does_not_read_any_backend_secret(
     proof = cleanup(descriptor_path, tmp_path / "proof.json")
 
     assert proof.cleanup_complete
+    replay = cleanup(descriptor_path, tmp_path / "proof-replay.json")
+    assert replay.cleanup_complete
     verify_evidence(descriptor_path, tmp_path / "proof.json")
 
 
@@ -304,6 +308,207 @@ def test_prepare_failure_before_source_does_not_initialize_backends(
     assert journal.source_state == "not_started"
     assert journal.analysis_state == "not_started"
     assert journal.detail_state == "not_started"
+
+
+def test_analysis_failure_never_resolves_or_constructs_neon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "descriptor.json"
+    source = MagicMock()
+    analysis_fence = MagicMock()
+    environments: list[str] = []
+    kinds: list[str] = []
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "required_bundle_integrity_configuration",
+        lambda: SimpleNamespace(signer=object(), public_key_ring={}),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture, "_new_source", lambda *_args, **_kwargs: source
+    )
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_seed_accepted_fixture",
+        lambda *_args: "a" * 64,
+    )
+    monkeypatch.setattr(
+        release_parity_fixture, "_reconciliation", lambda *_args: object()
+    )
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_required_env",
+        lambda name: environments.append(name) or f"url:{name}",
+    )
+
+    def fence(
+        _url: str, _destination: str, kind: str, **_kwargs: object
+    ) -> object:
+        kinds.append(kind)
+        if kind == "neon":
+            raise AssertionError("Neon factory must not be reached")
+        return analysis_fence
+
+    monkeypatch.setattr(release_parity_fixture, "_fence", fence)
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "export_whetstone",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("analysis promotion failed")
+        ),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture, "_rollback_prepare", lambda *_args: None
+    )
+
+    with pytest.raises(RuntimeError, match="analysis promotion"):
+        prepare(descriptor_path)
+
+    journal = RunJournal.model_validate_json(
+        _journal_path(descriptor_path).read_text()
+    )
+    assert environments == ["MOTHERDUCK_DATABASE_URL"]
+    assert kinds == ["motherduck"]
+    assert journal.analysis_state == "intent"
+    assert journal.detail_state == "not_started"
+
+
+def test_remote_cleanup_rejects_replacement_between_preflight_and_delete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    ).model_copy(update={"analysis_state": "intent"})
+    record = release_parity_fixture._RemoteCleanupRecord(
+        bundle_id=None,
+        owner=journal.ownership_nonce,
+        manifest_json=None,
+        integrity_key_id=None,
+        integrity_payload_json=None,
+        integrity_signature=None,
+        pin_ids=(),
+    )
+    replacement = release_parity_fixture._RemoteCleanupRecord(
+        bundle_id=None,
+        owner="b" * 64,
+        manifest_json=None,
+        integrity_key_id=None,
+        integrity_payload_json=None,
+        integrity_signature=None,
+        pin_ids=(),
+    )
+    connection = MagicMock()
+    engine = MagicMock()
+    engine.begin.return_value.__enter__.return_value = connection
+    fence = SimpleNamespace(engine=engine)
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "_remote_cleanup_record",
+        lambda *_args, **_kwargs: replacement,
+    )
+
+    with pytest.raises(ValueError, match="changed after preflight"):
+        release_parity_fixture._delete_journal_remote(
+            cast(Any, fence), journal, "analysis", record
+        )
+
+    connection.execute.assert_not_called()
+
+
+def test_recreated_source_marker_cannot_authorize_drop() -> None:
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    ).model_copy(update={"source_state": "owned"})
+    exists = MagicMock()
+    exists.one_or_none.return_value = (1,)
+    forged = MagicMock()
+    forged.one_or_none.return_value = (
+        journal.run_id,
+        journal.ownership_digest,
+        "0" * 64,
+    )
+    connection = MagicMock()
+    connection.execute.side_effect = [exists, forged]
+
+    with pytest.raises(ValueError, match="marker disagrees"):
+        release_parity_fixture._source_marker_state(connection, journal)
+
+
+@pytest.mark.parametrize("name", ["analysis", "detail"])
+def test_deterministically_forged_remote_owner_is_not_cleanup_authority(
+    name: Literal["analysis", "detail"],
+) -> None:
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    ).model_copy(update={f"{name}_state": "intent"})
+    state = MagicMock()
+    state.one_or_none.return_value = (None, journal.run_id)
+    records = MagicMock()
+    records.all.return_value = []
+    pins = MagicMock()
+    pins.all.return_value = []
+    connection = MagicMock()
+    connection.execute.side_effect = [state, records, pins]
+
+    with pytest.raises(ValueError, match="marker disagrees"):
+        release_parity_fixture._remote_cleanup_record(
+            cast(Any, SimpleNamespace(
+                _table='"state"',
+                _bundles_table='"bundles"',
+                _pins_table='"pins"',
+            )),
+            journal,
+            name,
+            connection=connection,
+        )
+
+
+@pytest.mark.parametrize("name", ["analysis", "detail"])
+def test_owned_remote_marker_may_not_disappear_before_cleanup(
+    name: Literal["analysis", "detail"],
+) -> None:
+    journal = _new_journal(
+        run_id="a" * 32,
+        source_schema=f"whetstone_v6_release_{'a' * 32}",
+        analysis_path=f"{'a' * 32}-analysis.duckdb",
+        detail_path=f"{'a' * 32}-detail.duckdb",
+        analysis_destination_id=f"whetstone-v6-analysis-{'a' * 32}",
+        detail_destination_id=f"whetstone-v6-detail-{'a' * 32}",
+    ).model_copy(update={f"{name}_state": "owned"})
+    state = MagicMock()
+    state.one_or_none.return_value = None
+    records = MagicMock()
+    records.all.return_value = []
+    pins = MagicMock()
+    pins.all.return_value = []
+    connection = MagicMock()
+    connection.execute.side_effect = [state, records, pins]
+
+    with pytest.raises(ValueError, match=f"owned {name} marker is missing"):
+        release_parity_fixture._remote_cleanup_record(
+            cast(Any, SimpleNamespace(
+                _table='"state"',
+                _bundles_table='"bundles"',
+                _pins_table='"pins"',
+            )),
+            journal,
+            name,
+            connection=connection,
+        )
 
 
 def test_v1_recovery_fails_closed_when_source_exists(
