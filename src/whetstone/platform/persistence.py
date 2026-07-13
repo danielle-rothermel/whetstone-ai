@@ -111,8 +111,6 @@ def prediction_spec_from_row(row: Mapping[str, Any]) -> PredictionSpecRecord:
         task=row["task_snapshot"],
         provider_configs=provider_configs,
         provider_axis=provider_axis,
-        fair_order_seed=row["fair_order_seed"],
-        fair_order_key=row["fair_order_key"],
         created_at=row["created_at"],
     )
 

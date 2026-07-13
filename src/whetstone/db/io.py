@@ -139,8 +139,6 @@ def prediction_spec_row(record: PredictionSpecRecord) -> Row:
         "model": provider_axis.model,
         "throttle_key": provider_axis.throttle_key,
         "provider_axis_config_id": provider_axis.config_id,
-        "fair_order_seed": record.fair_order_seed,
-        "fair_order_key": record.fair_order_key,
         "task_snapshot": _dump(record.task),
         "graph_snapshot": _dump(record.graph),
         "dimensions": _dump(record.dimensions),
@@ -296,8 +294,6 @@ def prediction_spec_record_from_row(row: Row) -> PredictionSpecRecord:
             throttle_key=row["throttle_key"],
             config_id=row.get("provider_axis_config_id"),
         ),
-        fair_order_seed=row["fair_order_seed"],
-        fair_order_key=row["fair_order_key"],
         created_at=row["created_at"],
     )
 
@@ -631,7 +627,6 @@ def select_rescore_submission_candidates(
     statement = (
         select(
             schema.prediction_specs.c.prediction_id,
-            schema.prediction_specs.c.fair_order_key,
             schema.generation_runs.c.generation_run_id,
             schema.score_attempts.c.score_attempt_id.label(
                 "existing_score_attempt_id"
@@ -653,7 +648,6 @@ def select_rescore_submission_candidates(
         )
         .where(schema.score_attempts.c.score_attempt_id.is_(None))
         .order_by(
-            schema.prediction_specs.c.fair_order_key,
             schema.prediction_specs.c.prediction_id,
             schema.generation_runs.c.generation_run_id,
         )

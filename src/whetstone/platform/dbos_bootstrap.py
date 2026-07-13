@@ -10,10 +10,10 @@ from __future__ import annotations
 import os
 
 from dbos import DBOSConfig
-from dr_platform import resolve_database_url
 from dr_platform.dbos_config import (
     DBOS_SYSTEM_DATABASE_URL_ENV,
     normalize_postgresql_driver_url,
+    resolve_database_url,
 )
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 

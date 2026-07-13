@@ -7,7 +7,6 @@ from whetstone.records.models import DimensionsPayload
 
 PREDICTION_ID_DIGEST_LENGTH = 24
 DIMENSIONS_DIGEST_LENGTH = 16
-FAIR_ORDER_DIGEST_LENGTH = 32
 GENERATION_RUN_ID_DIGEST_LENGTH = 24
 NODE_ATTEMPT_ID_DIGEST_LENGTH = 32
 SCORE_ATTEMPT_ID_DIGEST_LENGTH = 32
@@ -62,46 +61,17 @@ def stable_prediction_id(
     )
 
 
-def fair_order_key(
-    *,
-    experiment_seed: str,
-    prediction_id: str,
-    provider: str,
-    endpoint_kind: str,
-    model: str,
-    throttle_key: str,
-    graph_layout: str,
-    task_id: str,
-    repetition_seed: int,
-    config_axis: str,
-    length: int = FAIR_ORDER_DIGEST_LENGTH,
-) -> str:
-    return _sha256_digest(
-        {
-            "experiment_seed": experiment_seed,
-            "prediction_id": prediction_id,
-            "provider": provider,
-            "endpoint_kind": endpoint_kind,
-            "model": model,
-            "throttle_key": throttle_key,
-            "graph_layout": graph_layout,
-            "task_id": task_id,
-            "repetition_seed": repetition_seed,
-            "config_axis": config_axis,
-        },
-        length=length,
-    )
-
-
 def stable_generation_run_id(
     *,
     prediction_id: str,
+    execution_recipe_digest: str,
     attempt_index: int,
     length: int = GENERATION_RUN_ID_DIGEST_LENGTH,
 ) -> str:
     return _sha256_digest(
         {
             "prediction_id": prediction_id,
+            "execution_recipe_digest": execution_recipe_digest,
             "attempt_index": attempt_index,
         },
         length=length,

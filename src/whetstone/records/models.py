@@ -299,23 +299,21 @@ class PredictionSpecRecord(BaseModel):
     task: TaskSnapshotPayload
     provider_configs: tuple[ProviderConfigRef, ...]
     provider_axis: ProviderConfigRef
-    fair_order_seed: StrictStr
-    fair_order_key: StrictStr
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    # dr-platform SubmittableItem protocol view: the frozen domain axes
-    # under the library's neutral names.
     @property
-    def item_id(self) -> str:
+    def item_key(self) -> str:
         return self.prediction_id
 
     @property
-    def order_key(self) -> str:
-        return self.fair_order_key
+    def spec(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
     @property
-    def group_key(self) -> str:
-        return self.experiment_name
+    def service_class(self):
+        from dr_platform import ServiceClass
+
+        return ServiceClass.STANDARD
 
     @model_validator(mode="after")
     def validate_spec_shape(self) -> PredictionSpecRecord:
@@ -336,7 +334,6 @@ class PredictionSpecRecord(BaseModel):
         validate_provider_configs_identity(self.provider_configs)
         from whetstone.records.hashing import (
             dimensions_digest,
-            fair_order_key,
             stable_prediction_id,
         )
 
@@ -355,20 +352,6 @@ class PredictionSpecRecord(BaseModel):
         )
         if self.prediction_id != expected_prediction_id:
             raise ValueError("prediction_id must match stable prediction id")
-        expected_fair_order_key = fair_order_key(
-            experiment_seed=self.fair_order_seed,
-            prediction_id=self.prediction_id,
-            provider=self.provider_axis.provider_kind.value,
-            endpoint_kind=self.provider_axis.endpoint_kind.value,
-            model=self.provider_axis.model,
-            throttle_key=self.provider_axis.throttle_key,
-            graph_layout=self.graph.layout,
-            task_id=self.task_id,
-            repetition_seed=self.repetition_seed,
-            config_axis=self.dimensions_digest,
-        )
-        if self.fair_order_key != expected_fair_order_key:
-            raise ValueError("fair_order_key must match spec axes")
         return self
 
 

@@ -47,11 +47,9 @@ from whetstone.records import (
     TaskInputsPayload,
     TaskSnapshotPayload,
     dimensions_digest,
-    fair_order_key,
     stable_prediction_id,
 )
 
-DEFAULT_FAIR_ORDER_SEED = "seed"
 DEFAULT_DIMENSIONS_AXES: tuple[dict[str, Any], ...] = ({"temperature": 0.2},)
 DEFAULT_REPETITION_SEEDS: tuple[int, ...] = (0,)
 DEFAULT_HUMANEVAL_INSTRUCTIONS_START = (
@@ -183,7 +181,6 @@ class ComposableExperimentConfig(BaseModel):
     graph_layout: GraphLayout
     split: StrictStr
     model_configs: tuple[StrictStr, ...]
-    fair_order_seed: StrictStr = DEFAULT_FAIR_ORDER_SEED
     repetition_seeds: tuple[StrictInt, ...] = DEFAULT_REPETITION_SEEDS
     dimensions_axes: tuple[dict[StrictStr, Any], ...] = DEFAULT_DIMENSIONS_AXES
     encdec_shape: EncDecShape = "legacy"
@@ -215,7 +212,6 @@ class ExperimentSpecConfig(BaseModel):
     experiment_name: StrictStr
     graph_layout: GraphLayout
     dataset: DatasetSpecConfig
-    fair_order_seed: StrictStr = DEFAULT_FAIR_ORDER_SEED
     repetition_seeds: tuple[StrictInt, ...] = DEFAULT_REPETITION_SEEDS
     dimensions_axes: tuple[dict[StrictStr, Any], ...] = DEFAULT_DIMENSIONS_AXES
     providers: tuple[ProviderSpecConfig, ...]
@@ -479,7 +475,6 @@ def prediction_spec(
     dimensions: DimensionsPayload | None = None,
     experiment_name: str = "exp",
     repetition_seed: int = 0,
-    fair_order_seed: str = DEFAULT_FAIR_ORDER_SEED,
     created_at: datetime | None = None,
 ) -> PredictionSpecRecord:
     providers = providers or (provider_ref(),)
@@ -519,19 +514,6 @@ def prediction_spec(
         task=task_snapshot,
         provider_configs=providers,
         provider_axis=provider_axis,
-        fair_order_seed=fair_order_seed,
-        fair_order_key=fair_order_key(
-            experiment_seed=fair_order_seed,
-            prediction_id=prediction_id,
-            provider=provider_axis.provider_kind.value,
-            endpoint_kind=provider_axis.endpoint_kind.value,
-            model=provider_axis.model,
-            throttle_key=provider_axis.throttle_key,
-            graph_layout=layout,
-            task_id=task_id,
-            repetition_seed=repetition_seed,
-            config_axis=dimensions_id,
-        ),
         created_at=created_at or datetime.now(UTC),
     )
 
@@ -654,7 +636,6 @@ def iter_experiment_specs(
                     dimensions=dimensions,
                     experiment_name=config.experiment_name,
                     repetition_seed=repetition_seed,
-                    fair_order_seed=config.fair_order_seed,
                 )
 
 
@@ -710,7 +691,6 @@ def expand_composable_experiment(
             experiment_name=config.experiment_name,
             graph_layout=config.graph_layout,
             dataset=split.dataset,
-            fair_order_seed=config.fair_order_seed,
             repetition_seeds=config.repetition_seeds,
             dimensions_axes=config.dimensions_axes,
             providers=model.providers,

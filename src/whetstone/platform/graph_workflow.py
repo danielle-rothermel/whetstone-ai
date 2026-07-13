@@ -2,22 +2,25 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
 from dr_graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_platform import (
-    WORKFLOW_START_RACE_ERRORS,
     clear_throttle_backoff,
     record_throttle_failure,
     throttle_delay_seconds,
+)
+from dr_platform.dbos_config import (
+    WORKFLOW_START_RACE_ERRORS,
+    resolve_database_url,
     workflow_start_raced,
 )
-from dr_platform.backoff import utc_now
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
+from whetstone.clock import now
 from whetstone.eval_failures import should_retry_step
 from whetstone.platform.node_execution import (
     NodeStepResult,
@@ -45,19 +48,15 @@ from whetstone.records import (
     stable_node_attempt_id,
 )
 
-PLATFORM_GENERATION_WORKFLOW_NAME = "dr_dspy_platform_graph_generation_v1"
-LOAD_SPEC_STEP_NAME = "dr_dspy_platform_load_prediction_spec_v1"
-GENERATION_STARTED_AT_STEP_NAME = (
-    "dr_dspy_platform_generation_started_at_v1"
-)
-GENERATION_COMPLETED_AT_STEP_NAME = (
-    "dr_dspy_platform_generation_completed_at_v1"
-)
-NODE_STEP_ERROR_RESULT_STEP_NAME = "dr_dspy_platform_node_step_error_result_v1"
-EXECUTE_NODE_STEP_NAME = "dr_dspy_platform_execute_lm_node_v1"
-THROTTLE_PREFLIGHT_STEP_NAME = "dr_dspy_platform_throttle_preflight_v1"
-PERSIST_RESULT_STEP_NAME = "dr_dspy_platform_persist_generation_result_v1"
-WORKFLOW_ID_PREFIX = "platform-generate-v1"
+PLATFORM_GENERATION_WORKFLOW_NAME = "whetstone_generation"
+LOAD_SPEC_STEP_NAME = "whetstone_load_prediction_spec"
+GENERATION_STARTED_AT_STEP_NAME = "whetstone_generation_started_at"
+GENERATION_COMPLETED_AT_STEP_NAME = "whetstone_generation_completed_at"
+NODE_STEP_ERROR_RESULT_STEP_NAME = "whetstone_node_step_error_result"
+EXECUTE_NODE_STEP_NAME = "whetstone_execute_lm_node"
+THROTTLE_PREFLIGHT_STEP_NAME = "whetstone_throttle_preflight"
+PERSIST_RESULT_STEP_NAME = "whetstone_persist_generation_result"
+WORKFLOW_ID_PREFIX = "whetstone-generation"
 NODE_STEP_MAX_ATTEMPTS = 3
 NODE_STEP_RETRY_INTERVAL_SECONDS = 2.0
 
@@ -127,10 +126,10 @@ def run_prediction_graph_core(
 
 @DBOS.workflow(name=PLATFORM_GENERATION_WORKFLOW_NAME)
 def run_prediction_graph_workflow(
-    database_url: str,
     prediction_id: str,
     attempt_index: int = 0,
 ) -> str:
+    database_url = resolve_database_url(None)
     spec = PredictionSpecRecord.model_validate(
         load_prediction_spec_step(database_url, prediction_id)
     )
@@ -251,7 +250,6 @@ def _start_prediction_graph_workflow_handle(
         try:
             handle = DBOS.start_workflow(
                 run_prediction_graph_workflow,
-                database_url,
                 prediction_id,
                 attempt_index,
             )
@@ -293,7 +291,7 @@ def generation_completed_at_step(generation_run_id: str) -> str:
 
 
 def timestamp_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return now().isoformat()
 
 
 def sleep_for_backoff_seconds(seconds: float) -> None:
@@ -333,7 +331,7 @@ def provider_throttle_delay_seconds(
             return throttle_delay_seconds(
                 connection,
                 throttle_key=provider_ref.throttle_key,
-                now=utc_now(),
+                now=now(),
                 schema=PLATFORM_SCHEMA,
             )
     finally:
@@ -360,7 +358,7 @@ def execute_lm_node_step(
         provider_ref = provider_config_ref_for_node(spec=spec, node=node)
     except Exception:
         provider_ref = None
-    step_started_at = datetime.now(UTC)
+    step_started_at = now()
     try:
         result = execute_lm_node(
             spec=spec,
@@ -374,7 +372,7 @@ def execute_lm_node_step(
             attach_node_step_timing_to_exception(
                 error,
                 started_at=step_started_at,
-                completed_at=datetime.now(UTC),
+                completed_at=now(),
             )
         if provider_ref is not None:
             record_throttle_failure_state(
@@ -413,7 +411,7 @@ def record_throttle_failure_state(
                 error_type=summary.failure_exception_type,
                 message=summary.message,
                 metadata=summary.failure_metadata,
-                now=utc_now(),
+                now=now(),
                 schema=PLATFORM_SCHEMA,
             )
     finally:
@@ -431,7 +429,7 @@ def clear_throttle_backoff_state(
             clear_throttle_backoff(
                 connection,
                 throttle_key=throttle_key,
-                now=utc_now(),
+                now=now(),
                 schema=PLATFORM_SCHEMA,
             )
     finally:
@@ -450,9 +448,9 @@ def node_step_error_result_step(
         step_started_at = datetime.fromisoformat(started_at)
         step_completed_at = datetime.fromisoformat(completed_at)
     else:
-        now = datetime.now(UTC)
-        step_started_at = now
-        step_completed_at = now
+        current_time = now()
+        step_started_at = current_time
+        step_completed_at = current_time
     result = node_step_error_result_from_failure(
         spec=PredictionSpecRecord.model_validate(spec_payload),
         node=NodeSpec.model_validate(node_payload),

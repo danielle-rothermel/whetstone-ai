@@ -1,5 +1,5 @@
-"""Frozen v1 Alembic migration revision identifiers."""
+"""Fresh v6 Alembic baseline revision identifier."""
 
-V1_MIGRATION_BASE = "20260708_0001"
-V1_MIGRATION_HEAD = "20260708_0002"
-V1_MIGRATION_REVISION_COUNT = 2
+V6_MIGRATION_BASE = "20260712_0001"
+V6_MIGRATION_HEAD = V6_MIGRATION_BASE
+V6_MIGRATION_REVISION_COUNT = 1
