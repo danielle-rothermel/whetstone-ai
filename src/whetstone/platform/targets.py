@@ -283,7 +283,7 @@ def _register_prediction_specs(
 def _register_score_targets(
     connection: Any, *, operation_key: str, items: tuple[RegistrationItem, ...]
 ) -> RegistrationResult:
-    """Validate the frozen target rows without recreating legacy batching.
+    """Validate the frozen target rows without recreating legacy scheduling.
 
     Score outcomes are append-only and are intentionally *not* inserted at
     registration time.  A retry receives a new platform ordinal and persists

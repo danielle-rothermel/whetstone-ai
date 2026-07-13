@@ -40,9 +40,8 @@ def stable_prediction_id(
 ) -> str:
     """Return the v1 graph-aware prediction id.
 
-    This is intentionally not compatible with legacy v0 dimension-based
-    prediction ids. Backfills should store v0 ids as source metadata and
-    compute fresh v1 ids from graph, dimensions, and provider axes.
+    Prediction IDs bind the exact experiment, graph, dimensions, and provider
+    axes; fresh schemas never reinterpret older identifiers.
     """
 
     return _sha256_digest(
