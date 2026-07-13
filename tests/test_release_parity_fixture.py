@@ -312,3 +312,13 @@ def test_release_parity_maps_public_integrity_keys_to_unitbench() -> (
     )
     assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY" not in consumer_step
     assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH" not in consumer_step
+    assert "GIT_CONFIG_COUNT: 1" in consumer_step
+    assert (
+        "GIT_CONFIG_KEY_0: url.https://x-access-token:"
+        "${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}"
+        "@github.com/danielle-rothermel/.insteadOf" in consumer_step
+    )
+    assert (
+        "GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/"
+        in consumer_step
+    )

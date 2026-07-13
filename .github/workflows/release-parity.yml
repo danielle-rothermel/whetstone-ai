@@ -83,6 +83,9 @@ jobs:
           UNITBENCH_BUNDLE_INTEGRITY_PUBLIC_KEYS: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
           ANALYSIS_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}@github.com/danielle-rothermel/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/
         run: |
           cd unitbench
           corepack enable
