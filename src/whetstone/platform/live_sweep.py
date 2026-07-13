@@ -28,6 +28,7 @@ from dr_platform import (
     EligibilityReference,
     NextAttemptReason,
     NextAttemptRequest,
+    PlatformSchema,
     list_attempts,
     request_next_attempt,
 )
@@ -63,6 +64,7 @@ from whetstone.records import (
 )
 
 APP = typer.Typer(no_args_is_help=True)
+PLATFORM_SCHEMA = PlatformSchema(prefix="whetstone")
 EXPECTED_CELLS = 5_904
 CANARY_CELLS = 12
 MAX_RETRIES_PER_CELL = 2
@@ -218,6 +220,7 @@ def _attempt_facts(
         page = list_attempts(
             operation_key,
             engine=engine,
+            schema=PLATFORM_SCHEMA,
             cursor=cursor,
             limit=100,
         )
@@ -2582,6 +2585,7 @@ def submit_retry(
                     ),
                     engine=engine,
                     resolver=target_registry(),
+                    schema=PLATFORM_SCHEMA,
                 )
                 ledger.retried(
                     cell_id=fact.cell_id,
