@@ -15,6 +15,11 @@ from dr_platform import (
     SubmitResult,
     submit,
 )
+from dr_platform.enqueue_runtime import (
+    PhysicalEnqueueAdapter,
+    QueueLookup,
+    WorkflowObserver,
+)
 from dr_platform.submission import prepare_manifest
 from dr_serialize import sha256_json_digest
 from sqlalchemy import and_, or_, select
@@ -237,6 +242,9 @@ def submit_prediction_specs(
     submit_spec: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     options: SubmitOptions | None = None,
+    queue_lookup: QueueLookup | None = None,
+    enqueue_adapter: PhysicalEnqueueAdapter | None = None,
+    workflow_observer: WorkflowObserver | None = None,
 ) -> SubmitResult:
     manifest, source = prepare_generation_manifest(
         operation_key=operation_key,
@@ -253,6 +261,9 @@ def submit_prediction_specs(
         spec=submit_spec,
         metadata=metadata,
         options=options,
+        queue_lookup=queue_lookup,
+        enqueue_adapter=enqueue_adapter,
+        workflow_observer=workflow_observer,
     )
 
 
@@ -312,6 +323,9 @@ def submit_scoring_targets(
     source_generation_operation_key: str,
     metadata: dict[str, Any] | None = None,
     options: SubmitOptions | None = None,
+    queue_lookup: QueueLookup | None = None,
+    enqueue_adapter: PhysicalEnqueueAdapter | None = None,
+    workflow_observer: WorkflowObserver | None = None,
 ) -> SubmitResult:
     manifest, source, selection_digest = prepare_scoring_manifest(
         operation_key=operation_key,
@@ -332,4 +346,7 @@ def submit_scoring_targets(
         },
         metadata=metadata,
         options=options,
+        queue_lookup=queue_lookup,
+        enqueue_adapter=enqueue_adapter,
+        workflow_observer=workflow_observer,
     )

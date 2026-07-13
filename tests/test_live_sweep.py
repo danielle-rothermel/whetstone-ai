@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from decimal import Decimal
 from hashlib import sha256
@@ -852,6 +854,14 @@ def test_scoring_cut_rejects_partial_member_inventory(tmp_path: Path) -> None:
         ledger.close()
 
 
+@contextmanager
+def _fake_enqueue_runtime() -> Iterator[SimpleNamespace]:
+    """Unit tests never launch DBOS; the live canary proves the runtime."""
+    yield SimpleNamespace(
+        queue_lookup=None, enqueue_adapter=None, workflow_observer=None
+    )
+
+
 def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -891,6 +901,9 @@ def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
     )
     monkeypatch.setattr(
         live_sweep, "resolve_application_database_url", lambda: "sqlite://"
+    )
+    monkeypatch.setattr(
+        live_sweep, "_platform_enqueue_runtime", _fake_enqueue_runtime
     )
     submissions: list[tuple[live_sweep.ScoringTargetSpec, ...]] = []
     monkeypatch.setattr(
