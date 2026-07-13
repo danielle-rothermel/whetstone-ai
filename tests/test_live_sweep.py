@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+import shutil
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
+import typer
 from dr_platform.status import AttemptExecutionState
 from sqlalchemy.engine import Engine
 
@@ -94,6 +97,76 @@ def test_remaining_never_resubmits_typed_failure(tmp_path: Path) -> None:
         ]
     finally:
         ledger.close()
+
+
+def test_sqlite_intent_replays_after_platform_commit_before_local_ack(
+    tmp_path: Path,
+) -> None:
+    """The durable intent is enough to repeat the same Platform submission."""
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        cell = _cell("a")
+        ledger.reserve([cell], {"a": Decimal("0.10")})
+        ledger.submission_intent(
+            [cell],
+            operation_key="operation-a",
+            prediction_ids={"a": "prediction-a"},
+        )
+        # Simulate process death here: reopening SQLite sees only the intent.
+        assert ledger.reserve([cell], {"a": Decimal("0.10")}) == [cell]
+        row = ledger.rows()[0]
+        assert row["status"] == "submitting"
+        assert row["operation_key"] == "operation-a"
+        assert row["platform_item_id"] == live_sweep.item_id(
+            operation_key="operation-a", item_key="prediction-a"
+        )
+    finally:
+        ledger.close()
+
+
+def test_retry_reserves_each_known_cost_attempt_and_fails_closed_unknown(
+    tmp_path: Path,
+) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.reserve([_cell("a")], {"a": Decimal("2.31")})
+        ledger.submitted(
+            [_cell("a")],
+            operation_key="operation-a",
+            prediction_ids={"a": "prediction-a"},
+        )
+        known = CellReconciliation(
+            "a", "typed_failure", 0, 0, Decimal("2.31"), {}, "error"
+        )
+        ledger.reconciliation([known])
+        assert ledger.claim_retry(known)
+        assert ledger.rows()[0]["reserved_cost"] == "2.31"
+        unknown = CellReconciliation(
+            "a", "typed_failure", 1, 1, None, {}, "error"
+        )
+        assert not ledger.claim_retry(unknown)
+    finally:
+        ledger.close()
+
+
+def test_executable_artifact_binds_generated_spec_and_rejects_tamper(
+    tmp_path: Path,
+) -> None:
+    source = Path("/private/tmp/platform-v6-live-sweep-161")
+    target = tmp_path / "campaign"
+    shutil.copytree(source, target)
+    _metadata, cells, _hash = live_sweep.validate_campaign(target)
+    assert len(cells) == 5_904
+    manifest = target / "manifest.jsonl"
+    rows = [json.loads(line) for line in manifest.read_text().splitlines()]
+    rows[0]["prediction_id"] = "tampered"
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    with pytest.raises(typer.BadParameter):
+        live_sweep.validate_campaign(target)
 
 
 def test_ledger_requires_an_absolute_external_path(tmp_path: Path) -> None:

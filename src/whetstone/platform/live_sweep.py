@@ -463,6 +463,20 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _spec_digest(spec: Any) -> str:
+    """Digest the exact JSON contract passed to Platform."""
+    return sha256_json_digest(
+        spec.model_dump(mode="json", exclude={"created_at"})
+    )
+
+
+def _cell_operation_key(cell: Mapping[str, Any]) -> str:
+    value = cell.get("operation_key")
+    if not isinstance(value, str) or not value:
+        raise ValueError("locked cell has no deterministic operation key")
+    return value
+
+
 class SweepLedger:
     """Run-scoped, WAL-backed journal with atomic ceiling checks."""
 
@@ -577,6 +591,11 @@ class SweepLedger:
                     (self.manifest_hash, cell_id),
                 ).fetchone()
                 if row is not None:
+                    # A process may die after durable intent and before its
+                    # local acknowledgement.  Return that exact intent for
+                    # replay; its Platform operation key is immutable.
+                    if row[0] == "submitting":
+                        selected.append(cell)
                     continue
                 if actual + reserved + estimate > GENERATION_CEILING_USD:
                     raise ValueError(
@@ -678,6 +697,19 @@ class SweepLedger:
         return [
             cell for cell in all_cells if str(cell["cell_id"]) not in excluded
         ]
+
+    def pending_submission(
+        self, all_cells: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        pending = {
+            str(row[0])
+            for row in self.connection.execute(
+                "SELECT cell_id FROM sweep_cells WHERE manifest_hash=? "
+                "AND status='submitting'",
+                (self.manifest_hash,),
+            ).fetchall()
+        }
+        return [cell for cell in all_cells if str(cell["cell_id"]) in pending]
 
     def summary(self) -> dict[str, Any]:
         rows = self.connection.execute(
@@ -861,6 +893,25 @@ def validate_campaign(
         for line in manifest_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    baseline = _load_json(campaign_dir / "legacy-baseline-tasks.json")
+    baseline_by_task = {row["task_id"]: row for row in baseline}
+    if len(baseline_by_task) != 164:
+        raise typer.BadParameter("locked task baseline is incomplete")
+    for cell in cells:
+        task = baseline_by_task.get(cell["task_id"])
+        if task is None or task.get("task_definition_sha256") != cell.get(
+            "task_definition_sha256"
+        ):
+            raise typer.BadParameter(
+                "locked task definition does not match cell"
+            )
+        definition = task.get("legacy_baseline_definition")
+        if not isinstance(definition, dict) or sha256_json_digest(
+            definition
+        ) != task.get("task_definition_sha256"):
+            raise typer.BadParameter(
+                "locked task definition digest is invalid"
+            )
     if (
         len(cells) != EXPECTED_CELLS
         or metadata.get("expected_cell_count") != EXPECTED_CELLS
@@ -887,6 +938,10 @@ def validate_campaign(
             for provider in validated.providers
         ):
             raise typer.BadParameter("model fragment does not match campaign")
+    try:
+        _specs_for_cells(campaign_dir, cells)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     return metadata, cells, manifest_hash
 
 
@@ -944,6 +999,48 @@ def _specs_for_cells(
         )
         cell_id = expected.get(key)
         if cell_id is not None:
+            cell = next(cell for cell in cells if cell["cell_id"] == cell_id)
+            expected_prompt = hashlib.sha256(
+                str(spec.task.inputs.values.get("prompt", "")).encode()
+            ).hexdigest()
+            actual = {
+                "execution_contract": "whetstone_live_sweep_v1",
+                "task_definition_sha256": cell.get("task_definition_sha256"),
+                "task_prompt_sha256": cell.get("task_prompt_sha256"),
+                "provider_kind": spec.provider_axis.provider_kind.value,
+                "endpoint_kind": spec.provider_axis.endpoint_kind.value,
+                "model": spec.provider_axis.model,
+                "provider_parameters": spec.provider_axis.parameters,
+                "budget_key": cell.get("budget_key"),
+                "compression_target": target,
+                "repetition_seed": spec.repetition_seed,
+                "prediction_id": spec.prediction_id,
+                "spec_sha256": _spec_digest(spec),
+                "platform_item_id": item_id(
+                    operation_key=_cell_operation_key(cell),
+                    item_key=spec.prediction_id,
+                ),
+            }
+            locked = {
+                "execution_contract": cell.get("execution_contract"),
+                "task_definition_sha256": cell.get("task_definition_sha256"),
+                "task_prompt_sha256": expected_prompt,
+                "provider_kind": cell.get("provider_kind"),
+                "endpoint_kind": cell.get("endpoint_kind"),
+                "model": cell.get("model"),
+                "provider_parameters": cell.get("provider_parameters"),
+                "budget_key": cell.get("budget_key"),
+                "compression_target": cell.get("compression_target"),
+                "repetition_seed": cell.get("repetition_seed"),
+                "prediction_id": cell.get("prediction_id"),
+                "spec_sha256": cell.get("spec_sha256"),
+                "platform_item_id": cell.get("platform_item_id"),
+            }
+            if locked != actual:
+                raise ValueError(
+                    "locked spec contract does not match generated spec for "
+                    f"{cell_id}"
+                )
             selected[cell_id] = spec
     if len(selected) != len(cells):
         raise ValueError(
@@ -985,30 +1082,35 @@ def _submit(
     suffix: str,
 ) -> None:
     specs = _specs_for_cells(campaign_dir, cells)
-    operation_key = _operation_key(metadata, suffix)
-    prediction_ids = {
-        cell_id: spec.prediction_id for cell_id, spec in specs.items()
-    }
-    # This commit is deliberately before the external call.  Replaying this
-    # deterministic operation is safe because Platform submit is idempotent.
-    ledger.submission_intent(
-        cells, operation_key=operation_key, prediction_ids=prediction_ids
-    )
     engine = create_engine(resolve_application_database_url())
     try:
-        submit_prediction_specs(
-            engine,
-            operation_key=operation_key,
-            experiment_name=metadata["campaign"],
-            specs=specs.values(),
-            metadata={
-                "manifest_sha256": ledger.manifest_hash,
-                "operator": "whetstone-live-sweep",
-            },
-        )
-        ledger.submitted(
-            cells, operation_key=operation_key, prediction_ids=prediction_ids
-        )
+        for cell in cells:
+            cell_id = str(cell["cell_id"])
+            spec = specs[cell_id]
+            operation_key = _cell_operation_key(cell)
+            prediction_ids = {cell_id: spec.prediction_id}
+            # This commit is deliberately before the external call. Replaying
+            # this deterministic single-cell operation is idempotent.
+            ledger.submission_intent(
+                [cell],
+                operation_key=operation_key,
+                prediction_ids=prediction_ids,
+            )
+            submit_prediction_specs(
+                engine,
+                operation_key=operation_key,
+                experiment_name=metadata["campaign"],
+                specs=[spec],
+                metadata={
+                    "manifest_sha256": ledger.manifest_hash,
+                    "operator": "whetstone-live-sweep",
+                },
+            )
+            ledger.submitted(
+                [cell],
+                operation_key=operation_key,
+                prediction_ids=prediction_ids,
+            )
     finally:
         engine.dispose()
 
@@ -1102,7 +1204,9 @@ def submit_remaining(
     estimates = _estimates(estimates_path, cells)
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
     try:
-        remaining = ledger.selected_remaining(cells)
+        remaining = ledger.pending_submission(
+            cells
+        ) + ledger.selected_remaining(cells)
         for start in range(0, len(remaining), page_size):
             reserved = ledger.reserve(
                 remaining[start : start + page_size], estimates
