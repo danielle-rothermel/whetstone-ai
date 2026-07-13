@@ -4,6 +4,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from typer.testing import CliRunner
@@ -15,6 +16,7 @@ from whetstone.platform.cutover_tooling import (
     DatabaseEnvironment,
     _bound_url,
     _create_dbos_marker,
+    _create_schema,
     _initialize_dbos_store,
     _new_store_journal,
     _require_dbos_owner,
@@ -255,6 +257,64 @@ def test_bound_url_preserves_non_postgres_motherduck_semantics() -> None:
     assert "+psycopg" not in bound
 
 
+@pytest.mark.parametrize(
+    ("environment", "expect_trigger"),
+    [
+        ("DATABASE_URL", True),
+        ("MOTHERDUCK_DATABASE_URL", False),
+        ("NEON_DATABASE_URL", True),
+    ],
+)
+def test_schema_marker_uses_backend_specific_immutability(
+    environment: DatabaseEnvironment,
+    expect_trigger: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = MagicMock()
+    engine = MagicMock()
+    engine.begin.return_value.__enter__.return_value = connection
+    monkeypatch.setattr(
+        cutover_tooling, "_sqlalchemy_engine", lambda *_args, **_kwargs: engine
+    )
+    digest = "a" * 64
+
+    _create_schema(
+        "postgresql://operator:encoded%2Fsecret@db.example/test",
+        "owned_schema",
+        environment=environment,
+        run_id="acceptance_171",
+        descriptor_sha256=digest,
+    )
+
+    statements = "\n".join(
+        str(call.args[0]) for call in connection.execute.call_args_list
+    )
+    assert "CHECK (marker_id = 1)" in statements
+    assert "CHECK (run_id = 'acceptance_171')" in statements
+    assert f"CHECK (descriptor_sha256 = '{digest}')" in statements
+    assert ("LANGUAGE plpgsql" in statements) is expect_trigger
+    assert ("CREATE TRIGGER" in statements) is expect_trigger
+    assert "encoded%2Fsecret" not in statements
+
+
+def test_invalid_marker_identity_is_rejected_before_engine_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = MagicMock()
+    monkeypatch.setattr(cutover_tooling, "_sqlalchemy_engine", engine)
+
+    with pytest.raises(ValueError, match="invalid marker run ID"):
+        _create_schema(
+            "postgresql://db.example/test",
+            "owned_schema",
+            environment="MOTHERDUCK_DATABASE_URL",
+            run_id="unsafe'run",
+            descriptor_sha256="a" * 64,
+        )
+
+    engine.assert_not_called()
+
+
 def test_store_prepare_defaults_to_zero_mutation(tmp_path: Path) -> None:
     descriptor = tmp_path / "stores.json"
     result = CliRunner().invoke(
@@ -295,6 +355,54 @@ def test_store_prepare_execute_requires_exact_confirmation(
 
     assert result.exit_code != 0
     assert "equal to run ID" in result.output
+
+
+def test_prepare_failure_after_partial_marker_uses_journal_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "stores.json"
+    created: list[DatabaseEnvironment] = []
+    cleaned: list[tuple[str, str, Path]] = []
+    monkeypatch.setattr(
+        cutover_tooling, "_require_environment", lambda name: f"url:{name}"
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_schema_exists",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def fail_after_motherduck_marker(
+        _url: str,
+        _schema: str,
+        *,
+        environment: DatabaseEnvironment,
+        **_kwargs: object,
+    ) -> None:
+        created.append(environment)
+        if environment == "MOTHERDUCK_DATABASE_URL":
+            raise RuntimeError("failure after durable marker creation")
+
+    monkeypatch.setattr(
+        cutover_tooling, "_create_schema", fail_after_motherduck_marker
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_cleanup_owned_resources",
+        lambda descriptor, digest, base_dir: cleaned.append(
+            (descriptor.run_id, digest, base_dir)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="durable marker"):
+        cutover_tooling.prepare_stores(descriptor_path, "acceptance_171")
+
+    assert created == ["DATABASE_URL", "MOTHERDUCK_DATABASE_URL"]
+    assert len(cleaned) == 1
+    assert cleaned[0][0] == "acceptance_171"
+    assert len(cleaned[0][1]) == 64
+    assert cleaned[0][2] == tmp_path
+    assert (tmp_path / "stores.json.journal.json").is_file()
 
 
 def test_dbos_store_is_initialized_not_just_touched(tmp_path: Path) -> None:

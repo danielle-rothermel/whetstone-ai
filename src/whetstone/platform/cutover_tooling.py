@@ -29,6 +29,7 @@ MAX_GENERATION_USD = Decimal("4.62")
 SCHEMA_VERSION = 1
 _RUN_ID = re.compile(r"^[a-z][a-z0-9_]{2,23}$")
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OWNERSHIP_TABLE = "whetstone_cutover_ownership"
 NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 Sha256 = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -432,6 +433,10 @@ def _create_schema(
 ) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
+    if _RUN_ID.fullmatch(run_id) is None:
+        raise ValueError("invalid marker run ID")
+    if _SHA256.fullmatch(descriptor_sha256) is None:
+        raise ValueError("invalid marker descriptor digest")
     engine = _sqlalchemy_engine(url, environment=environment)
     try:
         with engine.begin() as connection:
@@ -439,34 +444,43 @@ def _create_schema(
             connection.execute(
                 text(
                     f'CREATE TABLE "{schema}"."{_OWNERSHIP_TABLE}" ('
-                    "run_id TEXT PRIMARY KEY, "
-                    "descriptor_sha256 TEXT NOT NULL)"
+                    "marker_id SMALLINT PRIMARY KEY "
+                    "CONSTRAINT ownership_singleton CHECK (marker_id = 1), "
+                    "run_id TEXT NOT NULL "
+                    "CONSTRAINT ownership_run_id_locked "
+                    f"CHECK (run_id = '{run_id}'), "
+                    "descriptor_sha256 TEXT NOT NULL "
+                    "CONSTRAINT ownership_digest_locked "
+                    "CHECK (descriptor_sha256 = "
+                    f"'{descriptor_sha256}'))"
                 )
             )
             connection.execute(
                 text(
                     f'INSERT INTO "{schema}"."{_OWNERSHIP_TABLE}" '
-                    "(run_id, descriptor_sha256) VALUES (:run_id, :digest)"
+                    "(marker_id, run_id, descriptor_sha256) "
+                    "VALUES (1, :run_id, :digest)"
                 ),
                 {"run_id": run_id, "digest": descriptor_sha256},
             )
-            connection.execute(
-                text(
-                    f'CREATE FUNCTION "{schema}".'
-                    '"reject_ownership_marker_mutation"() '
-                    "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
-                    "RAISE EXCEPTION 'ownership marker is immutable'; "
-                    "END $$"
+            if environment != "MOTHERDUCK_DATABASE_URL":
+                connection.execute(
+                    text(
+                        f'CREATE FUNCTION "{schema}".'
+                        '"reject_ownership_marker_mutation"() '
+                        "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+                        "RAISE EXCEPTION 'ownership marker is immutable'; "
+                        "END $$"
+                    )
                 )
-            )
-            connection.execute(
-                text(
-                    f'CREATE TRIGGER "ownership_marker_is_immutable" '
-                    f'BEFORE UPDATE OR DELETE ON "{schema}".'
-                    f'"{_OWNERSHIP_TABLE}" FOR EACH ROW EXECUTE FUNCTION '
-                    f'"{schema}"."reject_ownership_marker_mutation"()'
+                connection.execute(
+                    text(
+                        f'CREATE TRIGGER "ownership_marker_is_immutable" '
+                        f'BEFORE UPDATE OR DELETE ON "{schema}".'
+                        f'"{_OWNERSHIP_TABLE}" FOR EACH ROW EXECUTE FUNCTION '
+                        f'"{schema}"."reject_ownership_marker_mutation"()'
+                    )
                 )
-            )
     finally:
         engine.dispose()
 
@@ -491,7 +505,9 @@ def _schema_owner(
                     f'SELECT run_id, descriptor_sha256 FROM "{schema}".'
                     f'"{_OWNERSHIP_TABLE}"'
                 )
-            ).one()
+            ).one_or_none()
+            if row is None:
+                return None
             return str(row[0]), str(row[1])
     finally:
         engine.dispose()
