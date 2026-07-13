@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from typer.testing import CliRunner
 
+from whetstone.platform import cutover_tooling
 from whetstone.platform.cutover_tooling import (
     APP,
     EXPECTED_CELLS,
+    _bound_url,
+    _create_dbos_marker,
     _initialize_dbos_store,
+    _new_store_journal,
+    _require_dbos_owner,
+    _store_descriptor,
     generate_estimates,
     validate_estimates,
 )
@@ -29,7 +36,7 @@ def _campaign(tmp_path: Path) -> Path:
     return campaign
 
 
-def _prices(tmp_path: Path, *, output_price: str = "0.2") -> Path:
+def _prices(tmp_path: Path, *, output_price: str = "15") -> Path:
     path = tmp_path / "prices.json"
     path.write_text(
         json.dumps(
@@ -39,6 +46,9 @@ def _prices(tmp_path: Path, *, output_price: str = "0.2") -> Path:
                 "currency": "USD",
                 "assumptions_version": "legacy-token-envelope-v1",
                 "source": "operator-reviewed-price-snapshot",
+                "review_id": "acceptance-price-review-171",
+                "source_document_sha256": "a" * 64,
+                "token_evidence_sha256": "b" * 64,
                 "models": {
                     "model-a": {
                         "input_usd_per_million": "0.1",
@@ -75,6 +85,33 @@ def test_estimate_generation_rejects_ceiling(tmp_path: Path) -> None:
         )
 
 
+def test_estimate_generation_rejects_underpriced_book(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="below reviewed floor"):
+        generate_estimates(
+            _campaign(tmp_path), _prices(tmp_path, output_price="0.000001")
+        )
+
+
+def test_estimate_generation_rejects_zero_price(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="must be positive"):
+        generate_estimates(
+            _campaign(tmp_path), _prices(tmp_path, output_price="0")
+        )
+
+
+def test_estimate_generation_rejects_zero_token_assumption(
+    tmp_path: Path,
+) -> None:
+    campaign = _campaign(tmp_path)
+    price_path = _prices(tmp_path)
+    payload = json.loads(price_path.read_text())
+    payload["models"]["model-a"]["assumed_output_tokens"] = 0
+    price_path.write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="greater than 0"):
+        generate_estimates(campaign, price_path)
+
+
 def test_estimate_validation_rejects_tampering(tmp_path: Path) -> None:
     campaign = _campaign(tmp_path)
     payload = generate_estimates(campaign, _prices(tmp_path))
@@ -84,6 +121,21 @@ def test_estimate_validation_rejects_tampering(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="checksum"):
         validate_estimates(campaign, artifact)
+
+
+def test_bound_url_preserves_encoded_password_without_logging(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "p%2Fss%40word"
+
+    bound = _bound_url(
+        f"postgresql+psycopg://operator:{secret}@db.example/test",
+        "run_schema",
+    )
+
+    assert f"operator:{secret}@" in bound
+    assert "***" not in bound
+    assert secret not in caplog.text
 
 
 def test_store_prepare_defaults_to_zero_mutation(tmp_path: Path) -> None:
@@ -134,3 +186,124 @@ def test_dbos_store_is_initialized_not_just_touched(tmp_path: Path) -> None:
     _initialize_dbos_store(path, "acceptance_171")
 
     assert path.stat().st_size > 0
+
+
+def test_journal_recovers_complete_descriptor_when_descriptor_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "stores.json"
+    descriptor = _store_descriptor("acceptance_171", descriptor_path)
+    journal = _new_store_journal(descriptor)
+    journal_path = tmp_path / descriptor.journal_path
+    journal_path.write_text(journal.model_dump_json())
+    monkeypatch.setattr(
+        cutover_tooling, "_require_environment", lambda _name: "database-url"
+    )
+    monkeypatch.setattr(
+        cutover_tooling, "_schema_exists", lambda *_args: False
+    )
+
+    result = CliRunner().invoke(
+        APP,
+        [
+            "stores",
+            "cleanup",
+            "--journal",
+            str(journal_path),
+            "--execute",
+            "--confirm",
+            descriptor.run_id,
+        ],
+    )
+
+    assert result.exit_code == 0
+    verify = CliRunner().invoke(
+        APP,
+        ["stores", "verify-cleanup", "--journal", str(journal_path)],
+    )
+    assert verify.exit_code == 0
+    assert not descriptor_path.exists()
+
+
+def test_dbos_ownership_marker_is_persistent_and_immutable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "dbos.sqlite3"
+    digest = "a" * 64
+    _create_dbos_marker(
+        path, run_id="acceptance_171", descriptor_sha256=digest
+    )
+
+    _require_dbos_owner(
+        path, run_id="acceptance_171", descriptor_sha256=digest
+    )
+    with (
+        sqlite3.connect(path) as connection,
+        pytest.raises(sqlite3.IntegrityError, match="immutable"),
+    ):
+        connection.execute(
+            "UPDATE whetstone_cutover_ownership SET run_id='replacement'"
+        )
+
+
+def test_dbos_replacement_without_marker_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "dbos.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE replacement (value TEXT)")
+
+    with pytest.raises(ValueError, match="marker is unreadable"):
+        _require_dbos_owner(
+            path,
+            run_id="acceptance_171",
+            descriptor_sha256="a" * 64,
+        )
+
+
+def test_cleanup_preflights_all_markers_before_any_drop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = _store_descriptor("acceptance_171", tmp_path / "stores.json")
+    dropped: list[str] = []
+    monkeypatch.setattr(
+        cutover_tooling, "_require_environment", lambda _name: "database-url"
+    )
+    monkeypatch.setattr(cutover_tooling, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_schema_owner",
+        lambda *_args: ("replacement", "b" * 64),
+    )
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_drop_schema",
+        lambda _url, schema: dropped.append(schema),
+    )
+
+    with pytest.raises(ValueError, match="ownership marker disagrees"):
+        cutover_tooling._cleanup_owned_resources(
+            descriptor, "a" * 64, tmp_path
+        )
+
+    assert dropped == []
+
+
+def test_store_binding_rejects_replaced_schema_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor_path = tmp_path / "stores.json"
+    descriptor = _store_descriptor("acceptance_171", descriptor_path)
+    journal = _new_store_journal(descriptor)
+    descriptor_path.write_text(descriptor.model_dump_json())
+    (tmp_path / descriptor.journal_path).write_text(journal.model_dump_json())
+    monkeypatch.setattr(
+        cutover_tooling, "_require_environment", lambda _name: "database-url"
+    )
+    monkeypatch.setattr(cutover_tooling, "_schema_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        cutover_tooling,
+        "_schema_owner",
+        lambda *_args: ("replacement", "b" * 64),
+    )
+
+    with pytest.raises(ValueError, match="ownership marker disagrees"):
+        cutover_tooling.validate_store_state(descriptor_path)

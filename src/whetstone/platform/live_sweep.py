@@ -612,6 +612,29 @@ def reconcile_ledger(
     return facts
 
 
+def require_known_actual_costs(
+    facts: list[CellReconciliation], *, cell_ids: set[str]
+) -> None:
+    """Fail closed until every selected cell has observed provider cost."""
+    stable_statuses = {"succeeded", "typed_failure", "incomplete"}
+    selected = {
+        fact.cell_id: fact for fact in facts if fact.cell_id in cell_ids
+    }
+    missing = cell_ids - set(selected)
+    unknown = sorted(
+        cell_id
+        for cell_id, fact in selected.items()
+        if fact.actual_cost is None or fact.status not in stable_statuses
+    )
+    if missing or unknown:
+        blocked = sorted(missing) + unknown
+        preview = ", ".join(blocked[:5])
+        raise RuntimeError(
+            "actual provider cost is not established for the bounded page; "
+            f"reconcile before dispatching more cells ({preview})"
+        )
+
+
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
 
@@ -1440,9 +1463,37 @@ def submit_remaining(
     estimates = _estimates(estimates_path, cells)
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
     try:
-        remaining = ledger.pending_submission(
-            cells
-        ) + ledger.selected_remaining(cells)
+        submitted: list[dict[str, Any]] = []
+        pending = ledger.pending_submission(cells)
+        for start in range(0, len(pending), page_size):
+            page = pending[start : start + page_size]
+            _submit(
+                campaign_dir,
+                metadata,
+                page,
+                ledger,
+                suffix=f"replay-{start // page_size:04d}",
+            )
+            submitted.extend(page)
+            engine = create_engine(resolve_application_database_url())
+            try:
+                require_known_actual_costs(
+                    reconcile_ledger(ledger, engine=engine),
+                    cell_ids={str(cell["cell_id"]) for cell in page},
+                )
+            finally:
+                engine.dispose()
+        existing_ids = {str(row["cell_id"]) for row in ledger.rows()}
+        if existing_ids:
+            engine = create_engine(resolve_application_database_url())
+            try:
+                require_known_actual_costs(
+                    reconcile_ledger(ledger, engine=engine),
+                    cell_ids=existing_ids,
+                )
+            finally:
+                engine.dispose()
+        remaining = ledger.selected_remaining(cells)
         for start in range(0, len(remaining), page_size):
             reserved = ledger.reserve(
                 remaining[start : start + page_size], estimates
@@ -1455,9 +1506,18 @@ def submit_remaining(
                     ledger,
                     suffix=f"remaining-{start // page_size:04d}",
                 )
+                submitted.extend(reserved)
+                engine = create_engine(resolve_application_database_url())
+                try:
+                    require_known_actual_costs(
+                        reconcile_ledger(ledger, engine=engine),
+                        cell_ids={str(cell["cell_id"]) for cell in reserved},
+                    )
+                finally:
+                    engine.dispose()
         _emit(
             "submit-remaining",
-            cells=remaining,
+            cells=submitted,
             manifest_hash=manifest_hash,
             execute=True,
             ledger=ledger,

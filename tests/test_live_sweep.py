@@ -20,12 +20,57 @@ from whetstone.platform.live_sweep import (
     CellReconciliation,
     SweepLedger,
     reconcile_ledger,
+    require_known_actual_costs,
 )
 from whetstone.records import GenerationRunStatus
 
 
 def _cell(cell_id: str) -> dict[str, str]:
     return {"cell_id": cell_id}
+
+
+def test_bounded_page_requires_observed_actual_cost() -> None:
+    fact = CellReconciliation(
+        cell_id="a",
+        status="in_flight",
+        platform_attempt=0,
+        retry_count=0,
+        actual_cost=None,
+        provider_tokens={},
+        error_classification=None,
+    )
+
+    with pytest.raises(RuntimeError, match="actual provider cost"):
+        require_known_actual_costs([fact], cell_ids={"a"})
+
+
+def test_bounded_page_accepts_explicit_zero_actual_cost() -> None:
+    fact = CellReconciliation(
+        cell_id="a",
+        status="typed_failure",
+        platform_attempt=0,
+        retry_count=0,
+        actual_cost=Decimal("0"),
+        provider_tokens={},
+        error_classification="provider_rejected_before_charge",
+    )
+
+    require_known_actual_costs([fact], cell_ids={"a"})
+
+
+def test_bounded_page_rejects_unknown_lifecycle_even_with_cost() -> None:
+    fact = CellReconciliation(
+        cell_id="a",
+        status="unknown",
+        platform_attempt=0,
+        retry_count=0,
+        actual_cost=Decimal("0.10"),
+        provider_tokens={},
+        error_classification="unrecognized_platform_lifecycle",
+    )
+
+    with pytest.raises(RuntimeError, match="actual provider cost"):
+        require_known_actual_costs([fact], cell_ids={"a"})
 
 
 def _portable_snapshot_campaign(
