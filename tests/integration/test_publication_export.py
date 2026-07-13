@@ -190,7 +190,10 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
                 "dimensions, provider_configs, created_at) VALUES "
                 "('prediction', 'exp', 'task', 0, 'graph', 'dimensions', 'layout', "
                 "'provider', 'endpoint', 'model', 'throttle', '{}'::jsonb, "
-                "'{}'::jsonb, '{}'::jsonb, '{}'::jsonb, :now)"
+                "'{}'::jsonb, "
+                "'{\"values\":{\"optimizer\":\"copro_minimal\","
+                "\"candidate_id\":\"candidate-shared\"}}'::jsonb, "
+                "'{}'::jsonb, :now)"
             ),
             {"now": now},
         )
@@ -357,6 +360,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         database, analysis_pin, public_key_ring=public_key_ring
     )
     prediction = reader.rows("predictions")[0]
+    assert prediction["candidate_id"] == "candidate-shared"
     assert prediction["provider_cost"] == Decimal("0.125")
     assert float(prediction["compression_ratio"]) == pytest.approx(
         expected_compression_ratio
