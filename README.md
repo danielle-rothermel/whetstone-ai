@@ -9,6 +9,42 @@ This repo's role: experiment orchestration: DBOS workflows, Postgres persistence
 Neighbors: dr-serialize, dr-providers, dr-graph, dr-platform, dr-code, unitbench.
 Dependency direction: consumes dr-code's evaluator library; unitbench reads our Postgres.
 
+## Repo Ecosystem
+
+How the seven repos interact. Solid arrows are library dependencies; dashed
+arrows are runtime/service links.
+
+```mermaid
+graph TD
+    subgraph Apps
+        unitbench["unitbench<br/><i>results viewer (Next.js)</i>"]
+        whetstone["whetstone-ai<br/><i>experiment orchestration</i>"]
+    end
+    subgraph Platform
+        platform["dr-platform<br/><i>durable batch sweeps (DBOS)</i>"]
+    end
+    subgraph Libraries
+        code["dr-code<br/><i>HumanEval+ evaluator</i>"]
+        providers["dr-providers<br/><i>LLM provider kernel</i>"]
+        graphlib["dr-graph<br/><i>computation-graph specs</i>"]
+    end
+    subgraph Foundation
+        serialize["dr-serialize<br/><i>JSON-safe serialization + hashing</i>"]
+    end
+
+    unitbench -. "reads results DB" .-> whetstone
+    unitbench -. "localhost facade" .-> code
+    unitbench -. "localhost facade" .-> providers
+    whetstone --> platform
+    whetstone --> code
+    whetstone --> providers
+    whetstone --> graphlib
+    whetstone --> serialize
+    platform --> providers
+    platform --> serialize
+    graphlib --> serialize
+```
+
 ## Package Layout
 
 - `records/` - Pydantic domain contracts, stable IDs, fair-order keys, and
