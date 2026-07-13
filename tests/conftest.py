@@ -13,7 +13,6 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from dbos import DBOS
-from dr_platform.dbos_config import destroy_dbos_runtime
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -21,12 +20,13 @@ import tests.integration.dbos_test_workflows  # noqa: F401
 import whetstone.platform.graph_workflow
 import whetstone.platform.scoring_workflow  # noqa: F401
 from whetstone.db.migrations.url import normalize_postgresql_driver_url
-from whetstone.platform.dbos_bootstrap import (
-    EvalDbosConfig,
-    build_dbos_config,
-    build_eval_dbos_config,
-)
 from whetstone.platform.platform_db import ensure_platform_schema
+from whetstone.platform.runtime import (
+    WhetstoneDbosConfig,
+    build_whetstone_dbos_config,
+    dbos_config,
+    shutdown_dbos_runtime,
+)
 from whetstone.platform.targets import (
     listen_to_execution_queues,
     register_execution_queues,
@@ -113,9 +113,7 @@ def app_postgres_schema(
     try:
         with engine.begin() as connection:
             connection.execute(text(f"CREATE SCHEMA {schema_name}"))
-            connection.execute(
-                text(f"SET search_path TO {schema_name}")
-            )
+            connection.execute(text(f"SET search_path TO {schema_name}"))
             _apply_v1_migrations(connection, monkeypatch)
         ensure_platform_schema(
             database_url_with_search_path(postgres_base_url, schema_name)
@@ -140,19 +138,18 @@ def app_postgres_schema(
 def reset_dbos(
     app_postgres_schema: AppPostgresSchema,
     tmp_path: Path,
-) -> Iterator[EvalDbosConfig]:
-    destroy_dbos_runtime()
+) -> Iterator[WhetstoneDbosConfig]:
+    shutdown_dbos_runtime()
     system_db_path = tmp_path / "dbos_system.sqlite"
     system_database_url = f"sqlite:///{system_db_path}"
-    config = build_eval_dbos_config(
+    config = build_whetstone_dbos_config(
         database_url=app_postgres_schema.database_url,
-        dbos_system_database_url=system_database_url,
+        system_database_url=system_database_url,
         generation_concurrency=1,
         scoring_concurrency=1,
-        database_url_error_suffix="for integration tests",
     )
     DBOS(
-        config=build_dbos_config(
+        config=dbos_config(
             config,
             app_name=DBOS_APP_NAME,
         )
@@ -163,26 +160,25 @@ def reset_dbos(
     try:
         yield config
     finally:
-        destroy_dbos_runtime()
+        shutdown_dbos_runtime()
 
 
 @pytest.fixture()
 def reset_dbos_generation_consumer(
     app_postgres_schema: AppPostgresSchema,
     tmp_path: Path,
-) -> Iterator[EvalDbosConfig]:
-    destroy_dbos_runtime()
+) -> Iterator[WhetstoneDbosConfig]:
+    shutdown_dbos_runtime()
     system_db_path = tmp_path / "dbos_system_consumer.sqlite"
     system_database_url = f"sqlite:///{system_db_path}"
-    config = build_eval_dbos_config(
+    config = build_whetstone_dbos_config(
         database_url=app_postgres_schema.database_url,
-        dbos_system_database_url=system_database_url,
+        system_database_url=system_database_url,
         generation_concurrency=1,
         scoring_concurrency=1,
-        database_url_error_suffix="for integration tests",
     )
     DBOS(
-        config=build_dbos_config(
+        config=dbos_config(
             config,
             app_name=DBOS_APP_NAME,
         )
@@ -194,4 +190,4 @@ def reset_dbos_generation_consumer(
     try:
         yield config
     finally:
-        destroy_dbos_runtime()
+        shutdown_dbos_runtime()
