@@ -76,6 +76,15 @@ jobs:
           ref: ${{ github.sha }}
           path: unitbench
           persist-credentials: false
+      - name: Install Unitbench dependencies
+        env:
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}@github.com/danielle-rothermel/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/
+        run: |
+          cd unitbench
+          corepack enable
+          pnpm install --frozen-lockfile
       - name: Unitbench live delivery-parity evidence
         env:
           WHETSTONE_RELEASE_PARITY_DESCRIPTOR: ${{ runner.temp }}/release-parity/descriptor.json
@@ -85,8 +94,6 @@ jobs:
           DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           cd unitbench
-          corepack enable
-          pnpm install --frozen-lockfile
           pnpm check:delivery-parity
       - name: Always clean run-owned fixture
         if: always()
