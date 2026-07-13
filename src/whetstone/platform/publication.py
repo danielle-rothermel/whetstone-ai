@@ -5,21 +5,21 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, cast
 
 import typer
-from dbos import DBOS, DBOSClient
+from dbos import DBOSClient
 from dr_platform import ExportReconciliationDependencies
-from dr_platform.enqueue_runtime import (
-    DbosEnqueueAdapter,
-    DbosWorkflowObserver,
-)
 from dr_platform.reconciliation_runtime import (
     DbosLifecycleReader,
     ReconcileOptions,
 )
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import create_engine
 
+from whetstone.platform.enqueue_runtime import (
+    InProcessDbosApi,
+    platform_enqueue_runtime,
+)
 from whetstone.platform.integrity import (
     required_bundle_integrity_configuration,
 )
@@ -39,23 +39,13 @@ from whetstone.platform.release_parity_fixture import (
 from whetstone.platform.release_parity_fixture import (
     verify_evidence as verify_release_parity_evidence,
 )
-from whetstone.platform.runtime import (
-    build_whetstone_dbos_config,
-    dbos_config,
-    resolve_application_database_url,
-    shutdown_dbos_runtime,
-)
-from whetstone.platform.targets import (
-    listen_to_execution_queues,
-    register_execution_queues,
-    target_registry,
-)
+from whetstone.platform.runtime import resolve_application_database_url
+from whetstone.platform.targets import target_registry
 from whetstone.publication import export_whetstone
 
 APP = typer.Typer(no_args_is_help=True)
 PUBLICATION_RECONCILIATION_PAGE_SIZE = 100
 PUBLICATION_RECONCILIATION_MAX_CYCLES = 10
-PUBLICATION_RUNTIME_CONCURRENCY = 1
 
 
 @contextmanager
@@ -64,44 +54,42 @@ def build_export_reconciliation_dependencies(
     application_database_url: str,
     dbos_system_database_url: str | None = None,
 ) -> Iterator[ExportReconciliationDependencies]:
-    """Build the real bounded Whetstone reconciliation runtime."""
+    """Build the real bounded Whetstone reconciliation runtime.
 
-    config = build_whetstone_dbos_config(
-        database_url=application_database_url,
-        system_database_url=dbos_system_database_url,
-        generation_concurrency=PUBLICATION_RUNTIME_CONCURRENCY,
-        scoring_concurrency=PUBLICATION_RUNTIME_CONCURRENCY,
-    )
-    client: DBOSClient | None = None
-    dbos_engine: Engine | None = None
+    The runtime never listens to execution queues and never updates the
+    worker-owned queue configuration, so publication can run beside the
+    long-lived worker without consuming or reconfiguring paid work.  All
+    DBOS observation and cancellation runs over the launched in-process
+    runtime because ``DBOSClient`` cannot open SQLite system databases.
+    The export contract reads ``current_database()``/``clock_timestamp()``
+    from ``dbos_engine`` for its reconciled-cut proof, which is
+    PostgreSQL-only SQL, so the application database supplies that clock
+    (it is the exact engine the previous code built whenever the DBOS
+    system database defaulted to the application database).
+    """
+
+    dbos_engine = create_engine(application_database_url)
     try:
-        DBOS(config=dbos_config(config, app_name="whetstone-publication"))
-        listen_to_execution_queues()
-        DBOS.launch()
-        register_execution_queues(
-            worker_concurrency=PUBLICATION_RUNTIME_CONCURRENCY
-        )
-        client = DBOSClient(system_database_url=config.system_database_url)
-        dbos_engine = create_engine(config.system_database_url)
-        yield ExportReconciliationDependencies(
-            resolver=target_registry(),
-            queue_lookup=client,
-            reader=DbosLifecycleReader(client),
-            dbos_engine=dbos_engine,
-            options=ReconcileOptions(
-                page_size=PUBLICATION_RECONCILIATION_PAGE_SIZE
-            ),
-            max_cycles=PUBLICATION_RECONCILIATION_MAX_CYCLES,
-            recovery_observer=DbosWorkflowObserver(),
-            enqueue_adapter=DbosEnqueueAdapter(),
-            compensation_canceller=WhetstoneDbosCanceller(client),
-        )
+        with platform_enqueue_runtime(
+            application_database_url=application_database_url,
+            system_database_url=dbos_system_database_url,
+        ) as runtime:
+            dbos_api = cast("DBOSClient", InProcessDbosApi())
+            yield ExportReconciliationDependencies(
+                resolver=target_registry(),
+                queue_lookup=runtime.queue_lookup,
+                reader=DbosLifecycleReader(dbos_api),
+                dbos_engine=dbos_engine,
+                options=ReconcileOptions(
+                    page_size=PUBLICATION_RECONCILIATION_PAGE_SIZE
+                ),
+                max_cycles=PUBLICATION_RECONCILIATION_MAX_CYCLES,
+                recovery_observer=runtime.workflow_observer,
+                enqueue_adapter=runtime.enqueue_adapter,
+                compensation_canceller=WhetstoneDbosCanceller(dbos_api),
+            )
     finally:
-        if client is not None:
-            client.destroy()
-        if dbos_engine is not None:
-            dbos_engine.dispose()
-        shutdown_dbos_runtime()
+        dbos_engine.dispose()
 
 
 @APP.command()
