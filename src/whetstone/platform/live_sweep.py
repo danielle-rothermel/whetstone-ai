@@ -21,8 +21,10 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, cast
+from uuid import uuid4
 
 import typer
+from dbos import DBOS
 from dr_platform import (
     AttemptRecord,
     EligibilityReference,
@@ -32,11 +34,18 @@ from dr_platform import (
     list_attempts,
     request_next_attempt,
 )
+from dr_platform.enqueue_runtime import (
+    DbosEnqueueAdapter,
+    DbosWorkflowObserver,
+    enqueue_pending_page,
+    enqueue_replacement_page,
+    recover_call_started_page,
+)
 from dr_platform.items import item_id
 from dr_platform.status import AttemptExecutionState
 from dr_providers import FailureClass
 from dr_serialize import sha256_json_digest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 
 from whetstone.db import io as db_io
@@ -46,7 +55,12 @@ from whetstone.platform.dataset_snapshot import (
     HumanEvalSnapshot,
     load_humaneval_snapshot,
 )
-from whetstone.platform.runtime import resolve_application_database_url
+from whetstone.platform.runtime import (
+    build_whetstone_dbos_config,
+    dbos_config,
+    resolve_application_database_url,
+    shutdown_dbos_runtime,
+)
 from whetstone.platform.spec_builder import (
     iter_experiment_specs_from_file,
     load_model_config_fragment,
@@ -57,7 +71,13 @@ from whetstone.platform.submission import (
     submit_prediction_specs,
     submit_scoring_targets,
 )
-from whetstone.platform.targets import ScoringTargetSpec, target_registry
+from whetstone.platform.targets import (
+    GENERATION_QUEUE_NAME,
+    SCORING_QUEUE_NAME,
+    ScoringTargetSpec,
+    register_execution_queues,
+    target_registry,
+)
 from whetstone.records import (
     DatasetSnapshotIdentityPayload,
     GenerationRunStatus,
@@ -2089,6 +2109,79 @@ def _complete_generation_members(
     return members
 
 
+@dataclass(frozen=True)
+class _RegisteredQueueLookup:
+    """In-process admission for exactly the queues whetstone registers.
+
+    Kernel admission requires a database-backed queue object exposing
+    ``database_backed_queue`` and ``priority_enabled``; a bare name fails
+    closed.  ``DBOSClient`` cannot open SQLite system databases, so the
+    queue is resolved through the launched in-process runtime instead.
+    """
+
+    names: frozenset[str]
+
+    def retrieve_queue(self, name: str) -> object | None:
+        if name not in self.names:
+            return None
+        return DBOS.retrieve_queue(name)
+
+
+@dataclass(frozen=True)
+class _EnqueueRuntime:
+    queue_lookup: _RegisteredQueueLookup
+    enqueue_adapter: DbosEnqueueAdapter
+    workflow_observer: DbosWorkflowObserver
+
+
+@contextmanager
+def _platform_enqueue_runtime() -> Iterator[_EnqueueRuntime]:
+    """DBOS runtime that can enqueue but never consumes execution queues.
+
+    ``DbosEnqueueAdapter`` requires a launched in-process DBOS, and DBOS
+    2.26 gives a launched process two consumption paths that must both be
+    closed explicitly.  A process that never calls ``listen_queues`` polls
+    every registered queue, so ``DBOS.listen_queues([])`` pins the listen
+    set to nothing before launch.  Launch recovery re-executes PENDING
+    workflows owned by this process's executor ID, and the worker runs as
+    the default executor ``local``, so a unique per-invocation executor ID
+    makes recovery a no-op here.  Worker pickup of the enqueued workflows
+    requires an equal computed application version, which holds exactly
+    when the worker serves the same workflow sources as this checkout
+    (both processes register the identical workflow set via
+    ``whetstone.platform.targets``); restart the worker after deploys that
+    touch workflow code.
+    """
+    config = build_whetstone_dbos_config(
+        database_url=resolve_application_database_url(),
+        system_database_url=None,
+        generation_concurrency=1,
+        scoring_concurrency=1,
+    )
+    runtime_config = dbos_config(config, app_name="whetstone")
+    runtime_config["executor_id"] = f"whetstone-enqueue-{uuid4().hex}"
+    try:
+        DBOS(config=runtime_config)
+        DBOS.listen_queues([])
+        DBOS.launch()
+        # never_update: create the queues if absent, but never clobber the
+        # worker-owned configuration in the shared system database.
+        register_execution_queues(
+            worker_concurrency=1, on_conflict="never_update"
+        )
+        yield _EnqueueRuntime(
+            queue_lookup=_RegisteredQueueLookup(
+                names=frozenset(
+                    {GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME}
+                )
+            ),
+            enqueue_adapter=DbosEnqueueAdapter(),
+            workflow_observer=DbosWorkflowObserver(),
+        )
+    finally:
+        shutdown_dbos_runtime()
+
+
 def _submit(
     campaign_dir: Path,
     metadata: dict[str, Any],
@@ -2101,36 +2194,45 @@ def _submit(
         by_operation: dict[str, list[dict[str, Any]]] = {}
         for cell in cells:
             by_operation.setdefault(_cell_operation_key(cell), []).append(cell)
-        for operation_key, shard_cells in by_operation.items():
-            prediction_ids = {
-                str(cell["cell_id"]): specs[str(cell["cell_id"])].prediction_id
-                for cell in shard_cells
-            }
-            # One FULL-synchronous SQLite transaction fixes every member ID
-            # before Platform can register or enqueue the immutable shard.
-            ledger.submission_intent(
-                shard_cells,
-                operation_key=operation_key,
-                prediction_ids=prediction_ids,
-            )
-            submit_prediction_specs(
-                engine,
-                operation_key=operation_key,
-                experiment_name=metadata["campaign"],
-                specs=[specs[str(cell["cell_id"])] for cell in shard_cells],
-                metadata={
-                    "manifest_sha256": ledger.manifest_hash,
-                    "generation_shard_ordinal": shard_cells[0][
-                        "generation_shard_ordinal"
+        with _platform_enqueue_runtime() as runtime:
+            for operation_key, shard_cells in by_operation.items():
+                prediction_ids = {
+                    str(cell["cell_id"]): specs[
+                        str(cell["cell_id"])
+                    ].prediction_id
+                    for cell in shard_cells
+                }
+                # One FULL-synchronous SQLite transaction fixes every member
+                # ID before Platform can register or enqueue the immutable
+                # shard.
+                ledger.submission_intent(
+                    shard_cells,
+                    operation_key=operation_key,
+                    prediction_ids=prediction_ids,
+                )
+                submit_prediction_specs(
+                    engine,
+                    operation_key=operation_key,
+                    experiment_name=metadata["campaign"],
+                    specs=[
+                        specs[str(cell["cell_id"])] for cell in shard_cells
                     ],
-                    "operator": "whetstone-live-sweep",
-                },
-            )
-            ledger.submitted(
-                shard_cells,
-                operation_key=operation_key,
-                prediction_ids=prediction_ids,
-            )
+                    metadata={
+                        "manifest_sha256": ledger.manifest_hash,
+                        "generation_shard_ordinal": shard_cells[0][
+                            "generation_shard_ordinal"
+                        ],
+                        "operator": "whetstone-live-sweep",
+                    },
+                    queue_lookup=runtime.queue_lookup,
+                    enqueue_adapter=runtime.enqueue_adapter,
+                    workflow_observer=runtime.workflow_observer,
+                )
+                ledger.submitted(
+                    shard_cells,
+                    operation_key=operation_key,
+                    prediction_ids=prediction_ids,
+                )
     finally:
         engine.dispose()
 
@@ -2472,21 +2574,25 @@ def submit_scoring(
             return
         if frozen.status != "submitting":
             raise RuntimeError("frozen scoring intent has an invalid status")
-        submit_scoring_targets(
-            engine,
-            operation_key=frozen.operation_key,
-            experiment_name=str(metadata["campaign"]),
-            targets=frozen.targets,
-            source_generation_operation_key=(
-                f"sharded:{frozen.generation_cut_digest}"
-            ),
-            metadata={
-                "manifest_sha256": manifest_hash,
-                "generation_cut_digest": frozen.generation_cut_digest,
-                "snapshot_sha256": frozen.snapshot_sha256,
-                "operator": "whetstone-live-sweep",
-            },
-        )
+        with _platform_enqueue_runtime() as runtime:
+            submit_scoring_targets(
+                engine,
+                operation_key=frozen.operation_key,
+                experiment_name=str(metadata["campaign"]),
+                targets=frozen.targets,
+                source_generation_operation_key=(
+                    f"sharded:{frozen.generation_cut_digest}"
+                ),
+                metadata={
+                    "manifest_sha256": manifest_hash,
+                    "generation_cut_digest": frozen.generation_cut_digest,
+                    "snapshot_sha256": frozen.snapshot_sha256,
+                    "operator": "whetstone-live-sweep",
+                },
+                queue_lookup=runtime.queue_lookup,
+                enqueue_adapter=runtime.enqueue_adapter,
+                workflow_observer=runtime.workflow_observer,
+            )
         ledger.scoring_submitted(operation_key=frozen.operation_key)
         target_predictions = {
             target.prediction_id for target in frozen.targets
@@ -2602,6 +2708,87 @@ def submit_retry(
     finally:
         engine.dispose()
         ledger.close()
+
+
+@APP.command("recover-enqueues")
+def recover_enqueues(
+    execute: Annotated[bool, typer.Option("--execute")] = False,
+    operation_key: Annotated[str | None, typer.Option()] = None,
+    max_rounds: Annotated[int, typer.Option(min=1, max=100)] = 20,
+) -> None:
+    """Drive pending, expired, and interrupted enqueue Claims to outcomes."""
+    engine = create_engine(resolve_application_database_url())
+    try:
+        if not execute:
+            claims = PLATFORM_SCHEMA.enqueue_claims
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    select(claims.c.disposition, func.count())
+                    .group_by(claims.c.disposition)
+                    .order_by(claims.c.disposition)
+                ).all()
+            typer.echo(
+                json.dumps(
+                    {
+                        "command": "recover-enqueues",
+                        "execute": False,
+                        "claims": {str(d): int(n) for d, n in rows},
+                    },
+                    sort_keys=True,
+                )
+            )
+            return
+        rounds: list[dict[str, int]] = []
+        with _platform_enqueue_runtime() as runtime:
+            for _ in range(max_rounds):
+                counts = {
+                    "pending": len(
+                        enqueue_pending_page(
+                            engine,
+                            resolver=target_registry(),
+                            queue_lookup=runtime.queue_lookup,
+                            schema=PLATFORM_SCHEMA,
+                            adapter=runtime.enqueue_adapter,
+                            operation_key=operation_key,
+                        ).items
+                    ),
+                    "replacement": len(
+                        enqueue_replacement_page(
+                            engine,
+                            resolver=target_registry(),
+                            queue_lookup=runtime.queue_lookup,
+                            schema=PLATFORM_SCHEMA,
+                            adapter=runtime.enqueue_adapter,
+                            operation_key=operation_key,
+                        ).items
+                    ),
+                    "call_started": len(
+                        recover_call_started_page(
+                            engine,
+                            resolver=target_registry(),
+                            queue_lookup=runtime.queue_lookup,
+                            schema=PLATFORM_SCHEMA,
+                            adapter=runtime.enqueue_adapter,
+                            observer=runtime.workflow_observer,
+                            operation_key=operation_key,
+                        ).items
+                    ),
+                }
+                rounds.append(counts)
+                if sum(counts.values()) == 0:
+                    break
+        typer.echo(
+            json.dumps(
+                {
+                    "command": "recover-enqueues",
+                    "execute": True,
+                    "rounds": rounds,
+                },
+                sort_keys=True,
+            )
+        )
+    finally:
+        engine.dispose()
 
 
 @APP.command()
