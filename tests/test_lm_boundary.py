@@ -18,6 +18,7 @@ from dr_providers import (
     PromptMessage,
     RateLimitedProviderError,
     ReasoningEffort,
+    ResponsesDiagnostics,
     build_payload,
     failure_record,
     openai_responses_config,
@@ -129,6 +130,30 @@ class TestProviderResultFromResponse:
         result = provider_result_from_response(response)
         recorded = result.response_metadata["conformance_warnings"]
         assert recorded[0]["code"] == "model_substitution"
+
+    def test_response_diagnostics_ride_in_metadata(self) -> None:
+        response = LlmResponse(
+            text="hello",
+            diagnostics=ResponsesDiagnostics(
+                response_status="completed",
+                output_item_types={"message": 1},
+                content_part_types={"output_text": 1},
+                output_text_len=5,
+                response_id_hash="abc123",
+            ),
+        )
+
+        result = provider_result_from_response(response)
+
+        assert result.response_metadata["diagnostics"] == {
+            "response_status": "completed",
+            "incomplete_reason": None,
+            "output_item_types": {"message": 1},
+            "content_part_types": {"output_text": 1},
+            "output_text_len": 5,
+            "refusal_len": None,
+            "response_id_hash": "abc123",
+        }
 
     def test_blank_text_raises_empty_generation(self) -> None:
         response = LlmResponse(text="   ")

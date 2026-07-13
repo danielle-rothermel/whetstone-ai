@@ -70,6 +70,29 @@ GENERATION_SHARD_SIZE = 100
 GENERATION_SHARDS_FILE = "generation-manifest-shards.json"
 GENERATION_LOCK_POINTER_FILE = "generation-lock.json"
 GENERATION_LOCKS_DIRECTORY = "generation-locks"
+# Truncated digest length from the pinned dr-providers response contract
+# (dr_providers.response.RESPONSE_ID_HASH_LENGTH, not publicly re-exported).
+_RESPONSE_ID_HASH_LENGTH = 16
+_RESPONSE_STATUS_VALUES = frozenset(
+    {
+        "cancelled",
+        "completed",
+        "failed",
+        "in_progress",
+        "incomplete",
+        "queued",
+        "unknown",
+    }
+)
+_INCOMPLETE_REASON_VALUES = frozenset(
+    {"content_filter", "max_output_tokens", "unknown"}
+)
+_OUTPUT_ITEM_TYPE_VALUES = frozenset(
+    {"function_call", "message", "reasoning", "unknown"}
+)
+_CONTENT_PART_TYPE_VALUES = frozenset(
+    {"output_text", "refusal", "unknown"}
+)
 
 _PLATFORM_TERMINAL_FAILURES = frozenset(
     {
@@ -105,6 +128,10 @@ class TypedFailureCode(StrEnum):
     EMPTY_GENERATION = "empty_generation"
     PREDICTION_PARSE = "prediction_parse"
     PROVIDER_RESPONSE_PARSE = "provider_response_parse"
+    RESPONSE_REFUSAL = "response_refusal"
+    RESPONSE_INCOMPLETE_NO_TEXT = "response_incomplete_no_text"
+    RESPONSE_FAILED = "response_failed"
+    RESPONSE_NO_TEXT = "response_no_text"
     PROVIDER_FAILURE = "provider_failure"
     UNCLASSIFIED = "unclassified"
 
@@ -121,6 +148,11 @@ class LiveSweepDiagnostics:
     returned_model: str | None
     finish_reason: str | None
     response_status: str | None
+    incomplete_reason: str | None
+    output_item_types: dict[str, int] | None
+    content_part_types: dict[str, int] | None
+    output_text_len: int | None
+    refusal_len: int | None
     node_status: str | None
     expected_output_field: str
     output_field_present: bool
@@ -382,8 +414,11 @@ def _project_safe_diagnostics(
     output_metadata = (
         output.get("metadata") if isinstance(output, Mapping) else None
     )
-    response_metadata = (
+    persisted_response_metadata = (
         node.get("response_metadata") if node is not None else None
+    )
+    response_metadata = _provider_response_metadata(
+        persisted_response_metadata
     )
     response_id = _allowlisted_string(output_metadata, "response_id")
     if response_id is None:
@@ -396,24 +431,32 @@ def _project_safe_diagnostics(
     finish_reason = _allowlisted_string(output_metadata, "finish_reason")
     if finish_reason is None:
         finish_reason = _allowlisted_string(response_metadata, "finish_reason")
-    response_status = _allowlisted_string(response_metadata, "status")
     output_field_present, output_nonblank = _output_field_facts(output)
     failure = node.get("failure") if node is not None else None
-    if response_status is None and isinstance(failure, Mapping):
-        failure_metadata = failure.get("metadata")
-        provider_failure = (
-            failure_metadata.get("provider_failure")
-            if isinstance(failure_metadata, Mapping)
-            else None
+    response_diagnostics = _response_diagnostics(
+        response_metadata=response_metadata,
+        failure=failure,
+    )
+    response_status = _allowlisted_enum(
+        response_diagnostics,
+        "response_status",
+        allowed_values=_RESPONSE_STATUS_VALUES,
+    )
+    if response_status is None:
+        response_status = _allowlisted_enum(
+            response_metadata,
+            "status",
+            allowed_values=_RESPONSE_STATUS_VALUES,
         )
-        provider_metadata = (
-            provider_failure.get("metadata")
-            if isinstance(provider_failure, Mapping)
-            else None
+    if response_status is None:
+        response_status = _allowlisted_enum(
+            _provider_failure_metadata(failure),
+            "response_status",
+            allowed_values=_RESPONSE_STATUS_VALUES,
         )
-        response_status = _allowlisted_string(
-            provider_metadata, "response_status"
-        )
+    diagnostic_response_id_hash = _allowlisted_response_id_hash(
+        response_diagnostics
+    )
     disposition, failure_class, failure_code = _adapter_facts(
         node_status=_allowlisted_string(node, "status"),
         failure=failure,
@@ -422,13 +465,34 @@ def _project_safe_diagnostics(
     )
     diagnostics = LiveSweepDiagnostics(
         response_id_hash=(
-            hashlib.sha256(response_id.encode()).hexdigest()
+            _hash_response_id(response_id)
             if response_id is not None
-            else None
+            else diagnostic_response_id_hash
         ),
         returned_model=model,
         finish_reason=finish_reason,
         response_status=response_status,
+        incomplete_reason=_allowlisted_enum(
+            response_diagnostics,
+            "incomplete_reason",
+            allowed_values=_INCOMPLETE_REASON_VALUES,
+        ),
+        output_item_types=_allowlisted_counts(
+            response_diagnostics,
+            "output_item_types",
+            allowed_categories=_OUTPUT_ITEM_TYPE_VALUES,
+        ),
+        content_part_types=_allowlisted_counts(
+            response_diagnostics,
+            "content_part_types",
+            allowed_categories=_CONTENT_PART_TYPE_VALUES,
+        ),
+        output_text_len=_allowlisted_nonnegative_int(
+            response_diagnostics, "output_text_len"
+        ),
+        refusal_len=_allowlisted_nonnegative_int(
+            response_diagnostics, "refusal_len"
+        ),
         node_status=_allowlisted_string(node, "status"),
         expected_output_field=OUTPUT_FIELD_TEXT,
         output_field_present=output_field_present,
@@ -443,6 +507,52 @@ def _project_safe_diagnostics(
     return diagnostics.as_dict()
 
 
+def _provider_response_metadata(payload: object) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping):
+        return None
+    nested = payload.get("response_metadata")
+    if len(payload) == 1 and isinstance(nested, Mapping):
+        return cast(Mapping[str, Any], nested)
+    return cast(Mapping[str, Any], payload)
+
+
+def _response_diagnostics(
+    *,
+    response_metadata: object,
+    failure: object,
+) -> Mapping[str, Any] | None:
+    if isinstance(response_metadata, Mapping):
+        diagnostics = response_metadata.get("diagnostics")
+        if isinstance(diagnostics, Mapping):
+            return cast(Mapping[str, Any], diagnostics)
+    provider_metadata = _provider_failure_metadata(failure)
+    if provider_metadata is None:
+        return None
+    diagnostics = provider_metadata.get("diagnostics")
+    return (
+        cast(Mapping[str, Any], diagnostics)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+
+
+def _provider_failure_metadata(failure: object) -> Mapping[str, Any] | None:
+    if not isinstance(failure, Mapping):
+        return None
+    failure_metadata = failure.get("metadata")
+    if not isinstance(failure_metadata, Mapping):
+        return None
+    provider_failure = failure_metadata.get("provider_failure")
+    if not isinstance(provider_failure, Mapping):
+        return None
+    provider_metadata = provider_failure.get("metadata")
+    return (
+        cast(Mapping[str, Any], provider_metadata)
+        if isinstance(provider_metadata, Mapping)
+        else None
+    )
+
+
 def _allowlisted_string(
     payload: Mapping[str, Any] | None, key: str
 ) -> str | None:
@@ -450,6 +560,69 @@ def _allowlisted_string(
         return None
     value = payload.get(key)
     return value if isinstance(value, str) and value else None
+
+
+def _hash_response_id(response_id: str) -> str:
+    """Digest a response id exactly as pinned dr-providers failures do."""
+    return hashlib.sha256(response_id.encode()).hexdigest()[
+        :_RESPONSE_ID_HASH_LENGTH
+    ]
+
+
+def _allowlisted_response_id_hash(
+    payload: Mapping[str, Any] | None,
+) -> str | None:
+    value = _allowlisted_string(payload, "response_id_hash")
+    if value is None or len(value) != _RESPONSE_ID_HASH_LENGTH:
+        return None
+    return (
+        value
+        if all(character in "0123456789abcdef" for character in value)
+        else None
+    )
+
+
+def _allowlisted_enum(
+    payload: Mapping[str, Any] | None,
+    key: str,
+    *,
+    allowed_values: frozenset[str],
+) -> str | None:
+    value = _allowlisted_string(payload, key)
+    return value if value in allowed_values else None
+
+
+def _allowlisted_counts(
+    payload: Mapping[str, Any] | None,
+    key: str,
+    *,
+    allowed_categories: frozenset[str],
+) -> dict[str, int] | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if not isinstance(value, Mapping):
+        return None
+    counts = {
+        category: count
+        for category, count in value.items()
+        if category in allowed_categories
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 0
+    }
+    return dict(sorted(counts.items()))
+
+
+def _allowlisted_nonnegative_int(
+    payload: Mapping[str, Any] | None, key: str
+) -> int | None:
+    if payload is None:
+        return None
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
 
 
 def _output_field_facts(output: object) -> tuple[bool, bool]:
@@ -536,6 +709,21 @@ def _adapter_facts(
             AdapterDisposition.PARSE_FAILURE,
             failure_class,
             TypedFailureCode.PROVIDER_RESPONSE_PARSE,
+        )
+    response_outcome_codes = {
+        "response_refusal": TypedFailureCode.RESPONSE_REFUSAL,
+        "response_incomplete_no_text": (
+            TypedFailureCode.RESPONSE_INCOMPLETE_NO_TEXT
+        ),
+        "response_failed": TypedFailureCode.RESPONSE_FAILED,
+        "response_no_text": TypedFailureCode.RESPONSE_NO_TEXT,
+    }
+    response_outcome = response_outcome_codes.get(provider_failure_code)
+    if response_outcome is not None:
+        return (
+            AdapterDisposition.PROVIDER_FAILURE,
+            failure_class,
+            response_outcome,
         )
     if "ProviderFailureError" in type_names or (
         isinstance(metadata, Mapping) and "provider_failure" in metadata
