@@ -37,6 +37,8 @@ from whetstone.records import (
     PredictionSpecRecord,
 )
 
+PLATFORM_SCHEMA = PlatformSchema(prefix="whetstone")
+
 
 @dataclass(frozen=True)
 class PredictionSpecManifestSource:
@@ -247,6 +249,7 @@ def submit_prediction_specs(
         source,
         engine=engine,
         resolver=target_registry(),
+        schema=PLATFORM_SCHEMA,
         spec=submit_spec,
         metadata=metadata,
         options=options,
@@ -321,6 +324,7 @@ def submit_scoring_targets(
         source,
         engine=engine,
         resolver=target_registry(),
+        schema=PLATFORM_SCHEMA,
         spec={
             "experiment_name": experiment_name,
             "source_generation_operation_key": source_generation_operation_key,
