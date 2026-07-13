@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -20,7 +21,11 @@ from whetstone.optimization.copro import (
     manual_proposals,
     run_copro_loop,
     summarize_pinned_candidates,
-    write_copro_artifacts,
+)
+from whetstone.optimization.copro_checkpoint import (
+    CoproCheckpointStore,
+    CoproInputPins,
+    CoproRunManifest,
 )
 from whetstone.optimization.copro_operator import (
     CoproSpecConfiguration,
@@ -214,6 +219,18 @@ def _factory(lifecycle: _Lifecycle):
     return factory
 
 
+def _pins(*, model_digest: str = "model") -> CoproInputPins:
+    return CoproInputPins(
+        model_config_digest=model_digest,
+        split_config_digest="split",
+        dataset_snapshot_digest="snapshot",
+        dataset_snapshot_header_digest="header",
+        compression_targets=(0.5,),
+        repetition_seeds=(0,),
+        min_encoder_char_budget=50,
+    )
+
+
 def test_iteration_uses_exact_typed_lifecycle_order() -> None:
     lifecycle = _Lifecycle()
 
@@ -254,15 +271,23 @@ def test_dry_run_is_zero_spend_and_writes_durable_outputs(
 ) -> None:
     lifecycle = _Lifecycle()
     checkpoints: list[Path] = []
+    config = CoproRunConfig(
+        run_id="zero-spend", breadth=2, depth=2, dry_run=True
+    )
+    store = CoproCheckpointStore(
+        tmp_path,
+        manifest=CoproRunManifest.create(
+            run_config=config, input_pins=_pins()
+        ),
+    )
+    assert store.load_or_initialize() is None
 
     def checkpoint(result: Any) -> None:
-        write_copro_artifacts(result, output_dir=tmp_path)
-        checkpoints.append(tmp_path / "run.json")
+        paths = store.commit(result)
+        checkpoints.append(paths["run"])
 
     result = run_copro_loop(
-        config=CoproRunConfig(
-            run_id="zero-spend", breadth=2, depth=2, dry_run=True
-        ),
+        config=config,
         lifecycle=lifecycle,
         spec_factory=_specs,
         checkpoint=checkpoint,
@@ -271,10 +296,11 @@ def test_dry_run_is_zero_spend_and_writes_durable_outputs(
     assert lifecycle.calls == []
     assert result.best_candidate is None
     assert len(checkpoints) == 2
-    assert json.loads((tmp_path / "run.json").read_text())["dry_run"] is True
-    assert (tmp_path / "candidates.jsonl").read_text().count("\n") == 4
-    assert (tmp_path / "attempts.csv").is_file()
-    assert (tmp_path / "best_prompt.json").is_file()
+    paths = store.artifact_paths(result)
+    assert json.loads(paths["run"].read_text())["dry_run"] is True
+    assert paths["candidates"].read_text().count("\n") == 4
+    assert paths["attempts"].is_file()
+    assert paths["best_prompt"].is_file()
 
 
 def test_cli_dry_run_never_resolves_runtime_or_integrity(
@@ -284,6 +310,11 @@ def test_cli_dry_run_never_resolves_runtime_or_integrity(
         copro_operator,
         "build_candidate_specs",
         lambda *_args, **_kwargs: _specs(),
+    )
+    monkeypatch.setattr(
+        copro_operator,
+        "prepare_copro_inputs",
+        lambda _configuration: SimpleNamespace(pins=_pins()),
     )
 
     def forbidden(*_args: Any, **_kwargs: Any) -> Any:
@@ -321,6 +352,5 @@ def test_cli_dry_run_never_resolves_runtime_or_integrity(
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["dry_run"] is True
-    assert json.loads((tmp_path / "run.json").read_text())["run_id"] == (
-        "zero-spend-cli"
-    )
+    run_path = Path(json.loads(result.output)["artifacts"]["run"])
+    assert json.loads(run_path.read_text())["run_id"] == "zero-spend-cli"

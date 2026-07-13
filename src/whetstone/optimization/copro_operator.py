@@ -21,6 +21,7 @@ from dr_platform import (
     pin_local_bundle,
     wait_operation,
 )
+from dr_serialize import sha256_json_digest
 from sqlalchemy import Engine, create_engine
 
 from whetstone.optimization.copro import (
@@ -34,7 +35,11 @@ from whetstone.optimization.copro import (
     CoproRunResult,
     run_copro_loop,
     summarize_pinned_candidates,
-    write_copro_artifacts,
+)
+from whetstone.optimization.copro_checkpoint import (
+    CoproCheckpointStore,
+    CoproInputPins,
+    CoproRunManifest,
 )
 from whetstone.platform.acceptance import (
     AcceptanceDisposition,
@@ -42,7 +47,10 @@ from whetstone.platform.acceptance import (
     evaluate_strict_acceptance,
 )
 from whetstone.platform.cli_env import load_env_file, run_typer_app
-from whetstone.platform.dataset_snapshot import load_humaneval_snapshot
+from whetstone.platform.dataset_snapshot import (
+    HumanEvalSnapshot,
+    load_humaneval_snapshot,
+)
 from whetstone.platform.integrity import (
     BundleIntegrityConfiguration,
     required_bundle_integrity_configuration,
@@ -56,6 +64,8 @@ from whetstone.platform.spec_builder import (
     ExperimentSpecConfig,
     GraphLayout,
     HumanevalEncDecConfig,
+    ModelConfigFragment,
+    SplitConfigFragment,
     iter_experiment_specs,
     load_model_config_fragment,
     load_split_config_fragment,
@@ -89,6 +99,15 @@ class CoproSpecConfiguration:
     min_encoder_char_budget: int = 50
 
 
+@dataclass(frozen=True)
+class PreparedCoproInputs:
+    configuration: CoproSpecConfiguration
+    model: ModelConfigFragment
+    split: SplitConfigFragment
+    snapshot: HumanEvalSnapshot
+    pins: CoproInputPins
+
+
 def _resolve_config_path(configs_root: Path, path: Path) -> Path:
     if path.is_absolute():
         return path
@@ -96,14 +115,10 @@ def _resolve_config_path(configs_root: Path, path: Path) -> Path:
     return resolve_config_path(configs_root, reference)
 
 
-def build_candidate_specs(
+def prepare_copro_inputs(
     configuration: CoproSpecConfiguration,
-    *,
-    run_id: str,
-    experiment_name: str,
-    candidates: tuple[CoproCandidate, ...],
-) -> tuple[PredictionSpecRecord, ...]:
-    """Load the dataset once and stamp one shared identity per candidate."""
+) -> PreparedCoproInputs:
+    """Resolve and content-pin every input before resume or execution."""
     model = load_model_config_fragment(
         _resolve_config_path(
             configuration.configs_root, configuration.model_config_path
@@ -119,6 +134,38 @@ def build_candidate_specs(
         dataset_split=split.dataset.split,
         snapshot_path=split.dataset.snapshot_path,
     )
+    pins = CoproInputPins(
+        model_config_digest=sha256_json_digest(model.model_dump(mode="json")),
+        split_config_digest=sha256_json_digest(split.model_dump(mode="json")),
+        dataset_snapshot_digest=snapshot.identity.sha256,
+        dataset_snapshot_header_digest=sha256_json_digest(
+            snapshot.identity.header.model_dump(mode="json")
+        ),
+        compression_targets=configuration.compression_targets,
+        repetition_seeds=configuration.repetition_seeds,
+        min_encoder_char_budget=configuration.min_encoder_char_budget,
+    )
+    return PreparedCoproInputs(
+        configuration=configuration,
+        model=model,
+        split=split,
+        snapshot=snapshot,
+        pins=pins,
+    )
+
+
+def build_candidate_specs(
+    configuration: CoproSpecConfiguration,
+    *,
+    run_id: str,
+    experiment_name: str,
+    candidates: tuple[CoproCandidate, ...],
+    prepared: PreparedCoproInputs | None = None,
+) -> tuple[PredictionSpecRecord, ...]:
+    """Stamp one shared identity per candidate from content-pinned inputs."""
+    inputs = prepared or prepare_copro_inputs(configuration)
+    if inputs.configuration != configuration:
+        raise ValueError("prepared COPRO inputs do not match configuration")
     specs: list[PredictionSpecRecord] = []
     for candidate in candidates:
         dimensions = tuple(
@@ -135,10 +182,10 @@ def build_candidate_specs(
         config = ExperimentSpecConfig(
             experiment_name=experiment_name,
             graph_layout=GraphLayout.ENCDEC,
-            dataset=split.dataset,
+            dataset=inputs.split.dataset,
             repetition_seeds=configuration.repetition_seeds,
             dimensions_axes=dimensions,
-            providers=model.providers,
+            providers=inputs.model.providers,
             encdec_shape="humaneval",
             humaneval_encdec=HumanevalEncDecConfig(
                 instructions_start=candidate.instructions_start,
@@ -148,7 +195,7 @@ def build_candidate_specs(
                 ),
             ),
         )
-        specs.extend(iter_experiment_specs(config, snapshot=snapshot))
+        specs.extend(iter_experiment_specs(config, snapshot=inputs.snapshot))
     return tuple(specs)
 
 
@@ -369,6 +416,13 @@ def run(
         compression_targets=tuple(compression_target),
         repetition_seeds=tuple(range(repeats)),
     )
+    prepared = prepare_copro_inputs(spec_configuration)
+    manifest = CoproRunManifest.create(
+        run_config=config, input_pins=prepared.pins
+    )
+    store = CoproCheckpointStore(output_dir, manifest=manifest)
+    resume = store.load_or_initialize()
+
     def factory(
         experiment: str, candidates: tuple[CoproCandidate, ...]
     ) -> tuple[PredictionSpecRecord, ...]:
@@ -377,10 +431,11 @@ def run(
             run_id=resolved_run_id,
             experiment_name=experiment,
             candidates=candidates,
+            prepared=prepared,
         )
 
     def checkpoint(result: CoproRunResult) -> None:
-        write_copro_artifacts(result, output_dir=output_dir)
+        store.commit(result)
 
     if dry_run:
         result = run_copro_loop(
@@ -388,6 +443,7 @@ def run(
             lifecycle=None,
             spec_factory=factory,
             checkpoint=checkpoint,
+            resume=resume,
         )
     else:
         load_env_file()
@@ -416,10 +472,11 @@ def run(
                     lifecycle=lifecycle,
                     spec_factory=factory,
                     checkpoint=checkpoint,
+                    resume=resume,
                 )
         finally:
             engine.dispose()
-    paths = write_copro_artifacts(result, output_dir=output_dir)
+    paths = store.artifact_paths(result)
     typer.echo(
         json.dumps(
             {

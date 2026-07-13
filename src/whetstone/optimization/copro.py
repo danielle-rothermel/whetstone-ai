@@ -5,11 +5,9 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Protocol
 
 from dr_serialize import sha256_json_digest
@@ -277,7 +275,7 @@ class CoproLifecycle(Protocol):
 SpecFactory = Callable[
     [str, tuple[CoproCandidate, ...]], tuple[PredictionSpecRecord, ...]
 ]
-Checkpoint = Callable[[CoproRunResult], None]
+Checkpoint = Callable[[CoproRunResult], object]
 
 
 def instructions_digest(start: str, end: str) -> str:
@@ -413,13 +411,33 @@ def run_copro_loop(
     lifecycle: CoproLifecycle | None,
     spec_factory: SpecFactory,
     checkpoint: Checkpoint | None = None,
+    resume: CoproRunResult | None = None,
 ) -> CoproRunResult:
     """Run the exact wait/export/pinned-read lifecycle once per depth."""
     if not config.dry_run and lifecycle is None:
         raise ValueError("live COPRO requires lifecycle dependencies")
+    iterations = [] if resume is None else list(resume.iterations)
+    if resume is not None:
+        expected_resume = _result(config, iterations)
+        if resume != expected_resume:
+            raise ValueError(
+                "COPRO resume result is not internally consistent"
+            )
+        if len(iterations) > config.depth:
+            raise ValueError("COPRO resume exceeds configured depth")
+        for depth, iteration in enumerate(iterations):
+            if (
+                iteration.depth != depth
+                or iteration.experiment_name
+                != f"copro_minimal_{config.run_id}_d{depth}"
+            ):
+                raise ValueError("COPRO resume depths are not contiguous")
     current_best = baseline_candidate(config.run_id)
-    iterations: list[CoproIteration] = []
-    for depth in range(config.depth):
+    if iterations:
+        resumed_best = _best_attempt(iterations[-1].attempts)
+        if resumed_best is not None:
+            current_best = resumed_best.candidate
+    for depth in range(len(iterations), config.depth):
         experiment_name = f"copro_minimal_{config.run_id}_d{depth}"
         candidates = manual_proposals(
             current_best,
@@ -486,27 +504,8 @@ def run_copro_loop(
     return _result(config, iterations)
 
 
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    with temporary.open("w", encoding="utf-8", newline="") as stream:
-        stream.write(content)
-        stream.flush()
-        os.fsync(stream.fileno())
-    temporary.replace(path)
-    directory = os.open(
-        path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    )
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-
-
-def write_copro_artifacts(
-    result: CoproRunResult, *, output_dir: Path
-) -> Mapping[str, Path]:
-    """Atomically checkpoint every completed iteration for crash recovery."""
+def render_copro_artifacts(result: CoproRunResult) -> Mapping[str, str]:
+    """Render the complete human-facing view of one committed generation."""
     candidates = [
         attempt.candidate
         for iteration in result.iterations
@@ -517,16 +516,9 @@ def write_copro_artifacts(
         for iteration in result.iterations
         for attempt in iteration.attempts
     ]
-    run_path = output_dir / "run.json"
-    candidates_path = output_dir / "candidates.jsonl"
-    attempts_path = output_dir / "attempts.csv"
-    best_path = output_dir / "best_prompt.json"
-    _atomic_write(run_path, result.model_dump_json(indent=2) + "\n")
-    _atomic_write(
-        candidates_path,
-        "".join(
-            candidate.model_dump_json() + "\n" for candidate in candidates
-        ),
+    run_json = result.model_dump_json(indent=2) + "\n"
+    candidates_jsonl = "".join(
+        candidate.model_dump_json() + "\n" for candidate in candidates
     )
     buffer = io.StringIO(newline="")
     writer = csv.DictWriter(
@@ -556,9 +548,7 @@ def write_copro_artifacts(
                 "score_error_count": attempt.score_error_count,
             }
         )
-    _atomic_write(attempts_path, buffer.getvalue())
-    _atomic_write(
-        best_path,
+    best_prompt_json = (
         json.dumps(
             {
                 "best_candidate": (
@@ -575,11 +565,11 @@ def write_copro_artifacts(
             indent=2,
             sort_keys=True,
         )
-        + "\n",
+        + "\n"
     )
     return {
-        "run": run_path,
-        "candidates": candidates_path,
-        "attempts": attempts_path,
-        "best_prompt": best_path,
+        "run.json": run_json,
+        "candidates.jsonl": candidates_jsonl,
+        "attempts.csv": buffer.getvalue(),
+        "best_prompt.json": best_prompt_json,
     }

@@ -77,17 +77,27 @@ uv run whetstone-copro \
   --output-dir artifacts/optimization/copro
 ```
 
-Use a stable `--run-id` to replay the same deterministic Operations and local
-artifacts. Do not reuse a run ID with different inputs.
+Use a stable `--run-id` and the same output directory to resume. Startup binds
+the run configuration, model and split content, dataset snapshot identity,
+compression targets, repeats, and encoder budget in an immutable run manifest.
+Changing any pinned input fails before submission. A fully completed rerun is
+read-only and returns the committed result.
 
 ## Durable outputs
 
-The coordinator atomically replaces these files after every completed depth:
+The output directory contains:
 
-- `run.json`: lifecycle operation keys and pinned bundle coordinates;
-- `candidates.jsonl`: candidate instruction identities;
-- `attempts.csv`: aggregate score and error counts; and
-- `best_prompt.json`: current global best candidate and attempt.
+- `run-manifest.json`: immutable run/config/input identity; and
+- `checkpoints/depth-NNN/`: one immutable generation per completed depth.
+
+Each depth directory is assembled and fsynced under a staging name, then made
+visible with one directory rename. It contains verified `checkpoint.json`,
+`run.json`, `candidates.jsonl`, `attempts.csv`, and `best_prompt.json` members.
+The next process removes incomplete staging directories, validates contiguous
+depths and every member digest, and resumes after the last complete generation.
+It rejects gaps, missing/mixed members, tampering, legacy top-level artifact
+sets, and incompatible run manifests. Completed depth evidence is never
+overwritten.
 
 Candidate ranking uses pass rate, scoreable count, combined Generation/Scoring
 errors, instruction length, then candidate ID. Counts are aggregated across
