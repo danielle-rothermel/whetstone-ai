@@ -312,13 +312,20 @@ def test_release_parity_maps_public_integrity_keys_to_unitbench() -> (
     )
     assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY" not in consumer_step
     assert "WHETSTONE_BUNDLE_INTEGRITY_PRIVATE_KEY_PATH" not in consumer_step
-    assert "GIT_CONFIG_COUNT: 1" in consumer_step
+    assert "GIT_CONFIG_COUNT" not in consumer_step
+    assert "GH_DR_ORG_REPOS_READ_TOKEN" not in consumer_step
+    install_step = workflow.split(
+        "      - name: Install Unitbench dependencies\n", 1
+    )[1].split(
+        "      - name: Unitbench live delivery-parity evidence\n", 1
+    )[0]
+    assert "GIT_CONFIG_COUNT: 1" in install_step
     assert (
         "GIT_CONFIG_KEY_0: url.https://x-access-token:"
         "${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}"
-        "@github.com/danielle-rothermel/.insteadOf" in consumer_step
+        "@github.com/danielle-rothermel/.insteadOf" in install_step
     )
     assert (
         "GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/"
-        in consumer_step
+        in install_step
     )

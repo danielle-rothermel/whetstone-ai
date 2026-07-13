@@ -76,13 +76,8 @@ jobs:
           ref: ${{ github.sha }}
           path: unitbench
           persist-credentials: false
-      - name: Unitbench live delivery-parity evidence
+      - name: Install Unitbench dependencies
         env:
-          WHETSTONE_RELEASE_PARITY_DESCRIPTOR: ${{ runner.temp }}/release-parity/descriptor.json
-          UNITBENCH_RELEASE_PARITY_TOKEN: ${{ secrets.UNITBENCH_RELEASE_PARITY_TOKEN }}
-          UNITBENCH_BUNDLE_INTEGRITY_PUBLIC_KEYS: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
-          ANALYSIS_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
-          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
           GIT_CONFIG_COUNT: 1
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}@github.com/danielle-rothermel/.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/danielle-rothermel/
@@ -90,6 +85,15 @@ jobs:
           cd unitbench
           corepack enable
           pnpm install --frozen-lockfile
+      - name: Unitbench live delivery-parity evidence
+        env:
+          WHETSTONE_RELEASE_PARITY_DESCRIPTOR: ${{ runner.temp }}/release-parity/descriptor.json
+          UNITBENCH_RELEASE_PARITY_TOKEN: ${{ secrets.UNITBENCH_RELEASE_PARITY_TOKEN }}
+          UNITBENCH_BUNDLE_INTEGRITY_PUBLIC_KEYS: ${{ secrets.WHETSTONE_BUNDLE_INTEGRITY_PUBLIC_KEY_RING }}
+          ANALYSIS_DATABASE_URL: ${{ secrets.MOTHERDUCK_DATABASE_URL }}
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          cd unitbench
           pnpm check:delivery-parity
       - name: Always clean run-owned fixture
         if: always()
