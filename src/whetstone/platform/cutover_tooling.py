@@ -15,11 +15,16 @@ from typing import Annotated, Any, Literal
 
 import typer
 from dbos import DBOS
-from dr_platform.dbos_config import normalize_postgresql_driver_url
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy import text
+from sqlalchemy.engine import Engine
 
+from whetstone.platform.connections import (
+    DatabaseBoundary,
+    bind_schema,
+    create_whetstone_engine,
+    render_connection_url,
+)
 from whetstone.platform.platform_db import ensure_whetstone_application_schema
 from whetstone.platform.runtime import shutdown_dbos_runtime
 
@@ -358,10 +363,7 @@ def _store_descriptor(run_id: str, descriptor_path: Path) -> StoreDescriptor:
 
 
 def _bound_url(value: str, schema: str) -> str:
-    url = make_url(normalize_postgresql_driver_url(value))
-    return url.update_query_dict(
-        {"options": f"-c search_path={schema},public"}
-    ).render_as_string(hide_password=False)
+    return render_connection_url(bind_schema(value, schema))
 
 
 def _require_environment(name: DatabaseEnvironment) -> str:
@@ -374,14 +376,16 @@ def _require_environment(name: DatabaseEnvironment) -> str:
 def _sqlalchemy_engine(
     url: str, *, environment: DatabaseEnvironment
 ) -> Engine:
-    normalized = normalize_postgresql_driver_url(url)
-    options = (
-        {"use_native_hstore": False}
+    boundary = (
+        DatabaseBoundary.MOTHERDUCK_POSTGRES
         if environment == "MOTHERDUCK_DATABASE_URL"
-        and make_url(normalized).get_backend_name() == "postgresql"
-        else {}
+        else (
+            DatabaseBoundary.NEON_POSTGRES
+            if environment == "NEON_DATABASE_URL"
+            else DatabaseBoundary.SOURCE_SCHEMA
+        )
     )
-    return create_engine(normalized, **options)
+    return create_whetstone_engine(url, boundary=boundary)
 
 
 def _schema_exists(

@@ -7,9 +7,10 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy.engine import URL
 from typer.testing import CliRunner
 
-from whetstone.platform import cutover_tooling
+from whetstone.platform import connections, cutover_tooling
 from whetstone.platform.cutover_tooling import (
     APP,
     EXPECTED_CELLS,
@@ -191,12 +192,12 @@ def test_sqlalchemy_engine_normalizes_only_postgres_urls(
     expected_options: dict[str, bool],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: list[tuple[str, dict[str, object]]] = []
+    captured: list[tuple[URL, dict[str, object]]] = []
     marker = object()
     monkeypatch.setattr(
-        cutover_tooling,
+        connections,
         "create_engine",
-        lambda url, **options: captured.append((str(url), options)) or marker,
+        lambda url, **options: captured.append((url, options)) or marker,
     )
 
     assert (
@@ -205,7 +206,11 @@ def test_sqlalchemy_engine_normalizes_only_postgres_urls(
         )
         is marker
     )
-    assert captured == [(expected, expected_options)]
+    rendered = [
+        (url.render_as_string(hide_password=False), options)
+        for url, options in captured
+    ]
+    assert rendered == [(expected, expected_options)]
 
 
 def test_sqlalchemy_engine_selects_installed_psycopg_driver() -> None:
@@ -223,12 +228,12 @@ def test_sqlalchemy_engine_selects_installed_psycopg_driver() -> None:
 def test_bound_motherduck_engine_disables_only_native_hstore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: list[tuple[str, dict[str, object]]] = []
+    captured: list[tuple[URL, dict[str, object]]] = []
     marker = object()
     monkeypatch.setattr(
-        cutover_tooling,
+        connections,
         "create_engine",
-        lambda url, **options: captured.append((str(url), options)) or marker,
+        lambda url, **options: captured.append((url, options)) or marker,
     )
     bound = _bound_url(
         "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
@@ -241,7 +246,10 @@ def test_bound_motherduck_engine_disables_only_native_hstore(
         )
         is marker
     )
-    assert captured == [(bound, {"use_native_hstore": False})]
+    assert [
+        (url.render_as_string(hide_password=False), options)
+        for url, options in captured
+    ] == [(bound, {"use_native_hstore": False})]
     assert "operator:p%2Fss@" in bound
     assert "sslmode=require" in bound
 
