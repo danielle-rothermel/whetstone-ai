@@ -564,6 +564,17 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
                 case_values,
             )
+        # Keep the accepted score attempt as the acceptance member while
+        # exposing a real linked harness failure through the Detail artifact.
+        # This exercises the nonzero count without changing acceptance of the
+        # successful scoring result.
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_score_harness_failures (score_harness_failure_id, prediction_id, generation_run_id, attempt_index, execution_recipe_digest, platform_item_id, platform_attempt, score_attempt_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, failure, started_at, completed_at)
+            VALUES (:fixture || '_harness_failure_small_positive', :fixture || '_prediction_small_positive', :fixture || '_generation_small_positive', 1, 'score-harness-failure', :fixture || '_score_failure_item_small_positive', 1, :fixture || '_score_small_positive', 'humaneval', '1', 'python', '1', 'humaneval', 'test', '{"exception_type":"RuntimeError","message":"fixture harness failure"}'::jsonb, :now, :now)
+        """),
+            values,
+        )
         connection.execute(
             text("""
             INSERT INTO whetstone_experiment_acceptance_evaluations (acceptance_id, experiment_name, acceptance_source_version, status, generation_operation_key, generation_manifest_digest, scoring_relationships, scoring_relationships_digest, selected_scoring_candidates, selected_scoring_candidates_digest, domain_cut, domain_cut_digest, platform_cut, platform_cut_digest, required_profiles, required_profiles_digest, policy, policy_digest, observed_matrix, observed_matrix_digest, expected_count, accepted_count, missing_count, rejected_count, created_at)
@@ -594,6 +605,13 @@ def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
         """),
                 case_values,
             )
+        connection.execute(
+            text("""
+            INSERT INTO whetstone_experiment_acceptance_scoring_candidates (acceptance_id, prediction_id, scoring_profile_id, scoring_profile_version, parser_profile_id, parser_version, dataset_name, dataset_split, accepted_scoring_ordinal, score_attempt_id, generation_run_id, disposition, operation_key, manifest_digest, selection_digest, platform_item_id, platform_attempt, status, candidate_kind)
+            VALUES (:fixture || '_acceptance', :fixture || '_prediction_small_positive', 'humaneval', '1', 'python', '1', 'humaneval', 'test', 1, :fixture || '_score_small_positive', :fixture || '_generation_small_positive', 'rejected', 'operation', 'digest', 'digest', :fixture || '_score_failure_item_small_positive', 1, 'harness_failure', 'score_harness_failure')
+        """),
+            values,
+        )
         # The second experiment must own an accepted prediction because the
         # experiments projection excludes empty acceptances.
         connection.execute(text("""
