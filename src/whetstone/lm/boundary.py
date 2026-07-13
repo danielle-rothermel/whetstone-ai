@@ -161,6 +161,8 @@ def provider_result_from_response(
     output_field: str = OUTPUT_FIELD_TEXT,
 ) -> ProviderResult:
     metadata = dict(response.provider_metadata)
+    if response.diagnostics is not None:
+        metadata["diagnostics"] = response.diagnostics.model_dump(mode="json")
     if response.warnings:
         metadata["conformance_warnings"] = [
             warning.model_dump(mode="json")

@@ -395,7 +395,11 @@ def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
                 "metadata": {
                     "provider_failure": {
                         "code": "response_parse_error",
-                        "metadata": {"response_status": "completed"},
+                        "metadata": {
+                            "diagnostics": {
+                                "response_status": "completed"
+                            }
+                        },
                     }
                 },
             },
@@ -407,6 +411,97 @@ def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
     assert diagnostics["typed_failure_code"] == "provider_response_parse"
     assert diagnostics["response_status"] == "completed"
     assert diagnostics["output_field_present"] is False
+
+
+@pytest.mark.parametrize(
+    "provider_code",
+    [
+        "response_refusal",
+        "response_incomplete_no_text",
+        "response_failed",
+        "response_no_text",
+    ],
+)
+def test_typed_response_outcomes_remain_provider_outcomes(
+    provider_code: str,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "error",
+            "model": "gpt-5.4-nano",
+            "output": None,
+            "response_metadata": {},
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": (
+                    "whetstone.eval_failures.PermanentFailureError"
+                ),
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "metadata": {
+                    "provider_failure": {
+                        "code": provider_code,
+                        "metadata": {
+                            "diagnostics": {
+                                "response_status": "incomplete",
+                                "incomplete_reason": "max_output_tokens",
+                                "output_item_types": {"message": 1},
+                                "content_part_types": {"refusal": 1},
+                                "output_text_len": 0,
+                                "refusal_len": 12,
+                                "response_id_hash": "0123456789abcdef",
+                            }
+                        },
+                    }
+                },
+            },
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "provider_failure"
+    assert diagnostics["typed_failure_code"] == provider_code
+    assert diagnostics["response_status"] == "incomplete"
+    assert diagnostics["incomplete_reason"] == "max_output_tokens"
+    assert diagnostics["output_item_types"] == {"message": 1}
+    assert diagnostics["content_part_types"] == {"refusal": 1}
+    assert diagnostics["output_text_len"] == 0
+    assert diagnostics["refusal_len"] == 12
+    assert diagnostics["response_id_hash"] == "0123456789abcdef"
+
+
+def test_successful_response_diagnostics_are_projected_safely() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "success",
+            "model": "gpt-5.4-nano",
+            "output": {"values": {"text": "generated"}},
+            "response_metadata": {
+                "status": "PRIVATE_RAW_STATUS",
+                "diagnostics": {
+                    "response_status": "completed",
+                    "output_item_types": {
+                        "message": 1,
+                        "PRIVATE_ITEM_TYPE": 2,
+                    },
+                    "content_part_types": {"output_text": 1},
+                    "output_text_len": 9,
+                    "response_id_hash": "fedcba9876543210",
+                },
+            },
+            "failure": None,
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "success"
+    assert diagnostics["response_status"] == "completed"
+    assert diagnostics["output_item_types"] == {"message": 1}
+    assert diagnostics["content_part_types"] == {"output_text": 1}
+    assert diagnostics["output_text_len"] == 9
+    assert diagnostics["response_id_hash"] == "fedcba9876543210"
+    assert "PRIVATE" not in json.dumps(diagnostics, sort_keys=True)
 
 
 def test_legacy_cost_columns_are_removed_without_gating_intent(
