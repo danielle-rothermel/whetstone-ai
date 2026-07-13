@@ -102,10 +102,10 @@ old descriptor and journal.
 
 ```sh
 mise exec -- whetstone-cutover stores prepare --run-id <new_run_id> \
-  --descriptor /absolute/operator/stores.json \
+  --descriptor /absolute/operator/stores-<new_run_id>.json \
   --execute --confirm <new_run_id>
-mise exec -- whetstone-cutover stores verify --descriptor /absolute/operator/stores.json
-mise exec -- whetstone-cutover stores run --descriptor /absolute/operator/stores.json -- <command>
+mise exec -- whetstone-cutover stores verify --descriptor /absolute/operator/stores-<new_run_id>.json
+mise exec -- whetstone-cutover stores run --descriptor /absolute/operator/stores-<new_run_id>.json -- <command>
 ```
 
 Nothing from the failed run is carried forward. Rollback is source control
