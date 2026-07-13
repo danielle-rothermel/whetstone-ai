@@ -471,6 +471,11 @@ def test_remaining_pages_gate_only_on_terminal_lifecycle(
         "create_engine",
         lambda _url: SimpleNamespace(dispose=lambda: None),
     )
+    monkeypatch.setattr(
+        live_sweep,
+        "resolve_application_database_url",
+        lambda: "sqlite://",
+    )
 
     result = CliRunner().invoke(
         live_sweep.APP,
