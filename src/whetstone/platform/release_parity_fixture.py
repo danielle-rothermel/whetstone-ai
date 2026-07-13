@@ -31,10 +31,14 @@ from dr_platform import (
 )
 from dr_platform.reconciliation_runtime import ReconcileOptions
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
-from sqlalchemy import Engine, create_engine, text
-from sqlalchemy.engine.url import make_url
-from sqlalchemy.pool import NullPool
+from sqlalchemy import Engine, text
 
+from whetstone.platform.connections import (
+    DatabaseBoundary,
+    bind_schema,
+    create_whetstone_engine,
+    render_connection_url,
+)
 from whetstone.platform.integrity import (
     BundleIntegrityConfiguration,
     required_bundle_integrity_configuration,
@@ -433,16 +437,16 @@ def _required_env(name: str) -> str:
 
 
 def _source_url(schema: str) -> str:
-    base = make_url(_required_env("DATABASE_URL"))
-    return base.update_query_dict(
-        {"options": f"-c search_path={schema},public"}
-    ).render_as_string(
-        hide_password=False
+    return render_connection_url(
+        bind_schema(_required_env("DATABASE_URL"), schema)
     )
 
 
 def _new_source(schema: str) -> Engine:
-    admin = create_engine(_required_env("DATABASE_URL"))
+    admin = create_whetstone_engine(
+        _required_env("DATABASE_URL"),
+        boundary=DatabaseBoundary.SOURCE_ADMIN,
+    )
     try:
         with admin.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -461,7 +465,9 @@ def _new_source(schema: str) -> Engine:
         admin.dispose()
     source_url = _source_url(schema)
     ensure_platform_schema(source_url)
-    return create_engine(source_url)
+    return create_whetstone_engine(
+        source_url, boundary=DatabaseBoundary.SOURCE_SCHEMA
+    )
 
 
 def _seed_accepted_fixture(source: Engine, run_id: str) -> str:
@@ -659,7 +665,15 @@ def _fence(
     integrity: BundleIntegrityConfiguration | None = None,
 ) -> PostgresPublicationFence:
     return PostgresPublicationFence(
-        create_engine(url, poolclass=NullPool),
+        create_whetstone_engine(
+            url,
+            boundary=(
+                DatabaseBoundary.MOTHERDUCK_POSTGRES
+                if kind == "motherduck"
+                else DatabaseBoundary.NEON_POSTGRES
+            ),
+            pool_mode="ephemeral",
+        ),
         destination_id=destination_id,
         kind=kind,
         signer=integrity.signer if integrity else None,
@@ -994,7 +1008,10 @@ def cleanup_local(descriptor_path: Path) -> None:
         journal = _load_journal(descriptor_path)
         source_schema = journal.source_schema
         paths = (journal.analysis_path, journal.detail_path)
-    admin = create_engine(_required_env("DATABASE_URL"))
+    admin = create_whetstone_engine(
+        _required_env("DATABASE_URL"),
+        boundary=DatabaseBoundary.SOURCE_ADMIN,
+    )
     try:
         with admin.begin() as connection:
             connection.execute(
@@ -1093,7 +1110,10 @@ def _rollback_prepare(journal: RunJournal, directory: Path) -> None:
                     "prepare_remote_rollback_deferred", run_id=journal.run_id
                 )
     try:
-        admin = create_engine(_required_env("DATABASE_URL"))
+        admin = create_whetstone_engine(
+            _required_env("DATABASE_URL"),
+            boundary=DatabaseBoundary.SOURCE_ADMIN,
+        )
         try:
             with admin.begin() as connection:
                 connection.execute(
@@ -1329,7 +1349,10 @@ def cleanup(
     finally:
         analysis_fence.engine.dispose()
         detail_fence.engine.dispose()
-    admin = create_engine(_required_env("DATABASE_URL"))
+    admin = create_whetstone_engine(
+        _required_env("DATABASE_URL"),
+        boundary=DatabaseBoundary.SOURCE_ADMIN,
+    )
     try:
         with admin.begin() as connection:
             connection.execute(

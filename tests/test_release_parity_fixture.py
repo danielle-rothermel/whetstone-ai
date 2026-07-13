@@ -6,6 +6,8 @@ from typing import Literal
 
 import pytest
 
+from whetstone.platform import release_parity_fixture
+from whetstone.platform.connections import DatabaseBoundary
 from whetstone.platform.release_parity_fixture import (
     CleanupProof,
     LocalPlane,
@@ -268,6 +270,100 @@ def test_source_url_preserves_credentials_at_connection_boundary(
     assert "fixture:encoded%2Fpassword@db.example" in source_url
     assert "***" not in source_url
     assert "search_path%3Drun_owned%2Cpublic" in source_url
+
+
+def test_new_source_uses_admin_and_schema_connection_boundaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, DatabaseBoundary, str]] = []
+    admin = _EngineStub()
+    source = _EngineStub()
+    monkeypatch.setenv("DATABASE_URL", "postgresql://operator:p%2Fss@db/test")
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "create_whetstone_engine",
+        lambda url, *, boundary: calls.append((str(url), boundary, "default"))
+        or (admin if len(calls) == 1 else source),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture.MigrationContext,
+        "configure",
+        lambda connection: object(),
+    )
+    monkeypatch.setattr(
+        release_parity_fixture, "Operations", lambda _: object()
+    )
+    migration = type(
+        "Migration", (), {"upgrade": staticmethod(lambda: None)}
+    )()
+    monkeypatch.setattr(
+        release_parity_fixture.importlib,
+        "import_module",
+        lambda _: migration,
+    )
+    monkeypatch.setattr(
+        release_parity_fixture, "ensure_platform_schema", lambda _: None
+    )
+
+    assert release_parity_fixture._new_source("run_owned") is source
+    assert [boundary for _, boundary, _ in calls] == [
+        DatabaseBoundary.SOURCE_ADMIN,
+        DatabaseBoundary.SOURCE_SCHEMA,
+    ]
+    assert calls[1][0].startswith("postgresql+psycopg://")
+    assert "search_path%3Drun_owned%2Cpublic" in calls[1][0]
+
+
+@pytest.mark.parametrize(
+    ("kind", "boundary"),
+    [
+        ("motherduck", DatabaseBoundary.MOTHERDUCK_POSTGRES),
+        ("neon", DatabaseBoundary.NEON_POSTGRES),
+    ],
+)
+def test_fence_uses_ephemeral_boundary_engine(
+    kind: Literal["motherduck", "neon"],
+    boundary: DatabaseBoundary,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, DatabaseBoundary, str]] = []
+    marker = object()
+    monkeypatch.setattr(
+        release_parity_fixture,
+        "create_whetstone_engine",
+        lambda url, *, boundary, pool_mode: calls.append(
+            (url, boundary, pool_mode)
+        )
+        or marker,
+    )
+
+    fence = release_parity_fixture._fence(
+        "postgresql://operator:p%2Fss@db/test", "destination", kind
+    )
+
+    assert fence.engine is marker
+    assert calls == [
+        ("postgresql://operator:p%2Fss@db/test", boundary, "ephemeral")
+    ]
+
+
+class _ConnectionStub:
+    def __enter__(self) -> _ConnectionStub:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+class _EngineStub:
+    def begin(self) -> _ConnectionStub:
+        return _ConnectionStub()
+
+    def dispose(self) -> None:
+        return None
 
 
 def test_release_parity_workflow_scopes_credentials_and_pins_actions() -> None:
