@@ -123,19 +123,88 @@ def test_estimate_validation_rejects_tampering(tmp_path: Path) -> None:
         validate_estimates(campaign, artifact)
 
 
-def test_bound_url_preserves_encoded_password_without_logging(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    "scheme",
+    ["postgresql", "postgresql+psycopg"],
+)
+def test_bound_url_normalizes_driver_and_preserves_encoded_credentials_query(
+    scheme: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     secret = "p%2Fss%40word"
 
     bound = _bound_url(
-        f"postgresql+psycopg://operator:{secret}@db.example/test",
+        f"{scheme}://operator:{secret}@db.example/test"
+        "?sslmode=require&application_name=cutover",
         "run_schema",
     )
 
+    assert bound.startswith("postgresql+psycopg://")
+    assert bound.count("+psycopg") == 1
     assert f"operator:{secret}@" in bound
+    assert "sslmode=require" in bound
+    assert "application_name=cutover" in bound
+    assert "options=-c+search_path%3Drun_schema%2Cpublic" in bound
     assert "***" not in bound
     assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            "postgresql://operator:p%2Fss@db.example/test?sslmode=require",
+            "postgresql+psycopg://operator:p%2Fss@db.example/test"
+            "?sslmode=require",
+        ),
+        (
+            "postgresql+psycopg://operator:p%2Fss@db.example/test"
+            "?sslmode=require",
+            "postgresql+psycopg://operator:p%2Fss@db.example/test"
+            "?sslmode=require",
+        ),
+        (
+            "duckdb:///md:warehouse?motherduck_token=token%2Fvalue",
+            "duckdb:///md:warehouse?motherduck_token=token%2Fvalue",
+        ),
+    ],
+)
+def test_sqlalchemy_engine_normalizes_only_postgres_urls(
+    value: str,
+    expected: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[str] = []
+    marker = object()
+    monkeypatch.setattr(
+        cutover_tooling,
+        "create_engine",
+        lambda url: captured.append(str(url)) or marker,
+    )
+
+    assert cutover_tooling._sqlalchemy_engine(value) is marker
+    assert captured == [expected]
+
+
+def test_sqlalchemy_engine_selects_installed_psycopg_driver() -> None:
+    engine = cutover_tooling._sqlalchemy_engine(
+        "postgresql://operator:placeholder@db.example/test?sslmode=require"
+    )
+    try:
+        assert engine.url.drivername == "postgresql+psycopg"
+        assert engine.dialect.driver == "psycopg"
+    finally:
+        engine.dispose()
+
+
+def test_bound_url_preserves_non_postgres_motherduck_semantics() -> None:
+    bound = _bound_url(
+        "duckdb:///md:warehouse?motherduck_token=token%2Fvalue",
+        "analysis_schema",
+    )
+
+    assert bound.startswith("duckdb:///md:warehouse?")
+    assert "motherduck_token=token%2Fvalue" in bound
+    assert "+psycopg" not in bound
 
 
 def test_store_prepare_defaults_to_zero_mutation(tmp_path: Path) -> None:
