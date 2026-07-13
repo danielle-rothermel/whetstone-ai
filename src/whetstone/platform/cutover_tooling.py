@@ -1,4 +1,4 @@
-"""Fail-closed operator tooling for live-sweep estimates and run stores."""
+"""Fail-closed operator tooling for live-sweep run stores."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ import re
 import sqlite3
 import subprocess
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
 import typer
 from dbos import DBOS
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -28,15 +27,10 @@ from whetstone.platform.connections import (
 from whetstone.platform.platform_db import ensure_whetstone_application_schema
 from whetstone.platform.runtime import shutdown_dbos_runtime
 
-EXPECTED_CELLS = 5904
-MIN_INITIAL_GENERATION_USD = Decimal("1.54")
-MAX_GENERATION_USD = Decimal("4.62")
-SCHEMA_VERSION = 1
 _RUN_ID = re.compile(r"^[a-z][a-z0-9_]{2,23}$")
 _IDENTIFIER = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _OWNERSHIP_TABLE = "whetstone_cutover_ownership"
-NonEmpty = Annotated[StrictStr, Field(min_length=1)]
 Sha256 = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 DatabaseEnvironment = Literal[
     "DATABASE_URL",
@@ -45,9 +39,7 @@ DatabaseEnvironment = Literal[
 ]
 
 APP = typer.Typer(no_args_is_help=True)
-ESTIMATES = typer.Typer(no_args_is_help=True)
 STORES = typer.Typer(no_args_is_help=True)
-APP.add_typer(ESTIMATES, name="estimates")
 APP.add_typer(STORES, name="stores")
 
 
@@ -59,251 +51,6 @@ def _canonical(value: object) -> bytes:
 
 def _sha256(value: object) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _decimal(value: object, *, field: str) -> Decimal:
-    try:
-        result = Decimal(str(value))
-    except (InvalidOperation, ValueError) as error:
-        raise ValueError(f"{field} must be an exact decimal") from error
-    if not result.is_finite() or result < 0:
-        raise ValueError(f"{field} must be finite and non-negative")
-    return result
-
-
-def _positive_decimal(value: object, *, field: str) -> Decimal:
-    result = _decimal(value, field=field)
-    if result == 0:
-        raise ValueError(f"{field} must be positive")
-    return result
-
-
-class ModelPrice(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    input_usd_per_million: StrictStr
-    output_usd_per_million: StrictStr
-    assumed_input_tokens: StrictInt = Field(gt=0)
-    assumed_output_tokens: StrictInt = Field(gt=0)
-
-    def estimate(self) -> Decimal:
-        input_price = _positive_decimal(
-            self.input_usd_per_million,
-            field="input_usd_per_million",
-        )
-        output_price = _positive_decimal(
-            self.output_usd_per_million,
-            field="output_usd_per_million",
-        )
-        return (
-            input_price * self.assumed_input_tokens
-            + output_price * self.assumed_output_tokens
-        ) / Decimal(1_000_000)
-
-
-class PriceBook(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1]
-    effective_at: NonEmpty
-    currency: Literal["USD"]
-    assumptions_version: NonEmpty
-    source: NonEmpty
-    review_id: NonEmpty
-    source_document_sha256: Sha256
-    token_evidence_sha256: Sha256
-    models: dict[NonEmpty, ModelPrice]
-
-
-def _campaign_cells(campaign_dir: Path) -> list[dict[str, Any]]:
-    path = campaign_dir / "manifest.jsonl"
-    cells = [json.loads(line) for line in path.read_text().splitlines()]
-    identities = {str(cell.get("cell_id")) for cell in cells}
-    if len(cells) != EXPECTED_CELLS or len(identities) != EXPECTED_CELLS:
-        raise ValueError("campaign must contain exactly 5,904 unique cells")
-    return cells
-
-
-def generate_estimates(
-    campaign_dir: Path, price_book_path: Path
-) -> dict[str, object]:
-    """Build a deterministic estimate artifact without provider access."""
-    cells = _campaign_cells(campaign_dir)
-    price_book = PriceBook.model_validate_json(price_book_path.read_text())
-    price_book_payload = price_book.model_dump(mode="json")
-    unknown = sorted(
-        {str(cell["model"]) for cell in cells} - set(price_book.models)
-    )
-    if unknown:
-        raise ValueError(f"price book does not cover models: {unknown}")
-    estimates = {
-        str(cell["cell_id"]): format(
-            price_book.models[str(cell["model"])].estimate(), "f"
-        )
-        for cell in cells
-    }
-    total = sum(
-        (
-            _decimal(value, field="cell estimate")
-            for value in estimates.values()
-        ),
-        Decimal(),
-    )
-    if total < MIN_INITIAL_GENERATION_USD:
-        raise ValueError(
-            f"estimated total {total} is below reviewed floor "
-            f"{MIN_INITIAL_GENERATION_USD}"
-        )
-    if total > MAX_GENERATION_USD:
-        raise ValueError(
-            f"estimated total {total} exceeds ceiling {MAX_GENERATION_USD}"
-        )
-    manifest_path = campaign_dir / "manifest.jsonl"
-    payload: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION,
-        "manifest_sha256": _file_sha256(manifest_path),
-        "cells": estimates,
-        "summary": {
-            "cell_count": EXPECTED_CELLS,
-            "total_usd": format(total, "f"),
-            "minimum_usd": format(MIN_INITIAL_GENERATION_USD, "f"),
-            "ceiling_usd": format(MAX_GENERATION_USD, "f"),
-        },
-        "provenance": {
-            "price_book_sha256": _sha256(price_book_payload),
-            "price_book_schema_version": price_book.schema_version,
-            "effective_at": price_book.effective_at,
-            "assumptions_version": price_book.assumptions_version,
-            "source": price_book.source,
-            "review_id": price_book.review_id,
-            "source_document_sha256": price_book.source_document_sha256,
-            "token_evidence_sha256": price_book.token_evidence_sha256,
-            "price_book": price_book.model_dump(mode="json"),
-            "implicit_price_fetch": False,
-        },
-    }
-    payload["artifact_sha256"] = _sha256(payload)
-    return payload
-
-
-def validate_estimates(campaign_dir: Path, artifact_path: Path) -> None:
-    """Validate full coverage, provenance hash, and spend ceiling."""
-    cells = _campaign_cells(campaign_dir)
-    payload = json.loads(artifact_path.read_text())
-    if payload.get("schema_version") != SCHEMA_VERSION:
-        raise ValueError("estimate artifact schema version is unsupported")
-    artifact_hash = payload.pop("artifact_sha256", None)
-    if artifact_hash != _sha256(payload):
-        raise ValueError("estimate artifact checksum does not match")
-    if payload.get("manifest_sha256") != _file_sha256(
-        campaign_dir / "manifest.jsonl"
-    ):
-        raise ValueError("estimate artifact is for a different manifest")
-    estimates = payload.get("cells")
-    if not isinstance(estimates, dict) or set(estimates) != {
-        str(cell["cell_id"]) for cell in cells
-    }:
-        raise ValueError(
-            "estimate artifact must price every cell exactly once"
-        )
-    total = sum(
-        (
-            _decimal(value, field=f"estimate for {key}")
-            for key, value in estimates.items()
-        ),
-        Decimal(),
-    )
-    if any(
-        _decimal(value, field=f"estimate for {key}") == 0
-        for key, value in estimates.items()
-    ):
-        raise ValueError("every cell estimate must be positive")
-    if total < MIN_INITIAL_GENERATION_USD:
-        raise ValueError("estimate artifact is below the $1.54 floor")
-    if total > MAX_GENERATION_USD:
-        raise ValueError("estimate artifact exceeds the $4.62 ceiling")
-    summary = payload.get("summary")
-    if not isinstance(summary, dict) or summary.get("total_usd") != format(
-        total, "f"
-    ):
-        raise ValueError("estimate summary does not match cell total")
-    if summary.get("cell_count") != EXPECTED_CELLS:
-        raise ValueError("estimate summary does not match cell count")
-    if summary.get("minimum_usd") != format(
-        MIN_INITIAL_GENERATION_USD, "f"
-    ) or summary.get("ceiling_usd") != format(MAX_GENERATION_USD, "f"):
-        raise ValueError("estimate summary does not match locked bounds")
-    provenance = payload.get("provenance")
-    if not isinstance(provenance, dict) or not isinstance(
-        provenance.get("price_book"), dict
-    ):
-        raise ValueError("estimate provenance is incomplete")
-    price_book_payload = provenance["price_book"]
-    price_book = PriceBook.model_validate(price_book_payload)
-    if (
-        provenance.get("price_book_sha256") != _sha256(price_book_payload)
-        or provenance.get("price_book_schema_version")
-        != price_book.schema_version
-        or provenance.get("effective_at") != price_book.effective_at
-        or provenance.get("assumptions_version")
-        != price_book.assumptions_version
-        or provenance.get("source") != price_book.source
-        or provenance.get("review_id") != price_book.review_id
-        or provenance.get("source_document_sha256")
-        != price_book.source_document_sha256
-        or provenance.get("token_evidence_sha256")
-        != price_book.token_evidence_sha256
-        or provenance.get("implicit_price_fetch") is not False
-    ):
-        raise ValueError("estimate provenance does not match price book")
-
-
-@ESTIMATES.command("generate")
-def estimates_generate(
-    campaign_dir: Annotated[
-        Path, typer.Argument(exists=True, file_okay=False)
-    ],
-    price_book: Annotated[Path, typer.Option("--price-book", exists=True)],
-    output: Annotated[Path, typer.Option("--output")],
-    execute: Annotated[bool, typer.Option("--execute")] = False,
-) -> None:
-    """Generate a locked artifact; dry-run validates and prints only facts."""
-    payload = generate_estimates(campaign_dir, price_book)
-    if execute:
-        if output.exists():
-            raise typer.BadParameter("refusing to replace estimate artifact")
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    typer.echo(
-        json.dumps(
-            {
-                "dry_run": not execute,
-                "output": str(output),
-                "artifact_sha256": payload["artifact_sha256"],
-                "summary": payload["summary"],
-            },
-            sort_keys=True,
-        )
-    )
-
-
-@ESTIMATES.command("validate")
-def estimates_validate(
-    campaign_dir: Annotated[
-        Path, typer.Argument(exists=True, file_okay=False)
-    ],
-    artifact: Annotated[Path, typer.Option("--artifact", exists=True)],
-) -> None:
-    validate_estimates(campaign_dir, artifact)
-    typer.echo("verified")
 
 
 class StoreBoundary(BaseModel):

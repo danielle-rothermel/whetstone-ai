@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
-from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,7 +11,6 @@ from typer.testing import CliRunner
 from whetstone.platform import connections, cutover_tooling
 from whetstone.platform.cutover_tooling import (
     APP,
-    EXPECTED_CELLS,
     DatabaseEnvironment,
     _bound_url,
     _create_dbos_marker,
@@ -22,109 +19,18 @@ from whetstone.platform.cutover_tooling import (
     _new_store_journal,
     _require_dbos_owner,
     _store_descriptor,
-    generate_estimates,
-    validate_estimates,
 )
 
 
-def _campaign(tmp_path: Path) -> Path:
-    campaign = tmp_path / "campaign"
-    campaign.mkdir()
-    rows = [
-        {"cell_id": f"cell-{index}", "model": "model-a"}
-        for index in range(EXPECTED_CELLS)
-    ]
-    (campaign / "manifest.jsonl").write_text(
-        "".join(json.dumps(row) + "\n" for row in rows)
-    )
-    return campaign
+def test_cutover_cli_has_no_estimates_commands() -> None:
+    runner = CliRunner()
 
+    help_result = runner.invoke(APP, ["--help"])
+    rejected = runner.invoke(APP, ["estimates", "generate"])
 
-def _prices(tmp_path: Path, *, output_price: str = "15") -> Path:
-    path = tmp_path / "prices.json"
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "effective_at": "2026-07-13T00:00:00Z",
-                "currency": "USD",
-                "assumptions_version": "legacy-token-envelope-v1",
-                "source": "operator-reviewed-price-snapshot",
-                "review_id": "acceptance-price-review-171",
-                "source_document_sha256": "a" * 64,
-                "token_evidence_sha256": "b" * 64,
-                "models": {
-                    "model-a": {
-                        "input_usd_per_million": "0.1",
-                        "output_usd_per_million": output_price,
-                        "assumed_input_tokens": 10,
-                        "assumed_output_tokens": 20,
-                    }
-                },
-            }
-        )
-    )
-    return path
-
-
-def test_estimate_artifact_is_complete_hashed_and_valid(
-    tmp_path: Path,
-) -> None:
-    campaign = _campaign(tmp_path)
-    payload = generate_estimates(campaign, _prices(tmp_path))
-    artifact = tmp_path / "estimates.json"
-    artifact.write_text(json.dumps(payload))
-
-    validate_estimates(campaign, artifact)
-    cells = cast(dict[str, str], payload["cells"])
-    provenance = cast(dict[str, Any], payload["provenance"])
-    assert len(cells) == EXPECTED_CELLS
-    assert provenance["implicit_price_fetch"] is False
-
-
-def test_estimate_generation_rejects_ceiling(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="exceeds ceiling"):
-        generate_estimates(
-            _campaign(tmp_path), _prices(tmp_path, output_price="100000")
-        )
-
-
-def test_estimate_generation_rejects_underpriced_book(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="below reviewed floor"):
-        generate_estimates(
-            _campaign(tmp_path), _prices(tmp_path, output_price="0.000001")
-        )
-
-
-def test_estimate_generation_rejects_zero_price(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="must be positive"):
-        generate_estimates(
-            _campaign(tmp_path), _prices(tmp_path, output_price="0")
-        )
-
-
-def test_estimate_generation_rejects_zero_token_assumption(
-    tmp_path: Path,
-) -> None:
-    campaign = _campaign(tmp_path)
-    price_path = _prices(tmp_path)
-    payload = json.loads(price_path.read_text())
-    payload["models"]["model-a"]["assumed_output_tokens"] = 0
-    price_path.write_text(json.dumps(payload))
-
-    with pytest.raises(ValueError, match="greater than 0"):
-        generate_estimates(campaign, price_path)
-
-
-def test_estimate_validation_rejects_tampering(tmp_path: Path) -> None:
-    campaign = _campaign(tmp_path)
-    payload = generate_estimates(campaign, _prices(tmp_path))
-    cast(dict[str, str], payload["cells"])["cell-0"] = "NaN"
-    artifact = tmp_path / "estimates.json"
-    artifact.write_text(json.dumps(payload))
-
-    with pytest.raises(ValueError, match="checksum"):
-        validate_estimates(campaign, artifact)
+    assert help_result.exit_code == 0
+    assert "estimates" not in help_result.output
+    assert rejected.exit_code != 0
 
 
 @pytest.mark.parametrize(
