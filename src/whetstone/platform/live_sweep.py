@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -46,7 +47,7 @@ from whetstone.records import GenerationRunStatus
 APP = typer.Typer(no_args_is_help=True)
 EXPECTED_CELLS = 5_904
 CANARY_CELLS = 12
-GENERATION_CEILING_USD = 4.62
+GENERATION_CEILING_USD = Decimal("4.62")
 MAX_RETRIES_PER_CELL = 2
 
 _PLATFORM_TERMINAL_FAILURES = frozenset(
@@ -78,10 +79,11 @@ class CellReconciliation:
     status: str
     platform_attempt: int | None
     retry_count: int
-    actual_cost: float | None
+    actual_cost: Decimal | None
     provider_tokens: dict[str, int]
     error_classification: str | None
     score_status: str | None = None
+    diagnostics: dict[str, Any] | None = None
 
 
 def _attempt_facts(
@@ -112,7 +114,7 @@ def _node_cost_facts(
     prediction_id: str,
     platform_item_id: str,
     platform_attempt: int,
-) -> tuple[GenerationRunStatus | None, float | None, dict[str, int]]:
+) -> tuple[GenerationRunStatus | None, Decimal | None, dict[str, int]]:
     """Return terminal Whetstone run state and durable node costs only."""
     with engine.connect() as connection:
         generation = (
@@ -137,7 +139,7 @@ def _node_cost_facts(
                 == generation["generation_run_id"]
             )
         ).scalars()
-        costs: list[float] = []
+        costs: list[Decimal] = []
         tokens: dict[str, int] = {}
         saw_node_attempt = False
         for usage in node_rows:
@@ -146,14 +148,21 @@ def _node_cost_facts(
             cost = payload.get("provider_cost")
             if cost is None:
                 return GenerationRunStatus(generation["status"]), None, tokens
-            costs.append(float(cost))
+            try:
+                costs.append(_money(cost, field="persisted provider cost"))
+            except ValueError:
+                return GenerationRunStatus(generation["status"]), None, tokens
             for key in ("input_tokens", "output_tokens", "total_tokens"):
                 value = payload.get("usage_metadata", {}).get(key)
                 if isinstance(value, int) and value >= 0:
                     tokens[key] = tokens.get(key, 0) + value
     if not saw_node_attempt:
         return GenerationRunStatus(generation["status"]), None, tokens
-    return GenerationRunStatus(generation["status"]), sum(costs), tokens
+    return (
+        GenerationRunStatus(generation["status"]),
+        sum(costs, Decimal()),
+        tokens,
+    )
 
 
 def _score_terminal_status(
@@ -206,6 +215,98 @@ def _score_terminal_status(
             )
         ).scalar_one_or_none()
     return "score_harness_failure" if harness is not None else None
+
+
+def _safe_diagnostics(
+    engine: Engine,
+    *,
+    prediction_id: str,
+    platform_item_id: str,
+    platform_attempt: int,
+) -> dict[str, Any]:
+    """Project allowlisted durable fields; never copy provider payloads."""
+    with engine.connect() as connection:
+        generation_id = connection.execute(
+            select(whetstone_schema.generation_runs.c.generation_run_id).where(
+                whetstone_schema.generation_runs.c.prediction_id
+                == prediction_id,
+                whetstone_schema.generation_runs.c.platform_item_id
+                == platform_item_id,
+                whetstone_schema.generation_runs.c.platform_attempt
+                == platform_attempt,
+            )
+        ).scalar_one_or_none()
+        if generation_id is None:
+            return {}
+        node = (
+            connection.execute(
+                select(
+                    whetstone_schema.node_attempts.c.status,
+                    whetstone_schema.node_attempts.c.model,
+                    whetstone_schema.node_attempts.c.output,
+                    whetstone_schema.node_attempts.c.failure,
+                )
+                .where(
+                    whetstone_schema.node_attempts.c.generation_run_id
+                    == generation_id
+                )
+                .order_by(
+                    whetstone_schema.node_attempts.c.attempt_index.desc()
+                )
+            )
+            .mappings()
+            .first()
+        )
+        score = (
+            connection.execute(
+                select(
+                    whetstone_schema.score_attempts.c.parser_profile_id,
+                    whetstone_schema.score_attempts.c.parser_version,
+                    whetstone_schema.score_attempts.c.status,
+                )
+                .where(
+                    whetstone_schema.score_attempts.c.generation_run_id
+                    == generation_id
+                )
+                .order_by(
+                    whetstone_schema.score_attempts.c.attempt_index.desc()
+                )
+            )
+            .mappings()
+            .first()
+        )
+    result: dict[str, Any] = {}
+    if node:
+        output = node["output"] or {}
+        metadata = (
+            output.get("metadata", {}) if isinstance(output, dict) else {}
+        )
+        response_id = metadata.get("response_id")
+        result.update(
+            {
+                "node_status": node["status"],
+                "returned_model": metadata.get("model") or node["model"],
+                "finish_reason": metadata.get("finish_reason"),
+                "response_id_sha256": hashlib.sha256(
+                    str(response_id).encode()
+                ).hexdigest()
+                if response_id
+                else None,
+                "output_present": bool(output.get("values"))
+                if isinstance(output, dict)
+                else False,
+                "typed_failure": bool(node["failure"]),
+            }
+        )
+    if score:
+        result.update(
+            {
+                "parser_profile": score["parser_profile_id"],
+                "parser_version": score["parser_version"],
+                "parser_classification": score["status"],
+            }
+        )
+    return {key: value for key, value in result.items() if value is not None}
 
 
 def reconcile_ledger(
@@ -280,6 +381,12 @@ def reconcile_ledger(
             platform_item_id=str(platform_item_id),
             platform_attempt=int(platform_attempt),
         )
+        diagnostics = _safe_diagnostics(
+            engine,
+            prediction_id=str(prediction_id),
+            platform_item_id=str(platform_item_id),
+            platform_attempt=int(platform_attempt),
+        )
         if run_status in {
             GenerationRunStatus.ERROR,
             GenerationRunStatus.BLOCKED,
@@ -312,6 +419,7 @@ def reconcile_ledger(
                 provider_tokens=tokens,
                 error_classification=error,
                 score_status=score_status,
+                diagnostics=diagnostics,
             )
         )
     ledger.reconciliation(facts)
@@ -319,7 +427,36 @@ def reconcile_ledger(
 
 
 def _load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(path.read_text(encoding="utf-8"), parse_float=Decimal)
+
+
+def _money(value: object, *, field: str) -> Decimal:
+    """Accept only finite, non-negative JSON numeric values as USD."""
+    if isinstance(value, bool) or not isinstance(value, (int, Decimal)):
+        raise ValueError(f"{field} must be a JSON number")
+    try:
+        amount = Decimal(value)
+    except (InvalidOperation, ValueError) as error:
+        raise ValueError(f"{field} is not a decimal amount") from error
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(f"{field} must be finite and non-negative")
+    return amount
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value, "f")
+
+
+def _stored_money(value: object, *, field: str) -> Decimal:
+    if not isinstance(value, str):
+        return _money(value, field=field)
+    try:
+        amount = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"{field} is corrupt") from error
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(f"{field} is corrupt")
+    return amount
 
 
 def _sha256(path: Path) -> str:
@@ -346,8 +483,8 @@ class SweepLedger:
             """
             CREATE TABLE IF NOT EXISTS sweep_cells (
               manifest_hash TEXT NOT NULL, cell_id TEXT NOT NULL,
-              estimated_cost REAL NOT NULL, reserved_cost REAL,
-              actual_cost REAL, operation_key TEXT, prediction_id TEXT,
+              estimated_cost TEXT NOT NULL, reserved_cost TEXT,
+              actual_cost TEXT, operation_key TEXT, prediction_id TEXT,
               platform_item_id TEXT, platform_attempt INTEGER,
               attempt_ids_json TEXT NOT NULL DEFAULT '[]',
               status TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0,
@@ -365,6 +502,7 @@ class SweepLedger:
         )
         self._ensure_column("attempt_ids_json", "TEXT NOT NULL DEFAULT '[]'")
         self._ensure_column("score_status", "TEXT")
+        self._ensure_column("diagnostics_json", "TEXT")
 
     def _ensure_column(self, name: str, definition: str) -> None:
         columns = {
@@ -392,25 +530,47 @@ class SweepLedger:
         else:
             self.connection.execute("COMMIT")
 
+    def _totals(
+        self, connection: sqlite3.Connection
+    ) -> tuple[Decimal, Decimal]:
+        rows = connection.execute(
+            "SELECT actual_cost,reserved_cost FROM sweep_cells "
+            "WHERE manifest_hash=?",
+            (self.manifest_hash,),
+        ).fetchall()
+        return (
+            sum(
+                (
+                    _stored_money(row[0], field="stored actual cost")
+                    for row in rows
+                    if row[0] is not None
+                ),
+                Decimal(),
+            ),
+            sum(
+                (
+                    _stored_money(row[1], field="stored reserved cost")
+                    for row in rows
+                    if row[1] is not None
+                ),
+                Decimal(),
+            ),
+        )
+
     def reserve(
-        self, cells: list[dict[str, Any]], estimates: dict[str, float]
+        self, cells: list[dict[str, Any]], estimates: Mapping[str, object]
     ) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
         with self._transaction() as connection:
-            totals = connection.execute(
-                "SELECT COALESCE(SUM(actual_cost), 0), "
-                "COALESCE(SUM(reserved_cost), 0) "
-                "FROM sweep_cells WHERE manifest_hash=?",
-                (self.manifest_hash,),
-            ).fetchone()
-            actual, reserved = float(totals[0]), float(totals[1])
+            actual, reserved = self._totals(connection)
             for cell in cells:
                 cell_id = str(cell["cell_id"])
                 estimate = estimates.get(cell_id)
-                if estimate is None or estimate < 0:
+                if estimate is None:
                     raise ValueError(
                         f"unknown or invalid cost estimate for {cell_id}"
                     )
+                estimate = _money(estimate, field=f"estimate for {cell_id}")
                 row = connection.execute(
                     "SELECT status FROM sweep_cells "
                     "WHERE manifest_hash=? AND cell_id=?",
@@ -431,8 +591,8 @@ class SweepLedger:
                     (
                         self.manifest_hash,
                         cell_id,
-                        estimate,
-                        estimate,
+                        _decimal_text(estimate),
+                        _decimal_text(estimate),
                         "reserved",
                         timestamp,
                         timestamp,
@@ -476,12 +636,42 @@ class SweepLedger:
                     ),
                 )
 
+    def submission_intent(
+        self,
+        cells: list[dict[str, Any]],
+        *,
+        operation_key: str,
+        prediction_ids: dict[str, str],
+    ) -> None:
+        """Durably bind idempotent Platform identities before submission."""
+        with self._transaction() as connection:
+            for cell in cells:
+                cell_id = str(cell["cell_id"])
+                prediction_id = prediction_ids[cell_id]
+                connection.execute(
+                    "UPDATE sweep_cells SET status='submitting',"
+                    "operation_key=?,prediction_id=?,platform_item_id=?,"
+                    "platform_attempt=0,"
+                    "attempt_ids_json='[0]',updated_at=? "
+                    "WHERE manifest_hash=? AND cell_id=? "
+                    "AND status IN ('reserved','submitting')",
+                    (
+                        operation_key,
+                        prediction_id,
+                        item_id(
+                            operation_key=operation_key, item_key=prediction_id
+                        ),
+                        _now(),
+                        self.manifest_hash,
+                        cell_id,
+                    ),
+                )
+
     def selected_remaining(
         self, all_cells: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT cell_id FROM sweep_cells WHERE manifest_hash=? "
-            "AND status IN ('reserved','submitted','in_flight','succeeded')",
+            "SELECT cell_id FROM sweep_cells WHERE manifest_hash=?",
             (self.manifest_hash,),
         ).fetchall()
         excluded = {str(row[0]) for row in rows}
@@ -491,18 +681,45 @@ class SweepLedger:
 
     def summary(self) -> dict[str, Any]:
         rows = self.connection.execute(
-            "SELECT status, COUNT(*), COALESCE(SUM(reserved_cost),0), "
-            "COALESCE(SUM(actual_cost),0) "
-            "FROM sweep_cells WHERE manifest_hash=? GROUP BY status",
+            "SELECT status, COUNT(*) FROM sweep_cells "
+            "WHERE manifest_hash=? GROUP BY status",
             (self.manifest_hash,),
         ).fetchall()
         return {
             str(status): {
                 "count": count,
-                "reserved_usd": reserved,
-                "actual_usd": actual,
+                "reserved_usd": float(
+                    sum(
+                        (
+                            _stored_money(row[1], field="stored reserved cost")
+                            for row in self.connection.execute(
+                                "SELECT actual_cost,reserved_cost "
+                                "FROM sweep_cells "
+                                "WHERE manifest_hash=? AND status=?",
+                                (self.manifest_hash, status),
+                            ).fetchall()
+                            if row[1] is not None
+                        ),
+                        Decimal(),
+                    )
+                ),
+                "actual_usd": float(
+                    sum(
+                        (
+                            _stored_money(row[0], field="stored actual cost")
+                            for row in self.connection.execute(
+                                "SELECT actual_cost,reserved_cost "
+                                "FROM sweep_cells "
+                                "WHERE manifest_hash=? AND status=?",
+                                (self.manifest_hash, status),
+                            ).fetchall()
+                            if row[0] is not None
+                        ),
+                        Decimal(),
+                    )
+                ),
             }
-            for status, count, reserved, actual in rows
+            for status, count in rows
         } | {
             "manifest_mismatch": {
                 "count": self.connection.execute(
@@ -529,16 +746,21 @@ class SweepLedger:
                     "reserved_cost=CASE WHEN ? IS NULL THEN reserved_cost "
                     "ELSE NULL END,"
                     "error_classification=?,provider_tokens_json=?,"
-                    "score_status=?,"
+                    "score_status=?,diagnostics_json=?,"
                     "updated_at=? "
                     "WHERE manifest_hash=? AND cell_id=?",
                     (
                         fact.status,
-                        fact.actual_cost,
-                        fact.actual_cost,
+                        _decimal_text(fact.actual_cost)
+                        if fact.actual_cost is not None
+                        else None,
+                        _decimal_text(fact.actual_cost)
+                        if fact.actual_cost is not None
+                        else None,
                         fact.error_classification,
                         json.dumps(fact.provider_tokens, sort_keys=True),
                         fact.score_status,
+                        json.dumps(fact.diagnostics or {}, sort_keys=True),
                         _now(),
                         self.manifest_hash,
                         fact.cell_id,
@@ -551,15 +773,29 @@ class SweepLedger:
         if (
             fact.platform_attempt is None
             or fact.retry_count >= MAX_RETRIES_PER_CELL
+            or fact.actual_cost is None
         ):
             return False
         with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT estimated_cost FROM sweep_cells "
+                "WHERE manifest_hash=? AND cell_id=?",
+                (self.manifest_hash, fact.cell_id),
+            ).fetchone()
+            if row is None:
+                return False
+            estimate = _stored_money(row[0], field="stored estimate")
+            actual, reserved = self._totals(connection)
+            if actual + reserved + estimate > GENERATION_CEILING_USD:
+                return False
             result = connection.execute(
-                "UPDATE sweep_cells SET status='retrying',retry_of_attempt=?,"
+                "UPDATE sweep_cells SET status='retrying',reserved_cost=?,"
+                "retry_of_attempt=?,"
                 "updated_at=? WHERE manifest_hash=? AND cell_id=? "
                 "AND retry_count<? AND status IN "
                 "('typed_failure','incomplete','retrying')",
                 (
+                    _decimal_text(estimate),
                     fact.platform_attempt,
                     _now(),
                     self.manifest_hash,
@@ -654,7 +890,7 @@ def validate_campaign(
     return metadata, cells, manifest_hash
 
 
-def _estimates(path: Path, cells: list[dict[str, Any]]) -> dict[str, float]:
+def _estimates(path: Path, cells: list[dict[str, Any]]) -> dict[str, Decimal]:
     """Read a locked per-cell estimate artifact; aggregates are unsafe."""
     payload = _load_json(path)
     if payload.get("manifest_sha256") is None or not isinstance(
@@ -663,9 +899,13 @@ def _estimates(path: Path, cells: list[dict[str, Any]]) -> dict[str, float]:
         raise typer.BadParameter(
             "estimate artifact must contain manifest_sha256 and cells map"
         )
-    result = {
-        str(key): float(value) for key, value in payload["cells"].items()
-    }
+    try:
+        result = {
+            str(key): _money(value, field=f"estimate for {key}")
+            for key, value in payload["cells"].items()
+        }
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     if set(result) != {str(cell["cell_id"]) for cell in cells}:
         raise typer.BadParameter(
             "estimate artifact must price every immutable cell exactly once"
@@ -746,24 +986,31 @@ def _submit(
 ) -> None:
     specs = _specs_for_cells(campaign_dir, cells)
     operation_key = _operation_key(metadata, suffix)
+    prediction_ids = {
+        cell_id: spec.prediction_id for cell_id, spec in specs.items()
+    }
+    # This commit is deliberately before the external call.  Replaying this
+    # deterministic operation is safe because Platform submit is idempotent.
+    ledger.submission_intent(
+        cells, operation_key=operation_key, prediction_ids=prediction_ids
+    )
     engine = create_engine(resolve_application_database_url())
-    submit_prediction_specs(
-        engine,
-        operation_key=operation_key,
-        experiment_name=metadata["campaign"],
-        specs=specs.values(),
-        metadata={
-            "manifest_sha256": ledger.manifest_hash,
-            "operator": "whetstone-live-sweep",
-        },
-    )
-    ledger.submitted(
-        cells,
-        operation_key=operation_key,
-        prediction_ids={
-            cell_id: spec.prediction_id for cell_id, spec in specs.items()
-        },
-    )
+    try:
+        submit_prediction_specs(
+            engine,
+            operation_key=operation_key,
+            experiment_name=metadata["campaign"],
+            specs=specs.values(),
+            metadata={
+                "manifest_sha256": ledger.manifest_hash,
+                "operator": "whetstone-live-sweep",
+            },
+        )
+        ledger.submitted(
+            cells, operation_key=operation_key, prediction_ids=prediction_ids
+        )
+    finally:
+        engine.dispose()
 
 
 @APP.command()

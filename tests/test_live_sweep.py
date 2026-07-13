@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -30,7 +31,7 @@ def test_ledger_reservation_is_idempotent_and_excludes_remaining(
     )
     try:
         cells = [_cell("a"), _cell("b")]
-        estimates = {"a": 0.10, "b": 0.20}
+        estimates = {"a": Decimal("0.10"), "b": Decimal("0.20")}
         assert ledger.reserve(cells[:1], estimates) == cells[:1]
         assert ledger.reserve(cells[:1], estimates) == []
         assert ledger.selected_remaining(cells) == cells[1:]
@@ -48,7 +49,49 @@ def test_ledger_fails_closed_for_unknown_cost_and_ceiling(
         with pytest.raises(ValueError, match="unknown"):
             ledger.reserve([_cell("a")], {})
         with pytest.raises(ValueError, match="ceiling"):
-            ledger.reserve([_cell("a")], {"a": GENERATION_CEILING_USD + 0.01})
+            ledger.reserve(
+                [_cell("a")], {"a": GENERATION_CEILING_USD + Decimal("0.01")}
+            )
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize("estimate", [float("nan"), float("inf"), "0.10"])
+def test_ledger_rejects_non_json_or_nonfinite_money(
+    tmp_path: Path, estimate: object
+) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        with pytest.raises(ValueError):
+            ledger.reserve([_cell("a")], {"a": estimate})  # type: ignore[arg-type]
+    finally:
+        ledger.close()
+
+
+def test_remaining_never_resubmits_typed_failure(tmp_path: Path) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.reserve([_cell("a")], {"a": Decimal("0.10")})
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    "a",
+                    "typed_failure",
+                    0,
+                    0,
+                    Decimal("0.10"),
+                    {},
+                    "generation_error",
+                )
+            ]
+        )
+        assert ledger.selected_remaining([_cell("a"), _cell("b")]) == [
+            _cell("b")
+        ]
     finally:
         ledger.close()
 
@@ -65,7 +108,7 @@ def test_reconciliation_uses_persisted_platform_identity(
         tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
     )
     try:
-        ledger.reserve([_cell("a")], {"a": 0.10})
+        ledger.reserve([_cell("a")], {"a": Decimal("0.10")})
         ledger.submitted(
             [_cell("a")],
             operation_key="operation-a",
@@ -87,7 +130,7 @@ def test_reconciliation_uses_persisted_platform_identity(
             "_node_cost_facts",
             lambda _engine, **_kwargs: (
                 GenerationRunStatus.SUCCESS,
-                0.07,
+                Decimal("0.07"),
                 {"total_tokens": 12},
             ),
         )
@@ -96,11 +139,14 @@ def test_reconciliation_uses_persisted_platform_identity(
             "_score_terminal_status",
             lambda _engine, **_kwargs: None,
         )
+        monkeypatch.setattr(
+            live_sweep, "_safe_diagnostics", lambda *_args, **_kwargs: {}
+        )
 
         facts = reconcile_ledger(ledger, engine=cast("Engine", object()))
 
         assert facts[0].status == "succeeded"
-        assert facts[0].actual_cost == 0.07
+        assert facts[0].actual_cost == Decimal("0.07")
         assert ledger.summary()["succeeded"]["actual_usd"] == 0.07
     finally:
         ledger.close()
@@ -113,7 +159,7 @@ def test_reconciliation_keeps_unknown_cost_reserved(
         tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
     )
     try:
-        ledger.reserve([_cell("a")], {"a": 0.10})
+        ledger.reserve([_cell("a")], {"a": Decimal("0.10")})
         ledger.submitted(
             [_cell("a")],
             operation_key="operation-a",
@@ -140,6 +186,9 @@ def test_reconciliation_keeps_unknown_cost_reserved(
             "_score_terminal_status",
             lambda _engine, **_kwargs: None,
         )
+        monkeypatch.setattr(
+            live_sweep, "_safe_diagnostics", lambda *_args, **_kwargs: {}
+        )
 
         reconcile_ledger(ledger, engine=cast("Engine", object()))
 
@@ -155,7 +204,7 @@ def test_retry_resume_records_one_lineage_increment(tmp_path: Path) -> None:
         tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
     )
     try:
-        ledger.reserve([_cell("a")], {"a": 0.10})
+        ledger.reserve([_cell("a")], {"a": Decimal("0.10")})
         ledger.submitted(
             [_cell("a")],
             operation_key="operation-a",
@@ -166,7 +215,7 @@ def test_retry_resume_records_one_lineage_increment(tmp_path: Path) -> None:
             status="typed_failure",
             platform_attempt=0,
             retry_count=0,
-            actual_cost=None,
+            actual_cost=Decimal("0.10"),
             provider_tokens={},
             error_classification="generation_error",
         )
@@ -193,7 +242,7 @@ def test_concurrent_retry_claim_replays_one_attempt_lineage(
     first = SweepLedger(path, manifest_hash="manifest-a")
     second = SweepLedger(path, manifest_hash="manifest-a")
     try:
-        first.reserve([_cell("a")], {"a": 0.10})
+        first.reserve([_cell("a")], {"a": Decimal("0.10")})
         first.submitted(
             [_cell("a")],
             operation_key="operation-a",
@@ -204,7 +253,7 @@ def test_concurrent_retry_claim_replays_one_attempt_lineage(
             status="typed_failure",
             platform_attempt=0,
             retry_count=0,
-            actual_cost=None,
+            actual_cost=Decimal("0.10"),
             provider_tokens={},
             error_classification="generation_error",
         )
