@@ -104,6 +104,8 @@ def stable_score_attempt_id(
     attempt_index: int,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
+    execution_recipe_digest: str = "",
+    dataset_snapshot_identity: object | None = None,
     length: int = SCORE_ATTEMPT_ID_DIGEST_LENGTH,
 ) -> str:
     return _sha256_digest(
@@ -116,6 +118,8 @@ def stable_score_attempt_id(
             "attempt_index": attempt_index,
             "dataset_name": dataset_name,
             "dataset_split": dataset_split,
+            "execution_recipe_digest": execution_recipe_digest,
+            "dataset_snapshot_identity": dataset_snapshot_identity,
         },
         length=length,
     )

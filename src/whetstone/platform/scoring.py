@@ -55,6 +55,8 @@ def score_submission_run(
     dataset_snapshot: DatasetSnapshotIdentityPayload,
     started_at: datetime,
     completed_at: datetime | None = None,
+    execution_recipe_digest: str = "",
+    platform_item_id: str = "",
 ) -> ScoreSubmissionRunRecord:
     scoring_profile = scoring_profile or resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
@@ -65,8 +67,11 @@ def score_submission_run(
         run=generation_run,
         task=task,
     )
+    submission = generation_run.summary.terminal_submission_text
+    if submission is None:
+        raise ValueError("generation run has no terminal submission text")
     domain_score = score_humaneval_submission(
-        raw_submission=generation_run.summary.terminal_submission_text,
+        raw_submission=submission,
         task=task,
         parser_profile=scoring_profile.parser_profile,
         timeout_seconds=scoring_profile.timeout_seconds,
@@ -86,6 +91,8 @@ def score_submission_run(
             completed_score=domain_score,
             started_at=started_at,
             completed_at=resolved_completed_at,
+            execution_recipe_digest=execution_recipe_digest,
+            platform_item_id=platform_item_id,
         )
     return score_harness_failure_from_domain_failure(
         spec=spec,
@@ -98,6 +105,8 @@ def score_submission_run(
         harness_failure=domain_score,
         started_at=started_at,
         completed_at=resolved_completed_at,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
     )
 
 
@@ -115,6 +124,8 @@ def score_attempt_from_completed_score(
     completed_score: CompletedScore,
     started_at: datetime,
     completed_at: datetime,
+    execution_recipe_digest: str = "",
+    platform_item_id: str = "",
 ) -> ScoreAttemptRecord:
     extraction = completed_score.extraction
     parser_profile = scoring_profile.parser_profile
@@ -151,10 +162,15 @@ def score_attempt_from_completed_score(
             attempt_index=score_attempt_index,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
+            execution_recipe_digest=execution_recipe_digest,
+            dataset_snapshot_identity=dataset_snapshot.model_dump(mode="json"),
         ),
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
         attempt_index=score_attempt_index,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
+        platform_attempt=score_attempt_index,
         scoring_profile_id=scoring_profile.profile_id,
         scoring_profile_version=scoring_profile.version,
         parser_profile_id=parser_profile.profile_id,
@@ -190,6 +206,8 @@ def score_harness_failure_from_domain_failure(
     harness_failure: HarnessFailure,
     started_at: datetime,
     completed_at: datetime,
+    execution_recipe_digest: str = "",
+    platform_item_id: str = "",
 ) -> ScoreHarnessFailureRecord:
     parser_profile = scoring_profile.parser_profile
     extracted_payload = None
@@ -213,6 +231,18 @@ def score_harness_failure_from_domain_failure(
             },
         )
     return ScoreHarnessFailureRecord(
+        score_harness_failure_id=stable_score_attempt_id(
+            generation_run_id=generation_run.generation_run_id,
+            scoring_profile_id=scoring_profile.profile_id,
+            scoring_profile_version=scoring_profile.version,
+            parser_profile_id=parser_profile.profile_id,
+            parser_version=parser_profile.version,
+            attempt_index=score_attempt_index,
+            dataset_name=dataset_name,
+            dataset_split=dataset_split,
+            execution_recipe_digest=execution_recipe_digest,
+            dataset_snapshot_identity=dataset_snapshot.model_dump(mode="json"),
+        ),
         score_attempt_id=stable_score_attempt_id(
             generation_run_id=generation_run.generation_run_id,
             scoring_profile_id=scoring_profile.profile_id,
@@ -222,10 +252,15 @@ def score_harness_failure_from_domain_failure(
             attempt_index=score_attempt_index,
             dataset_name=dataset_name,
             dataset_split=dataset_split,
+            execution_recipe_digest=execution_recipe_digest,
+            dataset_snapshot_identity=dataset_snapshot.model_dump(mode="json"),
         ),
         prediction_id=spec.prediction_id,
         generation_run_id=generation_run.generation_run_id,
         attempt_index=score_attempt_index,
+        execution_recipe_digest=execution_recipe_digest,
+        platform_item_id=platform_item_id,
+        platform_attempt=score_attempt_index,
         scoring_profile_id=scoring_profile.profile_id,
         scoring_profile_version=scoring_profile.version,
         parser_profile_id=parser_profile.profile_id,
@@ -270,7 +305,7 @@ def validate_generation_run_for_scoring(
     if run.status is GenerationRunStatus.SUCCESS:
         return
     if run.status is GenerationRunStatus.PARTIAL:
-        if not run.summary.terminal_submission_text.strip():
+        if not (run.summary.terminal_submission_text or "").strip():
             raise ValueError(
                 "partial generation run missing terminal_submission_text"
             )

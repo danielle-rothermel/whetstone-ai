@@ -11,6 +11,7 @@ from dr_platform import (
     ExecutionTarget,
     FailureSnapshot,
     ItemInsertStatus,
+    PlatformSchema,
     TargetRegistry,
     WorkflowTopology,
 )
@@ -21,6 +22,7 @@ from dr_platform.items import SubmittableItem
 from dr_platform.submission import (
     RegistrationItem,
     RegistrationItemResult,
+    RegistrationPageContext,
     RegistrationResult,
 )
 from dr_platform.targets import TargetContractDeclaration
@@ -30,6 +32,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from whetstone.db import io as db_io
 from whetstone.db import schema
+from whetstone.platform.acceptance import accept_operation_manifest
 from whetstone.platform.graph_workflow import run_prediction_graph_workflow
 from whetstone.platform.scoring_workflow import run_score_submission_workflow
 from whetstone.records import ExperimentRecord, PredictionSpecRecord
@@ -184,9 +187,16 @@ def _generation_execution_identity(
     )
 
 
-def _generation_arguments(item: Any, attempt: int) -> tuple[str, int, str]:
+def _generation_arguments(
+    item: Any, attempt: int
+) -> tuple[str, int, str, str]:
     recipe_digest = _generation_recipe(cast("SubmittableItem", item)).digest()
-    return (str(item.spec["prediction_id"]), attempt, recipe_digest)
+    return (
+        str(item.spec["prediction_id"]),
+        attempt,
+        recipe_digest,
+        item.item_id,
+    )
 
 
 def _scoring_recipe(item: SubmittableItem) -> ExecutionRecipeEnvelope:
@@ -229,11 +239,17 @@ def _scoring_arguments(item: Any, attempt: int) -> tuple[Any, ...]:
         str(spec["scoring_profile_version"]),
         str(spec["dataset_name"]),
         str(spec["dataset_split"]),
+        _scoring_recipe(cast("SubmittableItem", item)).digest(),
+        item.item_id,
     )
 
 
 def _register_prediction_specs(
-    connection: Any, *, operation_key: str, items: tuple[RegistrationItem, ...]
+    connection: Any,
+    *,
+    operation_key: str,
+    items: tuple[RegistrationItem, ...],
+    page: RegistrationPageContext,
 ) -> RegistrationResult:
     results: list[RegistrationItemResult] = []
     for item in items:
@@ -277,11 +293,30 @@ def _register_prediction_specs(
                 item_key=item.item_key, insert_status=status
             )
         )
+    if page.is_final_page:
+        operation = connection.execute(
+            select(PlatformSchema(prefix="whetstone").operations).where(
+                PlatformSchema(prefix="whetstone").operations.c.operation_key
+                == operation_key
+            )
+        ).mappings().one()
+        accept_operation_manifest(
+            connection,
+            experiment_name=str(operation["group_key"]),
+            workflow_role="generation",
+            operation_key=operation_key,
+            manifest_digest=page.manifest_digest,
+            target_ref=_target_ref_from_operation(operation),
+        )
     return RegistrationResult(items=tuple(results))
 
 
 def _register_score_targets(
-    connection: Any, *, operation_key: str, items: tuple[RegistrationItem, ...]
+    connection: Any,
+    *,
+    operation_key: str,
+    items: tuple[RegistrationItem, ...],
+    page: RegistrationPageContext,
 ) -> RegistrationResult:
     """Validate the frozen target rows without recreating legacy scheduling.
 
@@ -289,7 +324,23 @@ def _register_score_targets(
     registration time.  A retry receives a new platform ordinal and persists
     either one immutable ScoreAttempt or one harness-failure record.
     """
-    _ = connection, operation_key
+    if page.is_final_page:
+        operation = connection.execute(
+            select(PlatformSchema(prefix="whetstone").operations).where(
+                PlatformSchema(prefix="whetstone").operations.c.operation_key
+                == operation_key
+            )
+        ).mappings().one()
+        spec = dict(operation["spec"])
+        accept_operation_manifest(
+            connection,
+            experiment_name=str(spec["experiment_name"]),
+            workflow_role="scoring",
+            operation_key=operation_key,
+            manifest_digest=page.manifest_digest,
+            selection_digest=str(spec["selection_digest"]),
+            target_ref=_target_ref_from_operation(operation),
+        )
     return RegistrationResult(
         items=tuple(
             RegistrationItemResult(
@@ -298,3 +349,11 @@ def _register_score_targets(
             for item in items
         )
     )
+
+
+def _target_ref_from_operation(operation: Any) -> dict[str, Any]:
+    return {
+        "target_key": operation["target_key"],
+        "target_version": operation["target_version"],
+        "target_contract_digest": operation["target_contract_digest"],
+    }

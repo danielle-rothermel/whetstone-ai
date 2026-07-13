@@ -314,6 +314,7 @@ score_attempts = Table(
         "parser_version",
         "dataset_name",
         "dataset_split",
+        "execution_recipe_digest",
         "attempt_index",
         name="uq_whetstone_score_attempts_profile",
     ),
@@ -344,6 +345,10 @@ score_harness_failures = Table(
     ),
     Column("generation_run_id", Text, nullable=False),
     Column("attempt_index", Integer, nullable=False),
+    Column("execution_recipe_digest", Text, nullable=False),
+    Column("platform_item_id", Text, nullable=False),
+    Column("platform_attempt", Integer, nullable=False),
+    Column("score_attempt_id", Text, nullable=False),
     Column("scoring_profile_id", Text, nullable=False),
     Column("scoring_profile_version", Text, nullable=False),
     Column("parser_profile_id", Text, nullable=False),
@@ -354,7 +359,7 @@ score_harness_failures = Table(
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
-        "attempt_index >= 0",
+        "attempt_index >= 0 AND platform_attempt >= 0",
         name="ck_whetstone_score_harness_failures_attempt",
     ),
     CheckConstraint(
@@ -371,6 +376,11 @@ score_harness_failures = Table(
         "dataset_split",
         "attempt_index",
         name="uq_whetstone_score_harness_failures_profile",
+    ),
+    UniqueConstraint(
+        "platform_item_id",
+        "platform_attempt",
+        name="uq_whetstone_score_harness_failures_platform_attempt",
     ),
     ForeignKeyConstraint(
         ["generation_run_id", "prediction_id"],

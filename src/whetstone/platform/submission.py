@@ -12,8 +12,11 @@ from dr_platform import OperationManifest, SubmitOptions, SubmitResult, submit
 from dr_platform.submission import prepare_manifest
 from dr_serialize import sha256_json_digest
 from pydantic import BaseModel, ConfigDict, StrictStr
-from sqlalchemy.engine import Engine
+from sqlalchemy import select
+from sqlalchemy.engine import Connection, Engine
 
+from whetstone.db import io as db_io
+from whetstone.db import schema
 from whetstone.platform.targets import (
     generation_target,
     scoring_target,
@@ -145,6 +148,49 @@ def scoring_target_for_generation_run(
         dataset_snapshot=DatasetSnapshotIdentityPayload.model_validate(
             snapshot
         ),
+    )
+
+
+def select_populated_scoring_generation_runs(
+    connection: Connection,
+    *,
+    experiment_name: str,
+) -> tuple[GenerationRunRecord, ...]:
+    """Return the one persisted eligibility boundary used before scoring IDs.
+
+    PostgreSQL's POSIX class deliberately handles spaces, tabs, and newlines;
+    Python ``strip`` is not permitted to stand in for this source-of-truth
+    query.
+    """
+    rows = connection.execute(
+        select(schema.generation_runs)
+        .join(
+            schema.prediction_specs,
+            schema.prediction_specs.c.prediction_id
+            == schema.generation_runs.c.prediction_id,
+        )
+        .where(
+            schema.prediction_specs.c.experiment_name == experiment_name,
+            schema.generation_runs.c.status.in_(
+                (
+                    GenerationRunStatus.SUCCESS.value,
+                    GenerationRunStatus.PARTIAL.value,
+                )
+            ),
+            schema.generation_runs.c.summary[
+                "terminal_submission_text"
+            ].astext.is_not(None),
+            schema.generation_runs.c.summary["terminal_submission_text"].astext.op("~")(
+                "[^[:space:]]"
+            ),
+        )
+        .order_by(
+            schema.generation_runs.c.prediction_id,
+            schema.generation_runs.c.platform_attempt.desc(),
+        )
+    ).mappings()
+    return tuple(
+        db_io.generation_run_record_from_row(dict(row)) for row in rows
     )
 
 

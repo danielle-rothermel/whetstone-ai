@@ -81,10 +81,23 @@ class _DbosCanceller:
             # The kernel requires a classified error for this case; leave it
             # active until bounded reconciliation classifies it safely.
             disposition = CancellationInspectionDisposition.ACTIVE
+        try:
+            children = self.client.list_workflows(
+                parent_workflow_id=workflow_id,
+                limit=1,
+                load_input=False,
+                load_output=False,
+            )
+        except Exception as error:
+            # A missing topology observation must never be treated as a
+            # childless top-level workflow.
+            raise RuntimeError(
+                "unable to inspect workflow topology"
+            ) from error
         return CancellationInspection(
             workflow_id=workflow_id,
             disposition=disposition,
-            has_children=False,
+            has_children=bool(children),
             dbos_status=status,
         )
 
