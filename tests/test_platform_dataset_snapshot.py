@@ -12,6 +12,7 @@ from whetstone.platform.dataset_snapshot import (
     load_humaneval_snapshot,
 )
 from whetstone.platform.spec_builder import (
+    ExperimentSpecConfig,
     iter_experiment_specs,
     load_experiment_spec_config,
 )
@@ -165,6 +166,55 @@ def test_injected_snapshot_carries_verified_identity(
         == snapshot.identity.model_dump(mode="json")
         for spec in specs
     )
+
+
+def test_humaneval_direct_axis_preserves_legacy_prompt_and_bypasses_encoder(
+    tmp_path: Path,
+) -> None:
+    snapshot = load_humaneval_snapshot(
+        dataset_name=DATASET_NAME,
+        dataset_split=DATASET_SPLIT,
+        snapshot_path=_write_snapshot(tmp_path / "snapshot.json"),
+    )
+    config = ExperimentSpecConfig.model_validate(
+        {
+            "experiment_name": "humaneval-direct",
+            "graph_layout": "encdec",
+            "encdec_shape": "humaneval",
+            "dataset": {
+                "name": DATASET_NAME,
+                "split": DATASET_SPLIT,
+                "snapshot_path": str(tmp_path / "snapshot.json"),
+            },
+            "repetition_seeds": [0],
+            "dimensions_axes": [
+                {"compression_target": None},
+                {"compression_target": 1.0},
+            ],
+            "providers": [
+                {"model": "test", "config_id": "encoder"},
+                {"model": "test", "config_id": "decoder"},
+            ],
+        }
+    )
+
+    direct, compressed = tuple(
+        iter_experiment_specs(config, snapshot=snapshot)
+    )
+
+    assert direct.dimensions.values == {
+        "compression_target": None,
+        "budget_mode": "direct",
+    }
+    assert direct.task.inputs.values["prompt"] == "def add_1(x):\n"
+    assert "gt_code" not in direct.task.inputs.values
+    assert direct.graph.graph.terminal_node_id == "direct"
+    assert direct.graph.graph.node("direct").config.input_bindings["prompt"]
+    assert direct.provider_axis.config_id == "decoder"
+    assert compressed.dimensions.values["budget_mode"] == "compressed"
+    assert compressed.graph.graph.terminal_node_id == "decoder"
+    assert "gt_code" in compressed.task.inputs.values
+    assert direct.prediction_id != compressed.prediction_id
 
 
 def test_injected_snapshot_rejects_another_dataset(

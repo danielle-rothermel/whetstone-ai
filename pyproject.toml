@@ -35,6 +35,7 @@ dependencies = [
 
 [project.scripts]
 whetstone-publish = "whetstone.platform.publication:main"
+whetstone-live-sweep = "whetstone.platform.live_sweep:main"
 
 [dependency-groups]
 dev = [
