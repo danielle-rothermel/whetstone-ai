@@ -75,7 +75,7 @@ def _assert_strict_migration_connection(
             ),
             {
                 "expected": expected_schema,
-                "names": sorted(schema.metadata.tables),
+                "names": list(required_run_schema_tables()),
             },
         )
         .scalars()
@@ -84,7 +84,7 @@ def _assert_strict_migration_connection(
     if pre_existing:
         raise ValueError(
             "run schema is not fresh; pre-existing Whetstone application "
-            f"tables: {sorted(pre_existing)}"
+            f"or kernel tables: {sorted(pre_existing)}"
         )
 
 

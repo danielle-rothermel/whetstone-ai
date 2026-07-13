@@ -28,6 +28,7 @@ from whetstone.platform.cutover_tooling import (
     validate_store_state,
 )
 from whetstone.platform.platform_db import (
+    PLATFORM_VERSION_TABLE,
     assert_run_schema_owns_objects,
     ensure_whetstone_application_schema,
 )
@@ -199,6 +200,28 @@ def test_pre_existing_application_table_in_fresh_schema_is_rejected(
             text(
                 f'CREATE TABLE "{fresh_schema}".'
                 f"{schema.GENERATION_RUNS_TABLE} (run_id TEXT)"
+            )
+        )
+
+    with pytest.raises(ValueError, match="not fresh"):
+        ensure_whetstone_application_schema(
+            postgres_base_url, expected_schema=fresh_schema
+        )
+
+    assert _public_whetstone_oids(admin_engine) == before
+
+
+@pytest.mark.integration
+def test_pre_existing_kernel_version_table_is_rejected(
+    postgres_base_url: str, admin_engine: Engine, fresh_schema: str
+) -> None:
+    """A pre-stamped kernel version table must not silently no-op alembic."""
+    before = _public_whetstone_oids(admin_engine)
+    with admin_engine.begin() as connection:
+        connection.execute(
+            text(
+                f'CREATE TABLE "{fresh_schema}".'
+                f"{PLATFORM_VERSION_TABLE} (version_num TEXT)"
             )
         )
 
