@@ -15,9 +15,10 @@ from typing import Annotated, Any, Literal
 
 import typer
 from dbos import DBOS
+from dr_platform.dbos_config import normalize_postgresql_driver_url
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import Engine, make_url
 
 from whetstone.platform.platform_db import ensure_whetstone_application_schema
 from whetstone.platform.runtime import shutdown_dbos_runtime
@@ -351,7 +352,7 @@ def _store_descriptor(run_id: str, descriptor_path: Path) -> StoreDescriptor:
 
 
 def _bound_url(value: str, schema: str) -> str:
-    url = make_url(value)
+    url = make_url(normalize_postgresql_driver_url(value))
     return url.update_query_dict(
         {"options": f"-c search_path={schema},public"}
     ).render_as_string(hide_password=False)
@@ -364,8 +365,12 @@ def _require_environment(name: str) -> str:
     return value
 
 
+def _sqlalchemy_engine(url: str) -> Engine:
+    return create_engine(normalize_postgresql_driver_url(url))
+
+
 def _schema_exists(url: str, schema: str) -> bool:
-    engine = create_engine(url)
+    engine = _sqlalchemy_engine(url)
     try:
         with engine.connect() as connection:
             return bool(
@@ -406,7 +411,7 @@ def _create_schema(
 ) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
-    engine = create_engine(url)
+    engine = _sqlalchemy_engine(url)
     try:
         with engine.begin() as connection:
             connection.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -446,7 +451,7 @@ def _create_schema(
 
 
 def _schema_owner(url: str, schema: str) -> tuple[str, str] | None:
-    engine = create_engine(url)
+    engine = _sqlalchemy_engine(url)
     try:
         with engine.connect() as connection:
             exists = connection.execute(
@@ -483,7 +488,7 @@ def _require_schema_owner(
 def _drop_schema(url: str, schema: str) -> None:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("invalid generated schema")
-    engine = create_engine(url)
+    engine = _sqlalchemy_engine(url)
     try:
         with engine.begin() as connection:
             connection.execute(text(f'DROP SCHEMA "{schema}" CASCADE'))
