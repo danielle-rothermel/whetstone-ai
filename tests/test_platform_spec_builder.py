@@ -8,9 +8,20 @@ from dr_code.humaneval import (
     HumanEvalTask,
     parse_human_eval_dataset,
 )
+from dr_code.humaneval.sampling import (
+    DEFAULT_HUMAN_EVAL_HF_REVISION,
+    HumanEvalRawRow,
+    HumanEvalRawRowsSnapshot,
+    HumanEvalRawRowsSnapshotHeader,
+    human_eval_overrides_digest,
+)
 from dr_platform import index_jsonl_items
 
 from whetstone.platform import spec_builder
+from whetstone.platform.dataset_snapshot import (
+    HumanEvalSnapshot,
+    snapshot_from_bytes,
+)
 from whetstone.platform.spec_builder import (
     HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
     HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
@@ -58,9 +69,31 @@ def _fixture_rows() -> tuple[dict[str, str], ...]:
     )
 
 
+def _fixture_snapshot() -> HumanEvalSnapshot:
+    payload = HumanEvalRawRowsSnapshot(
+        header=HumanEvalRawRowsSnapshotHeader(
+            schema_version=1,
+            dataset_id="local/fixture",
+            hf_revision=DEFAULT_HUMAN_EVAL_HF_REVISION,
+            overrides_digest=human_eval_overrides_digest(),
+        ),
+        rows=[HumanEvalRawRow.model_validate(row) for row in _fixture_rows()],
+    ).model_dump_json().encode("utf-8")
+    return snapshot_from_bytes(
+        payload,
+        dataset_name="local/fixture",
+        dataset_split="test",
+    )
+
+
 def test_direct_config_generates_validated_specs(tmp_path: Path) -> None:
     config = load_experiment_spec_config(FIXTURES_DIR / "direct_minimal.json")
-    specs = tuple(iter_experiment_specs(config, rows=_fixture_rows()))
+    specs = tuple(
+        iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
+    )
 
     assert len(specs) == 8
     assert all(
@@ -73,7 +106,12 @@ def test_direct_config_generates_validated_specs(tmp_path: Path) -> None:
 
 def test_encdec_config_generates_validated_specs() -> None:
     config = load_experiment_spec_config(FIXTURES_DIR / "encdec_minimal.json")
-    specs = tuple(iter_experiment_specs(config, rows=_fixture_rows()))
+    specs = tuple(
+        iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
+    )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -86,15 +124,20 @@ def test_encdec_config_generates_validated_specs() -> None:
 
 def test_iter_experiment_specs_is_deterministic() -> None:
     config = load_experiment_spec_config(FIXTURES_DIR / "direct_minimal.json")
-    rows = _fixture_rows()
 
     first = tuple(
         spec.prediction_id
-        for spec in iter_experiment_specs(config, rows=rows)
+        for spec in iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
     )
     second = tuple(
         spec.prediction_id
-        for spec in iter_experiment_specs(config, rows=rows)
+        for spec in iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
     )
 
     assert first == second
@@ -114,7 +157,12 @@ def test_task_snapshot_from_humaneval_matches_v0_inputs() -> None:
 
 def test_generated_jsonl_indexes_for_submit(tmp_path: Path) -> None:
     config = load_experiment_spec_config(FIXTURES_DIR / "direct_minimal.json")
-    specs = tuple(iter_experiment_specs(config, rows=_fixture_rows()))
+    specs = tuple(
+        iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
+    )
     specs_file = tmp_path / "specs.jsonl"
     spec_builder.write_prediction_specs_jsonl(specs, specs_file)
 
@@ -173,13 +221,15 @@ def test_sample_tasks_for_config_uses_injected_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = load_experiment_spec_config(FIXTURES_DIR / "encdec_minimal.json")
-    rows = _fixture_rows()
 
     def fail_load(**kwargs: object) -> object:
         raise AssertionError("load_humaneval_snapshot should not be called")
 
     monkeypatch.setattr(spec_builder, "load_humaneval_snapshot", fail_load)
-    sampled = spec_builder.sample_tasks_for_config(config, rows=rows)
+    sampled = spec_builder.sample_tasks_for_config(
+        config,
+        snapshot=_fixture_snapshot(),
+    )
 
     assert len(sampled) == 1
     assert sampled[0].task.task_id == "HumanEval/1"
@@ -203,7 +253,12 @@ def test_humaneval_encdec_config_builds_target_spec() -> None:
         FIXTURES_DIR / "encdec_humaneval_smoke.json"
     )
     rows = _fixture_rows()
-    specs = tuple(iter_experiment_specs(config, rows=rows))
+    specs = tuple(
+        iter_experiment_specs(
+            config,
+            snapshot=_fixture_snapshot(),
+        )
+    )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -367,13 +422,12 @@ def test_expand_composable_experiment_produces_one_config_per_model(
 def test_expand_composable_smoke_cardinality(tmp_path: Path) -> None:
     configs_root = tmp_path / "configs"
     experiment_path = _write_composable_config_tree(configs_root)
-    rows = _fixture_rows()
 
     specs = tuple(
         iter_experiment_specs_from_file(
             experiment_path,
             configs_root=configs_root,
-            rows=rows,
+            snapshot=_fixture_snapshot(),
         )
     )
 
@@ -385,13 +439,12 @@ def test_expand_composable_smoke_cardinality(tmp_path: Path) -> None:
 def test_same_experiment_name_across_models(tmp_path: Path) -> None:
     configs_root = tmp_path / "configs"
     experiment_path = _write_composable_config_tree(configs_root)
-    rows = _fixture_rows()
 
     specs = tuple(
         iter_experiment_specs_from_file(
             experiment_path,
             configs_root=configs_root,
-            rows=rows,
+            snapshot=_fixture_snapshot(),
         )
     )
     models = {spec.provider_axis.model for spec in specs}

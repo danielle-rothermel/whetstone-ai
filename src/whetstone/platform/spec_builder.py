@@ -34,7 +34,10 @@ from pydantic import (
 )
 
 from whetstone.node_ops import LLM_CALL_OP
-from whetstone.platform.dataset_snapshot import load_humaneval_snapshot
+from whetstone.platform.dataset_snapshot import (
+    HumanEvalSnapshot,
+    load_humaneval_snapshot,
+)
 from whetstone.records import (
     DatasetSnapshotIdentityPayload,
     DimensionsPayload,
@@ -576,18 +579,19 @@ def providers_for_config(
 def sample_tasks_for_config(
     config: ExperimentSpecConfig,
     *,
-    rows: Sequence[dict[str, Any]] | None = None,
+    snapshot: HumanEvalSnapshot | None = None,
 ) -> tuple[SampledHumanEvalTask, ...]:
-    if rows is None:
+    if snapshot is None:
         snapshot = load_humaneval_snapshot(
             dataset_name=config.dataset.name,
             dataset_split=config.dataset.split,
             snapshot_path=config.dataset.snapshot_path,
         )
-        rows = snapshot.rows
+    else:
+        _validate_injected_snapshot(config, snapshot)
     return tuple(
         sample_human_eval_tasks_from_rows(
-            rows,
+            snapshot.rows,
             seed=config.dataset.sample_seed,
             sample_count=config.dataset.sample_count,
         )
@@ -597,17 +601,17 @@ def sample_tasks_for_config(
 def iter_experiment_specs(
     config: ExperimentSpecConfig,
     *,
-    rows: Sequence[dict[str, Any]] | None = None,
+    snapshot: HumanEvalSnapshot | None = None,
 ) -> Iterator[PredictionSpecRecord]:
-    snapshot_identity = None
-    if rows is None:
+    if snapshot is None:
         snapshot = load_humaneval_snapshot(
             dataset_name=config.dataset.name,
             dataset_split=config.dataset.split,
             snapshot_path=config.dataset.snapshot_path,
         )
-        rows = snapshot.rows
-        snapshot_identity = snapshot.identity
+    else:
+        _validate_injected_snapshot(config, snapshot)
+    snapshot_identity = snapshot.identity
     humaneval_cfg = config.humaneval_encdec or HumanevalEncDecConfig()
     graph = graph_for_layout(
         config.graph_layout,
@@ -617,7 +621,10 @@ def iter_experiment_specs(
     layout = config.graph_layout.value
     providers = providers_for_config(config)
     provider_axis = providers[0]
-    sampled_tasks = sample_tasks_for_config(config, rows=rows)
+    sampled_tasks = sample_tasks_for_config(
+        config,
+        snapshot=snapshot,
+    )
     for sampled in sampled_tasks:
         for repetition_seed in config.repetition_seeds:
             for axis_values in config.dimensions_axes:
@@ -732,10 +739,24 @@ def iter_experiment_specs_from_file(
     path: Path,
     *,
     configs_root: Path = DEFAULT_CONFIGS_ROOT,
-    rows: Sequence[dict[str, Any]] | None = None,
+    snapshot: HumanEvalSnapshot | None = None,
 ) -> Iterator[PredictionSpecRecord]:
     for config in load_experiment_configs(path, configs_root=configs_root):
-        yield from iter_experiment_specs(config, rows=rows)
+        yield from iter_experiment_specs(
+            config,
+            snapshot=snapshot,
+        )
+
+
+def _validate_injected_snapshot(
+    config: ExperimentSpecConfig,
+    snapshot: HumanEvalSnapshot,
+) -> None:
+    snapshot.validate_content_coupling()
+    if snapshot.identity.header.dataset_id != config.dataset.name:
+        raise ValueError(
+            "injected snapshot must match the configured dataset"
+        )
 
 
 def write_prediction_specs_jsonl(

@@ -75,6 +75,7 @@ from whetstone.platform.scoring_workflow_state import ScoringWorkflowPresence
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
+    DatasetSnapshotIdentityPayload,
     DimensionsPayload,
     FailureMetadataPayload,
     GenerationRunRecord,
@@ -247,6 +248,11 @@ def _spec(layout: str = "direct") -> PredictionSpecRecord:
         task=TaskSnapshotPayload(
             task_id="HumanEval/fixture",
             inputs=TaskInputsPayload(values={"prompt": "write add"}),
+            metadata={
+                "dataset_snapshot": dataset_snapshot_identity().model_dump(
+                    mode="json"
+                )
+            },
         ),
         provider_configs=(provider,),
         provider_axis=provider,
@@ -1240,7 +1246,7 @@ def test_score_submission_rejects_partial_without_output() -> None:
         )
 
 
-def test_load_humaneval_task_step_uses_cached_task_map(
+def test_load_humaneval_scoring_input_step_couples_task_and_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, Any]] = []
@@ -1251,9 +1257,20 @@ def test_load_humaneval_task_step_uses_cached_task_map(
         dataset_name: str,
         dataset_split: str,
         snapshot_path: str,
+        expected_identity: DatasetSnapshotIdentityPayload,
     ) -> SimpleNamespace:
-        calls.append(("load", (dataset_name, dataset_split, snapshot_path)))
-        return SimpleNamespace(rows=rows)
+        calls.append(
+            (
+                "load",
+                (
+                    dataset_name,
+                    dataset_split,
+                    snapshot_path,
+                    expected_identity,
+                ),
+            )
+        )
+        return SimpleNamespace(rows=rows, identity=expected_identity)
 
     def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
         calls.append(("parse", payload))
@@ -1269,33 +1286,34 @@ def test_load_humaneval_task_step_uses_cached_task_map(
         "parse_human_eval_dataset",
         parse_rows,
     )
-    cached_loader = cast(Any, scoring_workflow.load_humaneval_task_map)
-    cached_loader.cache_clear()
-    try:
-        load_step = cast(Any, scoring_workflow.load_humaneval_task_step)
-        first = load_step.__wrapped__(
-            "dataset",
-            "split",
-            "snapshot.json",
-            "HumanEval/fixture",
-        )
-        second = load_step.__wrapped__(
-            "dataset",
-            "split",
-            "snapshot.json",
-            "HumanEval/fixture",
-        )
-    finally:
-        cached_loader.cache_clear()
+    registered = dataset_snapshot_identity()
+    load_step = cast(
+        Any,
+        scoring_workflow.load_humaneval_scoring_input_step,
+    )
+    result = load_step.__wrapped__(
+        "dataset",
+        "split",
+        "snapshot.json",
+        "HumanEval/fixture",
+        registered.model_dump(mode="json"),
+    )
 
-    assert first == second
+    scoring_input = scoring_workflow.HumanEvalScoringInput.model_validate(
+        result
+    )
+    assert scoring_input.task == _task()
+    assert scoring_input.dataset_snapshot == registered
     assert calls == [
-        ("load", ("dataset", "split", "snapshot.json")),
+        (
+            "load",
+            ("dataset", "split", "snapshot.json", registered),
+        ),
         ("parse", rows),
     ]
 
 
-def test_load_humaneval_task_step_raises_for_missing_task(
+def test_load_humaneval_scoring_input_step_raises_for_missing_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def load_snapshot(
@@ -1303,8 +1321,12 @@ def test_load_humaneval_task_step_raises_for_missing_task(
         dataset_name: str,
         dataset_split: str,
         snapshot_path: str,
+        expected_identity: DatasetSnapshotIdentityPayload,
     ) -> SimpleNamespace:
-        return SimpleNamespace(rows=[{"task_id": "HumanEval/fixture"}])
+        return SimpleNamespace(
+            rows=[{"task_id": "HumanEval/fixture"}],
+            identity=expected_identity,
+        )
 
     def parse_rows(payload: list[dict[str, str]]) -> tuple[HumanEvalTask, ...]:
         return (_task(),)
@@ -1319,22 +1341,21 @@ def test_load_humaneval_task_step_raises_for_missing_task(
         "parse_human_eval_dataset",
         parse_rows,
     )
-    cached_loader = cast(Any, scoring_workflow.load_humaneval_task_map)
-    cached_loader.cache_clear()
-    try:
-        load_step = cast(Any, scoring_workflow.load_humaneval_task_step)
-        with pytest.raises(
-            ValueError,
-            match="HumanEval task not found: HumanEval/missing",
-        ):
-            load_step.__wrapped__(
-                "dataset",
-                "split",
-                "snapshot.json",
-                "HumanEval/missing",
-            )
-    finally:
-        cached_loader.cache_clear()
+    load_step = cast(
+        Any,
+        scoring_workflow.load_humaneval_scoring_input_step,
+    )
+    with pytest.raises(
+        ValueError,
+        match="HumanEval task not found: HumanEval/missing",
+    ):
+        load_step.__wrapped__(
+            "dataset",
+            "split",
+            "snapshot.json",
+            "HumanEval/missing",
+            dataset_snapshot_identity().model_dump(mode="json"),
+        )
 
 
 def test_scoring_workflow_uses_dbos_step_boundaries(
@@ -1355,19 +1376,29 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
             "node_attempts": [],
         }
 
-    def load_task(
+    def load_scoring_input(
         dataset_name: str,
         dataset_split: str,
         dataset_snapshot_path: str,
         task_id: str,
+        registered_snapshot_payload: dict[str, Any],
     ) -> dict[str, Any]:
         calls.append(
             (
                 "task",
-                (dataset_name, dataset_split, dataset_snapshot_path, task_id),
+                (
+                    dataset_name,
+                    dataset_split,
+                    dataset_snapshot_path,
+                    task_id,
+                    registered_snapshot_payload,
+                ),
             )
         )
-        return _task().model_dump(mode="json")
+        return scoring_workflow.HumanEvalScoringInput(
+            task=_task(),
+            dataset_snapshot=dataset_snapshot_identity(),
+        ).model_dump(mode="json")
 
     def started(score_attempt_id: str) -> str:
         calls.append(("started", score_attempt_id))
@@ -1420,8 +1451,8 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
     )
     monkeypatch.setattr(
         scoring_workflow,
-        "load_humaneval_task_step",
-        load_task,
+        "load_humaneval_scoring_input_step",
+        load_scoring_input,
     )
     monkeypatch.setattr(
         scoring_workflow,
@@ -1429,11 +1460,6 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
         started,
     )
     monkeypatch.setattr(scoring_workflow, "score_submission_step", score_step)
-    monkeypatch.setattr(
-        scoring_workflow,
-        "read_snapshot_identity",
-        lambda path: dataset_snapshot_identity(),
-    )
     monkeypatch.setattr(
         scoring_workflow,
         "persist_score_result_step",
@@ -1468,6 +1494,7 @@ def test_scoring_workflow_uses_dbos_step_boundaries(
                 DEFAULT_SCORE_DATASET_SPLIT,
                 "snapshot.json",
                 spec.task_id,
+                dataset_snapshot_identity().model_dump(mode="json"),
             ),
         ),
         ("started", expected_score_id),

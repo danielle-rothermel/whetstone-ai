@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from functools import cache
 from typing import Any
 
 from dbos import DBOS, SetWorkflowID
@@ -15,12 +14,11 @@ from dr_code.humaneval import (
     resolve_humaneval_scoring_profile,
 )
 from dr_platform import WORKFLOW_START_RACE_ERRORS
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from sqlalchemy import create_engine
 
 from whetstone.platform.dataset_snapshot import (
     load_humaneval_snapshot,
-    read_snapshot_identity,
 )
 from whetstone.platform.persistence import (
     ScoreAttemptInsertResult,
@@ -53,7 +51,9 @@ PLATFORM_SCORING_WORKFLOW_NAME = (
     "dr_dspy_platform_humaneval_submission_scoring_v1"
 )
 LOAD_SCORING_TARGET_STEP_NAME = "dr_dspy_platform_load_scoring_target_v1"
-LOAD_HUMANEVAL_TASK_STEP_NAME = "dr_dspy_platform_load_humaneval_task_v1"
+LOAD_HUMANEVAL_SCORING_INPUT_STEP_NAME = (
+    "dr_dspy_platform_load_humaneval_scoring_input_v2"
+)
 SCORING_STARTED_AT_STEP_NAME = "dr_dspy_platform_scoring_started_at_v1"
 SCORE_SUBMISSION_STEP_NAME = "dr_dspy_platform_score_submission_v1"
 PERSIST_SCORE_RESULT_STEP_NAME = "dr_dspy_platform_persist_score_result_v1"
@@ -65,6 +65,17 @@ class ScoreSubmissionWorkflowResult(BaseModel):
 
     score_attempt_id: str
     insert_status: ScoreAttemptInsertStatus
+
+
+class HumanEvalScoringInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task: HumanEvalTask
+    dataset_snapshot: DatasetSnapshotIdentityPayload
+
+    @field_serializer("task")
+    def serialize_task(self, task: HumanEvalTask) -> dict[str, Any]:
+        return humaneval_task_payload(task)
 
 
 class ScheduledScoreSubmissionWorkflow(BaseModel):
@@ -100,17 +111,20 @@ def run_score_submission_workflow(
         NodeAttemptRecord.model_validate(payload)
         for payload in target["node_attempts"]
     )
-    task = humaneval_task_from_payload(
-        load_humaneval_task_step(
+    registered_snapshot = registered_dataset_snapshot_identity(spec)
+    scoring_input = HumanEvalScoringInput.model_validate(
+        load_humaneval_scoring_input_step(
             dataset_name,
             dataset_split,
             resolved_snapshot_path,
             spec.task_id,
+            registered_snapshot.model_dump(mode="json"),
         )
     )
-    dataset_snapshot_payload = read_snapshot_identity(
-        resolved_snapshot_path
-    ).model_dump(mode="json")
+    task = scoring_input.task
+    dataset_snapshot_payload = scoring_input.dataset_snapshot.model_dump(
+        mode="json"
+    )
     scoring_profile = resolve_humaneval_scoring_profile(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
@@ -415,37 +429,44 @@ def load_scoring_target_step(
         engine.dispose()
 
 
-@DBOS.step(name=LOAD_HUMANEVAL_TASK_STEP_NAME)
-def load_humaneval_task_step(
+@DBOS.step(name=LOAD_HUMANEVAL_SCORING_INPUT_STEP_NAME)
+def load_humaneval_scoring_input_step(
     dataset_name: str,
     dataset_split: str,
     dataset_snapshot_path: str,
     task_id: str,
+    registered_snapshot_payload: dict[str, Any],
 ) -> dict[str, Any]:
-    task = load_humaneval_task_map(
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-        dataset_snapshot_path=dataset_snapshot_path,
-    ).get(task_id)
-    if task is None:
-        raise ValueError(f"HumanEval task not found: {task_id}")
-    return humaneval_task_payload(task)
-
-
-@cache
-def load_humaneval_task_map(
-    *,
-    dataset_name: str,
-    dataset_split: str,
-    dataset_snapshot_path: str,
-) -> dict[str, HumanEvalTask]:
+    registered_snapshot = DatasetSnapshotIdentityPayload.model_validate(
+        registered_snapshot_payload
+    )
     snapshot = load_humaneval_snapshot(
         dataset_name=dataset_name,
         dataset_split=dataset_split,
         snapshot_path=dataset_snapshot_path,
+        expected_identity=registered_snapshot,
     )
-    tasks = parse_human_eval_dataset(snapshot.rows)
-    return {task.task_id: task for task in tasks}
+    task = {
+        task.task_id: task
+        for task in parse_human_eval_dataset(snapshot.rows)
+    }.get(task_id)
+    if task is None:
+        raise ValueError(f"HumanEval task not found: {task_id}")
+    return HumanEvalScoringInput(
+        task=task,
+        dataset_snapshot=snapshot.identity,
+    ).model_dump(mode="json")
+
+
+def registered_dataset_snapshot_identity(
+    spec: PredictionSpecRecord,
+) -> DatasetSnapshotIdentityPayload:
+    payload = spec.task.metadata.get("dataset_snapshot")
+    if payload is None:
+        raise ValueError(
+            "prediction spec is missing dataset snapshot identity"
+        )
+    return DatasetSnapshotIdentityPayload.model_validate(payload)
 
 
 @DBOS.step(name=SCORING_STARTED_AT_STEP_NAME)
