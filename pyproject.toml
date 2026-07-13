@@ -24,6 +24,7 @@ dependencies = [
     "pygments>=2.20.0",
     "pytest>=8.4.2",
     "python-dotenv>=1.1.0",
+    "pytz>=2025.2",
     "rich>=13.9.4",
     "ruff>=0.15.10",
     "sqlalchemy>=2.0.51",
@@ -34,6 +35,7 @@ dependencies = [
 
 [project.scripts]
 whetstone-publish = "whetstone.platform.publication:main"
+whetstone-live-sweep = "whetstone.platform.live_sweep:main"
 
 [dependency-groups]
 dev = [
@@ -45,7 +47,7 @@ dev = [
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "c08c6dc" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "b9665b89fbf1cea14cca708cab5a91a706981c15" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", branch = "main" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 

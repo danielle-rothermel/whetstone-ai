@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
+
 from whetstone.platform.submission import (
     ScoringTargetSpec,
     prepare_scoring_manifest,
@@ -58,3 +61,24 @@ def test_scoring_manifest_freezes_ordered_selection_axes() -> None:
     assert digest
     assert manifest.workflow_role == "scoring"
     assert manifest.manifest_digest
+
+
+def test_scoring_workflow_arguments_carry_every_recipe_axis() -> None:
+    target = _target("run-1")
+    registered_item = SimpleNamespace(spec=target.spec, item_id="item-id")
+
+    arguments = scoring_target().args_for(cast("Any", registered_item), 2)
+
+    assert arguments[:8] == (
+        "run-1",
+        2,
+        "humaneval",
+        "1",
+        "python",
+        "1",
+        "evalplus/humanevalplus",
+        "test",
+    )
+    assert arguments[8] == target.dataset_snapshot.model_dump(mode="json")
+    assert arguments[9]
+    assert arguments[10] == "item-id"

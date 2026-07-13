@@ -11,6 +11,7 @@ application_database_url="postgresql+psycopg:///$database_name"
 if [[ -n "${DATABASE_URL:-}" ]]; then
   lifecycle_args=("--maintenance-db=${DATABASE_URL/postgresql+psycopg:/postgresql:}")
   application_database_url="${DATABASE_URL%/*}/$database_name"
+  application_database_url="${application_database_url/postgresql:/postgresql+psycopg:}"
 fi
 cleanup() {
   dropdb "${lifecycle_args[@]}" --if-exists "$database_name" >/dev/null 2>&1 || true

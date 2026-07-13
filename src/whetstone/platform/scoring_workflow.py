@@ -6,15 +6,14 @@ from typing import Any
 
 from dbos import DBOS
 from dr_code.humaneval import (
-    HUMANEVAL_SCORING_PROFILE_ID,
-    HUMANEVAL_SCORING_PROFILE_VERSION,
     HumanEvalScoringProfile,
     HumanEvalTask,
     parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
+from dr_platform import PlatformSchema
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 
 from whetstone.platform.dataset_snapshot import (
     load_humaneval_snapshot,
@@ -31,8 +30,6 @@ from whetstone.platform.persistence import (
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.scoring import score_submission_run
 from whetstone.records import (
-    DEFAULT_SCORE_DATASET_NAME,
-    DEFAULT_SCORE_DATASET_SPLIT,
     DatasetSnapshotIdentityPayload,
     GenerationRunRecord,
     NodeAttemptRecord,
@@ -84,20 +81,37 @@ class ScheduledScoreSubmissionWorkflow(BaseModel):
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
 def run_score_submission_workflow(
     generation_run_id: str,
-    score_attempt_index: int = 0,
-    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
-    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
-    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-    execution_recipe_digest: str = "",
-    platform_item_id: str = "",
+    score_attempt_index: int,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    dataset_name: str,
+    dataset_split: str,
+    dataset_snapshot_payload: dict[str, Any],
+    execution_recipe_digest: str,
+    platform_item_id: str,
 ) -> dict[str, Any]:
     # DBOS persists this workflow's arguments.  Resolve connection state at
     # execution time so DSNs and credentials never enter replay payloads.
     resolved_snapshot_path = require_dataset_snapshot_path(
         os.environ.get("WHETSTONE_HUMANEVAL_SNAPSHOT_PATH")
     )
-    target = load_scoring_target_step(generation_run_id)
+    durable_snapshot = DatasetSnapshotIdentityPayload.model_validate(
+        dataset_snapshot_payload
+    )
+    target = load_scoring_target_step(
+        generation_run_id,
+        scoring_profile_id,
+        scoring_profile_version,
+        parser_profile_id,
+        parser_version,
+        dataset_name,
+        dataset_split,
+        durable_snapshot.model_dump(mode="json"),
+        execution_recipe_digest,
+        platform_item_id,
+    )
     spec = PredictionSpecRecord.model_validate(target["spec"])
     generation_run = GenerationRunRecord.model_validate(
         target["generation_run"]
@@ -106,14 +120,13 @@ def run_score_submission_workflow(
         NodeAttemptRecord.model_validate(payload)
         for payload in target["node_attempts"]
     )
-    registered_snapshot = registered_dataset_snapshot_identity(spec)
     scoring_input = HumanEvalScoringInput.model_validate(
         load_humaneval_scoring_input_step(
             dataset_name,
             dataset_split,
             resolved_snapshot_path,
             spec.task_id,
-            registered_snapshot.model_dump(mode="json"),
+            durable_snapshot.model_dump(mode="json"),
         )
     )
     task = scoring_input.task
@@ -124,6 +137,13 @@ def run_score_submission_workflow(
         scoring_profile_id=scoring_profile_id,
         scoring_profile_version=scoring_profile_version,
     )
+    if (
+        scoring_profile.parser_profile.profile_id != parser_profile_id
+        or scoring_profile.parser_profile.version != parser_version
+    ):
+        raise ValueError(
+            "durable parser axes do not match the canonical scoring profile"
+        )
     score_attempt_id = stable_score_attempt_id(
         generation_run_id=generation_run_id,
         scoring_profile_id=scoring_profile.profile_id,
@@ -165,6 +185,15 @@ def run_score_submission_workflow(
 @DBOS.step(name=LOAD_SCORING_TARGET_STEP_NAME)
 def load_scoring_target_step(
     generation_run_id: str,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    dataset_name: str,
+    dataset_split: str,
+    dataset_snapshot_payload: dict[str, Any],
+    execution_recipe_digest: str,
+    platform_item_id: str,
 ) -> dict[str, Any]:
     engine = create_engine(resolve_application_database_url())
     try:
@@ -176,6 +205,35 @@ def load_scoring_target_step(
             spec = load_prediction_spec(
                 connection,
                 prediction_id=generation_run.prediction_id,
+            )
+            platform = PlatformSchema(prefix="whetstone")
+            registered_item = (
+                connection.execute(
+                    select(
+                        platform.items.c.spec,
+                        platform.items.c.execution_recipe_digest,
+                    ).where(platform.items.c.item_id == platform_item_id)
+                )
+                .mappings()
+                .one()
+            )
+            validate_reloaded_scoring_target(
+                spec=spec,
+                generation_run=generation_run,
+                scoring_profile_id=scoring_profile_id,
+                scoring_profile_version=scoring_profile_version,
+                parser_profile_id=parser_profile_id,
+                parser_version=parser_version,
+                dataset_name=dataset_name,
+                dataset_split=dataset_split,
+                dataset_snapshot=DatasetSnapshotIdentityPayload.model_validate(
+                    dataset_snapshot_payload
+                ),
+                registered_item_spec=dict(registered_item["spec"]),
+                registered_recipe_digest=str(
+                    registered_item["execution_recipe_digest"]
+                ),
+                execution_recipe_digest=execution_recipe_digest,
             )
             node_attempts = load_node_attempts_for_generation_run(
                 connection,
@@ -190,6 +248,70 @@ def load_scoring_target_step(
         }
     finally:
         engine.dispose()
+
+
+def validate_reloaded_scoring_target(
+    *,
+    spec: PredictionSpecRecord,
+    generation_run: GenerationRunRecord,
+    scoring_profile_id: str,
+    scoring_profile_version: str,
+    parser_profile_id: str,
+    parser_version: str,
+    dataset_name: str,
+    dataset_split: str,
+    dataset_snapshot: DatasetSnapshotIdentityPayload,
+    registered_item_spec: dict[str, Any],
+    registered_recipe_digest: str,
+    execution_recipe_digest: str,
+) -> None:
+    if generation_run.prediction_id != spec.prediction_id:
+        raise ValueError(
+            "reloaded Generation Run does not belong to its Prediction"
+        )
+    if registered_dataset_snapshot_identity(spec) != dataset_snapshot:
+        raise ValueError(
+            "durable dataset snapshot does not match the registered Prediction"
+        )
+    expected_item_spec = {
+        "prediction_id": spec.prediction_id,
+        "generation_run_id": generation_run.generation_run_id,
+        "scoring_profile_id": scoring_profile_id,
+        "scoring_profile_version": scoring_profile_version,
+        "parser_profile_id": parser_profile_id,
+        "parser_version": parser_version,
+        "dataset_name": dataset_name,
+        "dataset_split": dataset_split,
+        "dataset_snapshot": dataset_snapshot.model_dump(mode="json"),
+    }
+    if registered_item_spec != expected_item_spec:
+        raise ValueError(
+            "durable scoring arguments do not match the registered Item spec"
+        )
+    if registered_recipe_digest != execution_recipe_digest:
+        raise ValueError(
+            "durable scoring recipe digest does not match the registered Item"
+        )
+    if (
+        dataset_snapshot.header.dataset_id != dataset_name
+        or not dataset_split
+    ):
+        raise ValueError(
+            "durable dataset axes do not match the registered snapshot"
+        )
+    profile = resolve_humaneval_scoring_profile(
+        scoring_profile_id=scoring_profile_id,
+        scoring_profile_version=scoring_profile_version,
+    )
+    if (
+        profile.profile_id != scoring_profile_id
+        or profile.version != scoring_profile_version
+        or profile.parser_profile.profile_id != parser_profile_id
+        or profile.parser_profile.version != parser_version
+    ):
+        raise ValueError(
+            "durable profile/parser axes do not match the canonical profile"
+        )
 
 
 @DBOS.step(name=LOAD_HUMANEVAL_SCORING_INPUT_STEP_NAME)

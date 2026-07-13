@@ -83,6 +83,13 @@ class GraphLayout(StrEnum):
     ENCDEC = "encdec"
 
 
+class BudgetMode(StrEnum):
+    """HumanEval treatment identity; direct never enters the encoder path."""
+
+    DIRECT = "direct"
+    COMPRESSED = "compressed"
+
+
 class DatasetSpecConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +160,22 @@ def _validate_humaneval_experiment_axes(
             raise ValueError(
                 "humaneval dimensions_axes require compression_target"
             )
+        target = axis["compression_target"]
+        mode = axis.get("budget_mode")
+        if target is None:
+            if mode not in (None, BudgetMode.DIRECT.value):
+                raise ValueError(
+                    "direct budget axis requires budget_mode direct"
+                )
+            continue
+        if mode not in (None, BudgetMode.COMPRESSED.value):
+            raise ValueError(
+                "numeric budget axis requires budget_mode compressed"
+            )
+        if isinstance(target, bool) or not isinstance(target, (int, float)):
+            raise ValueError("compression_target must be numeric or null")
+        if not 0 < float(target) <= 1:
+            raise ValueError("compression_target must be in (0, 1]")
 
 
 class ModelConfigFragment(BaseModel):
@@ -331,6 +354,15 @@ def humaneval_decoder_node() -> NodeSpec:
     )
 
 
+def humaneval_direct_node() -> NodeSpec:
+    """Legacy baseline treatment: send the original task prompt directly."""
+    return direct_node(
+        "direct",
+        output_field="code",
+        provider_config_id="decoder",
+    )
+
+
 def direct_graph() -> GraphSpec:
     return GraphSpec(
         nodes=(direct_node("direct", output_field="output"),),
@@ -355,6 +387,13 @@ def humaneval_encdec_graph(
             humaneval_encoder_node(humaneval_encdec=humaneval_encdec),
         ),
         terminal_node_id="decoder",
+    )
+
+
+def humaneval_direct_graph() -> GraphSpec:
+    return GraphSpec(
+        nodes=(humaneval_direct_node(),),
+        terminal_node_id="direct",
     )
 
 
@@ -602,7 +641,6 @@ def iter_experiment_specs(
     )
     layout = config.graph_layout.value
     providers = providers_for_config(config)
-    provider_axis = providers[0]
     sampled_tasks = sample_tasks_for_config(
         config,
         snapshot=snapshot,
@@ -610,24 +648,41 @@ def iter_experiment_specs(
     for sampled in sampled_tasks:
         for repetition_seed in config.repetition_seeds:
             for axis_values in config.dimensions_axes:
-                dimensions = DimensionsPayload(values=dict(axis_values))
+                values = dict(axis_values)
                 if config.encdec_shape == "humaneval":
-                    compression_target = float(
-                        axis_values["compression_target"]
-                    )
-                    task_snapshot = humaneval_encdec_task_snapshot(
-                        sampled.task,
-                        compression_target=compression_target,
-                        humaneval_encdec=humaneval_cfg,
-                        snapshot_identity=snapshot_identity,
-                    )
+                    target = axis_values["compression_target"]
+                    if target is None:
+                        values["budget_mode"] = BudgetMode.DIRECT.value
+                        task_snapshot = task_snapshot_from_humaneval(
+                            sampled.task,
+                            snapshot_identity=snapshot_identity,
+                        )
+                        spec_graph = humaneval_direct_graph()
+                        provider_axis = next(
+                            provider
+                            for provider in providers
+                            if provider.config_id == "decoder"
+                        )
+                    else:
+                        values["budget_mode"] = BudgetMode.COMPRESSED.value
+                        task_snapshot = humaneval_encdec_task_snapshot(
+                            sampled.task,
+                            compression_target=float(target),
+                            humaneval_encdec=humaneval_cfg,
+                            snapshot_identity=snapshot_identity,
+                        )
+                        spec_graph = graph
+                        provider_axis = providers[0]
                 else:
                     task_snapshot = task_snapshot_from_humaneval(
                         sampled.task,
                         snapshot_identity=snapshot_identity,
                     )
+                    spec_graph = graph
+                    provider_axis = providers[0]
+                dimensions = DimensionsPayload(values=values)
                 yield prediction_spec(
-                    graph,
+                    spec_graph,
                     providers=providers,
                     provider_axis=provider_axis,
                     layout=layout,
