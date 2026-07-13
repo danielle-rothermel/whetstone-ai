@@ -11,6 +11,9 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import NullPool
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_POOLED_NEON_HOST = re.compile(
+    r"^[a-z0-9.-]*-pooler\.[a-z0-9.-]+\.neon\.tech$", re.IGNORECASE
+)
 
 
 class DatabaseBoundary(StrEnum):
@@ -38,18 +41,41 @@ def render_connection_url(url: str | URL) -> str:
     return normalize_url(url).render_as_string(hide_password=False)
 
 
-def bind_schema(url: str | URL, schema: str) -> URL:
-    """Bind PostgreSQL search_path while retaining all existing URL options."""
+def require_direct_endpoint(url: str | URL) -> URL:
+    """Reject pooled Neon hosts, which drop startup search_path options."""
+    normalized = normalize_url(url)
+    host = normalized.host or ""
+    if _POOLED_NEON_HOST.fullmatch(host) is not None:
+        raise ValueError(
+            "pooled Neon endpoint (*-pooler.*.neon.tech) rejects startup "
+            "search_path options and is unsafe for Whetstone boundaries; "
+            "supply the explicitly direct (unpooled) Neon URL. Hostnames "
+            "are never derived or rewritten."
+        )
+    return normalized
+
+
+def _bind_search_path(url: str | URL, schema: str, search_path: str) -> URL:
     if _IDENTIFIER.fullmatch(schema) is None:
         raise ValueError("schema must be a SQL identifier")
-    normalized = normalize_url(url)
+    normalized = require_direct_endpoint(url)
     existing_options = normalized.query.get("options")
-    options = f"-c search_path={schema},public"
+    options = f"-c search_path={search_path}"
     if isinstance(existing_options, str) and existing_options:
         options = f"{existing_options} {options}"
     return normalized.update_query_dict(
         {"options": options}
     )
+
+
+def bind_schema(url: str | URL, schema: str) -> URL:
+    """Bind a runtime search_path keeping the public extension fallback."""
+    return _bind_search_path(url, schema, f"{schema},public")
+
+
+def bind_schema_strict(url: str | URL, schema: str) -> URL:
+    """Bind a migration/admin search_path to exactly the run schema."""
+    return _bind_search_path(url, schema, schema)
 
 
 def create_whetstone_engine(
@@ -61,6 +87,8 @@ def create_whetstone_engine(
     """Create a PostgreSQL engine with boundary-specific policy applied."""
     normalized = normalize_url(url)
     backend = normalized.get_backend_name()
+    if backend == "postgresql":
+        require_direct_endpoint(normalized)
     if backend != "postgresql" and not (
         boundary is DatabaseBoundary.MOTHERDUCK_POSTGRES
         and backend == "duckdb"

@@ -24,7 +24,10 @@ from whetstone.platform.connections import (
     create_whetstone_engine,
     render_connection_url,
 )
-from whetstone.platform.platform_db import ensure_whetstone_application_schema
+from whetstone.platform.platform_db import (
+    assert_run_schema_owns_objects,
+    ensure_whetstone_application_schema,
+)
 from whetstone.platform.runtime import shutdown_dbos_runtime
 
 _RUN_ID = re.compile(r"^[a-z][a-z0-9_]{2,23}$")
@@ -488,10 +491,8 @@ def prepare_stores(descriptor_path: Path, run_id: str) -> StoreDescriptor:
                 descriptor_sha256=journal.descriptor_sha256,
             )
         ensure_whetstone_application_schema(
-            _bound_url(
-                _require_environment(descriptor.source.environment),
-                descriptor.source.schema_name,
-            )
+            _require_environment(descriptor.source.environment),
+            expected_schema=descriptor.source.schema_name,
         )
         _create_dbos_marker(
             dbos_path,
@@ -536,6 +537,7 @@ def validate_store_state(descriptor_path: Path) -> StoreDescriptor:
             run_id=descriptor.run_id,
             descriptor_sha256=journal.descriptor_sha256,
         )
+    _verify_source_run_schema_objects(descriptor)
     dbos_path = descriptor_path.parent / descriptor.dbos_path
     if not dbos_path.is_file() or dbos_path.stat().st_size == 0:
         raise ValueError("missing run-owned DBOS store")
@@ -545,6 +547,24 @@ def validate_store_state(descriptor_path: Path) -> StoreDescriptor:
         descriptor_sha256=journal.descriptor_sha256,
     )
     return descriptor
+
+
+def _verify_source_run_schema_objects(descriptor: StoreDescriptor) -> None:
+    """Prove migrated source objects resolve from the run schema."""
+    bound = bind_schema(
+        _require_environment(descriptor.source.environment),
+        descriptor.source.schema_name,
+    )
+    engine = create_whetstone_engine(
+        bound, boundary=DatabaseBoundary.SOURCE_SCHEMA
+    )
+    try:
+        with engine.connect() as connection:
+            assert_run_schema_owns_objects(
+                connection, descriptor.source.schema_name
+            )
+    finally:
+        engine.dispose()
 
 
 @STORES.command("prepare")
@@ -599,7 +619,15 @@ def stores_run(
             run_id=facts.run_id,
             descriptor_sha256=journal.descriptor_sha256,
         )
-        environment[name] = _bound_url(url, boundary.schema_name)
+        if name == "MOTHERDUCK_DATABASE_URL":
+            # MotherDuck's Postgres-wire endpoint rejects the startup
+            # search_path option outright, so the analysis boundary uses
+            # the explicit-schema strategy: consumers receive the base URL
+            # and must qualify or SET search_path to this schema.
+            environment[name] = url
+            environment["WHETSTONE_ANALYSIS_SCHEMA"] = boundary.schema_name
+        else:
+            environment[name] = _bound_url(url, boundary.schema_name)
     dbos_path = descriptor.parent / facts.dbos_path
     _require_dbos_owner(
         dbos_path,
