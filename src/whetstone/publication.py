@@ -274,7 +274,12 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + f"""
-              SELECT p.prediction_id, p.experiment_name AS experiment_id, p.prediction_id AS candidate_id,
+              SELECT p.prediction_id, p.experiment_name AS experiment_id,
+                CASE
+                  WHEN p.dimensions->'values'->>'optimizer' = 'copro_minimal'
+                  THEN NULLIF(p.dimensions->'values'->>'candidate_id', '')
+                  ELSE p.prediction_id
+                END AS candidate_id,
                 p.task_id, p.repetition_seed AS sample_index,
                 COALESCE(e.config_metadata->>'experiment_kind', 'whetstone') AS experiment_kind,
                 'whetstone' AS source, p.model,
