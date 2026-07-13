@@ -1,7 +1,8 @@
 """Fail-closed operator commands for the immutable HumanEval live sweep.
 
-The ledger is deliberately local to an operator run: it contains identities and
-money facts, never prompts, provider headers, or credentials.  ``--execute``
+The ledger is deliberately local to an operator run: it contains identities,
+lifecycle facts, and observed provider costs, never prompts, provider headers,
+or credentials.  ``--execute``
 is the only path that can call Platform submission; provider work is performed
 later by the existing worker.
 """
@@ -57,7 +58,6 @@ from whetstone.records import (
 APP = typer.Typer(no_args_is_help=True)
 EXPECTED_CELLS = 5_904
 CANARY_CELLS = 12
-GENERATION_CEILING_USD = Decimal("4.62")
 MAX_RETRIES_PER_CELL = 2
 
 _PLATFORM_TERMINAL_FAILURES = frozenset(
@@ -476,12 +476,8 @@ def _adapter_facts(
             TypedFailureCode.PROVIDER_RESPONSE_PARSE,
         )
     metadata = failure_mapping.get("metadata")
-    if (
-        "ProviderFailureError" in type_names
-        or (
-            isinstance(metadata, Mapping)
-            and "provider_failure" in metadata
-        )
+    if "ProviderFailureError" in type_names or (
+        isinstance(metadata, Mapping) and "provider_failure" in metadata
     ):
         return (
             AdapterDisposition.PROVIDER_FAILURE,
@@ -612,10 +608,10 @@ def reconcile_ledger(
     return facts
 
 
-def require_known_actual_costs(
+def require_terminal_lifecycle(
     facts: list[CellReconciliation], *, cell_ids: set[str]
 ) -> None:
-    """Fail closed until every selected cell has observed provider cost."""
+    """Fail closed until every selected cell has a durable terminal state."""
     stable_statuses = {"succeeded", "typed_failure", "incomplete"}
     selected = {
         fact.cell_id: fact for fact in facts if fact.cell_id in cell_ids
@@ -624,13 +620,13 @@ def require_known_actual_costs(
     unknown = sorted(
         cell_id
         for cell_id, fact in selected.items()
-        if fact.actual_cost is None or fact.status not in stable_statuses
+        if fact.status not in stable_statuses
     )
     if missing or unknown:
         blocked = sorted(missing) + unknown
         preview = ", ".join(blocked[:5])
         raise RuntimeError(
-            "actual provider cost is not established for the bounded page; "
+            "terminal lifecycle is not established for the bounded page; "
             f"reconcile before dispatching more cells ({preview})"
         )
 
@@ -687,7 +683,7 @@ def _cell_operation_key(cell: Mapping[str, Any]) -> str:
 
 
 class SweepLedger:
-    """Run-scoped, WAL-backed journal with atomic ceiling checks."""
+    """Run-scoped, WAL-backed journal of durable submission lifecycle."""
 
     def __init__(self, path: Path, *, manifest_hash: str) -> None:
         if not path.is_absolute():
@@ -702,30 +698,84 @@ class SweepLedger:
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA synchronous=FULL")
         self.connection.execute("PRAGMA foreign_keys=ON")
-        self.connection.executescript(
+        self._create_tables()
+        self._migrate_legacy_cost_columns()
+        self._ensure_column("attempt_ids_json", "TEXT NOT NULL DEFAULT '[]'")
+        self._ensure_column("score_status", "TEXT")
+        self._ensure_column("diagnostics_json", "TEXT")
+
+    def _create_tables(self) -> None:
+        self.connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sweep_cells (
               manifest_hash TEXT NOT NULL, cell_id TEXT NOT NULL,
-              estimated_cost TEXT NOT NULL, reserved_cost TEXT,
               actual_cost TEXT, operation_key TEXT, prediction_id TEXT,
               platform_item_id TEXT, platform_attempt INTEGER,
               attempt_ids_json TEXT NOT NULL DEFAULT '[]',
               status TEXT NOT NULL, retry_count INTEGER NOT NULL DEFAULT 0,
               retry_of_attempt INTEGER, error_classification TEXT,
               provider_tokens_json TEXT, score_status TEXT,
+              diagnostics_json TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL, PRIMARY KEY (manifest_hash, cell_id)
-            );
+            )
+            """
+        )
+        self.connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS sweep_events (
               id INTEGER PRIMARY KEY, manifest_hash TEXT NOT NULL,
               cell_id TEXT NOT NULL, event TEXT NOT NULL,
               detail_json TEXT NOT NULL, created_at TEXT NOT NULL
-            );
+            )
             """
         )
-        self._ensure_column("attempt_ids_json", "TEXT NOT NULL DEFAULT '[]'")
-        self._ensure_column("score_status", "TEXT")
-        self._ensure_column("diagnostics_json", "TEXT")
+
+    def _migrate_legacy_cost_columns(self) -> None:
+        """Remove prediction-era columns while retaining durable cell facts."""
+        columns = {
+            str(row[1])
+            for row in self.connection.execute(
+                "PRAGMA table_info(sweep_cells)"
+            )
+        }
+        if not {"estimated_cost", "reserved_cost"} & columns:
+            return
+        retained = (
+            "manifest_hash",
+            "cell_id",
+            "actual_cost",
+            "operation_key",
+            "prediction_id",
+            "platform_item_id",
+            "platform_attempt",
+            "attempt_ids_json",
+            "status",
+            "retry_count",
+            "retry_of_attempt",
+            "error_classification",
+            "provider_tokens_json",
+            "score_status",
+            "diagnostics_json",
+            "created_at",
+            "updated_at",
+        )
+        copied = [name for name in retained if name in columns]
+        with self._transaction() as connection:
+            connection.execute(
+                "ALTER TABLE sweep_cells RENAME TO sweep_cells_legacy"
+            )
+            self._create_tables()
+            names = ",".join(copied)
+            connection.execute(
+                f"INSERT INTO sweep_cells({names}) "
+                f"SELECT {names} FROM sweep_cells_legacy"
+            )
+            connection.execute(
+                "UPDATE sweep_cells SET status='pending' "
+                "WHERE status='reserved'"
+            )
+            connection.execute("DROP TABLE sweep_cells_legacy")
 
     def _ensure_column(self, name: str, definition: str) -> None:
         columns = {
@@ -753,47 +803,13 @@ class SweepLedger:
         else:
             self.connection.execute("COMMIT")
 
-    def _totals(
-        self, connection: sqlite3.Connection
-    ) -> tuple[Decimal, Decimal]:
-        rows = connection.execute(
-            "SELECT actual_cost,reserved_cost FROM sweep_cells "
-            "WHERE manifest_hash=?",
-            (self.manifest_hash,),
-        ).fetchall()
-        return (
-            sum(
-                (
-                    _stored_money(row[0], field="stored actual cost")
-                    for row in rows
-                    if row[0] is not None
-                ),
-                Decimal(),
-            ),
-            sum(
-                (
-                    _stored_money(row[1], field="stored reserved cost")
-                    for row in rows
-                    if row[1] is not None
-                ),
-                Decimal(),
-            ),
-        )
-
-    def reserve(
-        self, cells: list[dict[str, Any]], estimates: Mapping[str, object]
+    def record_intent(
+        self, cells: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         selected: list[dict[str, Any]] = []
         with self._transaction() as connection:
-            actual, reserved = self._totals(connection)
             for cell in cells:
                 cell_id = str(cell["cell_id"])
-                estimate = estimates.get(cell_id)
-                if estimate is None:
-                    raise ValueError(
-                        f"unknown or invalid cost estimate for {cell_id}"
-                    )
-                estimate = _money(estimate, field=f"estimate for {cell_id}")
                 row = connection.execute(
                     "SELECT status FROM sweep_cells "
                     "WHERE manifest_hash=? AND cell_id=?",
@@ -806,22 +822,15 @@ class SweepLedger:
                     if row[0] == "submitting":
                         selected.append(cell)
                     continue
-                if actual + reserved + estimate > GENERATION_CEILING_USD:
-                    raise ValueError(
-                        "authorized generation ceiling would be exceeded"
-                    )
                 timestamp = _now()
                 connection.execute(
                     "INSERT INTO sweep_cells("
-                    "manifest_hash,cell_id,estimated_cost,reserved_cost,"
-                    "status,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?)",
+                    "manifest_hash,cell_id,status,created_at,updated_at) "
+                    "VALUES(?,?,?,?,?)",
                     (
                         self.manifest_hash,
                         cell_id,
-                        _decimal_text(estimate),
-                        _decimal_text(estimate),
-                        "reserved",
+                        "pending",
                         timestamp,
                         timestamp,
                     ),
@@ -830,9 +839,14 @@ class SweepLedger:
                     "INSERT INTO sweep_events("
                     "manifest_hash,cell_id,event,detail_json,created_at) "
                     "VALUES(?,?,?,?,?)",
-                    (self.manifest_hash, cell_id, "reserved", "{}", timestamp),
+                    (
+                        self.manifest_hash,
+                        cell_id,
+                        "intent_recorded",
+                        "{}",
+                        timestamp,
+                    ),
                 )
-                reserved += estimate
                 selected.append(cell)
         return selected
 
@@ -882,7 +896,7 @@ class SweepLedger:
                     "platform_attempt=0,"
                     "attempt_ids_json='[0]',updated_at=? "
                     "WHERE manifest_hash=? AND cell_id=? "
-                    "AND status IN ('reserved','submitting')",
+                    "AND status IN ('pending','submitting')",
                     (
                         operation_key,
                         prediction_id,
@@ -926,31 +940,15 @@ class SweepLedger:
             "WHERE manifest_hash=? GROUP BY status",
             (self.manifest_hash,),
         ).fetchall()
-        return {
+        by_status = {
             str(status): {
                 "count": count,
-                "reserved_usd": float(
-                    sum(
-                        (
-                            _stored_money(row[1], field="stored reserved cost")
-                            for row in self.connection.execute(
-                                "SELECT actual_cost,reserved_cost "
-                                "FROM sweep_cells "
-                                "WHERE manifest_hash=? AND status=?",
-                                (self.manifest_hash, status),
-                            ).fetchall()
-                            if row[1] is not None
-                        ),
-                        Decimal(),
-                    )
-                ),
                 "actual_usd": float(
                     sum(
                         (
                             _stored_money(row[0], field="stored actual cost")
                             for row in self.connection.execute(
-                                "SELECT actual_cost,reserved_cost "
-                                "FROM sweep_cells "
+                                "SELECT actual_cost FROM sweep_cells "
                                 "WHERE manifest_hash=? AND status=?",
                                 (self.manifest_hash, status),
                             ).fetchall()
@@ -959,17 +957,43 @@ class SweepLedger:
                         Decimal(),
                     )
                 ),
+                "unknown_cost_count": self.connection.execute(
+                    "SELECT COUNT(*) FROM sweep_cells "
+                    "WHERE manifest_hash=? AND status=? "
+                    "AND actual_cost IS NULL",
+                    (self.manifest_hash, status),
+                ).fetchone()[0],
             }
             for status, count in rows
-        } | {
+        }
+        observed_rows = self.connection.execute(
+            "SELECT actual_cost FROM sweep_cells WHERE manifest_hash=?",
+            (self.manifest_hash,),
+        ).fetchall()
+        return by_status | {
+            "observed_cost": {
+                "actual_usd": float(
+                    sum(
+                        (
+                            _stored_money(row[0], field="stored actual cost")
+                            for row in observed_rows
+                            if row[0] is not None
+                        ),
+                        Decimal(),
+                    )
+                ),
+                "unknown_cost_count": sum(
+                    1 for row in observed_rows if row[0] is None
+                ),
+            },
             "manifest_mismatch": {
                 "count": self.connection.execute(
                     "SELECT COUNT(*) FROM sweep_cells WHERE manifest_hash!=?",
                     (self.manifest_hash,),
                 ).fetchone()[0],
-                "reserved_usd": 0,
                 "actual_usd": 0,
-            }
+                "unknown_cost_count": 0,
+            },
         }
 
     def rows(self) -> list[sqlite3.Row]:
@@ -984,17 +1008,12 @@ class SweepLedger:
             for fact in facts:
                 connection.execute(
                     "UPDATE sweep_cells SET status=?,actual_cost=?,"
-                    "reserved_cost=CASE WHEN ? IS NULL THEN reserved_cost "
-                    "ELSE NULL END,"
                     "error_classification=?,provider_tokens_json=?,"
                     "score_status=?,diagnostics_json=?,"
                     "updated_at=? "
                     "WHERE manifest_hash=? AND cell_id=?",
                     (
                         fact.status,
-                        _decimal_text(fact.actual_cost)
-                        if fact.actual_cost is not None
-                        else None,
                         _decimal_text(fact.actual_cost)
                         if fact.actual_cost is not None
                         else None,
@@ -1014,29 +1033,15 @@ class SweepLedger:
         if (
             fact.platform_attempt is None
             or fact.retry_count >= MAX_RETRIES_PER_CELL
-            or fact.actual_cost is None
         ):
             return False
         with self._transaction() as connection:
-            row = connection.execute(
-                "SELECT estimated_cost FROM sweep_cells "
-                "WHERE manifest_hash=? AND cell_id=?",
-                (self.manifest_hash, fact.cell_id),
-            ).fetchone()
-            if row is None:
-                return False
-            estimate = _stored_money(row[0], field="stored estimate")
-            actual, reserved = self._totals(connection)
-            if actual + reserved + estimate > GENERATION_CEILING_USD:
-                return False
             result = connection.execute(
-                "UPDATE sweep_cells SET status='retrying',reserved_cost=?,"
-                "retry_of_attempt=?,"
+                "UPDATE sweep_cells SET status='retrying',retry_of_attempt=?,"
                 "updated_at=? WHERE manifest_hash=? AND cell_id=? "
                 "AND retry_count<? AND status IN "
                 "('typed_failure','incomplete','retrying')",
                 (
-                    _decimal_text(estimate),
                     fact.platform_attempt,
                     _now(),
                     self.manifest_hash,
@@ -1152,33 +1157,6 @@ def validate_campaign(
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     return metadata, cells, manifest_hash
-
-
-def _estimates(path: Path, cells: list[dict[str, Any]]) -> dict[str, Decimal]:
-    """Read a locked per-cell estimate artifact; aggregates are unsafe."""
-    payload = _load_json(path)
-    if payload.get("manifest_sha256") is None or not isinstance(
-        payload.get("cells"), dict
-    ):
-        raise typer.BadParameter(
-            "estimate artifact must contain manifest_sha256 and cells map"
-        )
-    try:
-        result = {
-            str(key): _money(value, field=f"estimate for {key}")
-            for key, value in payload["cells"].items()
-        }
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    if set(result) != {str(cell["cell_id"]) for cell in cells}:
-        raise typer.BadParameter(
-            "estimate artifact must price every immutable cell exactly once"
-        )
-    return result
-
-
-def _operation_key(metadata: dict[str, Any], suffix: str) -> str:
-    return f"{metadata['campaign']}-generation-{suffix}"
 
 
 def _campaign_snapshot(
@@ -1321,9 +1299,6 @@ def _emit(
                 "dry_run": not execute,
                 "dispatch": execute,
                 "cell_count": len(cells),
-                "generation_ceiling_usd": _decimal_text(
-                    GENERATION_CEILING_USD
-                ),
                 "manifest_sha256": manifest_hash,
                 "ledger": ledger.summary() if ledger else {},
             },
@@ -1337,8 +1312,6 @@ def _submit(
     metadata: dict[str, Any],
     cells: list[dict[str, Any]],
     ledger: SweepLedger,
-    *,
-    suffix: str,
 ) -> None:
     specs = _specs_for_cells(campaign_dir, metadata, cells)
     engine = create_engine(resolve_application_database_url())
@@ -1392,9 +1365,8 @@ def submit_canary(
     ],
     execute: Annotated[bool, typer.Option("--execute")] = False,
     ledger_path: Annotated[Path | None, typer.Option("--ledger")] = None,
-    estimates_path: Annotated[Path | None, typer.Option("--estimates")] = None,
 ) -> None:
-    """Reserve and submit exactly the stable 12-cell canary when confirmed."""
+    """Record and submit exactly the stable 12-cell canary when confirmed."""
     metadata, cells, manifest_hash = validate_campaign(campaign_dir)
     selected = [
         cell
@@ -1411,23 +1383,16 @@ def submit_canary(
             execute=False,
         )
         return
-    if ledger_path is None or estimates_path is None:
-        raise typer.BadParameter(
-            "--execute requires absolute --ledger and --estimates paths"
-        )
-    estimates = _estimates(estimates_path, cells)
-    if _load_json(estimates_path).get("manifest_sha256") != manifest_hash:
-        raise typer.BadParameter(
-            "estimate artifact is for a different manifest"
-        )
+    if ledger_path is None:
+        raise typer.BadParameter("--execute requires an absolute --ledger")
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
     try:
-        reserved = ledger.reserve(selected, estimates)
-        if reserved:
-            _submit(campaign_dir, metadata, reserved, ledger, suffix="canary")
+        recorded = ledger.record_intent(selected)
+        if recorded:
+            _submit(campaign_dir, metadata, recorded, ledger)
         _emit(
             "submit-canary",
-            cells=reserved,
+            cells=recorded,
             manifest_hash=manifest_hash,
             execute=True,
             ledger=ledger,
@@ -1443,10 +1408,9 @@ def submit_remaining(
     ],
     execute: Annotated[bool, typer.Option("--execute")] = False,
     ledger_path: Annotated[Path | None, typer.Option("--ledger")] = None,
-    estimates_path: Annotated[Path | None, typer.Option("--estimates")] = None,
     page_size: Annotated[int, typer.Option(min=1, max=500)] = 100,
 ) -> None:
-    """Submit cells not already reserved, submitted, or successful."""
+    """Submit cells not already recorded in the durable ledger."""
     metadata, cells, manifest_hash = validate_campaign(campaign_dir)
     if not execute:
         _emit(
@@ -1456,11 +1420,8 @@ def submit_remaining(
             execute=False,
         )
         return
-    if ledger_path is None or estimates_path is None:
-        raise typer.BadParameter(
-            "--execute requires absolute --ledger and --estimates paths"
-        )
-    estimates = _estimates(estimates_path, cells)
+    if ledger_path is None:
+        raise typer.BadParameter("--execute requires an absolute --ledger")
     ledger = SweepLedger(ledger_path, manifest_hash=manifest_hash)
     try:
         submitted: list[dict[str, Any]] = []
@@ -1472,12 +1433,11 @@ def submit_remaining(
                 metadata,
                 page,
                 ledger,
-                suffix=f"replay-{start // page_size:04d}",
             )
             submitted.extend(page)
             engine = create_engine(resolve_application_database_url())
             try:
-                require_known_actual_costs(
+                require_terminal_lifecycle(
                     reconcile_ledger(ledger, engine=engine),
                     cell_ids={str(cell["cell_id"]) for cell in page},
                 )
@@ -1487,7 +1447,7 @@ def submit_remaining(
         if existing_ids:
             engine = create_engine(resolve_application_database_url())
             try:
-                require_known_actual_costs(
+                require_terminal_lifecycle(
                     reconcile_ledger(ledger, engine=engine),
                     cell_ids=existing_ids,
                 )
@@ -1495,23 +1455,22 @@ def submit_remaining(
                 engine.dispose()
         remaining = ledger.selected_remaining(cells)
         for start in range(0, len(remaining), page_size):
-            reserved = ledger.reserve(
-                remaining[start : start + page_size], estimates
+            recorded = ledger.record_intent(
+                remaining[start : start + page_size]
             )
-            if reserved:
+            if recorded:
                 _submit(
                     campaign_dir,
                     metadata,
-                    reserved,
+                    recorded,
                     ledger,
-                    suffix=f"remaining-{start // page_size:04d}",
                 )
-                submitted.extend(reserved)
+                submitted.extend(recorded)
                 engine = create_engine(resolve_application_database_url())
                 try:
-                    require_known_actual_costs(
+                    require_terminal_lifecycle(
                         reconcile_ledger(ledger, engine=engine),
-                        cell_ids={str(cell["cell_id"]) for cell in reserved},
+                        cell_ids={str(cell["cell_id"]) for cell in recorded},
                     )
                 finally:
                     engine.dispose()
