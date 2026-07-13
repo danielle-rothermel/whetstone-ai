@@ -40,6 +40,21 @@ SCORE_HARNESS_FAILURES_TABLE = "whetstone_score_harness_failures"
 EXPERIMENT_OPERATION_MANIFESTS_TABLE = (
     "whetstone_experiment_operation_manifests"
 )
+EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE = (
+    "whetstone_experiment_acceptance_evaluations"
+)
+EXPERIMENT_ACCEPTANCE_GENERATION_MEMBERS_TABLE = (
+    "whetstone_experiment_acceptance_generation_members"
+)
+EXPERIMENT_ACCEPTANCE_GENERATION_CANDIDATES_TABLE = (
+    "whetstone_experiment_acceptance_generation_candidates"
+)
+EXPERIMENT_ACCEPTANCE_SCORING_MEMBERS_TABLE = (
+    "whetstone_experiment_acceptance_scoring_members"
+)
+EXPERIMENT_ACCEPTANCE_SCORING_CANDIDATES_TABLE = (
+    "whetstone_experiment_acceptance_scoring_candidates"
+)
 
 V6_TABLE_NAMES = (
     EXPERIMENTS_TABLE,
@@ -49,6 +64,11 @@ V6_TABLE_NAMES = (
     SCORE_ATTEMPTS_TABLE,
     SCORE_HARNESS_FAILURES_TABLE,
     EXPERIMENT_OPERATION_MANIFESTS_TABLE,
+    EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE,
+    EXPERIMENT_ACCEPTANCE_GENERATION_MEMBERS_TABLE,
+    EXPERIMENT_ACCEPTANCE_GENERATION_CANDIDATES_TABLE,
+    EXPERIMENT_ACCEPTANCE_SCORING_MEMBERS_TABLE,
+    EXPERIMENT_ACCEPTANCE_SCORING_CANDIDATES_TABLE,
 )
 
 APPEND_ONLY_OUTCOME_REJECT_FUNCTION = (
@@ -59,6 +79,11 @@ APPEND_ONLY_OUTCOME_TABLE_NAMES = (
     NODE_ATTEMPTS_TABLE,
     SCORE_ATTEMPTS_TABLE,
     SCORE_HARNESS_FAILURES_TABLE,
+    EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE,
+    EXPERIMENT_ACCEPTANCE_GENERATION_MEMBERS_TABLE,
+    EXPERIMENT_ACCEPTANCE_GENERATION_CANDIDATES_TABLE,
+    EXPERIMENT_ACCEPTANCE_SCORING_MEMBERS_TABLE,
+    EXPERIMENT_ACCEPTANCE_SCORING_CANDIDATES_TABLE,
 )
 
 metadata = MetaData()
@@ -372,6 +397,7 @@ experiment_operation_manifests = Table(
     Column("selection_digest", Text),
     Column("target_ref", JSONB, nullable=False),
     Column("accepted_at", DateTime(timezone=True), nullable=False),
+    Column("accepted_scoring_ordinal", Integer),
     UniqueConstraint(
         "experiment_name",
         "workflow_role",
@@ -388,9 +414,181 @@ Index(
     == "generation",
 )
 Index(
+    "uq_whetstone_scoring_manifest_ordinal",
+    experiment_operation_manifests.c.experiment_name,
+    experiment_operation_manifests.c.accepted_scoring_ordinal,
+    unique=True,
+    postgresql_where=experiment_operation_manifests.c.workflow_role
+    == "scoring",
+)
+Index(
     "ix_whetstone_generation_runs_prediction", generation_runs.c.prediction_id
 )
 Index("ix_whetstone_score_attempts_run", score_attempts.c.generation_run_id)
+
+experiment_acceptance_evaluations = Table(
+    EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE,
+    metadata,
+    Column("acceptance_id", Text, primary_key=True),
+    Column(
+        "experiment_name",
+        Text,
+        ForeignKey(
+            f"{EXPERIMENTS_TABLE}.experiment_name", ondelete="RESTRICT"
+        ),
+        nullable=False,
+    ),
+    Column("acceptance_source_version", Integer, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("generation_operation_key", Text, nullable=False),
+    Column("generation_manifest_digest", Text, nullable=False),
+    Column("scoring_relationships", JSONB, nullable=False),
+    Column("scoring_relationships_digest", Text, nullable=False),
+    Column("selected_scoring_candidates", JSONB, nullable=False),
+    Column("selected_scoring_candidates_digest", Text, nullable=False),
+    Column("domain_cut", JSONB, nullable=False),
+    Column("domain_cut_digest", Text, nullable=False),
+    Column("platform_cut", JSONB, nullable=False),
+    Column("platform_cut_digest", Text, nullable=False),
+    Column("required_profiles", JSONB, nullable=False),
+    Column("required_profiles_digest", Text, nullable=False),
+    Column("policy", JSONB, nullable=False),
+    Column("policy_digest", Text, nullable=False),
+    Column("observed_matrix", JSONB, nullable=False),
+    Column("observed_matrix_digest", Text, nullable=False),
+    Column("expected_count", Integer, nullable=False),
+    Column("accepted_count", Integer, nullable=False),
+    Column("missing_count", Integer, nullable=False),
+    Column("rejected_count", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "acceptance_source_version > 0",
+        name="ck_whetstone_acceptance_source_version",
+    ),
+)
+
+experiment_acceptance_generation_members = Table(
+    EXPERIMENT_ACCEPTANCE_GENERATION_MEMBERS_TABLE,
+    metadata,
+    Column(
+        "acceptance_id",
+        Text,
+        ForeignKey(
+            f"{EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE}.acceptance_id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    ),
+    Column(
+        "prediction_id",
+        Text,
+        ForeignKey(
+            f"{PREDICTION_SPECS_TABLE}.prediction_id", ondelete="RESTRICT"
+        ),
+        primary_key=True,
+    ),
+    Column("disposition", Text, nullable=False),
+    Column("generation_run_id", Text, nullable=True),
+    Column("generation_operation_key", Text),
+    Column("platform_item_id", Text),
+    Column("platform_attempt", Integer),
+)
+experiment_acceptance_generation_candidates = Table(
+    EXPERIMENT_ACCEPTANCE_GENERATION_CANDIDATES_TABLE,
+    metadata,
+    Column(
+        "acceptance_id",
+        Text,
+        ForeignKey(
+            f"{EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE}.acceptance_id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    ),
+    Column(
+        "prediction_id",
+        Text,
+        ForeignKey(
+            f"{PREDICTION_SPECS_TABLE}.prediction_id", ondelete="RESTRICT"
+        ),
+        primary_key=True,
+    ),
+    Column(
+        "generation_run_id",
+        Text,
+        ForeignKey(
+            f"{GENERATION_RUNS_TABLE}.generation_run_id", ondelete="RESTRICT"
+        ),
+        primary_key=True,
+    ),
+    Column("disposition", Text, nullable=False),
+    Column("platform_item_id", Text, nullable=False),
+    Column("platform_attempt", Integer, nullable=False),
+)
+experiment_acceptance_scoring_members = Table(
+    EXPERIMENT_ACCEPTANCE_SCORING_MEMBERS_TABLE,
+    metadata,
+    Column(
+        "acceptance_id",
+        Text,
+        ForeignKey(
+            f"{EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE}.acceptance_id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    ),
+    Column(
+        "prediction_id",
+        Text,
+        ForeignKey(
+            f"{PREDICTION_SPECS_TABLE}.prediction_id", ondelete="RESTRICT"
+        ),
+        primary_key=True,
+    ),
+    Column("scoring_profile_id", Text, primary_key=True),
+    Column("scoring_profile_version", Text, primary_key=True),
+    Column("parser_profile_id", Text, primary_key=True),
+    Column("parser_version", Text, primary_key=True),
+    Column("dataset_name", Text, primary_key=True),
+    Column("dataset_split", Text, primary_key=True),
+    Column("disposition", Text, nullable=False),
+    Column("generation_run_id", Text),
+    Column("score_attempt_id", Text),
+    Column("accepted_scoring_ordinal", Integer),
+    Column("scoring_operation_key", Text),
+    Column("platform_item_id", Text),
+    Column("platform_attempt", Integer),
+    Column("manifest_digest", Text),
+)
+experiment_acceptance_scoring_candidates = Table(
+    EXPERIMENT_ACCEPTANCE_SCORING_CANDIDATES_TABLE,
+    metadata,
+    Column(
+        "acceptance_id",
+        Text,
+        ForeignKey(
+            f"{EXPERIMENT_ACCEPTANCE_EVALUATIONS_TABLE}.acceptance_id",
+            ondelete="RESTRICT",
+        ),
+        primary_key=True,
+    ),
+    Column("prediction_id", Text, primary_key=True),
+    Column("scoring_profile_id", Text, primary_key=True),
+    Column("scoring_profile_version", Text, primary_key=True),
+    Column("parser_profile_id", Text, primary_key=True),
+    Column("parser_version", Text, primary_key=True),
+    Column("dataset_name", Text, primary_key=True),
+    Column("dataset_split", Text, primary_key=True),
+    Column("accepted_scoring_ordinal", Integer, primary_key=True),
+    Column("score_attempt_id", Text, primary_key=True),
+    Column("generation_run_id", Text, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("operation_key", Text, nullable=False),
+    Column("manifest_digest", Text, nullable=False),
+    Column("platform_item_id", Text, nullable=False),
+    Column("platform_attempt", Integer, nullable=False),
+    Column("status", Text, nullable=False),
+)
 
 v6_tables: tuple[Table, ...] = (
     experiments,
@@ -400,6 +598,11 @@ v6_tables: tuple[Table, ...] = (
     score_attempts,
     score_harness_failures,
     experiment_operation_manifests,
+    experiment_acceptance_evaluations,
+    experiment_acceptance_generation_members,
+    experiment_acceptance_generation_candidates,
+    experiment_acceptance_scoring_members,
+    experiment_acceptance_scoring_candidates,
 )
 
 __all__ = [name for name in globals() if name.isupper()] + [
@@ -410,6 +613,11 @@ __all__ = [name for name in globals() if name.isupper()] + [
     "score_attempts",
     "score_harness_failures",
     "experiment_operation_manifests",
+    "experiment_acceptance_evaluations",
+    "experiment_acceptance_generation_members",
+    "experiment_acceptance_generation_candidates",
+    "experiment_acceptance_scoring_members",
+    "experiment_acceptance_scoring_candidates",
     "metadata",
     "v6_tables",
 ]

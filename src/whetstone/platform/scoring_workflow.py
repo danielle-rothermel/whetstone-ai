@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+import os
 from datetime import UTC, datetime
 from typing import Any
 
-from dbos import DBOS, SetWorkflowID
+from dbos import DBOS
 from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
@@ -13,7 +13,9 @@ from dr_code.humaneval import (
     parse_human_eval_dataset,
     resolve_humaneval_scoring_profile,
 )
-from dr_platform.dbos_config import WORKFLOW_START_RACE_ERRORS
+from dr_platform.dbos_config import (
+    resolve_database_url,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
 from sqlalchemy import create_engine
 
@@ -30,11 +32,6 @@ from whetstone.platform.persistence import (
     persist_score_harness_failure,
 )
 from whetstone.platform.scoring import score_submission_run
-from whetstone.platform.scoring_workflow_state import (
-    ScoringWorkflowPresence,
-    classify_scoring_workflow_presence,
-    recover_orphan_scoring_workflow,
-)
 from whetstone.records import (
     DEFAULT_SCORE_DATASET_NAME,
     DEFAULT_SCORE_DATASET_SPLIT,
@@ -88,17 +85,18 @@ class ScheduledScoreSubmissionWorkflow(BaseModel):
 
 @DBOS.workflow(name=PLATFORM_SCORING_WORKFLOW_NAME)
 def run_score_submission_workflow(
-    database_url: str,
     generation_run_id: str,
     score_attempt_index: int = 0,
     scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
     scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
     dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
     dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-    dataset_snapshot_path: str | None = None,
 ) -> dict[str, Any]:
+    # DBOS persists this workflow's arguments.  Resolve connection state at
+    # execution time so DSNs and credentials never enter replay payloads.
+    database_url = resolve_database_url(None)
     resolved_snapshot_path = require_dataset_snapshot_path(
-        dataset_snapshot_path
+        os.environ.get("WHETSTONE_HUMANEVAL_SNAPSHOT_PATH")
     )
     target = load_scoring_target_step(database_url, generation_run_id)
     spec = PredictionSpecRecord.model_validate(target["spec"])
@@ -161,241 +159,6 @@ def run_score_submission_workflow(
     ).model_dump(mode="json")
 
 
-def start_score_submission_workflow(
-    database_url: str,
-    generation_run_id: str,
-    score_attempt_index: int = 0,
-    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
-    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
-    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-    dataset_snapshot_path: str | None = None,
-) -> str:
-    score_attempt_id, _handle = _start_score_submission_workflow_handle(
-        database_url=database_url,
-        generation_run_id=generation_run_id,
-        score_attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-        dataset_snapshot_path=dataset_snapshot_path,
-    )
-    return score_attempt_id
-
-
-def schedule_score_submission_workflow(
-    database_url: str,
-    generation_run_id: str,
-    score_attempt_index: int = 0,
-    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
-    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
-    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-    dataset_snapshot_path: str | None = None,
-    recover_orphans: bool = True,
-) -> ScheduledScoreSubmissionWorkflow:
-    resolved_snapshot_path = require_dataset_snapshot_path(
-        dataset_snapshot_path
-    )
-    score_attempt_id = score_attempt_id_for_workflow(
-        generation_run_id=generation_run_id,
-        score_attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-    )
-    workflow_id = platform_scoring_workflow_id(score_attempt_id)
-    presence = classify_scoring_workflow_presence(
-        database_url=database_url,
-        score_attempt_id=score_attempt_id,
-        workflow_id=workflow_id,
-    )
-    if presence is ScoringWorkflowPresence.COMPLETE:
-        return ScheduledScoreSubmissionWorkflow(
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            scheduled=False,
-        )
-    if presence is ScoringWorkflowPresence.IN_FLIGHT:
-        return ScheduledScoreSubmissionWorkflow(
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            scheduled=False,
-        )
-    if presence is ScoringWorkflowPresence.ORPHAN:
-        if recover_orphans and recover_orphan_scoring_workflow(
-            database_url=database_url,
-            workflow_id=workflow_id,
-            score_attempt_id=score_attempt_id,
-            replay_workflow=run_score_submission_workflow,
-            replay_args=(
-                database_url,
-                generation_run_id,
-                score_attempt_index,
-                scoring_profile_id,
-                scoring_profile_version,
-                dataset_name,
-                dataset_split,
-                resolved_snapshot_path,
-            ),
-        ):
-            return ScheduledScoreSubmissionWorkflow(
-                score_attempt_id=score_attempt_id,
-                workflow_id=workflow_id,
-                scheduled=True,
-                recovered=True,
-            )
-        return ScheduledScoreSubmissionWorkflow(
-            score_attempt_id=score_attempt_id,
-            workflow_id=workflow_id,
-            scheduled=False,
-        )
-    with SetWorkflowID(workflow_id):
-        try:
-            workflow_handle = DBOS.start_workflow(
-                run_score_submission_workflow,
-                database_url,
-                generation_run_id,
-                score_attempt_index,
-                scoring_profile_id,
-                scoring_profile_version,
-                dataset_name,
-                dataset_split,
-                resolved_snapshot_path,
-            )
-        except WORKFLOW_START_RACE_ERRORS:
-            return ScheduledScoreSubmissionWorkflow(
-                score_attempt_id=score_attempt_id,
-                workflow_id=workflow_id,
-                scheduled=False,
-            )
-        except Exception as error:
-            if _scoring_workflow_start_raced(
-                workflow_id=workflow_id,
-                error=error,
-            ):
-                return ScheduledScoreSubmissionWorkflow(
-                    score_attempt_id=score_attempt_id,
-                    workflow_id=workflow_id,
-                    scheduled=False,
-                )
-            raise
-    return ScheduledScoreSubmissionWorkflow(
-        score_attempt_id=score_attempt_id,
-        workflow_id=workflow_id,
-        scheduled=True,
-        workflow_handle=workflow_handle,
-    )
-
-
-def await_scheduled_score_workflows(handles: Sequence[Any]) -> None:
-    for handle in handles:
-        handle.get_result()
-
-
-def run_score_submission_workflow_once(
-    database_url: str,
-    generation_run_id: str,
-    score_attempt_index: int = 0,
-    scoring_profile_id: str = HUMANEVAL_SCORING_PROFILE_ID,
-    scoring_profile_version: str = HUMANEVAL_SCORING_PROFILE_VERSION,
-    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
-    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-    dataset_snapshot_path: str | None = None,
-) -> ScoreSubmissionWorkflowResult:
-    _score_attempt_id, handle = _start_score_submission_workflow_handle(
-        database_url=database_url,
-        generation_run_id=generation_run_id,
-        score_attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-        dataset_snapshot_path=dataset_snapshot_path,
-    )
-    result = handle.get_result()
-    if not isinstance(result, dict):
-        raise TypeError("platform scoring workflow returned a non-dict result")
-    return ScoreSubmissionWorkflowResult.model_validate(result)
-
-
-def platform_scoring_workflow_id(score_attempt_id: str) -> str:
-    return f"{WORKFLOW_ID_PREFIX}:{score_attempt_id}"
-
-
-def score_attempt_id_for_workflow(
-    *,
-    generation_run_id: str,
-    score_attempt_index: int,
-    scoring_profile_id: str,
-    scoring_profile_version: str,
-    dataset_name: str = DEFAULT_SCORE_DATASET_NAME,
-    dataset_split: str = DEFAULT_SCORE_DATASET_SPLIT,
-) -> str:
-    scoring_profile = resolve_humaneval_scoring_profile(
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-    )
-    return stable_score_attempt_id(
-        generation_run_id=generation_run_id,
-        scoring_profile_id=scoring_profile.profile_id,
-        scoring_profile_version=scoring_profile.version,
-        parser_profile_id=scoring_profile.parser_profile.profile_id,
-        parser_version=scoring_profile.parser_profile.version,
-        attempt_index=score_attempt_index,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-    )
-
-
-def _scoring_workflow_start_raced(
-    *,
-    workflow_id: str,
-    error: BaseException,
-) -> bool:
-    _ = workflow_id
-    return isinstance(error, WORKFLOW_START_RACE_ERRORS)
-
-
-def _start_score_submission_workflow_handle(
-    *,
-    database_url: str,
-    generation_run_id: str,
-    score_attempt_index: int,
-    scoring_profile_id: str,
-    scoring_profile_version: str,
-    dataset_name: str,
-    dataset_split: str,
-    dataset_snapshot_path: str | None,
-) -> tuple[str, Any]:
-    resolved_snapshot_path = require_dataset_snapshot_path(
-        dataset_snapshot_path
-    )
-    score_attempt_id = score_attempt_id_for_workflow(
-        generation_run_id=generation_run_id,
-        score_attempt_index=score_attempt_index,
-        scoring_profile_id=scoring_profile_id,
-        scoring_profile_version=scoring_profile_version,
-        dataset_name=dataset_name,
-        dataset_split=dataset_split,
-    )
-    with SetWorkflowID(platform_scoring_workflow_id(score_attempt_id)):
-        handle = DBOS.start_workflow(
-            run_score_submission_workflow,
-            database_url,
-            generation_run_id,
-            score_attempt_index,
-            scoring_profile_id,
-            scoring_profile_version,
-            dataset_name,
-            dataset_split,
-            resolved_snapshot_path,
-        )
-    return score_attempt_id, handle
-
-
 @DBOS.step(name=LOAD_SCORING_TARGET_STEP_NAME)
 def load_scoring_target_step(
     database_url: str,
@@ -445,8 +208,7 @@ def load_humaneval_scoring_input_step(
         expected_identity=registered_snapshot,
     )
     task = {
-        task.task_id: task
-        for task in parse_human_eval_dataset(snapshot.rows)
+        task.task_id: task for task in parse_human_eval_dataset(snapshot.rows)
     }.get(task_id)
     if task is None:
         raise ValueError(f"HumanEval task not found: {task_id}")

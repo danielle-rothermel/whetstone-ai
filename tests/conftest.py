@@ -13,7 +13,7 @@ import pytest
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from dbos import DBOS
-from dr_platform import destroy_dbos_runtime
+from dr_platform.dbos_config import destroy_dbos_runtime
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
@@ -27,9 +27,9 @@ from whetstone.platform.dbos_bootstrap import (
     build_eval_dbos_config,
 )
 from whetstone.platform.platform_db import ensure_platform_schema
-from whetstone.platform.queue_worker import (
-    listen_to_platform_generation_queue,
-    register_platform_generation_queue,
+from whetstone.platform.targets import (
+    listen_to_execution_queues,
+    register_execution_queues,
 )
 from whetstone.platform.worker import DBOS_APP_NAME
 
@@ -72,8 +72,7 @@ def _apply_v1_migrations(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     migration_modules = (
-        "whetstone.db.migrations.versions.20260708_0001_initial_schema",
-        "whetstone.db.migrations.versions.20260708_0002_score_dataset_snapshot",
+        "whetstone.db.migrations.versions.20260712_0001_whetstone_baseline",
     )
     for module_name in migration_modules:
         migration = importlib.import_module(module_name)
@@ -189,9 +188,9 @@ def reset_dbos_generation_consumer(
         )
     )
     DBOS.reset_system_database()
-    listen_to_platform_generation_queue()
+    listen_to_execution_queues()
     DBOS.launch()
-    register_platform_generation_queue(worker_concurrency=1)
+    register_execution_queues(worker_concurrency=1)
     try:
         yield config
     finally:
