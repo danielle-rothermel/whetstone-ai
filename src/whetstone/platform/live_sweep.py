@@ -21,6 +21,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any, cast
+from uuid import uuid4
 
 import typer
 from dbos import DBOS
@@ -2110,12 +2111,20 @@ def _complete_generation_members(
 
 @dataclass(frozen=True)
 class _RegisteredQueueLookup:
-    """In-process admission for exactly the queues whetstone registers."""
+    """In-process admission for exactly the queues whetstone registers.
+
+    Kernel admission requires a database-backed queue object exposing
+    ``database_backed_queue`` and ``priority_enabled``; a bare name fails
+    closed.  ``DBOSClient`` cannot open SQLite system databases, so the
+    queue is resolved through the launched in-process runtime instead.
+    """
 
     names: frozenset[str]
 
     def retrieve_queue(self, name: str) -> object | None:
-        return name if name in self.names else None
+        if name not in self.names:
+            return None
+        return DBOS.retrieve_queue(name)
 
 
 @dataclass(frozen=True)
@@ -2129,9 +2138,19 @@ class _EnqueueRuntime:
 def _platform_enqueue_runtime() -> Iterator[_EnqueueRuntime]:
     """DBOS runtime that can enqueue but never consumes execution queues.
 
-    ``DbosEnqueueAdapter`` requires a launched in-process DBOS.  Queue
-    listening is deliberately omitted so this operator process never claims
-    generation or scoring work; only the long-lived worker executes it.
+    ``DbosEnqueueAdapter`` requires a launched in-process DBOS, and DBOS
+    2.26 gives a launched process two consumption paths that must both be
+    closed explicitly.  A process that never calls ``listen_queues`` polls
+    every registered queue, so ``DBOS.listen_queues([])`` pins the listen
+    set to nothing before launch.  Launch recovery re-executes PENDING
+    workflows owned by this process's executor ID, and the worker runs as
+    the default executor ``local``, so a unique per-invocation executor ID
+    makes recovery a no-op here.  Worker pickup of the enqueued workflows
+    requires an equal computed application version, which holds exactly
+    when the worker serves the same workflow sources as this checkout
+    (both processes register the identical workflow set via
+    ``whetstone.platform.targets``); restart the worker after deploys that
+    touch workflow code.
     """
     config = build_whetstone_dbos_config(
         database_url=resolve_application_database_url(),
@@ -2139,10 +2158,17 @@ def _platform_enqueue_runtime() -> Iterator[_EnqueueRuntime]:
         generation_concurrency=1,
         scoring_concurrency=1,
     )
+    runtime_config = dbos_config(config, app_name="whetstone")
+    runtime_config["executor_id"] = f"whetstone-enqueue-{uuid4().hex}"
     try:
-        DBOS(config=dbos_config(config, app_name="whetstone"))
+        DBOS(config=runtime_config)
+        DBOS.listen_queues([])
         DBOS.launch()
-        register_execution_queues(worker_concurrency=1)
+        # never_update: create the queues if absent, but never clobber the
+        # worker-owned configuration in the shared system database.
+        register_execution_queues(
+            worker_concurrency=1, on_conflict="never_update"
+        )
         yield _EnqueueRuntime(
             queue_lookup=_RegisteredQueueLookup(
                 names=frozenset(

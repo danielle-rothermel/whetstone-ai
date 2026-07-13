@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from dbos import DBOS
 from dr_platform import (
@@ -196,13 +196,19 @@ def target_registry() -> TargetRegistry:
     return registry
 
 
-def register_execution_queues(*, worker_concurrency: int) -> None:
+def register_execution_queues(
+    *,
+    worker_concurrency: int,
+    on_conflict: Literal[
+        "update_if_latest_version", "always_update", "never_update"
+    ] = "always_update",
+) -> None:
     for queue_name in (GENERATION_QUEUE_NAME, SCORING_QUEUE_NAME):
         DBOS.register_queue(
             queue_name,
             worker_concurrency=worker_concurrency,
             priority_enabled=True,
-            on_conflict="always_update",
+            on_conflict=on_conflict,
         )
 
 

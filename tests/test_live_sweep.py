@@ -862,6 +862,21 @@ def _fake_enqueue_runtime() -> Iterator[SimpleNamespace]:
     )
 
 
+def test_registered_queue_lookup_resolves_member_queues_through_dbos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admission needs the database-backed Queue object, never a bare name."""
+    resolved = object()
+    monkeypatch.setattr(
+        live_sweep,
+        "DBOS",
+        SimpleNamespace(retrieve_queue=lambda name: resolved),
+    )
+    lookup = live_sweep._RegisteredQueueLookup(names=frozenset({"member"}))
+    assert lookup.retrieve_queue("member") is resolved
+    assert lookup.retrieve_queue("other") is None
+
+
 def test_scoring_replays_frozen_intent_once_then_duplicate_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
