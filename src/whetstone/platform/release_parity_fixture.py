@@ -453,14 +453,20 @@ def _new_source(schema: str) -> Engine:
             # Migration discovery must not see an unrelated public table with
             # the same name; this transaction owns only the run schema.
             connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
-            migration = cast(
-                Any,
-                importlib.import_module(
-                    "whetstone.db.migrations.versions.20260712_0001_whetstone_baseline"
-                ),
-            )
-            migration.op = Operations(MigrationContext.configure(connection))
-            migration.upgrade()
+            for module_name in (
+                "20260712_0001_whetstone_baseline",
+                "20260713_0002_generation_manifest_shards",
+            ):
+                migration = cast(
+                    Any,
+                    importlib.import_module(
+                        f"whetstone.db.migrations.versions.{module_name}"
+                    ),
+                )
+                migration.op = Operations(
+                    MigrationContext.configure(connection)
+                )
+                migration.upgrade()
     finally:
         admin.dispose()
     source_url = _source_url(schema)

@@ -142,6 +142,96 @@ def test_ledger_intent_is_idempotent_and_excludes_remaining(
         ledger.close()
 
 
+def test_generation_shards_are_bounded_stable_and_exhaustive() -> None:
+    cells = [_cell(f"cell-{index:03d}") for index in range(217)]
+    canary_ids = [str(cell["cell_id"]) for cell in cells[:12]]
+
+    first = live_sweep._generation_shards(
+        campaign="campaign", cells=cells, canary_ids=canary_ids
+    )
+    second = live_sweep._generation_shards(
+        campaign="campaign", cells=cells, canary_ids=canary_ids
+    )
+
+    assert first == second
+    assert [len(shard["cell_ids"]) for shard in first] == [12, 100, 100, 5]
+    assert [cell_id for shard in first for cell_id in shard["cell_ids"]] == [
+        *canary_ids,
+        *(str(cell["cell_id"]) for cell in cells[12:]),
+    ]
+    assert len({shard["operation_key"] for shard in first}) == 4
+
+
+def test_scoring_intent_is_replay_safe_and_snapshot_bound(
+    tmp_path: Path,
+) -> None:
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    intent = {
+        "operation_key": "scoring-a",
+        "generation_cut_digest": "cut-a",
+        "selection_digest": "selection-a",
+        "snapshot_sha256": "a" * 64,
+        "scoring_profile_id": "humaneval",
+        "scoring_profile_version": "v1",
+        "parser_profile_id": "humaneval-best-effort",
+        "parser_version": "v1",
+        "item_ids": ["item-a"],
+    }
+    try:
+        ledger.scoring_intent(**intent)
+        ledger.scoring_intent(**intent)
+        with pytest.raises(ValueError, match="identity changed"):
+            ledger.scoring_intent(
+                operation_key="scoring-a",
+                generation_cut_digest="cut-a",
+                selection_digest="selection-a",
+                snapshot_sha256="b" * 64,
+                scoring_profile_id="humaneval",
+                scoring_profile_version="v1",
+                parser_profile_id="humaneval-best-effort",
+                parser_version="v1",
+                item_ids=["item-a"],
+            )
+        count = ledger.connection.execute(
+            "SELECT COUNT(*) FROM sweep_scoring_operations"
+        ).fetchone()[0]
+        assert count == 1
+    finally:
+        ledger.close()
+
+
+def test_response_parse_provider_failure_is_adapter_parse_failure() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node={
+            "status": "error",
+            "model": "gpt-5.4-nano",
+            "output": None,
+            "response_metadata": {},
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": "whetstone.eval_failures.PermanentFailureError",
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "metadata": {
+                    "provider_failure": {
+                        "code": "response_parse_error",
+                        "metadata": {"response_status": "completed"},
+                    }
+                },
+            },
+        },
+        score=None,
+    )
+
+    assert diagnostics["adapter_disposition"] == "parse_failure"
+    assert diagnostics["typed_failure_code"] == "provider_response_parse"
+    assert diagnostics["response_status"] == "completed"
+    assert diagnostics["output_field_present"] is False
+
+
 def test_legacy_cost_columns_are_removed_without_gating_intent(
     tmp_path: Path,
 ) -> None:
@@ -539,8 +629,7 @@ def test_safe_diagnostics_reports_output_key_and_nonblank_semantics(
             {
                 "failure_class": "permanent",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "PredictionParseError"
+                    "whetstone.eval_failures.exceptions.PredictionParseError"
                 ),
             },
             "parse_failure",
@@ -550,8 +639,7 @@ def test_safe_diagnostics_reports_output_key_and_nonblank_semantics(
             {
                 "failure_class": "transient",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "TransientFailureError"
+                    "whetstone.eval_failures.exceptions.TransientFailureError"
                 ),
                 "metadata": {"provider_failure": {"message": "secret"}},
             },
@@ -605,8 +693,7 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
             "failure": {
                 "failure_class": "permanent",
                 "error_type": (
-                    "whetstone.eval_failures.exceptions."
-                    "EmptyGenerationError"
+                    "whetstone.eval_failures.exceptions.EmptyGenerationError"
                 ),
                 "message": secret,
                 "metadata": {"prompt": prompt, "headers": secret},
@@ -620,9 +707,9 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
     )
 
     serialized = json.dumps(diagnostics, sort_keys=True)
-    assert diagnostics["response_id_hash"] == sha256(
-        b"response-123"
-    ).hexdigest()
+    assert (
+        diagnostics["response_id_hash"] == sha256(b"response-123").hexdigest()
+    )
     assert diagnostics["returned_model"] == "gpt-5.4"
     assert diagnostics["finish_reason"] == "stop"
     assert diagnostics["parser_profile"] == "humaneval"

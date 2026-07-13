@@ -148,7 +148,7 @@ accepted_predictions AS (
   FROM current_acceptances e
   JOIN whetstone_experiment_acceptance_generation_members gm
     ON gm.acceptance_id = e.acceptance_id
-    AND gm.disposition = 'selected_success'
+    AND gm.disposition IN ('selected_success', 'typed_failure')
   JOIN whetstone_prediction_specs p
     ON p.prediction_id = gm.prediction_id
     AND p.experiment_name = e.experiment_name
@@ -288,12 +288,12 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
                 costs.provider_cost,
                 EXTRACT(EPOCH FROM (COALESCE(s.completed_at, g.completed_at) - COALESCE(s.started_at, g.started_at))) * 1000 AS latency_ms,
                 NULLIF(s.metrics->'compression'->'{PUBLISHED_COMPRESSION_METHOD}'->>'{PUBLISHED_COMPRESSION_SEMANTICS}', '')::double precision AS compression_ratio,
-                n.failure->>'class' AS failure_class,
+                n.failure->>'failure_class' AS failure_class,
                 p.created_at, GREATEST(p.created_at, COALESCE(s.completed_at, g.completed_at, p.created_at)) AS updated_at,
                 COALESCE(s.metrics, g.summary) AS summary_json
               FROM accepted_predictions p
               JOIN whetstone_experiments e ON e.experiment_name = p.experiment_name
-              JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
+              LEFT JOIN selected_generation_runs g ON g.generation_run_id=p.selected_generation_run_id
               LEFT JOIN LATERAL (SELECT * FROM selected_score_attempts x WHERE x.prediction_id=p.prediction_id ORDER BY x.scoring_profile_id, x.parser_profile_id, x.dataset_name, x.dataset_split LIMIT 1) s ON true
               LEFT JOIN LATERAL (SELECT sum(NULLIF(x.usage_cost->>'provider_cost', '')::double precision) AS provider_cost FROM whetstone_node_attempts x WHERE x.generation_run_id=p.selected_generation_run_id) costs ON true
               LEFT JOIN LATERAL (SELECT count(*) AS harness_failure_count FROM whetstone_score_harness_failures x WHERE x.prediction_id=p.prediction_id) failures ON true
@@ -451,9 +451,9 @@ def analysis_projection_specs() -> tuple[ProjectionSpec, ...]:
             full_rebuild_builder=_builder(
                 _ACCEPTED
                 + """
-          SELECT p.experiment_name AS experiment_id, COALESCE(n.failure->>'class', 'NONE') AS failure_class, count(*)::bigint AS failure_count
+          SELECT p.experiment_name AS experiment_id, COALESCE(n.failure->>'failure_class', 'NONE') AS failure_class, count(*)::bigint AS failure_count
           FROM accepted_predictions p LEFT JOIN whetstone_node_attempts n ON n.generation_run_id=p.selected_generation_run_id AND n.failure IS NOT NULL
-          GROUP BY p.experiment_name, COALESCE(n.failure->>'class', 'NONE')
+          GROUP BY p.experiment_name, COALESCE(n.failure->>'failure_class', 'NONE')
         """
             ),
         ),
