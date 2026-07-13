@@ -45,20 +45,30 @@ def test_every_dr_platform_call_passes_explicit_schema() -> None:
     defaulting = _schema_defaulting_names()
     assert "submit" in defaulting and "list_attempts" in defaulting
 
+    # Covered call forms: direct and aliased ``from dr_platform import ...``
+    # calls, which are the only forms whetstone uses.  Module-attribute calls
+    # (``import dr_platform``) and the one schema-defaulting class
+    # (``PostgresClaimTransitionStore``) appear nowhere in src/whetstone;
+    # extend this walker before introducing either form.
     violations: list[str] = []
     for path in sorted(SRC_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(), filename=str(path))
-        imported_from_dr_platform: set[str] = set()
+        local_to_dr_platform_name: dict[str, str] = {}
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.ImportFrom)
                 and node.module
                 and node.module.split(".")[0] == "dr_platform"
             ):
-                imported_from_dr_platform.update(
-                    alias.asname or alias.name for alias in node.names
-                )
-        watched = imported_from_dr_platform & defaulting
+                for alias in node.names:
+                    local_to_dr_platform_name[alias.asname or alias.name] = (
+                        alias.name
+                    )
+        watched = {
+            local
+            for local, original in local_to_dr_platform_name.items()
+            if original in defaulting
+        }
         if not watched:
             continue
         for node in ast.walk(tree):
