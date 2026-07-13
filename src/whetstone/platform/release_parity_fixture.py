@@ -434,8 +434,10 @@ def _required_env(name: str) -> str:
 
 def _source_url(schema: str) -> str:
     base = make_url(_required_env("DATABASE_URL"))
-    return str(
-        base.update_query_dict({"options": f"-c search_path={schema},public"})
+    return base.update_query_dict(
+        {"options": f"-c search_path={schema},public"}
+    ).render_as_string(
+        hide_password=False
     )
 
 
