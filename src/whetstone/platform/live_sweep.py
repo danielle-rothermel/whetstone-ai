@@ -70,6 +70,9 @@ GENERATION_SHARD_SIZE = 100
 GENERATION_SHARDS_FILE = "generation-manifest-shards.json"
 GENERATION_LOCK_POINTER_FILE = "generation-lock.json"
 GENERATION_LOCKS_DIRECTORY = "generation-locks"
+# Truncated digest length from the pinned dr-providers response contract
+# (dr_providers.response.RESPONSE_ID_HASH_LENGTH, not publicly re-exported).
+_RESPONSE_ID_HASH_LENGTH = 16
 _RESPONSE_STATUS_VALUES = frozenset(
     {
         "cancelled",
@@ -445,6 +448,12 @@ def _project_safe_diagnostics(
             "status",
             allowed_values=_RESPONSE_STATUS_VALUES,
         )
+    if response_status is None:
+        response_status = _allowlisted_enum(
+            _provider_failure_metadata(failure),
+            "response_status",
+            allowed_values=_RESPONSE_STATUS_VALUES,
+        )
     diagnostic_response_id_hash = _allowlisted_response_id_hash(
         response_diagnostics
     )
@@ -456,7 +465,7 @@ def _project_safe_diagnostics(
     )
     diagnostics = LiveSweepDiagnostics(
         response_id_hash=(
-            hashlib.sha256(response_id.encode()).hexdigest()
+            _hash_response_id(response_id)
             if response_id is not None
             else diagnostic_response_id_hash
         ),
@@ -516,6 +525,18 @@ def _response_diagnostics(
         diagnostics = response_metadata.get("diagnostics")
         if isinstance(diagnostics, Mapping):
             return cast(Mapping[str, Any], diagnostics)
+    provider_metadata = _provider_failure_metadata(failure)
+    if provider_metadata is None:
+        return None
+    diagnostics = provider_metadata.get("diagnostics")
+    return (
+        cast(Mapping[str, Any], diagnostics)
+        if isinstance(diagnostics, Mapping)
+        else None
+    )
+
+
+def _provider_failure_metadata(failure: object) -> Mapping[str, Any] | None:
     if not isinstance(failure, Mapping):
         return None
     failure_metadata = failure.get("metadata")
@@ -525,12 +546,9 @@ def _response_diagnostics(
     if not isinstance(provider_failure, Mapping):
         return None
     provider_metadata = provider_failure.get("metadata")
-    if not isinstance(provider_metadata, Mapping):
-        return None
-    diagnostics = provider_metadata.get("diagnostics")
     return (
-        cast(Mapping[str, Any], diagnostics)
-        if isinstance(diagnostics, Mapping)
+        cast(Mapping[str, Any], provider_metadata)
+        if isinstance(provider_metadata, Mapping)
         else None
     )
 
@@ -544,11 +562,18 @@ def _allowlisted_string(
     return value if isinstance(value, str) and value else None
 
 
+def _hash_response_id(response_id: str) -> str:
+    """Digest a response id exactly as pinned dr-providers failures do."""
+    return hashlib.sha256(response_id.encode()).hexdigest()[
+        :_RESPONSE_ID_HASH_LENGTH
+    ]
+
+
 def _allowlisted_response_id_hash(
     payload: Mapping[str, Any] | None,
 ) -> str | None:
     value = _allowlisted_string(payload, "response_id_hash")
-    if value is None or len(value) != 16:
+    if value is None or len(value) != _RESPONSE_ID_HASH_LENGTH:
         return None
     return (
         value

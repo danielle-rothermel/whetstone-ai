@@ -61,6 +61,34 @@ def _persisted_success_node(
     return node_attempt_row(record)
 
 
+def _persisted_failure_node(
+    provider_failure: dict[str, Any],
+) -> dict[str, Any]:
+    timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+    record = NodeAttemptRecord.model_validate(
+        {
+            "node_attempt_id": "node-attempt-a",
+            "generation_run_id": "run-a",
+            "prediction_id": "prediction-a",
+            "node_id": "generate",
+            "attempt_index": 0,
+            "status": "error",
+            "failure": {
+                "failure_class": "permanent",
+                "error_type": "whetstone.eval_failures.PermanentFailureError",
+                "underlying_exception_type": (
+                    "dr_providers.ProviderFailureError"
+                ),
+                "message": "provider failure",
+                "metadata": {"provider_failure": provider_failure},
+            },
+            "started_at": timestamp,
+            "completed_at": timestamp,
+        }
+    )
+    return node_attempt_row(record)
+
+
 def _scoring_target(
     *, prediction_id: str = "prediction-a", generation_run_id: str = "run-a"
 ) -> live_sweep.ScoringTargetSpec:
@@ -570,6 +598,135 @@ def test_private_raw_status_is_omitted_from_ledger_diagnostics(
                     actual_cost=None,
                     provider_tokens={},
                     error_classification=None,
+                    diagnostics=diagnostics,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert "PRIVATE_RAW_STATUS" not in serialized
+    finally:
+        ledger.close()
+
+
+def test_success_and_failure_hashes_use_provider_truncated_digest(
+    tmp_path: Path,
+) -> None:
+    response_id = "resp-correlation-1"
+    truncated_digest = sha256(response_id.encode()).hexdigest()[:16]
+
+    success = live_sweep._project_safe_diagnostics(
+        node=_persisted_success_node(
+            {"id": response_id, "status": "completed"}
+        ),
+        score=None,
+    )
+    failure = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "response_failed",
+                "metadata": {
+                    "diagnostics": {
+                        "response_status": "failed",
+                        "response_id_hash": truncated_digest,
+                    }
+                },
+            }
+        ),
+        score=None,
+    )
+
+    assert success["response_id_hash"] == truncated_digest
+    assert failure["response_id_hash"] == truncated_digest
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="succeeded",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification=None,
+                    diagnostics=success,
+                )
+            ]
+        )
+
+        serialized = str(ledger.rows()[0]["diagnostics_json"])
+        assert truncated_digest in serialized
+        assert sha256(response_id.encode()).hexdigest() not in serialized
+        assert response_id not in serialized
+    finally:
+        ledger.close()
+
+
+def test_legacy_flat_failure_status_recovers_via_closed_allowlist() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "provider_http_error",
+                "metadata": {"response_status": "failed"},
+            }
+        ),
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "failed"
+
+
+def test_nested_diagnostics_status_wins_over_legacy_flat_key() -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "response_failed",
+                "metadata": {
+                    "response_status": "cancelled",
+                    "diagnostics": {"response_status": "incomplete"},
+                },
+            }
+        ),
+        score=None,
+    )
+
+    assert diagnostics["response_status"] == "incomplete"
+
+
+def test_legacy_flat_raw_status_is_omitted_from_ledger(
+    tmp_path: Path,
+) -> None:
+    diagnostics = live_sweep._project_safe_diagnostics(
+        node=_persisted_failure_node(
+            {
+                "code": "provider_http_error",
+                "metadata": {"response_status": "PRIVATE_RAW_STATUS"},
+            }
+        ),
+        score=None,
+    )
+    assert "response_status" not in diagnostics
+
+    ledger = SweepLedger(
+        tmp_path / "ledger.sqlite3", manifest_hash="manifest-a"
+    )
+    try:
+        ledger.record_intent([_cell("a")])
+        ledger.reconciliation(
+            [
+                CellReconciliation(
+                    cell_id="a",
+                    status="typed_failure",
+                    platform_attempt=0,
+                    retry_count=0,
+                    actual_cost=None,
+                    provider_tokens={},
+                    error_classification="permanent",
                     diagnostics=diagnostics,
                 )
             ]
@@ -1343,7 +1500,8 @@ def test_safe_diagnostics_allowlists_and_hashes_provider_facts() -> None:
 
     serialized = json.dumps(diagnostics, sort_keys=True)
     assert (
-        diagnostics["response_id_hash"] == sha256(b"response-123").hexdigest()
+        diagnostics["response_id_hash"]
+        == sha256(b"response-123").hexdigest()[:16]
     )
     assert diagnostics["returned_model"] == "gpt-5.4"
     assert diagnostics["finish_reason"] == "stop"
