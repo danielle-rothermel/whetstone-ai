@@ -69,9 +69,9 @@
     <tr><td><code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Retained-core records, storage validation, and failure policy require a later design pass.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
     <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
-    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code></td><td>The operator runtime and 18 implementation-specific cases are also gone; downstream unit and structural tests remain.</td></tr>
+    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>The orphaned operator and submission cases are also gone; downstream unit and structural tests remain.</td></tr>
     <tr><td><code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove constant tests when their owning platform modules are redesigned or deleted.</td></tr>
-    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code></td><td>All application entry points and their orphaned operator plumbing are gone; platform workflow exports remain.</td></tr>
+    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>Application entry points, operator plumbing, and the unexported submission surface are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code></td><td>Development tools, six unused direct dependencies, Typer, and python-dotenv are out of the runtime contract; retained platform/database dependencies remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
@@ -289,7 +289,7 @@
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 112 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 111 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
@@ -355,7 +355,8 @@
     <tr><td class="path"><code>platform/cutover_tooling.py</code></td><td><span class="status addressed">Addressed</span></td><td>Neon/MotherDuck/DBOS cutover policy removed.</td></tr>
     <tr><td class="path"><code>platform/connections.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>Generic PostgreSQL and DBOS deployment behavior remains part of the broader platform design gate.</td></tr>
     <tr><td class="path"><code>platform/cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>worker.py</code></td><td><span class="status addressed">Addressed</span></td><td>Orphaned CLI plumbing, in-process enqueue runtime, and worker bootstrap removed.</td></tr>
-    <tr><td class="path"><code>platform/__init__.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform workflow execution, manifests, and targets remain.</td></tr>
+    <tr><td class="path"><code>platform/submission.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unexported programmatic manifest preparation and submission surface removed without a shim.</td></tr>
+    <tr><td class="path"><code>platform/__init__.py</code>, <code>graph_workflow.py</code>, <code>targets.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform workflow execution and targets remain.</td></tr>
     <tr><td class="path"><code>platform/release_parity_fixture.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unitbench release-parity implementation and CLI routes removed.</td></tr>
     <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>Signed bundle publication and its CLI removed.</td></tr>
     <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status addressed">Addressed</span></td><td>HumanEval campaign/ledger/reconciliation application removed.</td></tr>
@@ -390,7 +391,8 @@
     <tr><td class="path">Generic PostgreSQL cases in <code>test_connections.py</code></td><td class="num">6</td><td><span class="status partial">Decide</span></td><td>Retain only if PostgreSQL remains in the package contract after the platform design gate.</td></tr>
     <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status addressed">Addressed</span></td><td>Downstream optimization lifecycle and private durability-protocol tests removed.</td></tr>
     <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status addressed">Addressed</span></td><td>Unitbench delivery fixture and workflow-text tests removed.</td></tr>
-    <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, <code>test_platform_scoring_v6.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests HumanEval snapshots, encoder/decoder prompts, and scoring manifests.</td></tr>
+    <tr><td class="path">Submission-manifest case in <code>test_platform_scoring_v6.py</code></td><td class="num">1</td><td><span class="status addressed">Addressed</span></td><td>Programmatic submission-manifest behavior removed with its owning module.</td></tr>
+    <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, remaining <code>test_platform_scoring_v6.py</code></td><td class="num">22</td><td><span class="status fail">Remove</span></td><td>HumanEval snapshots, encoder/decoder prompts, and scoring-target tests remain.</td></tr>
     <tr><td class="path"><code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_publication.py</code></td><td class="num">14</td><td><span class="status addressed">Addressed</span></td><td>Projection, signing, and publication CLI tests removed.</td></tr>
     <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_cli_env.py</code></td><td class="num">18</td><td><span class="status addressed">Addressed</span></td><td>Orphaned DBOS runtime, operator, and CLI-plumbing tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status fail">Remove</span></td><td>AST-based implementation contract remains for the final test-cleanup slice.</td></tr>
@@ -440,7 +442,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -q</code>: 112 passed after the current cleanup stack.</li>
+      <li><code>uv run pytest tests/ -q</code>: 111 passed after the current cleanup stack.</li>
     </ul>
   </div>
 </div>

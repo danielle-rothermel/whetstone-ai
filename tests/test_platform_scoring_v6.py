@@ -3,12 +3,9 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any, cast
 
-from whetstone.platform.submission import (
-    ScoringTargetSpec,
-    prepare_scoring_manifest,
-)
 from whetstone.platform.targets import (
     SCORING_QUEUE_NAME,
+    ScoringTargetSpec,
     scoring_target,
     target_registry,
 )
@@ -45,22 +42,6 @@ def test_scoring_target_is_managed_top_level_priority_queue() -> None:
     assert target.queue_name == SCORING_QUEUE_NAME
     assert target.topology.value == "top_level_only"
     assert target_registry().resolve(target.ref) == target
-
-
-def test_scoring_manifest_freezes_ordered_selection_axes() -> None:
-    targets = (_target("run-1"), _target("run-2"))
-
-    manifest, source, digest = prepare_scoring_manifest(
-        operation_key="whetstone:scoring:exp:operation",
-        experiment_name="exp",
-        targets=targets,
-    )
-
-    assert source.targets == targets
-    assert manifest.item_count == 2
-    assert digest
-    assert manifest.workflow_role == "scoring"
-    assert manifest.manifest_digest
 
 
 def test_scoring_workflow_arguments_carry_every_recipe_axis() -> None:
