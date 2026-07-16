@@ -1,29 +1,26 @@
 from __future__ import annotations
 
-import errno
-import subprocess
-import sys
-from types import ModuleType
-
 import pytest
+from dbos._error import DBOSMaxStepRetriesExceeded
+from dr_providers import (
+    FailureClass,
+    ProviderFailureError,
+    failure_record,
+)
+from psycopg import OperationalError
 
 from whetstone.eval_failures import (
-    FailureClass,
     PermanentFailureError,
     RateLimitedFailureError,
     ResourceExhaustionFailureError,
     TransientFailureError,
-    policy,
+    UnknownFailureError,
+    classify_exception,
+    find_classified_exception,
     should_retry_step,
     summarize_exception,
+    unwrap_exception,
 )
-
-
-def _fake_module(name: str, **attrs: object) -> ModuleType:
-    module = ModuleType(name)
-    for attr_name, value in attrs.items():
-        setattr(module, attr_name, value)
-    return module
 
 
 @pytest.mark.parametrize(
@@ -51,13 +48,14 @@ def _fake_module(name: str, **attrs: object) -> ModuleType:
         ),
     ],
 )
-def test_explicit_failure_classes_define_recovery_and_retry_policy(
+def test_whetstone_failure_classes_define_policy(
     error: BaseException,
     expected_class: FailureClass,
     expected_retry: bool,
 ) -> None:
     summary = summarize_exception(error)
 
+    assert classify_exception(error) is expected_class
     assert summary.failure_class is expected_class
     assert summary.is_recoverable is (
         expected_class
@@ -70,166 +68,125 @@ def test_explicit_failure_classes_define_recovery_and_retry_policy(
     assert should_retry_step(error) is expected_retry
 
 
+@pytest.mark.parametrize(
+    ("failure_class", "expected_retry"),
+    [
+        (FailureClass.PERMANENT, False),
+        (FailureClass.TRANSIENT, True),
+        (FailureClass.RATE_LIMITED, True),
+        (FailureClass.RESOURCE_EXHAUSTION, False),
+        (FailureClass.UNKNOWN, False),
+    ],
+)
+def test_provider_failure_record_defines_policy(
+    failure_class: FailureClass,
+    expected_retry: bool,
+) -> None:
+    error = ProviderFailureError(
+        failure_record(
+            failure_class=failure_class,
+            message="provider failed",
+        )
+    )
+
+    summary = summarize_exception(error)
+
+    assert classify_exception(error) is failure_class
+    assert summary.failure_class is failure_class
+    assert summary.failure_exception_type.endswith("ProviderFailureError")
+    assert should_retry_step(error) is expected_retry
+
+
 def test_explicit_failure_summary_preserves_metadata() -> None:
     error = PermanentFailureError("bad input", metadata={"task_id": "x"})
 
     summary = summarize_exception(error)
 
-    assert summary.failure_class is FailureClass.PERMANENT
     assert summary.failure_metadata == {"task_id": "x"}
 
 
-def test_unclassified_error_is_unknown_and_not_retryable() -> None:
-    error = RuntimeError("unexpected")
+def test_cause_chain_uses_explicit_failure_and_underlying_root() -> None:
+    underlying = TimeoutError("provider deadline")
+    classified = TransientFailureError(
+        "provider failed",
+        underlying=underlying,
+        metadata={"provider": "test"},
+    )
+    wrapper = RuntimeError("workflow wrapper")
+    wrapper.__cause__ = classified
+
+    summary = summarize_exception(wrapper)
+
+    assert find_classified_exception(wrapper) is classified
+    assert summary.failure_class is FailureClass.TRANSIENT
+    assert summary.failure_exception_type.endswith("TransientFailureError")
+    assert summary.underlying_exception_type == "builtins.TimeoutError"
+    assert summary.message == "workflow wrapper"
+    assert summary.failure_metadata == {"provider": "test"}
+
+
+def test_explicit_unknown_failure_remains_classified() -> None:
+    error = UnknownFailureError("intentionally unknown")
 
     summary = summarize_exception(error)
 
+    assert classify_exception(error) is FailureClass.UNKNOWN
     assert summary.failure_class is FailureClass.UNKNOWN
+    assert summary.failure_exception_type.endswith("UnknownFailureError")
     assert summary.is_recoverable is False
     assert should_retry_step(error) is False
-def test_lazy_psycopg_operational_error_classification(
-    monkeypatch: pytest.MonkeyPatch,
+
+
+class FailureClassLookalike(Exception):
+    failure_class = FailureClass.TRANSIENT
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("unexpected"),
+        ValueError("bad input"),
+        TimeoutError("deadline exceeded"),
+        OSError("too many open files"),
+        FailureClassLookalike("looks transient"),
+    ],
+)
+def test_unclassified_builtin_and_duck_typed_errors_propagate(
+    error: BaseException,
 ) -> None:
-    class FakeOperationalError(Exception):
-        pass
+    assert classify_exception(error) is None
+    assert should_retry_step(error) is False
 
-    module_name = "tests.fake_psycopg"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(module_name, OperationalError=FakeOperationalError),
-    )
-    monkeypatch.setattr(policy, "PSYCOPG_MODULE", module_name)
+    with pytest.raises(type(error)) as exc_info:
+        summarize_exception(error)
 
-    error = FakeOperationalError("connection lost")
-
-    assert policy.classify_exception(error) is FailureClass.TRANSIENT
-    assert policy.should_retry_step(error) is True
+    assert exc_info.value is error
 
 
-def test_lazy_dbos_retry_wrapper_unwraps_last_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeDBOSMaxStepRetriesExceeded(Exception):
-        def __init__(self, errors: list[BaseException]) -> None:
-            super().__init__("max retries")
-            self.errors = errors
+def test_real_psycopg_failure_propagates() -> None:
+    error = OperationalError("connection lost")
 
-    module_name = "tests.fake_dbos_error"
-    monkeypatch.setitem(
-        sys.modules,
-        module_name,
-        _fake_module(
-            module_name,
-            DBOSMaxStepRetriesExceeded=FakeDBOSMaxStepRetriesExceeded,
-        ),
-    )
-    monkeypatch.setattr(policy, "DBOS_ERROR_MODULE", module_name)
+    assert classify_exception(error) is None
+    assert should_retry_step(error) is False
 
-    wrapper = FakeDBOSMaxStepRetriesExceeded(
-        [PermanentFailureError("first"), TransientFailureError("last")]
-    )
+    with pytest.raises(OperationalError) as exc_info:
+        summarize_exception(error)
 
-    assert policy.unwrap_exception(wrapper).args == ("last",)
-    assert policy.classify_exception(wrapper) is FailureClass.TRANSIENT
-    assert policy.should_retry_step(wrapper) is True
+    assert exc_info.value is error
 
 
-def test_real_dbos_max_step_retries_exceeded_unwraps_last_error() -> None:
-    from dbos._error import DBOSMaxStepRetriesExceeded
-
-    wrapper = DBOSMaxStepRetriesExceeded(
+def test_real_dbos_retry_wrapper_does_not_unwrap_errors_list() -> None:
+    error = DBOSMaxStepRetriesExceeded(
         "score_prediction_step",
         3,
         [PermanentFailureError("first"), TransientFailureError("last")],
     )
 
-    assert policy.unwrap_exception(wrapper).args == ("last",)
-    assert policy.classify_exception(wrapper) is FailureClass.TRANSIENT
-    assert policy.should_retry_step(wrapper) is True
+    assert unwrap_exception(error) is error
+    assert classify_exception(error) is None
+    assert should_retry_step(error) is False
 
+    with pytest.raises(DBOSMaxStepRetriesExceeded) as exc_info:
+        summarize_exception(error)
 
-def test_real_psycopg_operational_error_is_transient() -> None:
-    from psycopg import OperationalError
-
-    error = OperationalError("connection lost")
-
-    assert policy.classify_exception(error) is FailureClass.TRANSIENT
-    assert policy.should_retry_step(error) is True
-def test_is_open_file_exhaustion_detects_emfile_errno() -> None:
-    error = OSError(errno.EMFILE, "Too many open files")
-
-    assert policy.is_open_file_exhaustion(error) is True
-    assert policy.classify_exception(error) is FailureClass.RESOURCE_EXHAUSTION
-
-
-def test_is_open_file_exhaustion_detects_message_substring() -> None:
-    error = Exception("Too Many Open Files in process")
-
-    assert policy.is_open_file_exhaustion(error) is True
-
-
-@pytest.mark.parametrize(
-    ("error", "expected_class", "expected_retry"),
-    [
-        (TimeoutError("deadline exceeded"), FailureClass.TRANSIENT, True),
-        (ValueError("bad input"), FailureClass.PERMANENT, False),
-    ],
-)
-def test_builtin_exception_classification(
-    error: BaseException,
-    expected_class: FailureClass,
-    expected_retry: bool,
-) -> None:
-    assert policy.classify_exception(error) is expected_class
-    assert should_retry_step(error) is expected_retry
-
-
-def test_find_classified_exception_walks_cause_chain() -> None:
-    root = PermanentFailureError("root cause", metadata={"node": "decoder"})
-    wrapped = RuntimeError("wrapper")
-    wrapped.__cause__ = root
-
-    assert policy.find_classified_exception(wrapped) is root
-def test_policy_import_does_not_load_runtime_exception_modules() -> None:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; "
-                "blocked = ('dbos._error', 'openai', 'httpx', 'psycopg'); "
-                "before = set(sys.modules); "
-                "import whetstone.eval_failures; "
-                "import whetstone.eval_failures.policy; "
-                "introduced = set(sys.modules) - before; "
-                "print(any(name in introduced for name in blocked))"
-            ),
-        ],
-        capture_output=True,
-        check=True,
-        encoding="utf-8",
-    )
-
-    assert completed.stdout.strip() == "False"
-
-
-def test_recording_import_defers_psycopg_jsonb() -> None:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; "
-                "before = set(sys.modules); "
-                "import whetstone.eval_failures.recording; "
-                "introduced = set(sys.modules) - before; "
-                "print('psycopg.types.json' in introduced)"
-            ),
-        ],
-        capture_output=True,
-        check=True,
-        encoding="utf-8",
-    )
-
-    assert completed.stdout.strip() == "False"
+    assert exc_info.value is error

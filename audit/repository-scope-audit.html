@@ -45,7 +45,7 @@
     <tr><td>No visualization</td><td><span class="status addressed">Pass</span></td><td>No plotting implementation, visualization dependency, or tracked artifact output remains.</td></tr>
     <tr><td>No Unitbench link</td><td><span class="status addressed">Pass</span></td><td>The Unitbench workflow, fixture implementation, CLI routes, and tests are gone.</td></tr>
     <tr><td>No integration tests</td><td><span class="status addressed">Pass</span></td><td>The integration directory, global runtime fixtures, integration CI job, marker, and script are gone.</td></tr>
-    <tr><td>No defensive ceremony</td><td><span class="status fail">Fail</span></td><td>The source contains 358 explicit raises, 68 Pydantic models, 21 model validators, crash journals, fsync checkpoints, ownership proofs, cleanup proofs, allowlists, and layered failure translation.</td></tr>
+    <tr><td>No defensive ceremony</td><td><span class="status fail">Fail</span></td><td>The source still contains 107 explicit raises, 39 direct Pydantic <code>BaseModel</code> subclasses, seven model validators, duplicated record/database semantics, JSONB adapter limits, an explicit failure taxonomy/summary, and workflow fallbacks.</td></tr>
     <tr><td>Standalone and use-case neutral</td><td><span class="status fail">Fail</span></td><td>The README still defines Whetstone as a HumanEval/DR Platform application; HumanEval, encoder/decoder compression, PostgreSQL, and DBOS contracts remain in source and tests.</td></tr>
   </tbody>
 </table>
@@ -67,10 +67,10 @@
     <tr><td><code>DEF-01</code>, <code>TST-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-live-sweep</code></td><td>None. The live-sweep durability application and both private fault-injection suites are gone.</td></tr>
     <tr><td><code>DEF-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-cutover-motherduck</code></td><td>None. The cutover ownership, journaling, confirmation, and recovery subsystem is gone.</td></tr>
     <tr><td><code>DEF-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-dspy-adapter</code>, <code>cleanup-payload-validation</code></td><td>DSPy, record-construction byte caps, and the metrics-text storage cap are gone; semantic record/database duplication remains for the later model redesign.</td></tr>
-    <tr><td><code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Failure classification, dynamic exports, and third-party exception probing remain.</td></tr>
-    <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
+    <tr><td><code>DEF-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-failure-policy</code></td><td>Dynamic exports, loaded-module probing, built-in heuristics, and duck-typed classification are gone; the explicit package taxonomy and summary model remain for the public-API design gate.</td></tr>
+    <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code>, <code>cleanup-failure-policy</code></td><td>Release and live-sweep cleanup suppression are gone, and unclassified workflow errors now propagate; retained sleep, provider-reference, scoring, and cleanup fallbacks remain.</td></tr>
     <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
-    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code>, <code>cleanup-humaneval-authoring</code></td><td>DSPy and config-driven HumanEval authoring cases are also gone; downstream unit and structural tests remain.</td></tr>
+    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code>, <code>cleanup-humaneval-authoring</code>, <code>cleanup-failure-policy</code></td><td>Import-topology and private third-party-exception cases are gone; downstream unit tests and one AST structural test remain.</td></tr>
     <tr><td><code>TST-06</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-payload-validation</code></td><td>None. Constant-alias tests were removed with the duplicated byte-cap layer.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>Application entry points, operator plumbing, and the unexported submission surface are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-dspy-adapter</code></td><td>Development tools, unused direct dependencies, CLI dependencies, and DSPy are out of the package contract; retained platform/database dependencies remain.</td></tr>
@@ -230,8 +230,8 @@
 
 <div class="finding">
   <div class="finding-head"><h3>DEF-06 · Failure handling is a second abstraction over provider failures</h3><span class="severity high">High</span></div>
-  <p>The package defines 12 exception classes, dynamically exports policy and recording functions, lazily probes loaded DBOS and psycopg exception types, walks nested exception chains twice, converts errors into a five-field summary, wraps serialization failures, and then tests import order. This is more machinery than a small standalone boundary needs.</p>
-  <div class="evidence"><a href="../src/whetstone/eval_failures/exceptions.py"><code>eval_failures/exceptions.py</code></a> · <a href="../src/whetstone/eval_failures/policy.py"><code>eval_failures/policy.py:20–230</code></a> · <a href="../src/whetstone/eval_failures/__init__.py"><code>eval_failures/__init__.py:75–133</code></a></div>
+  <p>The failure-policy slice removed dynamic exports, loaded-module probing for DBOS and psycopg, built-in and message heuristics, arbitrary <code>failure_class</code> duck typing, and import-order tests. Only explicit Whetstone or provider failures can now be classified and recorded; everything else propagates. The package-specific exception taxonomy and five-field summary remain until the public error contract is designed.</p>
+  <div class="evidence"><a href="../src/whetstone/eval_failures/exceptions.py"><code>eval_failures/exceptions.py</code></a> · <a href="../src/whetstone/eval_failures/policy.py"><code>eval_failures/policy.py</code></a> · <a href="../src/whetstone/eval_failures/__init__.py"><code>eval_failures/__init__.py</code></a></div>
 </div>
 
 <div class="finding">
@@ -271,11 +271,11 @@
   <div class="finding-head"><h3>TST-04 · Structural tests are implementation- and dependency-version-bound</h3><span class="severity high">High</span></div>
   <ul>
     <li><code>test_platform_schema_contract.py</code> imports every DR Platform module, reflects signatures, walks every Whetstone AST, and recognizes only selected call shapes.</li>
-    <li><code>test_lm_imports.py</code> launches subprocesses and asserts exact <code>sys.modules</code> absence.</li>
-    <li><code>test_eval_failures_policy.py</code> similarly tests lazy import behavior and private DBOS exception wrappers.</li>
-    <li><code>test_release_parity_fixture.py</code> parses workflow YAML with string splitting and freezes action SHAs and step labels.</li>
+    <li><code>test_lm_imports.py</code> import-topology tests were removed by <code>cleanup-failure-policy</code>.</li>
+    <li><code>test_eval_failures_policy.py</code> now tests the explicit package contract rather than lazy imports or private DBOS wrappers.</li>
+    <li><code>test_release_parity_fixture.py</code> workflow-text tests were removed by <code>cleanup-unitbench-release</code>.</li>
   </ul>
-  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <a href="../tests/test_lm_imports.py"><code>tests/test_lm_imports.py</code></a> · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py:110–152, 194–235</code></a> · <code>tests/test_release_parity_fixture.py:369–432</code> (removed)</div>
+  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <code>tests/test_lm_imports.py</code> (removed) · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py</code></a> (rewritten) · <code>tests/test_release_parity_fixture.py</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -291,7 +291,7 @@
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 98 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 99 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
@@ -367,7 +367,7 @@
     <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
     <tr><td class="path"><code>platform/persistence.py</code>, <code>db/**</code>, <code>alembic.ini</code></td><td><span class="status fail">Remove</span></td><td>Application PostgreSQL persistence and migrations. If persistence remains a requirement, move it to an optional adapter with no core import path.</td></tr>
     <tr><td class="path"><code>records/models.py</code>, <code>hashing.py</code>, <code>providers.py</code></td><td><span class="status partial">Refactor</span></td><td>Repeated storage-size validation and <code>limits.py</code> are gone; HumanEval metrics, DR Platform properties, dataset defaults, and duplicated identities remain.</td></tr>
-    <tr><td class="path"><code>eval_failures/**</code></td><td><span class="status partial">Simplify</span></td><td>Retain a minimal explicit error contract; remove DBOS/psycopg heuristics, dynamic exports, import-order design, and duplicate provider taxonomy.</td></tr>
+    <tr><td class="path"><code>eval_failures/**</code></td><td><span class="status partial">Simplify</span></td><td>DBOS/psycopg heuristics, dynamic exports, and import-order design are gone. Decide the minimal public error contract before reducing the remaining package taxonomy and summary model.</td></tr>
     <tr><td class="path"><code>dspy_serialization.py</code></td><td><span class="status addressed">Addressed</span></td><td>DSPy-specific serialization adapter removed; generic <code>dr-serialize</code> behavior remains.</td></tr>
     <tr><td class="path"><code>lm/boundary.py</code>, <code>lm/utils.py</code></td><td><span class="status pass">Retain</span></td><td>Closest existing core: prompt-to-provider request mapping, provider response mapping, text/cost extraction, and credential sanitization. Rename and trim around a public contract.</td></tr>
     <tr><td class="path"><code>clock.py</code>, <code>node_ops.py</code></td><td><span class="status pass">Retain</span></td><td>Small generic utilities, subject to whether deterministic clock injection and the node-op vocabulary are actually used by the reduced package.</td></tr>
@@ -401,9 +401,10 @@
     <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_cli_env.py</code></td><td class="num">18</td><td><span class="status addressed">Addressed</span></td><td>Orphaned DBOS runtime, operator, and CLI-plumbing tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status fail">Remove</span></td><td>AST-based implementation contract remains for the final test-cleanup slice.</td></tr>
     <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status addressed">Addressed</span></td><td>DSPy adapter tests removed with their owning module.</td></tr>
-    <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">19</td><td><span class="status partial">Rewrite</span></td><td>The DSPy import-order assertion is gone; remove remaining private third-party exception and <code>sys.modules</code> tests in the failure-policy slice.</td></tr>
+    <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_platform_failure_boundary.py</code></td><td class="num">20</td><td><span class="status pass">Retain</span></td><td>Tests explicit Whetstone/provider classification, propagation of unclassified errors, retry policy, and the platform enum boundary.</td></tr>
+    <tr><td class="path"><code>test_lm_imports.py</code></td><td class="num">4</td><td><span class="status addressed">Addressed</span></td><td>Subprocess and <code>sys.modules</code> topology assertions removed.</td></tr>
     <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status addressed">Addressed</span></td><td>Constant-alias assertions removed with the duplicated byte-cap layer.</td></tr>
-    <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">22</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; delete direct/encdec naming and duplicated wrapper cases.</td></tr>
+    <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">23</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; direct/encdec naming and duplicated wrapper cases remain for the public-API design gate.</td></tr>
     <tr><td class="path"><code>test_lm_boundary.py</code>, <code>test_lm_utils.py</code></td><td class="num">31</td><td><span class="status pass">Retain</span></td><td>Best match for necessary request/response mapping, text extraction, cost extraction, and sanitization behavior.</td></tr>
     <tr><td class="path"><code>tests/conftest.py</code></td><td class="num">—</td><td><span class="status addressed">Addressed</span></td><td>Global database/runtime fixtures removed with the integration harness.</td></tr>
     <tr><td class="path">Experiment JSON fixtures, <code>serialization_support.py</code></td><td class="num">—</td><td><span class="status partial">Decide</span></td><td>Retain only small local builders required by the eventual standalone contract.</td></tr>
@@ -419,7 +420,7 @@
   <div class="step"><h3>Visualization and experiment residue · addressed</h3><p>Marimo, Matplotlib, tracked artifacts, and committed HumanEval experiment/model/split configurations are gone.</p></div>
   <div class="step"><h3>Platform application · partial</h3><p>Cutover, live sweep, publication, release parity, COPRO, operator/worker modules, and the explicit integration suite are gone. DBOS workflows, targets, persistence, and PostgreSQL schema/migrations remain.</p></div>
   <div class="step"><h3>Define one standalone public contract</h3><p>Choose the smallest reusable behavior—likely graph/LM request execution and typed outcomes—export it from <code>whetstone</code>, document it, and make benchmark, provider, persistence, and orchestration adapters explicit and optional.</p></div>
-  <div class="step"><h3>Simplify records and failures around that contract</h3><p>PostgreSQL byte limits now live only at JSONB adapters. Remove HumanEval metrics and defaults, redundant identities, dynamic failure exports, third-party exception heuristics, and silent fallbacks after choosing the public contract and persistence boundary.</p></div>
+  <div class="step"><h3>Simplify records and failures around that contract</h3><p>PostgreSQL byte limits now live only at JSONB adapters; dynamic failure exports and third-party heuristics are gone. Remove HumanEval metrics and defaults, redundant identities, the residual package error taxonomy, and silent fallbacks after choosing the public contract and persistence boundary.</p></div>
   <div class="step"><h3>Rebuild tests from public behavior</h3><p>Retain deterministic request/response, parsing, sanitization, and explicit error tests. Delete source inspection, workflow text, import-order, crash-boundary, database, runtime, and downstream scenario tests.</p></div>
 </div>
 
@@ -446,7 +447,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -q</code>: 98 passed after the current cleanup stack.</li>
+      <li><code>uv run pytest tests/ -q</code>: 99 passed after the current cleanup stack.</li>
     </ul>
   </div>
 </div>

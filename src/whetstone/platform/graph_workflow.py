@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import Any
 
+import dr_platform
 from dbos import DBOS, SetWorkflowID
 from dr_graph import GraphRunResult, NodeOutput, NodeSpec, execute_graph
 from dr_platform import (
@@ -20,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import create_engine
 
 from whetstone.clock import now
-from whetstone.eval_failures import should_retry_step
+from whetstone.eval_failures import classify_exception, should_retry_step
 from whetstone.platform.node_execution import (
     NodeStepResult,
     attach_node_step_timing_to_exception,
@@ -169,6 +170,8 @@ def run_prediction_graph_workflow(
             )
             return NodeStepResult.model_validate(result)
         except Exception as error:
+            if classify_exception(error) is None:
+                raise
             timing = node_step_timing_from_exception(error)
             result = node_step_error_result_step(
                 spec_payload,
@@ -371,6 +374,8 @@ def execute_lm_node_step(
                 started_at=step_started_at,
                 completed_at=now(),
             )
+        if classify_exception(error) is None:
+            raise
         if provider_ref is not None:
             record_throttle_failure_state(
                 throttle_key=provider_ref.throttle_key,
@@ -401,7 +406,9 @@ def record_throttle_failure_state(
             record_throttle_failure(
                 connection,
                 throttle_key=throttle_key,
-                failure_class=summary.failure_class,
+                failure_class=dr_platform.FailureClass(
+                    summary.failure_class.value
+                ),
                 error_type=summary.failure_exception_type,
                 message=summary.message,
                 metadata=summary.failure_metadata,
