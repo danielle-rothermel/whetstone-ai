@@ -32,7 +32,6 @@ dependencies = [
 ]
 
 [project.scripts]
-whetstone-live-sweep = "whetstone.platform.live_sweep:main"
 whetstone-cutover = "whetstone.platform.cutover_tooling:main"
 
 [dependency-groups]
