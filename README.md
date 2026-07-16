@@ -9,5 +9,4 @@ Run the local checks with:
 ```sh
 ./scripts/ci/unit.sh
 ./scripts/ci/lint.sh
-DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```

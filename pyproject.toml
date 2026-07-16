@@ -61,9 +61,6 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = [
-    "integration: Postgres and DBOS integration tests (opt-in)",
-]
 
 [tool.pyright]
 venvPath = "."
