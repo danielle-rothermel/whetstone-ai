@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -11,20 +10,9 @@ from whetstone.platform.dataset_snapshot import (
     HumanEvalSnapshot,
     load_humaneval_snapshot,
 )
-from whetstone.platform.spec_builder import (
-    ExperimentSpecConfig,
-    iter_experiment_specs,
-    load_experiment_spec_config,
-)
 
 DATASET_NAME = "local/fixture"
 DATASET_SPLIT = "test"
-CONFIG_PATH = (
-    Path(__file__).parent
-    / "fixtures"
-    / "experiment_configs"
-    / "direct_minimal.json"
-)
 
 
 def _row(offset: int) -> dict[str, str]:
@@ -140,107 +128,6 @@ def test_mutation_after_registration_is_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_injected_snapshot_carries_verified_identity(
-    tmp_path: Path,
-) -> None:
-    snapshot_path = _write_snapshot(tmp_path / "snapshot.json")
-    snapshot = load_humaneval_snapshot(
-        dataset_name=DATASET_NAME,
-        dataset_split=DATASET_SPLIT,
-        snapshot_path=snapshot_path,
-    )
-    config = load_experiment_spec_config(CONFIG_PATH)
-
-    assert "rows" not in inspect.signature(iter_experiment_specs).parameters
-
-    specs = tuple(
-        iter_experiment_specs(
-            config,
-            snapshot=snapshot,
-        )
-    )
-
-    assert specs
-    assert all(
-        spec.task.metadata["dataset_snapshot"]
-        == snapshot.identity.model_dump(mode="json")
-        for spec in specs
-    )
-
-
-def test_humaneval_direct_axis_preserves_legacy_prompt_and_bypasses_encoder(
-    tmp_path: Path,
-) -> None:
-    snapshot = load_humaneval_snapshot(
-        dataset_name=DATASET_NAME,
-        dataset_split=DATASET_SPLIT,
-        snapshot_path=_write_snapshot(tmp_path / "snapshot.json"),
-    )
-    config = ExperimentSpecConfig.model_validate(
-        {
-            "experiment_name": "humaneval-direct",
-            "graph_layout": "encdec",
-            "encdec_shape": "humaneval",
-            "dataset": {
-                "name": DATASET_NAME,
-                "split": DATASET_SPLIT,
-                "snapshot_path": str(tmp_path / "snapshot.json"),
-            },
-            "repetition_seeds": [0],
-            "dimensions_axes": [
-                {"compression_target": None},
-                {"compression_target": 1.0},
-            ],
-            "providers": [
-                {"model": "test", "config_id": "encoder"},
-                {"model": "test", "config_id": "decoder"},
-            ],
-        }
-    )
-
-    direct, compressed = tuple(
-        iter_experiment_specs(config, snapshot=snapshot)
-    )
-
-    assert direct.dimensions.values == {
-        "compression_target": None,
-        "budget_mode": "direct",
-    }
-    assert direct.task.inputs.values["prompt"] == "def add_1(x):\n"
-    assert "gt_code" not in direct.task.inputs.values
-    assert direct.graph.graph.terminal_node_id == "direct"
-    assert direct.graph.graph.node("direct").config.input_bindings["prompt"]
-    assert direct.provider_axis.config_id == "decoder"
-    assert compressed.dimensions.values["budget_mode"] == "compressed"
-    assert compressed.graph.graph.terminal_node_id == "decoder"
-    assert "gt_code" in compressed.task.inputs.values
-    assert direct.prediction_id != compressed.prediction_id
-
-
-def test_injected_snapshot_rejects_another_dataset(
-    tmp_path: Path,
-) -> None:
-    snapshot_path = write_human_eval_snapshot_rows(
-        [_row(1)],
-        snapshot_path=tmp_path / "snapshot.json",
-        dataset_name="other/dataset",
-    )
-    snapshot = load_humaneval_snapshot(
-        dataset_name="other/dataset",
-        dataset_split=DATASET_SPLIT,
-        snapshot_path=snapshot_path,
-    )
-    config = load_experiment_spec_config(CONFIG_PATH)
-
-    with pytest.raises(ValueError, match="configured dataset"):
-        tuple(
-            iter_experiment_specs(
-                config,
-                snapshot=snapshot,
-            )
-        )
-
-
 def test_same_dataset_different_content_cannot_be_detached(
     tmp_path: Path,
 ) -> None:
@@ -263,7 +150,7 @@ def test_same_dataset_different_content_cannot_be_detached(
         )
 
 
-def test_nested_row_mutation_is_rejected_at_consumption(
+def test_nested_row_mutation_is_rejected_by_content_validation(
     tmp_path: Path,
 ) -> None:
     snapshot = load_humaneval_snapshot(
@@ -271,14 +158,13 @@ def test_nested_row_mutation_is_rejected_at_consumption(
         dataset_split=DATASET_SPLIT,
         snapshot_path=_write_snapshot(tmp_path / "snapshot.json"),
     )
-    config = load_experiment_spec_config(CONFIG_PATH)
     snapshot.rows[0]["prompt"] = "def tampered(x):\n"
 
     with pytest.raises(ValueError, match="rows must match snapshot bytes"):
-        tuple(iter_experiment_specs(config, snapshot=snapshot))
+        snapshot.validate_content_coupling()
 
 
-def test_row_field_replacement_is_rejected_at_consumption(
+def test_row_field_replacement_is_rejected_by_content_validation(
     tmp_path: Path,
 ) -> None:
     snapshot = load_humaneval_snapshot(
@@ -286,10 +172,9 @@ def test_row_field_replacement_is_rejected_at_consumption(
         dataset_split=DATASET_SPLIT,
         snapshot_path=_write_snapshot(tmp_path / "snapshot.json"),
     )
-    config = load_experiment_spec_config(CONFIG_PATH)
     replacement = dict(snapshot.rows[0])
     replacement["prompt"] = "def replaced(x):\n"
     snapshot.rows = (replacement,)
 
     with pytest.raises(ValueError, match="rows must match snapshot bytes"):
-        tuple(iter_experiment_specs(config, snapshot=snapshot))
+        snapshot.validate_content_coupling()

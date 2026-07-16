@@ -1,6 +1,0 @@
-{
-  "experiment_name": "encdec-exp", "graph_layout": "encdec",
-  "dataset": {"name": "local/fixture", "split": "test", "snapshot_path": "../dr-code/tests/corpus/humanevalplus_snapshot.json", "sample_seed": 3, "sample_count": 1},
-  "repetition_seeds": [0], "dimensions_axes": [{"temperature": 0.2}],
-  "providers": [{"model": "encoder-model", "config_id": "encoder"}, {"model": "decoder-model", "config_id": "decoder"}]
-}
