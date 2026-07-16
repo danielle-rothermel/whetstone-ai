@@ -19,7 +19,9 @@ from dr_providers import (
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from whetstone.eval_failures import (
+    EvalFailureError,
     PermanentFailureError,
+    classify_exception,
     find_classified_exception,
     should_retry_step,
     summarize_exception,
@@ -228,6 +230,8 @@ def execute_lm_node(
         )
     except Exception as error:
         completed_at = datetime.now(UTC)
+        if classify_exception(error) is None:
+            raise
         if raise_retryable and should_retry_step(error):
             attach_node_step_timing_to_exception(
                 error,
@@ -255,7 +259,7 @@ def attach_node_step_timing_to_exception(
         NODE_STEP_COMPLETED_AT_METADATA_KEY: completed_at.isoformat(),
     }
     classified = find_classified_exception(error)
-    if classified is not None:
+    if isinstance(classified, EvalFailureError):
         classified.metadata.update(timing_metadata)
         return
     error.__dict__["node_step_started_at"] = started_at
@@ -266,10 +270,8 @@ def node_step_timing_from_exception(
     error: BaseException,
 ) -> tuple[datetime, datetime] | None:
     classified = find_classified_exception(error)
-    if classified is not None:
-        started_at = classified.metadata.get(
-            NODE_STEP_STARTED_AT_METADATA_KEY
-        )
+    if isinstance(classified, EvalFailureError):
+        started_at = classified.metadata.get(NODE_STEP_STARTED_AT_METADATA_KEY)
         completed_at = classified.metadata.get(
             NODE_STEP_COMPLETED_AT_METADATA_KEY
         )
