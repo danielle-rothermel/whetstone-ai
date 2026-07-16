@@ -24,21 +24,6 @@ from whetstone.platform.integrity import (
     required_bundle_integrity_configuration,
 )
 from whetstone.platform.operations import WhetstoneDbosCanceller
-from whetstone.platform.release_parity_fixture import (
-    cleanup as cleanup_release_parity_fixture,
-)
-from whetstone.platform.release_parity_fixture import (
-    cleanup_local as cleanup_local_release_parity_fixture,
-)
-from whetstone.platform.release_parity_fixture import (
-    prepare as prepare_release_parity_fixture,
-)
-from whetstone.platform.release_parity_fixture import (
-    prepare_local as prepare_local_release_parity_fixture,
-)
-from whetstone.platform.release_parity_fixture import (
-    verify_evidence as verify_release_parity_evidence,
-)
 from whetstone.platform.runtime import resolve_application_database_url
 from whetstone.platform.targets import target_registry
 from whetstone.publication import export_whetstone
@@ -121,64 +106,6 @@ def publish(
         typer.echo(detail.model_dump_json())
     finally:
         engine.dispose()
-
-
-@APP.command("release-parity-fixture")
-def release_parity_fixture(
-    action: Annotated[
-        str, typer.Argument(help="prepare, cleanup, or verify-evidence")
-    ],
-    descriptor: Annotated[Path, typer.Option("--descriptor")],
-    cleanup_proof: Annotated[
-        Path | None, typer.Option("--cleanup-proof")
-    ] = None,
-    journal: Annotated[Path | None, typer.Option("--journal")] = None,
-) -> None:
-    """Produce or remove the disposable v6 release-parity fixture."""
-
-    if action == "prepare":
-        if cleanup_proof is not None:
-            raise typer.BadParameter("prepare does not accept --cleanup-proof")
-        typer.echo(
-            prepare_release_parity_fixture(descriptor).model_dump_json()
-        )
-    elif action == "cleanup":
-        if cleanup_proof is None:
-            raise typer.BadParameter("cleanup requires --cleanup-proof")
-        typer.echo(
-            cleanup_release_parity_fixture(
-                descriptor, cleanup_proof, journal
-            ).model_dump_json()
-        )
-    elif action == "verify-evidence":
-        if cleanup_proof is None:
-            raise typer.BadParameter(
-                "verify-evidence requires --cleanup-proof"
-            )
-        verify_release_parity_evidence(descriptor, cleanup_proof, journal)
-        typer.echo("verified")
-    else:
-        raise typer.BadParameter(
-            "action must be prepare, cleanup, or verify-evidence"
-        )
-
-
-@APP.command("local-release-parity-fixture")
-def local_release_parity_fixture(
-    action: Annotated[str, typer.Argument(help="prepare or cleanup")],
-    descriptor: Annotated[Path, typer.Option("--descriptor")],
-) -> None:
-    """Produce or remove only the signed local release-parity artifacts."""
-
-    if action == "prepare":
-        typer.echo(
-            prepare_local_release_parity_fixture(descriptor).model_dump_json()
-        )
-    elif action == "cleanup":
-        cleanup_local_release_parity_fixture(descriptor)
-        typer.echo("cleaned")
-    else:
-        raise typer.BadParameter("action must be prepare or cleanup")
 
 
 def main() -> None:
