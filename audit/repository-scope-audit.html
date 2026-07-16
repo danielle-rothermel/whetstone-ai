@@ -59,11 +59,15 @@
   <tbody>
     <tr><td><code>VIS-02</code>, <code>VIS-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>main</code> · PR #51</td><td>None. All tracked files under <code>artifacts/</code> are gone.</td></tr>
     <tr><td><code>VIS-01</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-visualization-deps</code></td><td>None. Marimo and Matplotlib are absent from project dependencies and the lock.</td></tr>
-    <tr><td><code>DCK-01</code>–<code>DCK-04</code>, <code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove COPRO, publication projections, direct DuckDB, MotherDuck policy, and tests.</td></tr>
+    <tr><td><code>DCK-01</code>, <code>DCK-04</code>, <code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove COPRO, publication projections, direct DuckDB, and tests.</td></tr>
+    <tr><td><code>DCK-02</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release-parity DuckDB descriptors are gone; COPRO defaults and publication bundles remain.</td></tr>
+    <tr><td><code>DCK-03</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release-parity MotherDuck behavior is gone; cutover and connection policy remain.</td></tr>
     <tr><td><code>DCK-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-visualization-deps</code></td><td>The Marimo dependency path is gone; DuckDB remains transitively through <code>dr-platform</code>.</td></tr>
-    <tr><td><code>UNT-01</code>–<code>UNT-03</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove Unitbench release-parity workflow, fixture implementation, and tests.</td></tr>
-    <tr><td><code>DEF-01</code>–<code>DEF-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core fallbacks and validation require a later design pass.</td></tr>
-    <tr><td><code>TST-01</code>–<code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Delete tests with their owning slices, then remove the residual integration harness.</td></tr>
+    <tr><td><code>UNT-01</code>–<code>UNT-03</code>, <code>DEF-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code></td><td>None. Workflow, fixture implementation, CLI routes, and both test modules are gone.</td></tr>
+    <tr><td><code>DEF-01</code>, <code>DEF-03</code>–<code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core validation requires a later design pass.</td></tr>
+    <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release rollback suppression is gone; live-sweep and retained workflow fallbacks remain.</td></tr>
+    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Two integration cases and 15 workflow/fixture unit cases are gone; other downstream and structural tests remain.</td></tr>
+    <tr><td><code>TST-02</code>, <code>TST-05</code>, <code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove residual integration fixtures, durability-protocol tests, and constant tests.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
@@ -104,13 +108,13 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-02 · Local publication and COPRO persist DuckDB files by contract</h3><span class="severity blocker">Blocker</span></div>
   <p>The publication API builds two fixed bundles at caller-supplied paths. COPRO defaults those paths to <code>analysis.duckdb</code> and <code>detail.duckdb</code>; release-parity descriptors validate those exact suffixes as ownership identities.</p>
-  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:834–874</code></a> · <a href="../src/whetstone/optimization/copro_operator.py"><code>src/whetstone/optimization/copro_operator.py:448–465</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>src/whetstone/platform/release_parity_fixture.py:145–179, 196–253</code></a></div>
+  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:834–874</code></a> · <a href="../src/whetstone/optimization/copro_operator.py"><code>src/whetstone/optimization/copro_operator.py:448–465</code></a> · <code>src/whetstone/platform/release_parity_fixture.py:145–179, 196–253</code> (removed)</div>
 </div>
 
 <div class="finding">
   <div class="finding-head"><h3>DCK-03 · MotherDuck-specific connection and cutover policy is spread across the platform</h3><span class="severity blocker">Blocker</span></div>
   <p><code>DatabaseBoundary.MOTHERDUCK_POSTGRES</code>, backend detection, hstore special-casing, three-store cutover descriptors, MotherDuck environment variables, remote fences, and MotherDuck cleanup are all explicit application behavior.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/connections.py"><code>platform/connections.py:19–25, 81–102</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>platform/cutover_tooling.py:40–134, 394–704</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>platform/release_parity_fixture.py:669–835, 1036–1134</code></a></div>
+  <div class="evidence"><a href="../src/whetstone/platform/connections.py"><code>platform/connections.py:19–25, 81–102</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>platform/cutover_tooling.py:40–134, 394–704</code></a> · <code>platform/release_parity_fixture.py:669–835, 1036–1134</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -162,19 +166,19 @@
 <div class="finding">
   <div class="finding-head"><h3>UNT-01 · Release CI checks out and executes Unitbench</h3><span class="severity blocker">Blocker</span></div>
   <p>The reusable workflow requires a Unitbench token, checks out the caller repository into <code>unitbench/</code>, runs <code>pnpm install</code>, maps database and integrity credentials, and invokes <code>pnpm check:delivery-parity</code>.</p>
-  <div class="evidence"><a href="../.github/workflows/release-parity.yml"><code>.github/workflows/release-parity.yml:19–20, 72–97</code></a></div>
+  <div class="evidence"><code>.github/workflows/release-parity.yml:19–20, 72–97</code> (removed by <code>cleanup-unitbench-release</code>)</div>
 </div>
 
 <div class="finding">
   <div class="finding-head"><h3>UNT-02 · A 1,438-line production fixture exists to satisfy that delivery gate</h3><span class="severity blocker">Blocker</span></div>
   <p><code>release_parity_fixture.py</code> seeds accepted rows, signs two local bundles, publishes two remote planes, records pins/checksums, writes recovery journals, proves cleanup, and exposes local and remote fixture commands. The publication CLI imports and dispatches it.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/release_parity_fixture.py"><code>src/whetstone/platform/release_parity_fixture.py</code></a> · <a href="../src/whetstone/platform/publication.py"><code>src/whetstone/platform/publication.py:127–180</code></a></div>
+  <div class="evidence"><code>src/whetstone/platform/release_parity_fixture.py</code> (removed) · <a href="../src/whetstone/platform/publication.py"><code>src/whetstone/platform/publication.py</code></a> (fixture commands removed)</div>
 </div>
 
 <div class="finding">
   <div class="finding-head"><h3>UNT-03 · Tests freeze Unitbench workflow text and secret mapping</h3><span class="severity high">High</span></div>
   <p>Tests split raw YAML around exact Unitbench step names and assert exact secret names and Git credential configuration. These assertions protect the downstream integration rather than Whetstone’s core behavior.</p>
-  <div class="evidence"><a href="../tests/test_release_parity_fixture.py"><code>tests/test_release_parity_fixture.py:369–432</code></a></div>
+  <div class="evidence"><code>tests/test_release_parity_fixture.py:369–432</code> (removed)</div>
 </div>
 
 <div class="section-head" id="defensive"><h2>Defensive machinery has become multiple subsystems</h2></div>
@@ -192,7 +196,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DEF-02 · Release parity validates ownership at every representation</h3><span class="severity blocker">Blocker</span></div>
   <p>Seven models validate run IDs, SHA-256 values, local file names, remote destination IDs, bundle keys, pin IDs, member inventories, counts, checksums, secret-shaped fields, cleanup observations, and journal agreement. The module has 47 raises and several best-effort rollback branches.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/release_parity_fixture.py"><code>release_parity_fixture.py:92–380, 721–1438</code></a></div>
+  <div class="evidence"><code>release_parity_fixture.py:92–380, 721–1438</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -229,7 +233,7 @@
     <li>Unknown harness failure classes become <code>UNKNOWN</code> instead of failing at the ingest boundary.</li>
     <li>Cutover and release rollback suppress secondary failures, retaining only optional trace evidence in the latter case.</li>
   </ul>
-  <div class="evidence"><a href="../src/whetstone/platform/graph_workflow.py"><code>graph_workflow.py:298–304, 352–386</code></a> · <a href="../src/whetstone/platform/node_execution.py"><code>node_execution.py:288–307</code></a> · <a href="../src/whetstone/platform/live_sweep.py"><code>live_sweep.py:284–299</code></a> · <a href="../src/whetstone/platform/scoring.py"><code>scoring.py:283–289</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>release_parity_fixture.py:1036–1134</code></a></div>
+  <div class="evidence"><a href="../src/whetstone/platform/graph_workflow.py"><code>graph_workflow.py:298–304, 352–386</code></a> · <a href="../src/whetstone/platform/node_execution.py"><code>node_execution.py:288–307</code></a> · <a href="../src/whetstone/platform/live_sweep.py"><code>live_sweep.py:284–299</code></a> · <a href="../src/whetstone/platform/scoring.py"><code>scoring.py:283–289</code></a> · <code>release_parity_fixture.py:1036–1134</code> (removed)</div>
 </div>
 
 <div class="section-head" id="tests"><h2>The test suite protects the application architecture more than a core contract</h2></div>
@@ -260,7 +264,7 @@
     <li><code>test_eval_failures_policy.py</code> similarly tests lazy import behavior and private DBOS exception wrappers.</li>
     <li><code>test_release_parity_fixture.py</code> parses workflow YAML with string splitting and freezes action SHAs and step labels.</li>
   </ul>
-  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <a href="../tests/test_lm_imports.py"><code>tests/test_lm_imports.py</code></a> · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py:110–152, 194–235</code></a> · <a href="../tests/test_release_parity_fixture.py"><code>tests/test_release_parity_fixture.py:369–432</code></a></div>
+  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <a href="../tests/test_lm_imports.py"><code>tests/test_lm_imports.py</code></a> · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py:110–152, 194–235</code></a> · <code>tests/test_release_parity_fixture.py:369–432</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -340,7 +344,8 @@
     <tr><td class="path"><code>platform/acceptance.py</code>, <code>operations.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform manifest acceptance, promotion, cancellation, retry, and operator CLI.</td></tr>
     <tr><td class="path"><code>platform/connections.py</code>, <code>cutover_tooling.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>PostgreSQL/Neon/MotherDuck/DBOS deployment and cutover policy.</td></tr>
     <tr><td class="path"><code>platform/__init__.py</code>, <code>cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code>, <code>worker.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform and DBOS workflow execution, queues, manifests, targets, CLI plumbing, and worker bootstrap.</td></tr>
-    <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code>, <code>release_parity_fixture.py</code></td><td><span class="status fail">Remove</span></td><td>Signed bundle publication and Unitbench release-parity delivery.</td></tr>
+    <tr><td class="path"><code>platform/release_parity_fixture.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unitbench release-parity implementation and CLI routes removed.</td></tr>
+    <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status fail">Remove</span></td><td>Signed bundle publication remains.</td></tr>
     <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval campaign/ledger/reconciliation application.</td></tr>
     <tr><td class="path"><code>platform/dataset_snapshot.py</code>, <code>scoring.py</code>, <code>scoring_workflow.py</code>, <code>spec_builder.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval snapshots, scoring, prompts, encoder/decoder compression, and experiment expansion.</td></tr>
     <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
@@ -352,7 +357,7 @@
     <tr><td class="path"><code>clock.py</code>, <code>node_ops.py</code></td><td><span class="status pass">Retain</span></td><td>Small generic utilities, subject to whether deterministic clock injection and the node-op vocabulary are actually used by the reduced package.</td></tr>
     <tr><td class="path"><code>src/whetstone/__init__.py</code>, <code>lm/__init__.py</code>, <code>records/__init__.py</code>, <code>py.typed</code></td><td><span class="status partial">Rewrite</span></td><td>Expose the reduced public contract from the root, re-export only intentional types, and keep the typing marker.</td></tr>
     <tr><td class="path"><code>configs/**</code>, <code>artifacts/**</code></td><td><span class="status fail">Remove</span></td><td>HumanEval experiment deployment and historical outputs.</td></tr>
-    <tr><td class="path"><code>.github/workflows/release-parity.yml</code></td><td><span class="status fail">Remove</span></td><td>Direct Unitbench/MotherDuck/Neon delivery integration.</td></tr>
+    <tr><td class="path"><code>.github/workflows/release-parity.yml</code></td><td><span class="status addressed">Addressed</span></td><td>Direct Unitbench/MotherDuck/Neon delivery integration removed.</td></tr>
     <tr><td class="path"><code>scripts/ci/integration.sh</code>, integration CI job</td><td><span class="status fail">Remove</span></td><td>Explicit integration-test harness.</td></tr>
     <tr><td class="path"><code>scripts/ci/unit.sh</code>, <code>lint.sh</code>, <code>.github/workflows/whetstone_tests.yml</code>, <code>Dockerfile.ci</code></td><td><span class="status partial">Simplify</span></td><td>Keep unit/lint automation, remove integration setup and application-only dependencies, and align it with the reduced package.</td></tr>
     <tr><td class="path"><code>pyproject.toml</code>, <code>uv.lock</code>, <code>README.md</code></td><td><span class="status partial">Rewrite</span></td><td>Define the package contract, narrow runtime dependencies, remove CLI surfaces, and regenerate the lock.</td></tr>
@@ -371,7 +376,7 @@
     <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status fail">Remove</span></td><td>Tests removable campaign ledger and reconciliation implementation.</td></tr>
     <tr><td class="path"><code>test_cutover_tooling.py</code>, <code>test_connections.py</code></td><td class="num">40</td><td><span class="status fail">Remove</span></td><td>Tests MotherDuck/Neon/PostgreSQL/DBOS deployment boundaries.</td></tr>
     <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests downstream optimization lifecycle and private durability protocol.</td></tr>
-    <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status fail">Remove</span></td><td>Tests Unitbench delivery fixture, workflow text, secrets, ownership, and cleanup proof.</td></tr>
+    <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status addressed">Addressed</span></td><td>Unitbench delivery fixture and workflow-text tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, <code>test_platform_scoring_v6.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests HumanEval snapshots, encoder/decoder prompts, and scoring manifests.</td></tr>
     <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_platform_schema_contract.py</code>, <code>test_platform_cli_env.py</code>, <code>test_publication.py</code></td><td class="num">28</td><td><span class="status fail">Remove</span></td><td>Tests DBOS runtime, operator commands, projection, signing, platform structure, and CLI plumbing.</td></tr>
     <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status partial">Decide</span></td><td>Retain only if DSPy is an explicit optional package adapter.</td></tr>
