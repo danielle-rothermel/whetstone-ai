@@ -32,7 +32,6 @@ dependencies = [
 ]
 
 [project.scripts]
-whetstone-cutover = "whetstone.platform.cutover_tooling:main"
 
 [dependency-groups]
 dev = [

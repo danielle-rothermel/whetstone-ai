@@ -60,17 +60,17 @@
     <tr><td><code>VIS-02</code>, <code>VIS-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>main</code> · PR #51</td><td>None. All tracked files under <code>artifacts/</code> are gone.</td></tr>
     <tr><td><code>VIS-01</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-visualization-deps</code></td><td>None. Marimo and Matplotlib are absent from project dependencies and the lock.</td></tr>
     <tr><td><code>DCK-01</code>, <code>DCK-02</code>, <code>DCK-04</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>None. Direct DuckDB access, fixed projection schemas, and local bundle contracts are gone.</td></tr>
-    <tr><td><code>DCK-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-publication-duckdb</code></td><td>DuckDB export tests are gone; MotherDuck cutover and connection tests remain.</td></tr>
-    <tr><td><code>DCK-03</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release-parity MotherDuck behavior is gone; cutover and connection policy remain.</td></tr>
+    <tr><td><code>DCK-03</code>, <code>DCK-06</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-cutover-motherduck</code></td><td>None. MotherDuck/Neon policy, cutover tooling, and DuckDB/MotherDuck tests are gone.</td></tr>
     <tr><td><code>DCK-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-visualization-deps</code></td><td>The Marimo dependency path is gone; DuckDB remains transitively through <code>dr-platform</code>.</td></tr>
     <tr><td><code>UNT-01</code>–<code>UNT-03</code>, <code>DEF-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code></td><td>None. Workflow, fixture implementation, CLI routes, and both test modules are gone.</td></tr>
     <tr><td><code>DEF-04</code>, <code>GEN-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code></td><td>None. The COPRO operator, crash-safe checkpoint store, CLI, and tests are gone.</td></tr>
     <tr><td><code>DEF-01</code>, <code>TST-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-live-sweep</code></td><td>None. The live-sweep durability application and both private fault-injection suites are gone.</td></tr>
-    <tr><td><code>DEF-03</code>, <code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove the cutover subsystem; retained-core validation requires a later design pass.</td></tr>
+    <tr><td><code>DEF-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-cutover-motherduck</code></td><td>None. The cutover ownership, journaling, confirmation, and recovery subsystem is gone.</td></tr>
+    <tr><td><code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Retained-core records, storage validation, and failure policy require a later design pass.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
-    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code></td><td>Release, COPRO, publication, and 62 live-sweep unit cases are gone; other application and structural tests remain.</td></tr>
+    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code></td><td>Release, COPRO, publication, live-sweep, cutover, and MotherDuck cases are gone; other application and structural tests remain.</td></tr>
     <tr><td><code>TST-02</code>, <code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove residual integration fixtures and constant tests.</td></tr>
-    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code></td><td>Three application entry points are gone; cutover and platform exports remain.</td></tr>
+    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code></td><td>All four application entry points are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code>, <code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
@@ -117,7 +117,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-03 · MotherDuck-specific connection and cutover policy is spread across the platform</h3><span class="severity blocker">Blocker</span></div>
   <p><code>DatabaseBoundary.MOTHERDUCK_POSTGRES</code>, backend detection, hstore special-casing, three-store cutover descriptors, MotherDuck environment variables, remote fences, and MotherDuck cleanup are all explicit application behavior.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/connections.py"><code>platform/connections.py:19–25, 81–102</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>platform/cutover_tooling.py:40–134, 394–704</code></a> · <code>platform/release_parity_fixture.py:669–835, 1036–1134</code> (removed)</div>
+  <div class="evidence"><code>platform/connections.py:19–25, 81–102</code> (MotherDuck/Neon policy removed) · <code>platform/cutover_tooling.py:40–134, 394–704</code> (removed) · <code>platform/release_parity_fixture.py:669–835, 1036–1134</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -135,7 +135,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-06 · Tests cover DuckDB and MotherDuck as supported behavior</h3><span class="severity high">High</span></div>
   <p>The suite imports DuckDB, opens exported files, uses DuckDB filenames in unit tests, probes live MotherDuck behavior, and tests MotherDuck URL and marker semantics.</p>
-  <div class="evidence"><code>tests/integration/test_publication_export.py:11, 303–399</code> (removed) · <a href="../tests/integration/test_cutover_motherduck.py"><code>tests/integration/test_cutover_motherduck.py</code></a> · <a href="../tests/test_connections.py"><code>tests/test_connections.py:170–244</code></a> · <a href="../tests/test_cutover_tooling.py"><code>tests/test_cutover_tooling.py:82–179, 462–518</code></a></div>
+  <div class="evidence"><code>tests/integration/test_publication_export.py:11, 303–399</code> (removed) · <code>tests/integration/test_cutover_motherduck.py</code> (removed) · <code>tests/test_connections.py:170–244</code> (MotherDuck cases removed) · <code>tests/test_cutover_tooling.py:82–179, 462–518</code> (removed)</div>
 </div>
 
 <div class="section-head" id="visualization"><h2>Visualization code is absent, but visualization tooling and outputs remain</h2></div>
@@ -205,7 +205,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DEF-03 · Cutover tooling adds a second ownership-and-recovery protocol</h3><span class="severity high">High</span></div>
   <p>The 728-line cutover tool manages three database boundaries, marker tables, schema ownership, a durable journal, SQLite DBOS identity, zero-mutation previews, exact confirmation tokens, cleanup preflight, and cleanup verification. It catches cleanup failures and suppresses the secondary exception.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/cutover_tooling.py"><code>cutover_tooling.py:44–654</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>cutover_tooling.py:505–511</code></a></div>
+  <div class="evidence"><code>cutover_tooling.py:44–654, 505–511</code> (removed by <code>cleanup-cutover-motherduck</code>)</div>
 </div>
 
 <div class="finding">
@@ -345,7 +345,8 @@
     <tr><td class="path"><code>src/whetstone/publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>DuckDB reader and fixed DR Platform projection surface removed.</td></tr>
     <tr><td class="path"><code>src/whetstone/optimization/*.py</code></td><td><span class="status addressed">Addressed</span></td><td>COPRO, HumanEval encoder optimization, pinned bundle reads, and crash-safe operator checkpoints removed.</td></tr>
     <tr><td class="path"><code>platform/acceptance.py</code>, <code>operations.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform manifest acceptance, promotion, cancellation, retry, and operator CLI.</td></tr>
-    <tr><td class="path"><code>platform/connections.py</code>, <code>cutover_tooling.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>PostgreSQL/Neon/MotherDuck/DBOS deployment and cutover policy.</td></tr>
+    <tr><td class="path"><code>platform/cutover_tooling.py</code></td><td><span class="status addressed">Addressed</span></td><td>Neon/MotherDuck/DBOS cutover policy removed.</td></tr>
+    <tr><td class="path"><code>platform/connections.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>Generic PostgreSQL and DBOS deployment behavior remains part of the broader platform design gate.</td></tr>
     <tr><td class="path"><code>platform/__init__.py</code>, <code>cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code>, <code>worker.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform and DBOS workflow execution, queues, manifests, targets, CLI plumbing, and worker bootstrap.</td></tr>
     <tr><td class="path"><code>platform/release_parity_fixture.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unitbench release-parity implementation and CLI routes removed.</td></tr>
     <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>Signed bundle publication and its CLI removed.</td></tr>
@@ -377,7 +378,8 @@
   <tbody>
     <tr><td class="path"><code>tests/integration/test_*.py</code> (7 modules)</td><td class="num">18</td><td><span class="status fail">Remove</span></td><td>Explicit PostgreSQL, DBOS, DuckDB, MotherDuck, migration, publication, and release-fixture integration tests.</td></tr>
     <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status addressed">Addressed</span></td><td>Campaign ledger and reconciliation tests removed.</td></tr>
-    <tr><td class="path"><code>test_cutover_tooling.py</code>, <code>test_connections.py</code></td><td class="num">40</td><td><span class="status fail">Remove</span></td><td>Tests MotherDuck/Neon/PostgreSQL/DBOS deployment boundaries.</td></tr>
+    <tr><td class="path"><code>test_cutover_tooling.py</code>, MotherDuck cases in <code>test_connections.py</code></td><td class="num">34</td><td><span class="status addressed">Addressed</span></td><td>Cutover and MotherDuck/Neon connection-policy tests removed.</td></tr>
+    <tr><td class="path">Generic PostgreSQL cases in <code>test_connections.py</code></td><td class="num">6</td><td><span class="status partial">Decide</span></td><td>Retain only if PostgreSQL remains in the package contract after the platform design gate.</td></tr>
     <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status addressed">Addressed</span></td><td>Downstream optimization lifecycle and private durability-protocol tests removed.</td></tr>
     <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status addressed">Addressed</span></td><td>Unitbench delivery fixture and workflow-text tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, <code>test_platform_scoring_v6.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests HumanEval snapshots, encoder/decoder prompts, and scoring manifests.</td></tr>
