@@ -70,7 +70,8 @@
     <tr><td><code>DEF-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-failure-policy</code></td><td>Dynamic exports, loaded-module probing, built-in heuristics, and duck-typed classification are gone; the explicit package taxonomy and summary model remain for the public-API design gate.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code>, <code>cleanup-failure-policy</code></td><td>Release and live-sweep cleanup suppression are gone, and unclassified workflow errors now propagate; retained sleep, provider-reference, scoring, and cleanup fallbacks remain.</td></tr>
     <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
-    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code>, <code>cleanup-humaneval-authoring</code>, <code>cleanup-failure-policy</code></td><td>Import-topology and private third-party-exception cases are gone; downstream unit tests and one AST structural test remain.</td></tr>
+    <tr><td><code>TST-03</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code>, <code>cleanup-humaneval-authoring</code>, <code>cleanup-failure-policy</code>, <code>cleanup-structural-tests</code></td><td>Removable application, authoring, import-topology, and structural cases are gone; retained HumanEval and platform unit behavior remains for later design gates.</td></tr>
+    <tr><td><code>TST-04</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-failure-policy</code>, <code>cleanup-structural-tests</code></td><td>None. Workflow-text, import-topology, private-wrapper, and AST implementation-contract tests are gone.</td></tr>
     <tr><td><code>TST-06</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-payload-validation</code></td><td>None. Constant-alias tests were removed with the duplicated byte-cap layer.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>Application entry points, operator plumbing, and the unexported submission surface are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-dspy-adapter</code></td><td>Development tools, unused direct dependencies, CLI dependencies, and DSPy are out of the package contract; retained platform/database dependencies remain.</td></tr>
@@ -137,7 +138,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-05 · DuckDB remains resolved through a platform dependency</h3><span class="severity high">High</span></div>
   <p>The original audit resolved DuckDB through both <code>dr-platform</code> and <code>marimo[recommended]</code>. <code>cleanup-visualization-deps</code> removes the Marimo path; <code>dr-platform</code> still resolves DuckDB transitively.</p>
-  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:12, 15, 18</code></a> · <a href="../uv.lock"><code>uv.lock:525–532, 580, 1295–1327</code></a></div>
+  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml</code></a> (direct <code>dr-platform</code> requirement) · <a href="../uv.lock"><code>uv.lock</code></a> (<code>dr-platform</code> → <code>duckdb</code>)</div>
 </div>
 
 <div class="finding">
@@ -146,12 +147,12 @@
   <div class="evidence"><code>tests/integration/test_publication_export.py:11, 303–399</code> (removed) · <code>tests/integration/test_cutover_motherduck.py</code> (removed) · <code>tests/test_connections.py:170–244</code> (MotherDuck cases removed) · <code>tests/test_cutover_tooling.py:82–179, 462–518</code> (removed)</div>
 </div>
 
-<div class="section-head" id="visualization"><h2>Visualization code is absent, but visualization tooling and outputs remain</h2></div>
+<div class="section-head" id="visualization"><h2>Visualization implementation, tooling, and outputs are removed</h2></div>
 
 <div class="finding">
   <div class="finding-head"><h3>VIS-01 · Visualization and notebook tooling shipped as runtime dependencies</h3><span class="severity high">High</span></div>
   <p><code>marimo[recommended]</code> and <code>matplotlib</code> were direct project dependencies, despite neither being imported by tracked production source. <code>cleanup-visualization-deps</code> removes both and regenerates the lock.</p>
-  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:18–19</code></a> · <a href="../uv.lock"><code>uv.lock:1295, 1411, 3097–3131</code></a></div>
+  <div class="evidence"><code>pyproject.toml</code> and <code>uv.lock</code> (historical dependency entries removed by <code>cleanup-visualization-deps</code>)</div>
 </div>
 
 <div class="finding">
@@ -195,7 +196,7 @@
 <div class="section-head" id="defensive"><h2>Defensive machinery has become multiple subsystems</h2></div>
 
 <div class="callout warn">
-  Counts are a scale signal, not a claim that every check is wrong: 358 <code>raise</code> statements, 48 exception handlers, 68 direct Pydantic models, and 21 model-validator methods. The findings below identify where the checks form removable operational protocols or hide failures.
+  Counts are a scale signal, not a claim that every check is wrong: 107 <code>raise</code> statements, 15 exception handlers, 39 direct Pydantic <code>BaseModel</code> subclasses, and seven model-validator methods. The findings below identify where the retained checks duplicate persistence rules or hide failures.
 </div>
 
 <div class="finding">
@@ -270,12 +271,12 @@
 <div class="finding">
   <div class="finding-head"><h3>TST-04 · Structural tests are implementation- and dependency-version-bound</h3><span class="severity high">High</span></div>
   <ul>
-    <li><code>test_platform_schema_contract.py</code> imports every DR Platform module, reflects signatures, walks every Whetstone AST, and recognizes only selected call shapes.</li>
+    <li><code>test_platform_schema_contract.py</code> AST and reflected-signature checks were removed by <code>cleanup-structural-tests</code>.</li>
     <li><code>test_lm_imports.py</code> import-topology tests were removed by <code>cleanup-failure-policy</code>.</li>
     <li><code>test_eval_failures_policy.py</code> now tests the explicit package contract rather than lazy imports or private DBOS wrappers.</li>
     <li><code>test_release_parity_fixture.py</code> workflow-text tests were removed by <code>cleanup-unitbench-release</code>.</li>
   </ul>
-  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <code>tests/test_lm_imports.py</code> (removed) · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py</code></a> (rewritten) · <code>tests/test_release_parity_fixture.py</code> (removed)</div>
+  <div class="evidence"><code>tests/test_platform_schema_contract.py</code> (removed) · <code>tests/test_lm_imports.py</code> (removed) · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py</code></a> (rewritten) · <code>tests/test_release_parity_fixture.py</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -291,7 +292,7 @@
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 99 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 98 retained unit tests pass. No integration marker, global integration fixtures, structural contract tests, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
@@ -399,7 +400,7 @@
     <tr><td class="path">Retained <code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, and <code>test_platform_scoring_v6.py</code></td><td class="num">18</td><td><span class="status fail">Remove</span></td><td>HumanEval snapshot, generic prompt, and scoring-target behavior remains for later boundary decisions.</td></tr>
     <tr><td class="path"><code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_publication.py</code></td><td class="num">14</td><td><span class="status addressed">Addressed</span></td><td>Projection, signing, and publication CLI tests removed.</td></tr>
     <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_cli_env.py</code></td><td class="num">18</td><td><span class="status addressed">Addressed</span></td><td>Orphaned DBOS runtime, operator, and CLI-plumbing tests removed.</td></tr>
-    <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status fail">Remove</span></td><td>AST-based implementation contract remains for the final test-cleanup slice.</td></tr>
+    <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status addressed">Addressed</span></td><td>AST-based implementation contract removed.</td></tr>
     <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status addressed">Addressed</span></td><td>DSPy adapter tests removed with their owning module.</td></tr>
     <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_platform_failure_boundary.py</code></td><td class="num">20</td><td><span class="status pass">Retain</span></td><td>Tests explicit Whetstone/provider classification, propagation of unclassified errors, retry policy, and the platform enum boundary.</td></tr>
     <tr><td class="path"><code>test_lm_imports.py</code></td><td class="num">4</td><td><span class="status addressed">Addressed</span></td><td>Subprocess and <code>sys.modules</code> topology assertions removed.</td></tr>
@@ -447,7 +448,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -q</code>: 99 passed after the current cleanup stack.</li>
+      <li><code>uv run pytest tests/ -q</code>: 98 passed after the current cleanup stack.</li>
     </ul>
   </div>
 </div>
