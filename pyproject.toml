@@ -20,7 +20,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "dspy==3.3.0b1",
     "pre-commit>=4.6.0",
     "pytest>=8.4.2",
     "ruff>=0.15.10",
@@ -59,7 +58,7 @@ venv = ".venv"
 select = ["E", "F", "I", "UP", "B", "RUF"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["whetstone", "dspy"]
+known-first-party = ["whetstone"]
 
 [tool.ty.environment]
 extra-paths = ["..", "tests"]

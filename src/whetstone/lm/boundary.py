@@ -64,7 +64,7 @@ class ProviderResult(BaseModel):
 
 
 class PlainPromptAdapter(BaseModel):
-    """Minimal prompt adapter with no hidden DSPy formatting."""
+    """Minimal prompt adapter with no hidden framework formatting."""
 
     model_config = ConfigDict(extra="forbid")
 
