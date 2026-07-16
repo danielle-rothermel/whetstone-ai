@@ -66,13 +66,14 @@
     <tr><td><code>DEF-04</code>, <code>GEN-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code></td><td>None. The COPRO operator, crash-safe checkpoint store, CLI, and tests are gone.</td></tr>
     <tr><td><code>DEF-01</code>, <code>TST-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-live-sweep</code></td><td>None. The live-sweep durability application and both private fault-injection suites are gone.</td></tr>
     <tr><td><code>DEF-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-cutover-motherduck</code></td><td>None. The cutover ownership, journaling, confirmation, and recovery subsystem is gone.</td></tr>
-    <tr><td><code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Retained-core records, storage validation, and failure policy require a later design pass.</td></tr>
+    <tr><td><code>DEF-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-dspy-adapter</code></td><td>DSPy-specific serialization is gone; repeated record-size validation remains for the storage-boundary slice.</td></tr>
+    <tr><td><code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Failure classification, dynamic exports, and third-party exception probing remain.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
     <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
-    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>The orphaned operator and submission cases are also gone; downstream unit and structural tests remain.</td></tr>
+    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code></td><td>The DSPy adapter tests and its import-order assertion are also gone; downstream unit and structural tests remain.</td></tr>
     <tr><td><code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove constant tests when their owning platform modules are redesigned or deleted.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>Application entry points, operator plumbing, and the unexported submission surface are gone; platform workflow exports remain.</td></tr>
-    <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code></td><td>Development tools, six unused direct dependencies, Typer, and python-dotenv are out of the runtime contract; retained platform/database dependencies remain.</td></tr>
+    <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-dspy-adapter</code></td><td>Development tools, unused direct dependencies, CLI dependencies, and DSPy are out of the package contract; retained platform/database dependencies remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
@@ -289,7 +290,7 @@
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 111 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 103 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
@@ -365,7 +366,7 @@
     <tr><td class="path"><code>platform/persistence.py</code>, <code>db/**</code>, <code>alembic.ini</code></td><td><span class="status fail">Remove</span></td><td>Application PostgreSQL persistence and migrations. If persistence remains a requirement, move it to an optional adapter with no core import path.</td></tr>
     <tr><td class="path"><code>records/models.py</code>, <code>hashing.py</code>, <code>providers.py</code>, <code>limits.py</code></td><td><span class="status partial">Refactor</span></td><td>Keep only generic graph/LM result contracts; remove HumanEval metrics, DR Platform properties, dataset defaults, storage-size policy, and duplicated stable identities not required by the public API.</td></tr>
     <tr><td class="path"><code>eval_failures/**</code></td><td><span class="status partial">Simplify</span></td><td>Retain a minimal explicit error contract; remove DBOS/psycopg heuristics, dynamic exports, import-order design, and duplicate provider taxonomy.</td></tr>
-    <tr><td class="path"><code>dspy_serialization.py</code></td><td><span class="status partial">Isolate</span></td><td>DSPy-specific adapter; make optional or remove unless DSPy is part of the intended standalone contract.</td></tr>
+    <tr><td class="path"><code>dspy_serialization.py</code></td><td><span class="status addressed">Addressed</span></td><td>DSPy-specific serialization adapter removed; generic <code>dr-serialize</code> behavior remains.</td></tr>
     <tr><td class="path"><code>lm/boundary.py</code>, <code>lm/utils.py</code></td><td><span class="status pass">Retain</span></td><td>Closest existing core: prompt-to-provider request mapping, provider response mapping, text/cost extraction, and credential sanitization. Rename and trim around a public contract.</td></tr>
     <tr><td class="path"><code>clock.py</code>, <code>node_ops.py</code></td><td><span class="status pass">Retain</span></td><td>Small generic utilities, subject to whether deterministic clock injection and the node-op vocabulary are actually used by the reduced package.</td></tr>
     <tr><td class="path"><code>src/whetstone/__init__.py</code>, <code>lm/__init__.py</code>, <code>records/__init__.py</code>, <code>py.typed</code></td><td><span class="status partial">Rewrite</span></td><td>Expose the reduced public contract from the root, re-export only intentional types, and keep the typing marker.</td></tr>
@@ -396,8 +397,8 @@
     <tr><td class="path"><code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_publication.py</code></td><td class="num">14</td><td><span class="status addressed">Addressed</span></td><td>Projection, signing, and publication CLI tests removed.</td></tr>
     <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_cli_env.py</code></td><td class="num">18</td><td><span class="status addressed">Addressed</span></td><td>Orphaned DBOS runtime, operator, and CLI-plumbing tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status fail">Remove</span></td><td>AST-based implementation contract remains for the final test-cleanup slice.</td></tr>
-    <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status partial">Decide</span></td><td>Retain only if DSPy is an explicit optional package adapter.</td></tr>
-    <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">20</td><td><span class="status partial">Rewrite</span></td><td>Keep public error outcomes; delete import-order, private third-party exception, and <code>sys.modules</code> tests.</td></tr>
+    <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status addressed">Addressed</span></td><td>DSPy adapter tests removed with their owning module.</td></tr>
+    <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">19</td><td><span class="status partial">Rewrite</span></td><td>The DSPy import-order assertion is gone; remove remaining private third-party exception and <code>sys.modules</code> tests in the failure-policy slice.</td></tr>
     <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status fail">Remove</span></td><td>Constant-alias assertions provide no core behavioral evidence.</td></tr>
     <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">22</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; delete direct/encdec naming and duplicated wrapper cases.</td></tr>
     <tr><td class="path"><code>test_lm_boundary.py</code>, <code>test_lm_utils.py</code></td><td class="num">31</td><td><span class="status pass">Retain</span></td><td>Best match for necessary request/response mapping, text extraction, cost extraction, and sanitization behavior.</td></tr>
@@ -442,7 +443,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -q</code>: 111 passed after the current cleanup stack.</li>
+      <li><code>uv run pytest tests/ -q</code>: 103 passed after the current cleanup stack.</li>
     </ul>
   </div>
 </div>
