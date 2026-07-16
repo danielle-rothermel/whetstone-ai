@@ -15,8 +15,6 @@ dependencies = [
     "dr-platform",
     "dr-providers",
     "dr-serialize",
-    "marimo[recommended]>=0.23.11",
-    "matplotlib>=3.11.0",
     "pandas>=3.0.3",
     "pre-commit>=4.6.0",
     "psycopg>=3.3.4",

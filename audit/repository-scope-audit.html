@@ -58,8 +58,9 @@
   <thead><tr><th>Findings</th><th>Status</th><th>Addressed by</th><th>Remaining work</th></tr></thead>
   <tbody>
     <tr><td><code>VIS-02</code>, <code>VIS-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>main</code> · PR #51</td><td>None. All tracked files under <code>artifacts/</code> are gone.</td></tr>
-    <tr><td><code>VIS-01</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove Marimo and Matplotlib from project dependencies and regenerate the lock.</td></tr>
-    <tr><td><code>DCK-01</code>–<code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove COPRO, publication projections, direct DuckDB, MotherDuck policy, tests, and dependency paths.</td></tr>
+    <tr><td><code>VIS-01</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-visualization-deps</code></td><td>None. Marimo and Matplotlib are absent from project dependencies and the lock.</td></tr>
+    <tr><td><code>DCK-01</code>–<code>DCK-04</code>, <code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove COPRO, publication projections, direct DuckDB, MotherDuck policy, and tests.</td></tr>
+    <tr><td><code>DCK-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-visualization-deps</code></td><td>The Marimo dependency path is gone; DuckDB remains transitively through <code>dr-platform</code>.</td></tr>
     <tr><td><code>UNT-01</code>–<code>UNT-03</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove Unitbench release-parity workflow, fixture implementation, and tests.</td></tr>
     <tr><td><code>DEF-01</code>–<code>DEF-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core fallbacks and validation require a later design pass.</td></tr>
     <tr><td><code>TST-01</code>–<code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Delete tests with their owning slices, then remove the residual integration harness.</td></tr>
@@ -119,8 +120,8 @@
 </div>
 
 <div class="finding">
-  <div class="finding-head"><h3>DCK-05 · DuckDB remains resolved through two dependency paths</h3><span class="severity high">High</span></div>
-  <p><code>uv tree</code> resolves DuckDB through both <code>dr-platform</code> and <code>marimo[recommended]</code>. Removing direct imports is therefore insufficient; dependency and lockfile cleanup must follow.</p>
+  <div class="finding-head"><h3>DCK-05 · DuckDB remains resolved through a platform dependency</h3><span class="severity high">High</span></div>
+  <p>The original audit resolved DuckDB through both <code>dr-platform</code> and <code>marimo[recommended]</code>. <code>cleanup-visualization-deps</code> removes the Marimo path; <code>dr-platform</code> still resolves DuckDB transitively.</p>
   <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:12, 15, 18</code></a> · <a href="../uv.lock"><code>uv.lock:525–532, 580, 1295–1327</code></a></div>
 </div>
 
@@ -133,8 +134,8 @@
 <div class="section-head" id="visualization"><h2>Visualization code is absent, but visualization tooling and outputs remain</h2></div>
 
 <div class="finding">
-  <div class="finding-head"><h3>VIS-01 · Visualization and notebook tooling ships as runtime dependencies</h3><span class="severity high">High</span></div>
-  <p><code>marimo[recommended]</code> and <code>matplotlib</code> are direct project dependencies, not optional or development dependencies. Neither is imported by tracked production source. Their presence expands installation and brings DuckDB back through Marimo.</p>
+  <div class="finding-head"><h3>VIS-01 · Visualization and notebook tooling shipped as runtime dependencies</h3><span class="severity high">High</span></div>
+  <p><code>marimo[recommended]</code> and <code>matplotlib</code> were direct project dependencies, despite neither being imported by tracked production source. <code>cleanup-visualization-deps</code> removes both and regenerates the lock.</p>
   <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:18–19</code></a> · <a href="../uv.lock"><code>uv.lock:1295, 1411, 3097–3131</code></a></div>
 </div>
 
