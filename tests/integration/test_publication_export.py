@@ -29,10 +29,6 @@ from dr_platform.publication import OpenSslEd25519Signer
 from dr_platform.reconciliation_runtime import ReconcileOptions
 from sqlalchemy import create_engine, insert, text
 
-from whetstone.optimization.copro import (
-    select_best_candidate,
-    summarize_pinned_candidates,
-)
 from whetstone.platform.scoring import score_metrics_payload
 from whetstone.platform.targets import target_registry
 from whetstone.publication import (
@@ -191,8 +187,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
                 "('prediction', 'exp', 'task', 0, 'graph', 'dimensions', 'layout', "
                 "'provider', 'endpoint', 'model', 'throttle', '{}'::jsonb, "
                 "'{}'::jsonb, "
-                "'{\"values\":{\"optimizer\":\"copro_minimal\","
-                "\"candidate_id\":\"candidate-shared\"}}'::jsonb, "
+                "'{}'::jsonb, "
                 "'{}'::jsonb, :now)"
             ),
             {"now": now},
@@ -360,7 +355,7 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
         database, analysis_pin, public_key_ring=public_key_ring
     )
     prediction = reader.rows("predictions")[0]
-    assert prediction["candidate_id"] == "candidate-shared"
+    assert prediction["candidate_id"] == "prediction"
     assert prediction["provider_cost"] == Decimal("0.125")
     assert float(prediction["compression_ratio"]) == pytest.approx(
         expected_compression_ratio
@@ -371,10 +366,6 @@ def test_export_builds_and_promotes_complete_pinned_bundles(
     assert [
         row["score_attempt_id"] for row in reader.rows("score_attempts")
     ] == ["score-selected"]
-    copro_results = summarize_pinned_candidates(reader, experiment_name="exp")
-    assert len(copro_results) == 1
-    assert copro_results[0].pass_count == 1
-    assert select_best_candidate(copro_results) == copro_results[0]
     detail_bundle = resolve_local_pin(
         database, detail_pin, public_key_ring=public_key_ring
     )

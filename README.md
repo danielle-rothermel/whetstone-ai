@@ -19,5 +19,4 @@ Publication has two explicit, independently promoted surfaces:
 - the root-cascaded Detail Bundle, including application-snapshot platform
   attempts.
 
-Consumers pin a bundle before reading it. COPRO ranks only the pinned Analysis
-Bundle and never falls back to operational tables or workflow payloads.
+Consumers pin a bundle before reading it.
