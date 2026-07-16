@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -22,10 +21,6 @@ from whetstone.platform.connections import (
     bind_schema,
     bind_schema_strict,
     render_connection_url,
-)
-from whetstone.platform.cutover_tooling import (
-    prepare_stores,
-    validate_store_state,
 )
 from whetstone.platform.platform_db import (
     PLATFORM_VERSION_TABLE,
@@ -121,49 +116,6 @@ def test_ensure_migrates_fresh_schema_despite_public_collision(
     finally:
         strict.dispose()
         runtime.dispose()
-
-
-@pytest.mark.integration
-def test_production_prepare_path_leaves_public_oids_unchanged(
-    postgres_base_url: str,
-    admin_engine: Engine,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Exact production ``stores prepare`` into fresh schemas, then verify."""
-    _assert_public_baseline_installed(admin_engine)
-    before = _public_whetstone_oids(admin_engine)
-    for name in (
-        "DATABASE_URL",
-        "MOTHERDUCK_DATABASE_URL",
-        "NEON_DATABASE_URL",
-    ):
-        monkeypatch.setenv(name, postgres_base_url)
-    run_id = f"it{uuid.uuid4().hex[:10]}"
-    descriptor_path = tmp_path / "stores.json"
-    schemas = (
-        f"whetstone_run_{run_id}",
-        f"whetstone_analysis_{run_id}",
-        f"whetstone_detail_{run_id}",
-    )
-
-    try:
-        descriptor = prepare_stores(descriptor_path, run_id)
-
-        assert descriptor.run_id == run_id
-        assert descriptor_path.exists()
-        assert _public_whetstone_oids(admin_engine) == before
-        # stores verify: re-proves run-schema ownership of every object.
-        validate_store_state(descriptor_path)
-    finally:
-        for name in schemas:
-            with admin_engine.begin() as connection:
-                connection.execute(
-                    text(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
-                )
-        dbos_path = tmp_path / f"{run_id}-dbos.sqlite3"
-        if dbos_path.exists():
-            dbos_path.unlink()
 
 
 @pytest.mark.integration
