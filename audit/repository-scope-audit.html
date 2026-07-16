@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<title>Whetstone is currently a HumanEval platform application, not a standalone package</title>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Whetstone scope audit</div>
+  <a href="#verdict">Verdict</a>
+  <a href="#remediation">Remediation status</a>
+  <a href="#inventory">Repository shape</a>
+  <div class="group">Findings</div>
+  <a href="#duckdb">DuckDB and projection</a>
+  <a href="#visualization">Visualization</a>
+  <a href="#unitbench">Unitbench</a>
+  <a href="#defensive">Defensive ceremony</a>
+  <a href="#tests">Tests</a>
+  <a href="#downstream">Downstream coupling</a>
+  <div class="group">Action</div>
+  <a href="#production-ledger">Production file ledger</a>
+  <a href="#test-ledger">Test file ledger</a>
+  <a href="#sequence">Removal sequence</a>
+  <a href="#method">Method and verification</a>
+</nav>
+
+<main>
+<h1>Whetstone is currently a HumanEval platform application, not a standalone package</h1>
+<div class="byline">whetstone-ai · repository scope audit · 2026-07-15</div>
+
+<div class="hero">
+  The repository <span class="key">fails every requested boundary</span> except one narrow negative finding: there is no tracked Python plotting implementation. DuckDB, MotherDuck, Unitbench, visualization dependencies, integration tests, platform operations, HumanEval treatment logic, fixed data projections, and extensive recovery machinery are present. Generated artifacts were removed on <code>main</code> after the original audit. The remaining work is an architectural contraction, not a small cleanup.
+</div>
+
+<div class="section-head" id="verdict"><h2>Every requested boundary is currently violated</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Boundary</th><th>Verdict</th><th>Current evidence</th></tr></thead>
+  <tbody>
+    <tr><td>No DuckDB</td><td><span class="status fail">Fail</span></td><td>Two production imports, a direct read-only connection, DuckDB file defaults, DuckDB-aware exception handling, MotherDuck policy, tests, CI secrets, and two resolved dependency paths.</td></tr>
+    <tr><td>No visualization</td><td><span class="status fail">Fail</span></td><td><code>matplotlib</code> and <code>marimo[recommended]</code> remain runtime dependencies. The previously tracked PNGs and analysis artifacts were removed by <code>main</code> PR #51.</td></tr>
+    <tr><td>No Unitbench link</td><td><span class="status fail">Fail</span></td><td>A reusable workflow checks out Unitbench, installs it, runs its delivery-parity command, and maps Whetstone secrets into Unitbench-specific variables.</td></tr>
+    <tr><td>No integration tests</td><td><span class="status fail">Fail</span></td><td>Seven integration test modules collect 18 cases; CI provisions PostgreSQL and runs them separately.</td></tr>
+    <tr><td>No defensive ceremony</td><td><span class="status fail">Fail</span></td><td>The source contains 358 explicit raises, 68 Pydantic models, 21 model validators, crash journals, fsync checkpoints, ownership proofs, cleanup proofs, allowlists, and layered failure translation.</td></tr>
+    <tr><td>Standalone and use-case neutral</td><td><span class="status fail">Fail</span></td><td>The README defines Whetstone as a HumanEval/DR Platform application; HumanEval, encoder/decoder compression, COPRO, PostgreSQL, DBOS, and publication contracts permeate source, configuration, tests, and artifacts.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="remediation"><h2>Remediation status is cumulative across the stack</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Findings</th><th>Status</th><th>Addressed by</th><th>Remaining work</th></tr></thead>
+  <tbody>
+    <tr><td><code>VIS-02</code>, <code>VIS-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>main</code> · PR #51</td><td>None. All tracked files under <code>artifacts/</code> are gone.</td></tr>
+    <tr><td><code>VIS-01</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove Marimo and Matplotlib from project dependencies and regenerate the lock.</td></tr>
+    <tr><td><code>DCK-01</code>–<code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove COPRO, publication projections, direct DuckDB, MotherDuck policy, tests, and dependency paths.</td></tr>
+    <tr><td><code>UNT-01</code>–<code>UNT-03</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove Unitbench release-parity workflow, fixture implementation, and tests.</td></tr>
+    <tr><td><code>DEF-01</code>–<code>DEF-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core fallbacks and validation require a later design pass.</td></tr>
+    <tr><td><code>TST-01</code>–<code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Delete tests with their owning slices, then remove the residual integration harness.</td></tr>
+    <tr><td><code>GEN-01</code>–<code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout good">
+  <strong>Important clean finding:</strong> tracked source contains no <code>matplotlib</code>, <code>marimo</code>, seaborn, Plotly, Altair, Bokeh, or <code>savefig</code> call. Visualization residue is limited to dependencies, lockfile entries, and generated artifacts.
+</div>
+
+<div class="section-head" id="inventory"><h2>The application shell dominates the package</h2></div>
+
+<div class="grid-4">
+  <div class="card"><div class="metric">18,062</div><div class="label">production Python lines</div></div>
+  <div class="card"><div class="metric">89.1%</div><div class="label">platform + database + optimization + publication</div></div>
+  <div class="card"><div class="metric">291</div><div class="label">collected test cases</div></div>
+  <div class="card"><div class="metric">209</div><div class="label">cases tied to removable downstream/infrastructure surfaces</div></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>The platform package is 67.4% of production source</h3>
+    <p><code>src/whetstone/platform/</code> contains 24 files and 12,166 lines. Database code adds 1,434 lines, optimization 1,531, and fixed publication projection 956.</p>
+  </div>
+  <div class="card">
+    <h3>The apparent core is small and still not neutral</h3>
+    <p>LM helpers are 259 lines and failure helpers 576. The 962-line records layer still imports HumanEval metric and test types, DR Graph, DR Providers, and DR Platform behavior.</p>
+  </div>
+</div>
+
+<div class="section-head" id="duckdb"><h2>DuckDB and data projection are first-class production behavior</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-01 · Production code imports and opens DuckDB directly</h3><span class="severity blocker">Blocker</span></div>
+  <p><code>whetstone.publication</code> imports <code>duckdb</code> and <code>AnalysisBundleReader.rows()</code> opens the database directly in read-only mode. <code>copro_operator</code> also imports DuckDB solely to translate its exceptions.</p>
+  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:10, 905–952</code></a> · <a href="../src/whetstone/optimization/copro_operator.py"><code>src/whetstone/optimization/copro_operator.py:13, 351–361</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-02 · Local publication and COPRO persist DuckDB files by contract</h3><span class="severity blocker">Blocker</span></div>
+  <p>The publication API builds two fixed bundles at caller-supplied paths. COPRO defaults those paths to <code>analysis.duckdb</code> and <code>detail.duckdb</code>; release-parity descriptors validate those exact suffixes as ownership identities.</p>
+  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:834–874</code></a> · <a href="../src/whetstone/optimization/copro_operator.py"><code>src/whetstone/optimization/copro_operator.py:448–465</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>src/whetstone/platform/release_parity_fixture.py:145–179, 196–253</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-03 · MotherDuck-specific connection and cutover policy is spread across the platform</h3><span class="severity blocker">Blocker</span></div>
+  <p><code>DatabaseBoundary.MOTHERDUCK_POSTGRES</code>, backend detection, hstore special-casing, three-store cutover descriptors, MotherDuck environment variables, remote fences, and MotherDuck cleanup are all explicit application behavior.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/connections.py"><code>platform/connections.py:19–25, 81–102</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>platform/cutover_tooling.py:40–134, 394–704</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>platform/release_parity_fixture.py:669–835, 1036–1134</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-04 · The fixed Analysis and Detail surfaces are the direct data-projection layer</h3><span class="severity blocker">Blocker</span></div>
+  <p>The 956-line publication module defines six Analysis members, seven Detail members, typed <code>ProjectionSpec</code> schemas, SQL builders, cross-member references, and import-time validation. Compression semantics are embedded in the published contract.</p>
+  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:28–54, 174–873, 877–956</code></a> · <a href="../README.md"><code>README.md:15–23</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-05 · DuckDB remains resolved through two dependency paths</h3><span class="severity high">High</span></div>
+  <p><code>uv tree</code> resolves DuckDB through both <code>dr-platform</code> and <code>marimo[recommended]</code>. Removing direct imports is therefore insufficient; dependency and lockfile cleanup must follow.</p>
+  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:12, 15, 18</code></a> · <a href="../uv.lock"><code>uv.lock:525–532, 580, 1295–1327</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DCK-06 · Tests cover DuckDB and MotherDuck as supported behavior</h3><span class="severity high">High</span></div>
+  <p>The suite imports DuckDB, opens exported files, uses DuckDB filenames in unit tests, probes live MotherDuck behavior, and tests MotherDuck URL and marker semantics.</p>
+  <div class="evidence"><a href="../tests/integration/test_publication_export.py"><code>tests/integration/test_publication_export.py:11, 303–399</code></a> · <a href="../tests/integration/test_cutover_motherduck.py"><code>tests/integration/test_cutover_motherduck.py</code></a> · <a href="../tests/test_connections.py"><code>tests/test_connections.py:170–244</code></a> · <a href="../tests/test_cutover_tooling.py"><code>tests/test_cutover_tooling.py:82–179, 462–518</code></a></div>
+</div>
+
+<div class="section-head" id="visualization"><h2>Visualization code is absent, but visualization tooling and outputs remain</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>VIS-01 · Visualization and notebook tooling ships as runtime dependencies</h3><span class="severity high">High</span></div>
+  <p><code>marimo[recommended]</code> and <code>matplotlib</code> are direct project dependencies, not optional or development dependencies. Neither is imported by tracked production source. Their presence expands installation and brings DuckDB back through Marimo.</p>
+  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:18–19</code></a> · <a href="../uv.lock"><code>uv.lock:1295, 1411, 3097–3131</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>VIS-02 · Seven generated plots were committed despite <code>artifacts/</code> being ignored</h3><span class="severity high">High</span></div>
+  <p>The tracked PNGs covered pass rate, coverage/compression, stability, generation/score health, and task-signal views. They were historical HumanEval experiment outputs rather than package assets and were removed by <code>main</code> PR #51.</p>
+  <ul>
+    <li><code>q1_generation_score_health.png</code> and <code>q1_pass_rate_by_model.png</code></li>
+    <li><code>q2_coverage_vs_compression.png</code> and <code>q2_pass_rate_vs_compression.png</code></li>
+    <li><code>q3_stability_by_sample_size.png</code></li>
+    <li><code>q4_task_pass_rate_distribution.png</code> and <code>q4_task_signal_rank.png</code></li>
+  </ul>
+  <div class="evidence"><code>artifacts/analysis/v0_encdec_backfill_smoke_20260630/</code> (removed) · <a href="../.gitignore"><code>.gitignore:7</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>VIS-03 · The tracked artifact tree was downstream experiment residue</h3><span class="severity high">High</span></div>
+  <p>The original audit found 61 tracked files totaling about 1.5 MB: 7 PNG, 24 CSV, 24 Markdown, 2 JSON, 2 JSONL, and 2 logs. <code>main</code> PR #51 removed the complete tracked tree.</p>
+  <div class="evidence"><code>artifacts/</code> (removed)</div>
+</div>
+
+<div class="section-head" id="unitbench"><h2>Unitbench is wired into release behavior, not merely mentioned</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>UNT-01 · Release CI checks out and executes Unitbench</h3><span class="severity blocker">Blocker</span></div>
+  <p>The reusable workflow requires a Unitbench token, checks out the caller repository into <code>unitbench/</code>, runs <code>pnpm install</code>, maps database and integrity credentials, and invokes <code>pnpm check:delivery-parity</code>.</p>
+  <div class="evidence"><a href="../.github/workflows/release-parity.yml"><code>.github/workflows/release-parity.yml:19–20, 72–97</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>UNT-02 · A 1,438-line production fixture exists to satisfy that delivery gate</h3><span class="severity blocker">Blocker</span></div>
+  <p><code>release_parity_fixture.py</code> seeds accepted rows, signs two local bundles, publishes two remote planes, records pins/checksums, writes recovery journals, proves cleanup, and exposes local and remote fixture commands. The publication CLI imports and dispatches it.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/release_parity_fixture.py"><code>src/whetstone/platform/release_parity_fixture.py</code></a> · <a href="../src/whetstone/platform/publication.py"><code>src/whetstone/platform/publication.py:127–180</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>UNT-03 · Tests freeze Unitbench workflow text and secret mapping</h3><span class="severity high">High</span></div>
+  <p>Tests split raw YAML around exact Unitbench step names and assert exact secret names and Git credential configuration. These assertions protect the downstream integration rather than Whetstone’s core behavior.</p>
+  <div class="evidence"><a href="../tests/test_release_parity_fixture.py"><code>tests/test_release_parity_fixture.py:369–432</code></a></div>
+</div>
+
+<div class="section-head" id="defensive"><h2>Defensive machinery has become multiple subsystems</h2></div>
+
+<div class="callout warn">
+  Counts are a scale signal, not a claim that every check is wrong: 358 <code>raise</code> statements, 48 exception handlers, 68 direct Pydantic models, and 21 model-validator methods. The findings below identify where the checks form removable operational protocols or hide failures.
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-01 · Live sweep is a 2,812-line durability application inside the package</h3><span class="severity blocker">Blocker</span></div>
+  <p>It implements HumanEval campaign generation, deterministic canaries, content-addressed lock generations, fsync/atomic writes, a WAL-backed SQLite ledger, submission intents, retry lineage, reconciliation, cost accounting, and a private diagnostic allowlist. It contains 68 raises; its 1,901-line test module collects 62 cases.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/live_sweep.py"><code>src/whetstone/platform/live_sweep.py</code></a> · <a href="../tests/test_live_sweep.py"><code>tests/test_live_sweep.py</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-02 · Release parity validates ownership at every representation</h3><span class="severity blocker">Blocker</span></div>
+  <p>Seven models validate run IDs, SHA-256 values, local file names, remote destination IDs, bundle keys, pin IDs, member inventories, counts, checksums, secret-shaped fields, cleanup observations, and journal agreement. The module has 47 raises and several best-effort rollback branches.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/release_parity_fixture.py"><code>release_parity_fixture.py:92–380, 721–1438</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-03 · Cutover tooling adds a second ownership-and-recovery protocol</h3><span class="severity high">High</span></div>
+  <p>The 728-line cutover tool manages three database boundaries, marker tables, schema ownership, a durable journal, SQLite DBOS identity, zero-mutation previews, exact confirmation tokens, cleanup preflight, and cleanup verification. It catches cleanup failures and suppresses the secondary exception.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/cutover_tooling.py"><code>cutover_tooling.py:44–654</code></a> · <a href="../src/whetstone/platform/cutover_tooling.py"><code>cutover_tooling.py:505–511</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-04 · COPRO checkpointing models a crash-safe append-only store</h3><span class="severity high">High</span></div>
+  <p>The 441-line checkpoint module validates content pins and digests, rejects legacy/mixed artifacts, requires contiguous depths, stages and fsyncs every artifact, atomically commits directories, recovers staging, and exposes nine injected failure boundaries. Its tests exercise each write boundary.</p>
+  <div class="evidence"><a href="../src/whetstone/optimization/copro_checkpoint.py"><code>optimization/copro_checkpoint.py:37–436</code></a> · <a href="../tests/test_optimization_copro_checkpoint.py"><code>tests/test_optimization_copro_checkpoint.py:86–289</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-05 · The record layer repeats integrity checks across models and storage</h3><span class="severity high">High</span></div>
+  <p>Twenty-five record models validate payload sizes, graph digests, external bindings, provider identity, dimensions digests, stable IDs, timestamp order, terminal status, and HumanEval result shapes. PostgreSQL repeats many constraints and adds append-only mutation triggers. Some invariants are appropriate at a boundary; the present layering is inseparable from the platform persistence design.</p>
+  <div class="evidence"><a href="../src/whetstone/records/models.py"><code>records/models.py:66–583</code></a> · <a href="../src/whetstone/db/schema.py"><code>db/schema.py:74–648</code></a> · <a href="../src/whetstone/db/io.py"><code>db/io.py:431–505</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-06 · Failure handling is a second abstraction over provider failures</h3><span class="severity high">High</span></div>
+  <p>The package defines 12 exception classes, dynamically exports policy and recording functions, lazily probes loaded DBOS and psycopg exception types, walks nested exception chains twice, converts errors into a five-field summary, wraps serialization failures, and then tests import order. This is more machinery than a small standalone boundary needs.</p>
+  <div class="evidence"><a href="../src/whetstone/eval_failures/exceptions.py"><code>eval_failures/exceptions.py</code></a> · <a href="../src/whetstone/eval_failures/policy.py"><code>eval_failures/policy.py:20–230</code></a> · <a href="../src/whetstone/eval_failures/__init__.py"><code>eval_failures/__init__.py:75–133</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>DEF-07 · Several fallbacks actively obscure invalid state or failed cleanup</h3><span class="severity blocker">Blocker</span></div>
+  <ul>
+    <li>Any <code>DBOS.sleep</code> failure silently changes execution to <code>time.sleep</code>.</li>
+    <li>Any provider-reference resolution failure becomes <code>None</code>, losing the original configuration error.</li>
+    <li>Throttle-state cleanup catches every exception and discards it.</li>
+    <li>Invalid persisted provider cost becomes “cost unavailable” instead of surfacing corruption.</li>
+    <li>Unknown harness failure classes become <code>UNKNOWN</code> instead of failing at the ingest boundary.</li>
+    <li>Cutover and release rollback suppress secondary failures, retaining only optional trace evidence in the latter case.</li>
+  </ul>
+  <div class="evidence"><a href="../src/whetstone/platform/graph_workflow.py"><code>graph_workflow.py:298–304, 352–386</code></a> · <a href="../src/whetstone/platform/node_execution.py"><code>node_execution.py:288–307</code></a> · <a href="../src/whetstone/platform/live_sweep.py"><code>live_sweep.py:284–299</code></a> · <a href="../src/whetstone/platform/scoring.py"><code>scoring.py:283–289</code></a> · <a href="../src/whetstone/platform/release_parity_fixture.py"><code>release_parity_fixture.py:1036–1134</code></a></div>
+</div>
+
+<div class="section-head" id="tests"><h2>The test suite protects the application architecture more than a core contract</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-01 · Seven modules are explicit integration tests</h3><span class="severity blocker">Blocker</span></div>
+  <p>Eighteen collected cases cover PostgreSQL migrations and schema isolation, concurrent acceptance, DBOS/domain retry behavior, DuckDB publication export, live MotherDuck probes, and release-parity prepare/cleanup.</p>
+  <div class="evidence"><a href="../tests/integration/"><code>tests/integration/</code></a> · <a href="../scripts/ci/integration.sh"><code>scripts/ci/integration.sh</code></a> · <a href="../.github/workflows/whetstone_tests.yml"><code>.github/workflows/whetstone_tests.yml:68–110</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-02 · Integration infrastructure loads from global <code>conftest.py</code></h3><span class="severity high">High</span></div>
+  <p>The suite-wide conftest imports Alembic, DBOS, SQLAlchemy, migrations, platform workflows, targets, and worker code. It defines live PostgreSQL availability checks, per-test schemas, DBOS SQLite system databases, and consumer runtimes even though ordinary unit tests do not need them.</p>
+  <div class="evidence"><a href="../tests/conftest.py"><code>tests/conftest.py:1–193</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-03 · At least 209 of 291 cases are tied to removable downstream surfaces</h3><span class="severity blocker">Blocker</span></div>
+  <p>This count includes the 18 integration cases plus unit files for live sweep, cutover, connections, release parity, publication, COPRO, enqueue runtime, platform CLI/environment, HumanEval snapshots/prompts/scoring, integrity, operations, and structural platform rules. Passing them demonstrates internal consistency, not a small general-purpose contract.</p>
+  <div class="evidence">See the complete test disposition ledger below.</div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-04 · Structural tests are implementation- and dependency-version-bound</h3><span class="severity high">High</span></div>
+  <ul>
+    <li><code>test_platform_schema_contract.py</code> imports every DR Platform module, reflects signatures, walks every Whetstone AST, and recognizes only selected call shapes.</li>
+    <li><code>test_lm_imports.py</code> launches subprocesses and asserts exact <code>sys.modules</code> absence.</li>
+    <li><code>test_eval_failures_policy.py</code> similarly tests lazy import behavior and private DBOS exception wrappers.</li>
+    <li><code>test_release_parity_fixture.py</code> parses workflow YAML with string splitting and freezes action SHAs and step labels.</li>
+  </ul>
+  <div class="evidence"><a href="../tests/test_platform_schema_contract.py"><code>tests/test_platform_schema_contract.py</code></a> · <a href="../tests/test_lm_imports.py"><code>tests/test_lm_imports.py</code></a> · <a href="../tests/test_eval_failures_policy.py"><code>tests/test_eval_failures_policy.py:110–152, 194–235</code></a> · <a href="../tests/test_release_parity_fixture.py"><code>tests/test_release_parity_fixture.py:369–432</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-05 · Fault-injection tests over-specify private durability protocols</h3><span class="severity high">High</span></div>
+  <p>Live-sweep tests depend on private helpers, exact lock generations, SQLite intent ordering, retry lineage, diagnostic allowlists, and canary behavior. COPRO tests inject failures after each internal write and fsync boundary. These are fragile because they freeze the implementation that should be removed.</p>
+  <div class="evidence"><a href="../tests/test_live_sweep.py"><code>tests/test_live_sweep.py:237–379, 933–1188, 1491–1901</code></a> · <a href="../tests/test_optimization_copro_checkpoint.py"><code>tests/test_optimization_copro_checkpoint.py:86–289</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>TST-06 · Two tests assert constants rather than behavior</h3><span class="severity medium">Medium</span></div>
+  <p><code>test_records_limits.py</code> asserts that six aliases equal a dependency constant and that a count is “extraordinarily high.” Neither proves a user-visible contract, and both entrench the defensive payload layer.</p>
+  <div class="evidence"><a href="../tests/test_records_limits.py"><code>tests/test_records_limits.py:17–24</code></a></div>
+</div>
+
+<div class="callout good">
+  <strong>Current status:</strong> all 273 non-integration tests pass; 18 integration tests are deselected by the unit command. The problem is scope and test value, not a currently failing suite.
+</div>
+
+<div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-01 · Project identity is explicitly downstream-specific</h3><span class="severity blocker">Blocker</span></div>
+  <p>The README says Whetstone evaluates graph-shaped HumanEval workloads through generation and scoring Operations, delegates execution to <code>dr-platform</code>, and publishes two pinned bundle surfaces. The package description in <code>pyproject.toml</code> remains a placeholder, so no alternative standalone contract is documented.</p>
+  <div class="evidence"><a href="../README.md"><code>README.md:1–23</code></a> · <a href="../pyproject.toml"><code>pyproject.toml:1–5</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-02 · The spec builder hardcodes one encoder/decoder compression study</h3><span class="severity blocker">Blocker</span></div>
+  <p>It defines HumanEval encoder and decoder prompts, <code>direct</code>/<code>encdec</code> graph layouts, compression-target axes, budget modes, exactly two provider IDs named <code>encoder</code> and <code>decoder</code>, HumanEval task conversion, and composable experiment expansion.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/spec_builder.py"><code>platform/spec_builder.py:53–190, 269–809</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-03 · HumanEval types are embedded in records and persistence</h3><span class="severity blocker">Blocker</span></div>
+  <p>The record module aliases HumanEval AST, leakage, text, stage, and per-test metric models and stores HumanEval test-case kinds and submission outcomes. The database schema and row mapper import <code>SubmissionOutcome</code>. The default score dataset is <code>evalplus/humanevalplus</code>.</p>
+  <div class="evidence"><a href="../src/whetstone/records/models.py"><code>records/models.py:7–47, 252–280, 455–583</code></a> · <a href="../src/whetstone/db/schema.py"><code>db/schema.py:11, 276–648</code></a> · <a href="../src/whetstone/db/io.py"><code>db/io.py:6, 197–396</code></a> · <a href="../src/whetstone/records/hashing.py"><code>records/hashing.py:13–14</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-04 · Scoring and snapshot APIs cannot serve another benchmark</h3><span class="severity blocker">Blocker</span></div>
+  <p><code>HumanEvalSnapshot</code>, <code>load_humaneval_snapshot</code>, <code>HumanEvalScoringInput</code>, HumanEval task payload conversion, and <code>score_humaneval_submission</code> are concrete production contracts rather than adapters or injected protocols.</p>
+  <div class="evidence"><a href="../src/whetstone/platform/dataset_snapshot.py"><code>platform/dataset_snapshot.py</code></a> · <a href="../src/whetstone/platform/scoring.py"><code>platform/scoring.py:5–369</code></a> · <a href="../src/whetstone/platform/scoring_workflow.py"><code>platform/scoring_workflow.py:8–455</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-05 · COPRO is an application feature, not a general optimization boundary</h3><span class="severity high">High</span></div>
+  <p>All four optimization modules rank published prompt candidates, mutate encoder instructions, submit HumanEval cells, wait for DR Platform lifecycles, pin the Analysis bundle, and checkpoint operator artifacts. The CLI description explicitly says it optimizes encoder instructions through the frozen v6 lifecycle.</p>
+  <div class="evidence"><a href="../src/whetstone/optimization/"><code>src/whetstone/optimization/</code></a> · <a href="../src/whetstone/optimization/copro_operator.py"><code>copro_operator.py:368–496</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-06 · The public surface is platform workflow execution</h3><span class="severity high">High</span></div>
+  <p>The root <code>whetstone</code> package exports nothing. <code>whetstone.platform</code> exports DBOS workflow start/run functions and node execution. All four console scripts are publication, live sweep, cutover, or COPRO operator commands. There is no small documented standalone API.</p>
+  <div class="evidence"><a href="../src/whetstone/__init__.py"><code>src/whetstone/__init__.py</code></a> · <a href="../src/whetstone/platform/__init__.py"><code>src/whetstone/platform/__init__.py</code></a> · <a href="../pyproject.toml"><code>pyproject.toml:36–40</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-07 · Repository configuration is an experiment deployment</h3><span class="severity high">High</span></div>
+  <p>The committed experiment is <code>humaneval_encdec_smoke_v1</code>; model fragments require encoder and decoder configurations; the split points outside the repository to a DR Code HumanEval snapshot; dimensions are compression targets. These are examples only if clearly isolated, but today production defaults resolve this directory.</p>
+  <div class="evidence"><a href="../configs/experiments/humaneval_encdec_smoke.json"><code>configs/experiments/humaneval_encdec_smoke.json</code></a> · <a href="../configs/splits/tiny.json"><code>configs/splits/tiny.json</code></a> · <a href="../configs/models/"><code>configs/models/</code></a> · <a href="../src/whetstone/platform/spec_builder.py"><code>spec_builder.py:59</code></a></div>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>GEN-08 · Runtime dependencies mix library, application, analysis, and development concerns</h3><span class="severity high">High</span></div>
+  <p>DBOS, Alembic, PostgreSQL drivers, SQLAlchemy, datasets, DR Platform, Marimo, Matplotlib, pandas, pre-commit, pytest, Ruff, and Ty are all installed as runtime dependencies. Private Git dependencies further prevent the package from behaving like a conventional standalone install.</p>
+  <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:9–34, 47–54</code></a></div>
+</div>
+
+<div class="section-head" id="production-ledger"><h2>Production files have a clear remove, extract, or retain disposition</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Files</th><th>Disposition</th><th>Reason</th></tr></thead>
+  <tbody>
+    <tr><td class="path"><code>src/whetstone/publication.py</code></td><td><span class="status fail">Remove</span></td><td>DuckDB reader and fixed DR Platform projection surface.</td></tr>
+    <tr><td class="path"><code>src/whetstone/optimization/*.py</code></td><td><span class="status fail">Remove</span></td><td>COPRO, HumanEval encoder optimization, pinned bundle reads, and crash-safe operator checkpoints.</td></tr>
+    <tr><td class="path"><code>platform/acceptance.py</code>, <code>operations.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform manifest acceptance, promotion, cancellation, retry, and operator CLI.</td></tr>
+    <tr><td class="path"><code>platform/connections.py</code>, <code>cutover_tooling.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>PostgreSQL/Neon/MotherDuck/DBOS deployment and cutover policy.</td></tr>
+    <tr><td class="path"><code>platform/__init__.py</code>, <code>cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code>, <code>worker.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform and DBOS workflow execution, queues, manifests, targets, CLI plumbing, and worker bootstrap.</td></tr>
+    <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code>, <code>release_parity_fixture.py</code></td><td><span class="status fail">Remove</span></td><td>Signed bundle publication and Unitbench release-parity delivery.</td></tr>
+    <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval campaign/ledger/reconciliation application.</td></tr>
+    <tr><td class="path"><code>platform/dataset_snapshot.py</code>, <code>scoring.py</code>, <code>scoring_workflow.py</code>, <code>spec_builder.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval snapshots, scoring, prompts, encoder/decoder compression, and experiment expansion.</td></tr>
+    <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
+    <tr><td class="path"><code>platform/persistence.py</code>, <code>db/**</code>, <code>alembic.ini</code></td><td><span class="status fail">Remove</span></td><td>Application PostgreSQL persistence and migrations. If persistence remains a requirement, move it to an optional adapter with no core import path.</td></tr>
+    <tr><td class="path"><code>records/models.py</code>, <code>hashing.py</code>, <code>providers.py</code>, <code>limits.py</code></td><td><span class="status partial">Refactor</span></td><td>Keep only generic graph/LM result contracts; remove HumanEval metrics, DR Platform properties, dataset defaults, storage-size policy, and duplicated stable identities not required by the public API.</td></tr>
+    <tr><td class="path"><code>eval_failures/**</code></td><td><span class="status partial">Simplify</span></td><td>Retain a minimal explicit error contract; remove DBOS/psycopg heuristics, dynamic exports, import-order design, and duplicate provider taxonomy.</td></tr>
+    <tr><td class="path"><code>dspy_serialization.py</code></td><td><span class="status partial">Isolate</span></td><td>DSPy-specific adapter; make optional or remove unless DSPy is part of the intended standalone contract.</td></tr>
+    <tr><td class="path"><code>lm/boundary.py</code>, <code>lm/utils.py</code></td><td><span class="status pass">Retain</span></td><td>Closest existing core: prompt-to-provider request mapping, provider response mapping, text/cost extraction, and credential sanitization. Rename and trim around a public contract.</td></tr>
+    <tr><td class="path"><code>clock.py</code>, <code>node_ops.py</code></td><td><span class="status pass">Retain</span></td><td>Small generic utilities, subject to whether deterministic clock injection and the node-op vocabulary are actually used by the reduced package.</td></tr>
+    <tr><td class="path"><code>src/whetstone/__init__.py</code>, <code>lm/__init__.py</code>, <code>records/__init__.py</code>, <code>py.typed</code></td><td><span class="status partial">Rewrite</span></td><td>Expose the reduced public contract from the root, re-export only intentional types, and keep the typing marker.</td></tr>
+    <tr><td class="path"><code>configs/**</code>, <code>artifacts/**</code></td><td><span class="status fail">Remove</span></td><td>HumanEval experiment deployment and historical outputs.</td></tr>
+    <tr><td class="path"><code>.github/workflows/release-parity.yml</code></td><td><span class="status fail">Remove</span></td><td>Direct Unitbench/MotherDuck/Neon delivery integration.</td></tr>
+    <tr><td class="path"><code>scripts/ci/integration.sh</code>, integration CI job</td><td><span class="status fail">Remove</span></td><td>Explicit integration-test harness.</td></tr>
+    <tr><td class="path"><code>scripts/ci/unit.sh</code>, <code>lint.sh</code>, <code>.github/workflows/whetstone_tests.yml</code>, <code>Dockerfile.ci</code></td><td><span class="status partial">Simplify</span></td><td>Keep unit/lint automation, remove integration setup and application-only dependencies, and align it with the reduced package.</td></tr>
+    <tr><td class="path"><code>pyproject.toml</code>, <code>uv.lock</code>, <code>README.md</code></td><td><span class="status partial">Rewrite</span></td><td>Define the package contract, narrow runtime dependencies, remove CLI surfaces, and regenerate the lock.</td></tr>
+    <tr><td class="path"><code>.python-version</code>, <code>.pre-commit-config.yaml</code>, <code>.gitignore</code>, <code>AGENTS.md</code></td><td><span class="status pass">Retain</span></td><td>Repository tooling is not part of the identified scope problem; update ignore rules only if the new layout requires it.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="test-ledger"><h2>Test files should follow the production boundary</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Test files</th><th>Collected cases</th><th>Disposition</th><th>Reason</th></tr></thead>
+  <tbody>
+    <tr><td class="path"><code>tests/integration/test_*.py</code> (7 modules)</td><td class="num">18</td><td><span class="status fail">Remove</span></td><td>Explicit PostgreSQL, DBOS, DuckDB, MotherDuck, migration, publication, and release-fixture integration tests.</td></tr>
+    <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status fail">Remove</span></td><td>Tests removable campaign ledger and reconciliation implementation.</td></tr>
+    <tr><td class="path"><code>test_cutover_tooling.py</code>, <code>test_connections.py</code></td><td class="num">40</td><td><span class="status fail">Remove</span></td><td>Tests MotherDuck/Neon/PostgreSQL/DBOS deployment boundaries.</td></tr>
+    <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests downstream optimization lifecycle and private durability protocol.</td></tr>
+    <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status fail">Remove</span></td><td>Tests Unitbench delivery fixture, workflow text, secrets, ownership, and cleanup proof.</td></tr>
+    <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, <code>test_platform_scoring_v6.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests HumanEval snapshots, encoder/decoder prompts, and scoring manifests.</td></tr>
+    <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_platform_schema_contract.py</code>, <code>test_platform_cli_env.py</code>, <code>test_publication.py</code></td><td class="num">28</td><td><span class="status fail">Remove</span></td><td>Tests DBOS runtime, operator commands, projection, signing, platform structure, and CLI plumbing.</td></tr>
+    <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status partial">Decide</span></td><td>Retain only if DSPy is an explicit optional package adapter.</td></tr>
+    <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">20</td><td><span class="status partial">Rewrite</span></td><td>Keep public error outcomes; delete import-order, private third-party exception, and <code>sys.modules</code> tests.</td></tr>
+    <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status fail">Remove</span></td><td>Constant-alias assertions provide no core behavioral evidence.</td></tr>
+    <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">22</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; delete direct/encdec naming and duplicated wrapper cases.</td></tr>
+    <tr><td class="path"><code>test_lm_boundary.py</code>, <code>test_lm_utils.py</code></td><td class="num">31</td><td><span class="status pass">Retain</span></td><td>Best match for necessary request/response mapping, text extraction, cost extraction, and sanitization behavior.</td></tr>
+    <tr><td class="path"><code>tests/conftest.py</code>, experiment JSON fixtures, <code>serialization_support.py</code></td><td class="num">—</td><td><span class="status partial">Replace</span></td><td>Delete database/runtime fixtures; keep only small local builders required by retained tests.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="sequence"><h2>A safe contraction removes whole vertical slices first</h2></div>
+
+<div class="steps">
+  <div class="step"><h3>Delete the Unitbench delivery slice</h3><p>Remove the release-parity workflow, production fixture, publication CLI subcommands, associated tests, secrets, and integrity-only dependencies.</p></div>
+  <div class="step"><h3>Delete DuckDB, MotherDuck, and data projection as one slice</h3><p>Remove the fixed publication module, remote/local bundle behavior, COPRO bundle reader path, MotherDuck connection policy and tests, then regenerate the lock and confirm <code>rg -i 'duckdb|motherduck'</code> is empty.</p></div>
+  <div class="step"><h3>Delete visualization and experiment residue</h3><p>Remove Marimo and Matplotlib dependencies, all tracked artifacts, and committed HumanEval experiment/model/split configurations.</p></div>
+  <div class="step"><h3>Remove the platform application</h3><p>Delete DBOS workflows, targets, worker, enqueue runtime, operations, acceptance, cutover, live sweep, persistence, PostgreSQL schema/migrations, and the explicit integration suite.</p></div>
+  <div class="step"><h3>Define one standalone public contract</h3><p>Choose the smallest reusable behavior—likely graph/LM request execution and typed outcomes—export it from <code>whetstone</code>, document it, and make benchmark, provider, persistence, and orchestration adapters explicit and optional.</p></div>
+  <div class="step"><h3>Simplify records and failures around that contract</h3><p>Remove HumanEval metrics and defaults, redundant identities, storage-size policy, dynamic failure exports, third-party exception heuristics, and silent fallbacks. Validate only at real input boundaries.</p></div>
+  <div class="step"><h3>Rebuild tests from public behavior</h3><p>Retain deterministic request/response, parsing, sanitization, and explicit error tests. Delete source inspection, workflow text, import-order, crash-boundary, database, runtime, and downstream scenario tests.</p></div>
+</div>
+
+<div class="callout danger">
+  <strong>Do not begin by deleting individual checks.</strong> Most ceremony belongs to removable vertical slices. Removing the slices first avoids spending time deciding whether each journal checksum, retry state, or cleanup proof is locally justified.
+</div>
+
+<div class="section-head" id="method"><h2>The audit covers the tracked repository and current test collection</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Scope</h3>
+    <ul>
+      <li>Original findings at commit <code>189c2735a9e718ba52b18c3db5a53ce3f4f24878</code>; remediation baseline reconciled to <code>2984620ec5fe2a1c1e617ea5ccea2dfd19f0eda5</code>.</li>
+      <li>All tracked source, tests, workflows, scripts, config, dependencies, lockfile entries, documentation, and artifacts.</li>
+      <li>Ignored virtual environments, bytecode, and tool caches were inventoried but excluded as generated local state.</li>
+      <li>The audit report itself was created after the scope snapshot.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Checks performed</h3>
+    <ul>
+      <li>Exact and semantic searches for DuckDB, MotherDuck, Unitbench, visualization, projection, HumanEval, compression, DBOS, PostgreSQL, and downstream vocabulary.</li>
+      <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
+      <li>Dependency-tree inspection with <code>uv tree</code>.</li>
+      <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
+      <li><code>uv run pytest tests/ -m "not integration" -q</code>: 273 passed, 18 deselected.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout">
+  This document is an audit and removal map. It does not modify production code, tests, dependencies, workflows, configuration, or artifacts.
+</div>
+
+</main>
+</body>
+</html>
