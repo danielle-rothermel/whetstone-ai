@@ -28,17 +28,6 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.records.limits import (
-    GRAPH_SNAPSHOT_MAX_BYTES,
-    METRICS_MAX_BYTES,
-    METRICS_STAGES_MAX_COUNT,
-    NODE_OUTPUT_MAX_BYTES,
-    PER_TEST_RESULTS_MAX_BYTES,
-    PROVIDER_TELEMETRY_MAX_BYTES,
-    TASK_INPUTS_MAX_BYTES,
-    validate_payload_size,
-)
-
 AstMetricsPayload = metric_models.AstMetricsPayload
 HumanEvalTaskTestMetricsPayload = metric_models.HumanEvalTaskTestMetricsPayload
 MetricsPayload = metric_models.MetricsPayload
@@ -67,15 +56,6 @@ class TaskInputsPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     values: dict[StrictStr, Any]
-
-    @model_validator(mode="after")
-    def validate_values_size(self) -> TaskInputsPayload:
-        validate_payload_size(
-            self.values,
-            max_bytes=TASK_INPUTS_MAX_BYTES,
-            label="task inputs",
-        )
-        return self
 
 
 class TaskSnapshotPayload(BaseModel):
@@ -122,11 +102,6 @@ class GraphSnapshotPayload(BaseModel):
 
         if self.graph_digest != graph_digest(self.graph):
             raise ValueError("graph_digest must match graph")
-        validate_payload_size(
-            self.model_dump(mode="json"),
-            max_bytes=GRAPH_SNAPSHOT_MAX_BYTES,
-            label="graph snapshot",
-        )
         return self
 
 
@@ -164,29 +139,11 @@ class UsageCostPayload(BaseModel):
     usage_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
     provider_cost: StrictFloat | None = None
 
-    @model_validator(mode="after")
-    def validate_usage_metadata_size(self) -> UsageCostPayload:
-        validate_payload_size(
-            self.usage_metadata,
-            max_bytes=PROVIDER_TELEMETRY_MAX_BYTES,
-            label="usage metadata",
-        )
-        return self
-
 
 class ResponseMetadataPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     response_metadata: dict[StrictStr, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_response_metadata_size(self) -> ResponseMetadataPayload:
-        validate_payload_size(
-            self.response_metadata,
-            max_bytes=PROVIDER_TELEMETRY_MAX_BYTES,
-            label="response metadata",
-        )
-        return self
 
 
 class FailureMetadataPayload(BaseModel):
@@ -204,15 +161,6 @@ class NodeOutputPayload(BaseModel):
 
     values: dict[StrictStr, Any]
     metadata: dict[StrictStr, Any] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_output_size(self) -> NodeOutputPayload:
-        validate_payload_size(
-            {"values": self.values, "metadata": self.metadata},
-            max_bytes=NODE_OUTPUT_MAX_BYTES,
-            label="node output",
-        )
-        return self
 
 
 class GenerationTerminalErrorPayload(BaseModel):
@@ -489,26 +437,6 @@ class ScoreAttemptRecord(BaseModel):
         if self.status is ScoreAttemptStatus.SUCCESS:
             if self.score is None:
                 raise ValueError("successful score attempts require score")
-        if self.per_test_results:
-            per_test_payload = [
-                case.model_dump(mode="json") for case in self.per_test_results
-            ]
-            validate_payload_size(
-                per_test_payload,
-                max_bytes=PER_TEST_RESULTS_MAX_BYTES,
-                label="per_test_results",
-            )
-        if self.metrics is not None:
-            if len(self.metrics.stages) > METRICS_STAGES_MAX_COUNT:
-                raise ValueError(
-                    f"metrics.stages cannot exceed {METRICS_STAGES_MAX_COUNT} "
-                    "entries"
-                )
-            validate_payload_size(
-                self.metrics.model_dump(mode="json"),
-                max_bytes=METRICS_MAX_BYTES,
-                label="metrics",
-            )
         if (
             self.extracted_submission.parser_profile_id
             != self.parser_profile_id

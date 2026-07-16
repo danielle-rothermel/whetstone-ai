@@ -13,17 +13,6 @@ from whetstone.records.hashing import (
     stable_prediction_id,
     stable_score_attempt_id,
 )
-from whetstone.records.limits import (
-    DOMAIN_PAYLOAD_MAX_BYTES,
-    GRAPH_SNAPSHOT_MAX_BYTES,
-    METRICS_MAX_BYTES,
-    METRICS_STAGES_MAX_COUNT,
-    NODE_OUTPUT_MAX_BYTES,
-    PER_TEST_RESULTS_MAX_BYTES,
-    PROVIDER_TELEMETRY_MAX_BYTES,
-    TASK_INPUTS_MAX_BYTES,
-    validate_payload_size,
-)
 from whetstone.records.models import (
     AstMetricsPayload,
     DatasetSnapshotHeaderPayload,
@@ -62,18 +51,10 @@ __all__ = [
     "DEFAULT_SCORE_DATASET_NAME",
     "DEFAULT_SCORE_DATASET_SPLIT",
     "DIMENSIONS_DIGEST_LENGTH",
-    "DOMAIN_PAYLOAD_MAX_BYTES",
     "GENERATION_RUN_ID_DIGEST_LENGTH",
-    "GRAPH_SNAPSHOT_MAX_BYTES",
-    "METRICS_MAX_BYTES",
-    "METRICS_STAGES_MAX_COUNT",
     "NODE_ATTEMPT_ID_DIGEST_LENGTH",
-    "NODE_OUTPUT_MAX_BYTES",
-    "PER_TEST_RESULTS_MAX_BYTES",
     "PREDICTION_ID_DIGEST_LENGTH",
-    "PROVIDER_TELEMETRY_MAX_BYTES",
     "SCORE_ATTEMPT_ID_DIGEST_LENGTH",
-    "TASK_INPUTS_MAX_BYTES",
     "AstMetricsPayload",
     "DatasetSnapshotHeaderPayload",
     "DatasetSnapshotIdentityPayload",
@@ -111,5 +92,4 @@ __all__ = [
     "stable_node_attempt_id",
     "stable_prediction_id",
     "stable_score_attempt_id",
-    "validate_payload_size",
 ]

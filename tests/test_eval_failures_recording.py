@@ -10,6 +10,7 @@ from dr_serialize import (
     PayloadTooLargeError,
 )
 
+from whetstone.db.io import experiment_row
 from whetstone.eval_failures import (
     FailureClass,
     RecordingFailureError,
@@ -21,6 +22,7 @@ from whetstone.eval_failures import (
     summarize_exception,
 )
 from whetstone.eval_failures.exceptions import TransientFailureError
+from whetstone.records import ExperimentRecord
 
 
 def test_recordable_text_passthrough_str() -> None:
@@ -31,8 +33,8 @@ def test_recordable_text_canonicalizes_dict() -> None:
     assert recordable_text({"code": "x"}) == '{"code":"x"}'
 
 
-def test_recordable_text_wraps_encode_error() -> None:
-    with pytest.raises(RecordingFailureError):
+def test_recordable_text_propagates_encode_error() -> None:
+    with pytest.raises(JsonEncodeError):
         recordable_text({"bad": object()})
 
 
@@ -41,6 +43,18 @@ def test_ensure_recordable_wraps_encode_error() -> None:
         ensure_recordable({"bad": object()})
     assert exc_info.value.underlying is not None
     assert isinstance(exc_info.value.underlying, JsonEncodeError)
+
+
+def test_jsonb_row_rejects_unserializable_record_value() -> None:
+    unserializable = object()
+    record = ExperimentRecord(
+        experiment_name="payload-boundary",
+        config_metadata={"value": unserializable},
+    )
+
+    assert record.config_metadata["value"] is unserializable
+    with pytest.raises(RecordingFailureError):
+        experiment_row(record)
 
 
 def test_ensure_recordable_wraps_depth_error() -> None:

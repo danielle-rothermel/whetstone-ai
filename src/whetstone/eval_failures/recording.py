@@ -47,7 +47,7 @@ def recordable_text(value: Any) -> str:
         return value
     from dr_serialize import canonical_json
 
-    return canonical_json(ensure_recordable(value))
+    return canonical_json(value)
 
 
 def recordable_jsonb(
