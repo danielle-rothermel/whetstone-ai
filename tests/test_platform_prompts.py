@@ -18,11 +18,6 @@ from whetstone.platform.prompts import (
     build_node_messages,
     node_prompt_spec,
 )
-from whetstone.platform.spec_builder import (
-    HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE,
-    HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE,
-    humaneval_encdec_graph,
-)
 
 
 def _node(
@@ -147,40 +142,3 @@ def test_build_node_messages_rejects_malformed_format_string() -> None:
 
     assert "malformed" in str(error.value)
     assert isinstance(error.value.underlying, ValueError)
-
-
-def test_humaneval_encdec_prompts_format_without_missing_inputs() -> None:
-    graph = humaneval_encdec_graph()
-    encoder = graph.node("encoder")
-    decoder = graph.node("decoder")
-
-    encoder_messages = build_node_messages(
-        node=encoder,
-        node_inputs={
-            "instructions_start": "Describe this code briefly.",
-            "budget": 42,
-            "gt_code": "def add_one(x):\n    return x + 1\n",
-            "instructions_end": "",
-        },
-    )
-    encoder_user = encoder_messages[-1].content
-    assert "Describe this code briefly." in encoder_user
-    assert "Use at most 42 characters." in encoder_user
-    assert "```python" in encoder_user
-    assert "def add_one(x):" in encoder_user
-    assert (
-        encoder.config.parameters["user_prompt_template"]
-        == HUMANEVAL_ENCODER_USER_PROMPT_TEMPLATE
-    )
-
-    decoder_messages = build_node_messages(
-        node=decoder,
-        node_inputs={"encoded_desc": "increment input by one"},
-    )
-    decoder_user = decoder_messages[-1].content
-    assert "Write functional code in Python" in decoder_user
-    assert "increment input by one" in decoder_user
-    assert (
-        decoder.config.parameters["user_prompt_template"]
-        == HUMANEVAL_DECODER_USER_PROMPT_TEMPLATE
-    )
