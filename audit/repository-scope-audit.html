@@ -72,7 +72,8 @@
     <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code></td><td>Directly removable application and integration cases are gone; downstream unit and structural tests remain for the design pass.</td></tr>
     <tr><td><code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove constant tests when their owning platform modules are redesigned or deleted.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code></td><td>All four application entry points are gone; platform workflow exports remain.</td></tr>
-    <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code>, <code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
+    <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code></td><td>Development tools and six unused direct dependencies are out of the runtime contract; retained platform/database dependencies still await later slices.</td></tr>
+    <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
 </div>
@@ -337,7 +338,7 @@
 
 <div class="finding">
   <div class="finding-head"><h3>GEN-08 · Runtime dependencies still mix library, application, analysis, and development concerns</h3><span class="severity high">High</span></div>
-  <p>DBOS, Alembic, PostgreSQL drivers, SQLAlchemy, datasets, DR Platform, pandas, pre-commit, pytest, Ruff, and Ty remain runtime dependencies. Marimo and Matplotlib are gone; private Git dependencies and the remaining application/dev mix still prevent a conventional standalone install.</p>
+  <p>DBOS, Alembic, the PostgreSQL driver, SQLAlchemy, and DR Platform remain runtime dependencies. Development tools now live in the dev group, and datasets, pandas, Pygments, psycopg-pool, pytz, Rich, and zstandard are no longer direct requirements. Private Git and application dependencies still prevent a conventional standalone install.</p>
   <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:9–34, 47–54</code></a></div>
 </div>
 
@@ -369,7 +370,7 @@
     <tr><td class="path"><code>.github/workflows/release-parity.yml</code></td><td><span class="status addressed">Addressed</span></td><td>Direct Unitbench/MotherDuck/Neon delivery integration removed.</td></tr>
     <tr><td class="path"><code>scripts/ci/integration.sh</code>, integration CI job</td><td><span class="status addressed">Addressed</span></td><td>Explicit integration-test harness removed.</td></tr>
     <tr><td class="path"><code>scripts/ci/unit.sh</code>, <code>lint.sh</code>, <code>.github/workflows/whetstone_tests.yml</code>, <code>Dockerfile.ci</code></td><td><span class="status partial">Simplify</span></td><td>Unit/lint automation now has no integration setup; application-only dependencies still await the platform design pass.</td></tr>
-    <tr><td class="path"><code>pyproject.toml</code>, <code>uv.lock</code>, <code>README.md</code></td><td><span class="status partial">Rewrite</span></td><td>Define the package contract, narrow runtime dependencies, remove CLI surfaces, and regenerate the lock.</td></tr>
+    <tr><td class="path"><code>pyproject.toml</code>, <code>uv.lock</code>, <code>README.md</code></td><td><span class="status partial">Rewrite</span></td><td>Runtime/dev dependency separation is addressed; the package contract and remaining application dependencies still await later slices.</td></tr>
     <tr><td class="path"><code>.python-version</code>, <code>.pre-commit-config.yaml</code>, <code>.gitignore</code>, <code>AGENTS.md</code></td><td><span class="status pass">Retain</span></td><td>Repository tooling is not part of the identified scope problem; update ignore rules only if the new layout requires it.</td></tr>
   </tbody>
 </table>
