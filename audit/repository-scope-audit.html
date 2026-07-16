@@ -59,18 +59,17 @@
   <tbody>
     <tr><td><code>VIS-02</code>, <code>VIS-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>main</code> · PR #51</td><td>None. All tracked files under <code>artifacts/</code> are gone.</td></tr>
     <tr><td><code>VIS-01</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-visualization-deps</code></td><td>None. Marimo and Matplotlib are absent from project dependencies and the lock.</td></tr>
-    <tr><td><code>DCK-01</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code></td><td>The COPRO reader is gone; direct DuckDB projection remains in publication.</td></tr>
-    <tr><td><code>DCK-04</code>, <code>DCK-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove publication projections, direct DuckDB, MotherDuck policy, and tests.</td></tr>
-    <tr><td><code>DCK-02</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code></td><td>Release-parity descriptors and COPRO defaults are gone; publication bundles remain.</td></tr>
+    <tr><td><code>DCK-01</code>, <code>DCK-02</code>, <code>DCK-04</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>None. Direct DuckDB access, fixed projection schemas, and local bundle contracts are gone.</td></tr>
+    <tr><td><code>DCK-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-publication-duckdb</code></td><td>DuckDB export tests are gone; MotherDuck cutover and connection tests remain.</td></tr>
     <tr><td><code>DCK-03</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release-parity MotherDuck behavior is gone; cutover and connection policy remain.</td></tr>
     <tr><td><code>DCK-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-visualization-deps</code></td><td>The Marimo dependency path is gone; DuckDB remains transitively through <code>dr-platform</code>.</td></tr>
     <tr><td><code>UNT-01</code>–<code>UNT-03</code>, <code>DEF-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code></td><td>None. Workflow, fixture implementation, CLI routes, and both test modules are gone.</td></tr>
     <tr><td><code>DEF-04</code>, <code>GEN-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code></td><td>None. The COPRO operator, crash-safe checkpoint store, CLI, and tests are gone.</td></tr>
     <tr><td><code>DEF-01</code>, <code>DEF-03</code>, <code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core validation requires a later design pass.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release rollback suppression is gone; live-sweep and retained workflow fallbacks remain.</td></tr>
-    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code>, <code>TST-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code></td><td>Two integration cases and 38 downstream unit cases are gone, including the COPRO durability tests; other application and structural tests remain.</td></tr>
+    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code>, <code>TST-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>Release, COPRO, projection, signing, and publication integration tests are gone; other application and structural tests remain.</td></tr>
     <tr><td><code>TST-02</code>, <code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove residual integration fixtures and constant tests.</td></tr>
-    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code></td><td>The COPRO entry point is gone; publication, live-sweep, cutover, and platform exports remain.</td></tr>
+    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>COPRO and publication entry points are gone; live-sweep, cutover, and platform exports remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code>, <code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
@@ -105,13 +104,13 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-01 · Production code imports and opens DuckDB directly</h3><span class="severity blocker">Blocker</span></div>
   <p><code>whetstone.publication</code> imports <code>duckdb</code> and <code>AnalysisBundleReader.rows()</code> opens the database directly in read-only mode. <code>copro_operator</code> also imports DuckDB solely to translate its exceptions.</p>
-  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:10, 905–952</code></a> · <code>src/whetstone/optimization/copro_operator.py:13, 351–361</code> (removed by <code>cleanup-copro</code>)</div>
+  <div class="evidence"><code>src/whetstone/publication.py:10, 905–952</code> (removed by <code>cleanup-publication-duckdb</code>) · <code>src/whetstone/optimization/copro_operator.py:13, 351–361</code> (removed by <code>cleanup-copro</code>)</div>
 </div>
 
 <div class="finding">
   <div class="finding-head"><h3>DCK-02 · Local publication and COPRO persist DuckDB files by contract</h3><span class="severity blocker">Blocker</span></div>
   <p>The publication API builds two fixed bundles at caller-supplied paths. COPRO defaults those paths to <code>analysis.duckdb</code> and <code>detail.duckdb</code>; release-parity descriptors validate those exact suffixes as ownership identities.</p>
-  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:834–874</code></a> · <code>src/whetstone/optimization/copro_operator.py:448–465</code> (removed) · <code>src/whetstone/platform/release_parity_fixture.py:145–179, 196–253</code> (removed)</div>
+  <div class="evidence"><code>src/whetstone/publication.py:834–874</code> (removed) · <code>src/whetstone/optimization/copro_operator.py:448–465</code> (removed) · <code>src/whetstone/platform/release_parity_fixture.py:145–179, 196–253</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -123,7 +122,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-04 · The fixed Analysis and Detail surfaces are the direct data-projection layer</h3><span class="severity blocker">Blocker</span></div>
   <p>The 956-line publication module defines six Analysis members, seven Detail members, typed <code>ProjectionSpec</code> schemas, SQL builders, cross-member references, and import-time validation. Compression semantics are embedded in the published contract.</p>
-  <div class="evidence"><a href="../src/whetstone/publication.py"><code>src/whetstone/publication.py:28–54, 174–873, 877–956</code></a> · <a href="../README.md"><code>README.md:15–23</code></a></div>
+  <div class="evidence"><code>src/whetstone/publication.py:28–54, 174–873, 877–956</code> (removed) · <a href="../README.md"><code>README.md</code></a> (projection contract removed)</div>
 </div>
 
 <div class="finding">
@@ -135,7 +134,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DCK-06 · Tests cover DuckDB and MotherDuck as supported behavior</h3><span class="severity high">High</span></div>
   <p>The suite imports DuckDB, opens exported files, uses DuckDB filenames in unit tests, probes live MotherDuck behavior, and tests MotherDuck URL and marker semantics.</p>
-  <div class="evidence"><a href="../tests/integration/test_publication_export.py"><code>tests/integration/test_publication_export.py:11, 303–399</code></a> · <a href="../tests/integration/test_cutover_motherduck.py"><code>tests/integration/test_cutover_motherduck.py</code></a> · <a href="../tests/test_connections.py"><code>tests/test_connections.py:170–244</code></a> · <a href="../tests/test_cutover_tooling.py"><code>tests/test_cutover_tooling.py:82–179, 462–518</code></a></div>
+  <div class="evidence"><code>tests/integration/test_publication_export.py:11, 303–399</code> (removed) · <a href="../tests/integration/test_cutover_motherduck.py"><code>tests/integration/test_cutover_motherduck.py</code></a> · <a href="../tests/test_connections.py"><code>tests/test_connections.py:170–244</code></a> · <a href="../tests/test_cutover_tooling.py"><code>tests/test_cutover_tooling.py:82–179, 462–518</code></a></div>
 </div>
 
 <div class="section-head" id="visualization"><h2>Visualization code is absent, but visualization tooling and outputs remain</h2></div>
@@ -175,7 +174,7 @@
 <div class="finding">
   <div class="finding-head"><h3>UNT-02 · A 1,438-line production fixture exists to satisfy that delivery gate</h3><span class="severity blocker">Blocker</span></div>
   <p><code>release_parity_fixture.py</code> seeds accepted rows, signs two local bundles, publishes two remote planes, records pins/checksums, writes recovery journals, proves cleanup, and exposes local and remote fixture commands. The publication CLI imports and dispatches it.</p>
-  <div class="evidence"><code>src/whetstone/platform/release_parity_fixture.py</code> (removed) · <a href="../src/whetstone/platform/publication.py"><code>src/whetstone/platform/publication.py</code></a> (fixture commands removed)</div>
+  <div class="evidence"><code>src/whetstone/platform/release_parity_fixture.py</code> (removed) · <code>src/whetstone/platform/publication.py</code> (removed by <code>cleanup-publication-duckdb</code>)</div>
 </div>
 
 <div class="finding">
@@ -342,13 +341,13 @@
 <table>
   <thead><tr><th>Files</th><th>Disposition</th><th>Reason</th></tr></thead>
   <tbody>
-    <tr><td class="path"><code>src/whetstone/publication.py</code></td><td><span class="status fail">Remove</span></td><td>DuckDB reader and fixed DR Platform projection surface.</td></tr>
+    <tr><td class="path"><code>src/whetstone/publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>DuckDB reader and fixed DR Platform projection surface removed.</td></tr>
     <tr><td class="path"><code>src/whetstone/optimization/*.py</code></td><td><span class="status addressed">Addressed</span></td><td>COPRO, HumanEval encoder optimization, pinned bundle reads, and crash-safe operator checkpoints removed.</td></tr>
     <tr><td class="path"><code>platform/acceptance.py</code>, <code>operations.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform manifest acceptance, promotion, cancellation, retry, and operator CLI.</td></tr>
     <tr><td class="path"><code>platform/connections.py</code>, <code>cutover_tooling.py</code>, <code>platform_db.py</code>, <code>runtime.py</code></td><td><span class="status fail">Remove</span></td><td>PostgreSQL/Neon/MotherDuck/DBOS deployment and cutover policy.</td></tr>
     <tr><td class="path"><code>platform/__init__.py</code>, <code>cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code>, <code>worker.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform and DBOS workflow execution, queues, manifests, targets, CLI plumbing, and worker bootstrap.</td></tr>
     <tr><td class="path"><code>platform/release_parity_fixture.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unitbench release-parity implementation and CLI routes removed.</td></tr>
-    <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status fail">Remove</span></td><td>Signed bundle publication remains.</td></tr>
+    <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>Signed bundle publication and its CLI removed.</td></tr>
     <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval campaign/ledger/reconciliation application.</td></tr>
     <tr><td class="path"><code>platform/dataset_snapshot.py</code>, <code>scoring.py</code>, <code>scoring_workflow.py</code>, <code>spec_builder.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval snapshots, scoring, prompts, encoder/decoder compression, and experiment expansion.</td></tr>
     <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
@@ -381,7 +380,8 @@
     <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status addressed">Addressed</span></td><td>Downstream optimization lifecycle and private durability-protocol tests removed.</td></tr>
     <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status addressed">Addressed</span></td><td>Unitbench delivery fixture and workflow-text tests removed.</td></tr>
     <tr><td class="path"><code>test_platform_dataset_snapshot.py</code>, <code>test_platform_prompts.py</code>, <code>test_platform_scoring_v6.py</code></td><td class="num">23</td><td><span class="status fail">Remove</span></td><td>Tests HumanEval snapshots, encoder/decoder prompts, and scoring manifests.</td></tr>
-    <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_platform_schema_contract.py</code>, <code>test_platform_cli_env.py</code>, <code>test_publication.py</code></td><td class="num">28</td><td><span class="status fail">Remove</span></td><td>Tests DBOS runtime, operator commands, projection, signing, platform structure, and CLI plumbing.</td></tr>
+    <tr><td class="path"><code>test_platform_publication.py</code>, <code>test_platform_integrity.py</code>, <code>test_publication.py</code></td><td class="num">14</td><td><span class="status addressed">Addressed</span></td><td>Projection, signing, and publication CLI tests removed.</td></tr>
+    <tr><td class="path"><code>test_enqueue_runtime.py</code>, <code>test_platform_operations.py</code>, <code>test_platform_schema_contract.py</code>, <code>test_platform_cli_env.py</code></td><td class="num">14</td><td><span class="status fail">Remove</span></td><td>DBOS runtime, operator, platform structure, and CLI-plumbing tests remain.</td></tr>
     <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status partial">Decide</span></td><td>Retain only if DSPy is an explicit optional package adapter.</td></tr>
     <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">20</td><td><span class="status partial">Rewrite</span></td><td>Keep public error outcomes; delete import-order, private third-party exception, and <code>sys.modules</code> tests.</td></tr>
     <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status fail">Remove</span></td><td>Constant-alias assertions provide no core behavioral evidence.</td></tr>

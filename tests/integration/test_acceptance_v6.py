@@ -13,7 +13,6 @@ from dr_platform.enqueue_runtime import (
     PhysicalEnqueueDisposition,
     PhysicalEnqueueOutcome,
 )
-from dr_platform.export import ApplicationSnapshot
 from sqlalchemy import create_engine, insert, select, update
 from typer.testing import CliRunner
 
@@ -36,10 +35,6 @@ from whetstone.platform.submission import (
     select_populated_scoring_generation_runs,
 )
 from whetstone.platform.targets import target_registry
-from whetstone.publication import (
-    analysis_projection_specs,
-    detail_projection_specs,
-)
 from whetstone.records import DatasetSnapshotIdentityPayload
 
 
@@ -522,29 +517,6 @@ def test_mixed_terminal_failures_promote_only_when_every_cell_is_accounted(
     assert result.accepted_count == 3
     assert result.missing_count == 0
     assert result.rejected_count == 0
-    snapshot_cut = ApplicationSnapshot(
-        source_database="test",
-        captured_at=datetime.now(UTC),
-        snapshot_seq=1,
-    )
-    projections = analysis_projection_specs() + detail_projection_specs()
-    with app_postgres_schema.engine.connect() as connection:
-        rows = {
-            projection.member: projection.full_rebuild_builder(
-                connection, snapshot_cut
-            )
-            for projection in projections
-            if projection.full_rebuild_builder is not None
-        }
-    assert len(rows["predictions"]) == 3
-    generation_failure = next(
-        row
-        for row in rows["predictions"]
-        if row["prediction_id"] == specs[1].prediction_id
-    )
-    assert generation_failure["generation_status"] == "error"
-    assert generation_failure["score"] is None
-    assert len(rows["detail_score_harness_failures"]) == 1
 
 
 @pytest.mark.integration
@@ -772,23 +744,6 @@ def test_selection_candidates_cut_current_read_and_cli(
     assert historical.platform_cut
     assert current.disposition is CurrentAcceptanceDisposition.CURRENT
 
-    projections = analysis_projection_specs() + detail_projection_specs()
-    with app_postgres_schema.engine.connect() as connection:
-        snapshot = ApplicationSnapshot(
-            source_database="test",
-            captured_at=datetime.now(UTC),
-            snapshot_seq=1,
-        )
-        fresh_rows = {
-            projection.member: projection.full_rebuild_builder(
-                connection, snapshot
-            )
-            for projection in projections
-            if projection.full_rebuild_builder is not None
-        }
-    assert len(fresh_rows["predictions"]) == 1
-    assert len(fresh_rows["score_attempts"]) == 1
-
     monkeypatch.setattr(
         operations,
         "_engine",
@@ -833,7 +788,3 @@ def test_selection_candidates_cut_current_read_and_cli(
         )
         stale = load_current_acceptance(connection, experiment_name="exp")
     assert stale.disposition is CurrentAcceptanceDisposition.STALE_PLATFORM_CUT
-    with app_postgres_schema.engine.connect() as connection:
-        for projection in projections:
-            assert projection.full_rebuild_builder is not None
-            assert projection.full_rebuild_builder(connection, snapshot) == ()
