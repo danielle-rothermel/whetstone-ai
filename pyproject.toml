@@ -44,12 +44,12 @@ dev = [
     "dspy==3.3.0b1",
 ]
 
-# dr-* libs are not on PyPI. Paid-work dependencies use an exact reviewed rev;
-# branch sources remain reproducible through uv.lock.
+# dr-* libs are not on PyPI. Git sources remain reproducible through uv.lock;
+# dr-providers uses an exact reviewed revision.
 [tool.uv.sources]
-dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" }
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "cbd2eaf4f27f42771e232a725853754acbd17648" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "main" }
 dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
 dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 
@@ -63,7 +63,7 @@ packages = ["src/whetstone"]
 [tool.ruff]
 include = ["src/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 line-length = 79
-target-version = "py312"
+target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
