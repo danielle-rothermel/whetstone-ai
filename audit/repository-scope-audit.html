@@ -32,21 +32,21 @@
 <div class="byline">whetstone-ai · repository scope audit · 2026-07-15</div>
 
 <div class="hero">
-  The repository <span class="key">fails every requested boundary</span> except one narrow negative finding: there is no tracked Python plotting implementation. DuckDB, MotherDuck, Unitbench, visualization dependencies, integration tests, platform operations, HumanEval treatment logic, fixed data projections, and extensive recovery machinery are present. Generated artifacts were removed on <code>main</code> after the original audit. The remaining work is an architectural contraction, not a small cleanup.
+  The cleanup stack removes the directly actionable categories: visualization dependencies, Unitbench, direct DuckDB and projection code, COPRO, publication, live sweep, MotherDuck/cutover behavior, and the integration harness. The package still depends transitively on DuckDB through <code>dr-platform</code> and retains platform operations, HumanEval treatment logic, and defensive core machinery. Those residual findings require an architectural design pass rather than another deletion-only slice.
 </div>
 
-<div class="section-head" id="verdict"><h2>Every requested boundary is currently violated</h2></div>
+<div class="section-head" id="verdict"><h2>Straightforward boundaries are removed; design gates remain</h2></div>
 
 <div class="table-wrap">
 <table>
   <thead><tr><th>Boundary</th><th>Verdict</th><th>Current evidence</th></tr></thead>
   <tbody>
-    <tr><td>No DuckDB</td><td><span class="status fail">Fail</span></td><td>Two production imports, a direct read-only connection, DuckDB file defaults, DuckDB-aware exception handling, MotherDuck policy, tests, CI secrets, and two resolved dependency paths.</td></tr>
-    <tr><td>No visualization</td><td><span class="status fail">Fail</span></td><td><code>matplotlib</code> and <code>marimo[recommended]</code> remain runtime dependencies. The previously tracked PNGs and analysis artifacts were removed by <code>main</code> PR #51.</td></tr>
-    <tr><td>No Unitbench link</td><td><span class="status fail">Fail</span></td><td>A reusable workflow checks out Unitbench, installs it, runs its delivery-parity command, and maps Whetstone secrets into Unitbench-specific variables.</td></tr>
-    <tr><td>No integration tests</td><td><span class="status fail">Fail</span></td><td>Seven integration test modules collect 18 cases; CI provisions PostgreSQL and runs them separately.</td></tr>
+    <tr><td>No DuckDB</td><td><span class="status partial">Partial</span></td><td>Direct DuckDB, MotherDuck, projection, publication, and test code is gone. DuckDB still resolves transitively through <code>dr-platform</code>.</td></tr>
+    <tr><td>No visualization</td><td><span class="status addressed">Pass</span></td><td>No plotting implementation, visualization dependency, or tracked artifact output remains.</td></tr>
+    <tr><td>No Unitbench link</td><td><span class="status addressed">Pass</span></td><td>The Unitbench workflow, fixture implementation, CLI routes, and tests are gone.</td></tr>
+    <tr><td>No integration tests</td><td><span class="status addressed">Pass</span></td><td>The integration directory, global runtime fixtures, integration CI job, marker, and script are gone.</td></tr>
     <tr><td>No defensive ceremony</td><td><span class="status fail">Fail</span></td><td>The source contains 358 explicit raises, 68 Pydantic models, 21 model validators, crash journals, fsync checkpoints, ownership proofs, cleanup proofs, allowlists, and layered failure translation.</td></tr>
-    <tr><td>Standalone and use-case neutral</td><td><span class="status fail">Fail</span></td><td>The README defines Whetstone as a HumanEval/DR Platform application; HumanEval, encoder/decoder compression, COPRO, PostgreSQL, DBOS, and publication contracts permeate source, configuration, tests, and artifacts.</td></tr>
+    <tr><td>Standalone and use-case neutral</td><td><span class="status fail">Fail</span></td><td>The README still defines Whetstone as a HumanEval/DR Platform application; HumanEval, encoder/decoder compression, PostgreSQL, and DBOS contracts remain in source, configuration, and tests.</td></tr>
   </tbody>
 </table>
 </div>
@@ -68,19 +68,24 @@
     <tr><td><code>DEF-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-cutover-motherduck</code></td><td>None. The cutover ownership, journaling, confirmation, and recovery subsystem is gone.</td></tr>
     <tr><td><code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Retained-core records, storage validation, and failure policy require a later design pass.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
-    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code></td><td>Release, COPRO, publication, live-sweep, cutover, and MotherDuck cases are gone; other application and structural tests remain.</td></tr>
-    <tr><td><code>TST-02</code>, <code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove residual integration fixtures and constant tests.</td></tr>
+    <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
+    <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code></td><td>Directly removable application and integration cases are gone; downstream unit and structural tests remain for the design pass.</td></tr>
+    <tr><td><code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove constant tests when their owning platform modules are redesigned or deleted.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code></td><td>All four application entry points are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code>, <code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
 </div>
 
-<div class="callout good">
-  <strong>Important clean finding:</strong> tracked source contains no <code>matplotlib</code>, <code>marimo</code>, seaborn, Plotly, Altair, Bokeh, or <code>savefig</code> call. Visualization residue is limited to dependencies, lockfile entries, and generated artifacts.
+<div class="callout">
+  <strong>Reading the evidence below:</strong> inventory metrics and finding narratives describe the original audit snapshot at <code>189c273</code>. The remediation table above and explicit “current status” callouts describe the top of this cleanup stack. Removed-file evidence is retained as history and labeled accordingly.
 </div>
 
-<div class="section-head" id="inventory"><h2>The application shell dominates the package</h2></div>
+<div class="callout good">
+  <strong>Current visualization status:</strong> tracked source, dependencies, lockfile entries, and artifacts contain no visualization implementation or tooling.
+</div>
+
+<div class="section-head" id="inventory"><h2>Original snapshot · the application shell dominated the package</h2></div>
 
 <div class="grid-4">
   <div class="card"><div class="metric">18,062</div><div class="label">production Python lines</div></div>
@@ -244,13 +249,13 @@
 <div class="finding">
   <div class="finding-head"><h3>TST-01 · Seven modules are explicit integration tests</h3><span class="severity blocker">Blocker</span></div>
   <p>Eighteen collected cases cover PostgreSQL migrations and schema isolation, concurrent acceptance, DBOS/domain retry behavior, DuckDB publication export, live MotherDuck probes, and release-parity prepare/cleanup.</p>
-  <div class="evidence"><a href="../tests/integration/"><code>tests/integration/</code></a> · <a href="../scripts/ci/integration.sh"><code>scripts/ci/integration.sh</code></a> · <a href="../.github/workflows/whetstone_tests.yml"><code>.github/workflows/whetstone_tests.yml:68–110</code></a></div>
+  <div class="evidence"><code>tests/integration/</code> and <code>scripts/ci/integration.sh</code> (removed by <code>cleanup-integration-harness</code>) · <a href="../.github/workflows/whetstone_tests.yml"><code>.github/workflows/whetstone_tests.yml</code></a> (integration job removed)</div>
 </div>
 
 <div class="finding">
   <div class="finding-head"><h3>TST-02 · Integration infrastructure loads from global <code>conftest.py</code></h3><span class="severity high">High</span></div>
   <p>The suite-wide conftest imports Alembic, DBOS, SQLAlchemy, migrations, platform workflows, targets, and worker code. It defines live PostgreSQL availability checks, per-test schemas, DBOS SQLite system databases, and consumer runtimes even though ordinary unit tests do not need them.</p>
-  <div class="evidence"><a href="../tests/conftest.py"><code>tests/conftest.py:1–193</code></a></div>
+  <div class="evidence"><code>tests/conftest.py:1–193</code> (removed by <code>cleanup-integration-harness</code>)</div>
 </div>
 
 <div class="finding">
@@ -283,15 +288,15 @@
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 273 non-integration tests pass; 18 integration tests are deselected by the unit command. The problem is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 130 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
 
 <div class="finding">
-  <div class="finding-head"><h3>GEN-01 · Project identity is explicitly downstream-specific</h3><span class="severity blocker">Blocker</span></div>
-  <p>The README says Whetstone evaluates graph-shaped HumanEval workloads through generation and scoring Operations, delegates execution to <code>dr-platform</code>, and publishes two pinned bundle surfaces. The package description in <code>pyproject.toml</code> remains a placeholder, so no alternative standalone contract is documented.</p>
-  <div class="evidence"><a href="../README.md"><code>README.md:1–23</code></a> · <a href="../pyproject.toml"><code>pyproject.toml:1–5</code></a></div>
+  <div class="finding-head"><h3>GEN-01 · Project identity remains explicitly downstream-specific</h3><span class="severity blocker">Blocker</span></div>
+  <p>The current README says Whetstone evaluates graph-shaped HumanEval workloads through generation and scoring Operations and delegates execution to <code>dr-platform</code>. Publication language is gone, but the package description in <code>pyproject.toml</code> remains a placeholder, so no alternative standalone contract is documented.</p>
+  <div class="evidence"><a href="../README.md"><code>README.md:1–12</code></a> · <a href="../pyproject.toml"><code>pyproject.toml:1–5</code></a></div>
 </div>
 
 <div class="finding">
@@ -319,9 +324,9 @@
 </div>
 
 <div class="finding">
-  <div class="finding-head"><h3>GEN-06 · The public surface is platform workflow execution</h3><span class="severity high">High</span></div>
-  <p>The root <code>whetstone</code> package exports nothing. <code>whetstone.platform</code> exports DBOS workflow start/run functions and node execution. All four console scripts are publication, live sweep, cutover, or COPRO operator commands. There is no small documented standalone API.</p>
-  <div class="evidence"><a href="../src/whetstone/__init__.py"><code>src/whetstone/__init__.py</code></a> · <a href="../src/whetstone/platform/__init__.py"><code>src/whetstone/platform/__init__.py</code></a> · <a href="../pyproject.toml"><code>pyproject.toml:36–40</code></a></div>
+  <div class="finding-head"><h3>GEN-06 · The public surface remains platform workflow execution</h3><span class="severity high">High</span></div>
+  <p>The root <code>whetstone</code> package exports nothing, while <code>whetstone.platform</code> exports DBOS workflow start/run functions and node execution. All four application console scripts are gone, but there is still no small documented standalone API.</p>
+  <div class="evidence"><a href="../src/whetstone/__init__.py"><code>src/whetstone/__init__.py</code></a> · <a href="../src/whetstone/platform/__init__.py"><code>src/whetstone/platform/__init__.py</code></a> · <a href="../pyproject.toml"><code>pyproject.toml</code></a></div>
 </div>
 
 <div class="finding">
@@ -331,8 +336,8 @@
 </div>
 
 <div class="finding">
-  <div class="finding-head"><h3>GEN-08 · Runtime dependencies mix library, application, analysis, and development concerns</h3><span class="severity high">High</span></div>
-  <p>DBOS, Alembic, PostgreSQL drivers, SQLAlchemy, datasets, DR Platform, Marimo, Matplotlib, pandas, pre-commit, pytest, Ruff, and Ty are all installed as runtime dependencies. Private Git dependencies further prevent the package from behaving like a conventional standalone install.</p>
+  <div class="finding-head"><h3>GEN-08 · Runtime dependencies still mix library, application, analysis, and development concerns</h3><span class="severity high">High</span></div>
+  <p>DBOS, Alembic, PostgreSQL drivers, SQLAlchemy, datasets, DR Platform, pandas, pre-commit, pytest, Ruff, and Ty remain runtime dependencies. Marimo and Matplotlib are gone; private Git dependencies and the remaining application/dev mix still prevent a conventional standalone install.</p>
   <div class="evidence"><a href="../pyproject.toml"><code>pyproject.toml:9–34, 47–54</code></a></div>
 </div>
 
@@ -362,8 +367,8 @@
     <tr><td class="path"><code>src/whetstone/__init__.py</code>, <code>lm/__init__.py</code>, <code>records/__init__.py</code>, <code>py.typed</code></td><td><span class="status partial">Rewrite</span></td><td>Expose the reduced public contract from the root, re-export only intentional types, and keep the typing marker.</td></tr>
     <tr><td class="path"><code>configs/**</code>, <code>artifacts/**</code></td><td><span class="status fail">Remove</span></td><td>HumanEval experiment deployment and historical outputs.</td></tr>
     <tr><td class="path"><code>.github/workflows/release-parity.yml</code></td><td><span class="status addressed">Addressed</span></td><td>Direct Unitbench/MotherDuck/Neon delivery integration removed.</td></tr>
-    <tr><td class="path"><code>scripts/ci/integration.sh</code>, integration CI job</td><td><span class="status fail">Remove</span></td><td>Explicit integration-test harness.</td></tr>
-    <tr><td class="path"><code>scripts/ci/unit.sh</code>, <code>lint.sh</code>, <code>.github/workflows/whetstone_tests.yml</code>, <code>Dockerfile.ci</code></td><td><span class="status partial">Simplify</span></td><td>Keep unit/lint automation, remove integration setup and application-only dependencies, and align it with the reduced package.</td></tr>
+    <tr><td class="path"><code>scripts/ci/integration.sh</code>, integration CI job</td><td><span class="status addressed">Addressed</span></td><td>Explicit integration-test harness removed.</td></tr>
+    <tr><td class="path"><code>scripts/ci/unit.sh</code>, <code>lint.sh</code>, <code>.github/workflows/whetstone_tests.yml</code>, <code>Dockerfile.ci</code></td><td><span class="status partial">Simplify</span></td><td>Unit/lint automation now has no integration setup; application-only dependencies still await the platform design pass.</td></tr>
     <tr><td class="path"><code>pyproject.toml</code>, <code>uv.lock</code>, <code>README.md</code></td><td><span class="status partial">Rewrite</span></td><td>Define the package contract, narrow runtime dependencies, remove CLI surfaces, and regenerate the lock.</td></tr>
     <tr><td class="path"><code>.python-version</code>, <code>.pre-commit-config.yaml</code>, <code>.gitignore</code>, <code>AGENTS.md</code></td><td><span class="status pass">Retain</span></td><td>Repository tooling is not part of the identified scope problem; update ignore rules only if the new layout requires it.</td></tr>
   </tbody>
@@ -376,7 +381,7 @@
 <table>
   <thead><tr><th>Test files</th><th>Collected cases</th><th>Disposition</th><th>Reason</th></tr></thead>
   <tbody>
-    <tr><td class="path"><code>tests/integration/test_*.py</code> (7 modules)</td><td class="num">18</td><td><span class="status fail">Remove</span></td><td>Explicit PostgreSQL, DBOS, DuckDB, MotherDuck, migration, publication, and release-fixture integration tests.</td></tr>
+    <tr><td class="path"><code>tests/integration/test_*.py</code> (7 modules)</td><td class="num">18</td><td><span class="status addressed">Addressed</span></td><td>Explicit PostgreSQL, DBOS, DuckDB, MotherDuck, migration, publication, and release-fixture integration tests removed.</td></tr>
     <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status addressed">Addressed</span></td><td>Campaign ledger and reconciliation tests removed.</td></tr>
     <tr><td class="path"><code>test_cutover_tooling.py</code>, MotherDuck cases in <code>test_connections.py</code></td><td class="num">34</td><td><span class="status addressed">Addressed</span></td><td>Cutover and MotherDuck/Neon connection-policy tests removed.</td></tr>
     <tr><td class="path">Generic PostgreSQL cases in <code>test_connections.py</code></td><td class="num">6</td><td><span class="status partial">Decide</span></td><td>Retain only if PostgreSQL remains in the package contract after the platform design gate.</td></tr>
@@ -390,18 +395,19 @@
     <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status fail">Remove</span></td><td>Constant-alias assertions provide no core behavioral evidence.</td></tr>
     <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">22</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; delete direct/encdec naming and duplicated wrapper cases.</td></tr>
     <tr><td class="path"><code>test_lm_boundary.py</code>, <code>test_lm_utils.py</code></td><td class="num">31</td><td><span class="status pass">Retain</span></td><td>Best match for necessary request/response mapping, text extraction, cost extraction, and sanitization behavior.</td></tr>
-    <tr><td class="path"><code>tests/conftest.py</code>, experiment JSON fixtures, <code>serialization_support.py</code></td><td class="num">—</td><td><span class="status partial">Replace</span></td><td>Delete database/runtime fixtures; keep only small local builders required by retained tests.</td></tr>
+    <tr><td class="path"><code>tests/conftest.py</code></td><td class="num">—</td><td><span class="status addressed">Addressed</span></td><td>Global database/runtime fixtures removed with the integration harness.</td></tr>
+    <tr><td class="path">Experiment JSON fixtures, <code>serialization_support.py</code></td><td class="num">—</td><td><span class="status partial">Decide</span></td><td>Retain only small local builders required by the eventual standalone contract.</td></tr>
   </tbody>
 </table>
 </div>
 
-<div class="section-head" id="sequence"><h2>A safe contraction removes whole vertical slices first</h2></div>
+<div class="section-head" id="sequence"><h2>Original sequence · deletion slices completed, design gates remain</h2></div>
 
 <div class="steps">
-  <div class="step"><h3>Delete the Unitbench delivery slice</h3><p>Remove the release-parity workflow, production fixture, publication CLI subcommands, associated tests, secrets, and integrity-only dependencies.</p></div>
-  <div class="step"><h3>Delete DuckDB, MotherDuck, and data projection as one slice</h3><p>Remove the fixed publication module, remote/local bundle behavior, COPRO bundle reader path, MotherDuck connection policy and tests, then regenerate the lock and confirm <code>rg -i 'duckdb|motherduck'</code> is empty.</p></div>
-  <div class="step"><h3>Delete visualization and experiment residue</h3><p>Remove Marimo and Matplotlib dependencies, all tracked artifacts, and committed HumanEval experiment/model/split configurations.</p></div>
-  <div class="step"><h3>Remove the platform application</h3><p>Delete DBOS workflows, targets, worker, enqueue runtime, operations, acceptance, cutover, live sweep, persistence, PostgreSQL schema/migrations, and the explicit integration suite.</p></div>
+  <div class="step"><h3>Unitbench delivery · addressed</h3><p>The release-parity workflow, production fixture, publication CLI subcommands, associated tests, and delivery-specific integrity behavior are gone.</p></div>
+  <div class="step"><h3>Direct DuckDB, MotherDuck, and data projection · addressed</h3><p>Fixed publication, COPRO bundle access, MotherDuck connection policy, and their tests are gone. DuckDB still resolves transitively through <code>dr-platform</code> and is explicitly tracked as <code>DCK-05</code>.</p></div>
+  <div class="step"><h3>Visualization and experiment residue · partial</h3><p>Marimo, Matplotlib, and all tracked artifacts are gone. Committed HumanEval experiment/model/split configurations remain for the standalone-package design pass.</p></div>
+  <div class="step"><h3>Platform application · partial</h3><p>Cutover, live sweep, publication, release parity, COPRO, and the explicit integration suite are gone. DBOS workflows, targets, worker, operations, persistence, and PostgreSQL schema/migrations remain.</p></div>
   <div class="step"><h3>Define one standalone public contract</h3><p>Choose the smallest reusable behavior—likely graph/LM request execution and typed outcomes—export it from <code>whetstone</code>, document it, and make benchmark, provider, persistence, and orchestration adapters explicit and optional.</p></div>
   <div class="step"><h3>Simplify records and failures around that contract</h3><p>Remove HumanEval metrics and defaults, redundant identities, storage-size policy, dynamic failure exports, third-party exception heuristics, and silent fallbacks. Validate only at real input boundaries.</p></div>
   <div class="step"><h3>Rebuild tests from public behavior</h3><p>Retain deterministic request/response, parsing, sanitization, and explicit error tests. Delete source inspection, workflow text, import-order, crash-boundary, database, runtime, and downstream scenario tests.</p></div>
@@ -411,7 +417,7 @@
   <strong>Do not begin by deleting individual checks.</strong> Most ceremony belongs to removable vertical slices. Removing the slices first avoids spending time deciding whether each journal checksum, retry state, or cleanup proof is locally justified.
 </div>
 
-<div class="section-head" id="method"><h2>The audit covers the tracked repository and current test collection</h2></div>
+<div class="section-head" id="method"><h2>Method distinguishes the original snapshot from cleanup verification</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -430,7 +436,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -m "not integration" -q</code>: 273 passed, 18 deselected.</li>
+      <li><code>uv run pytest tests/ -q</code>: 130 passed after the straightforward cleanup stack.</li>
     </ul>
   </div>
 </div>
