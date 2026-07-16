@@ -2188,9 +2188,7 @@ dependencies = [
     { name = "dr-providers" },
     { name = "dr-serialize" },
     { name = "psycopg" },
-    { name = "python-dotenv" },
     { name = "sqlalchemy" },
-    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -2212,9 +2210,7 @@ requires-dist = [
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "psycopg", specifier = ">=3.3.4" },
-    { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "sqlalchemy", specifier = ">=2.0.51" },
-    { name = "typer", specifier = ">=0.26.7" },
 ]
 
 [package.metadata.requires-dev]

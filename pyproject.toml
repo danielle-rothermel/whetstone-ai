@@ -15,9 +15,7 @@ dependencies = [
     "dr-providers",
     "dr-serialize",
     "psycopg>=3.3.4",
-    "python-dotenv>=1.1.0",
     "sqlalchemy>=2.0.51",
-    "typer>=0.26.7",
 ]
 
 [dependency-groups]
