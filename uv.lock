@@ -504,7 +504,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?rev=ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b#ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?branch=main#564d61fc403620b66431eb08d109414b1f11ff0d" }
 dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
@@ -524,7 +524,7 @@ dependencies = [
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?rev=cbd2eaf4f27f42771e232a725853754acbd17648#cbd2eaf4f27f42771e232a725853754acbd17648" }
+source = { git = "https://github.com/danielle-rothermel/dr-platform?branch=main#38207293d671e36496a347a7b3f140fe053e1f2f" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos", extra = ["otel"] },
@@ -3122,9 +3122,9 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.16.2" },
     { name = "datasets", specifier = ">=3.6.0" },
     { name = "dbos", specifier = ">=2.25.0" },
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=ccfecac22057332902d84ec9ac3fb5e8ad3d2b7b" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=cbd2eaf4f27f42771e232a725853754acbd17648" },
+    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=main" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "marimo", extras = ["recommended"], specifier = ">=0.23.11" },

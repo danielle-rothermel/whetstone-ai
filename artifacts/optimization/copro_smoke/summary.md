@@ -36,5 +36,5 @@
 ## Command
 
 ```bash
-scripts/optimization/run_copro_encdec.py --model-config configs/models/gpt54-nano-openai.json --split configs/splits/tiny.json --compression-target 0.5 --breadth 2 --depth 1 --repeats 1 --proposal-mode manual --output-dir artifacts/optimization/copro_smoke --dry-run --no-append-testing-log
+uv run whetstone-copro --model-config configs/models/gpt54-nano-openai.json --split configs/splits/tiny.json --compression-target 0.5 --breadth 2 --depth 1 --repeats 1 --output-dir artifacts/optimization/copro_smoke --dry-run
 ```
