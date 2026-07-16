@@ -66,12 +66,12 @@
     <tr><td><code>DEF-04</code>, <code>GEN-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code></td><td>None. The COPRO operator, crash-safe checkpoint store, CLI, and tests are gone.</td></tr>
     <tr><td><code>DEF-01</code>, <code>TST-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-live-sweep</code></td><td>None. The live-sweep durability application and both private fault-injection suites are gone.</td></tr>
     <tr><td><code>DEF-03</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-cutover-motherduck</code></td><td>None. The cutover ownership, journaling, confirmation, and recovery subsystem is gone.</td></tr>
-    <tr><td><code>DEF-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-dspy-adapter</code></td><td>DSPy-specific serialization is gone; repeated record-size validation remains for the storage-boundary slice.</td></tr>
+    <tr><td><code>DEF-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-dspy-adapter</code>, <code>cleanup-payload-validation</code></td><td>DSPy, record-construction byte caps, and the metrics-text storage cap are gone; semantic record/database duplication remains for the later model redesign.</td></tr>
     <tr><td><code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Failure classification, dynamic exports, and third-party exception probing remain.</td></tr>
     <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
     <tr><td><code>TST-01</code>, <code>TST-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-integration-harness</code></td><td>None. All integration modules, global runtime fixtures, CI services, marker, and runner are gone.</td></tr>
     <tr><td><code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-integration-harness</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code>, <code>cleanup-dspy-adapter</code>, <code>cleanup-humaneval-authoring</code></td><td>DSPy and config-driven HumanEval authoring cases are also gone; downstream unit and structural tests remain.</td></tr>
-    <tr><td><code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove constant tests when their owning platform modules are redesigned or deleted.</td></tr>
+    <tr><td><code>TST-06</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-payload-validation</code></td><td>None. Constant-alias tests were removed with the duplicated byte-cap layer.</td></tr>
     <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code>, <code>cleanup-cutover-motherduck</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-submission-surface</code></td><td>Application entry points, operator plumbing, and the unexported submission surface are gone; platform workflow exports remain.</td></tr>
     <tr><td><code>GEN-08</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-package-dependencies</code>, <code>cleanup-orphaned-operators</code>, <code>cleanup-dspy-adapter</code></td><td>Development tools, unused direct dependencies, CLI dependencies, and DSPy are out of the package contract; retained platform/database dependencies remain.</td></tr>
     <tr><td><code>GEN-02</code>, <code>GEN-07</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-humaneval-authoring</code></td><td>None. The encoder/decoder spec builder, committed experiment configuration, and authoring fixtures are gone.</td></tr>
@@ -224,7 +224,7 @@
 
 <div class="finding">
   <div class="finding-head"><h3>DEF-05 · The record layer repeats integrity checks across models and storage</h3><span class="severity high">High</span></div>
-  <p>Twenty-five record models validate payload sizes, graph digests, external bindings, provider identity, dimensions digests, stable IDs, timestamp order, terminal status, and HumanEval result shapes. PostgreSQL repeats many constraints and adds append-only mutation triggers. Some invariants are appropriate at a boundary; the present layering is inseparable from the platform persistence design.</p>
+  <p>Record construction and metrics-text conversion no longer enforce PostgreSQL-sized byte caps; JSONB row adapters retain the storage limit. Record models still validate graph digests, external bindings, provider identity, dimensions digests, stable IDs, timestamp order, terminal status, and HumanEval result shapes, while PostgreSQL repeats several constraints and adds append-only mutation triggers. The remaining semantic duplication is inseparable from the platform persistence design.</p>
   <div class="evidence"><a href="../src/whetstone/records/models.py"><code>records/models.py:66–583</code></a> · <a href="../src/whetstone/db/schema.py"><code>db/schema.py:74–648</code></a> · <a href="../src/whetstone/db/io.py"><code>db/io.py:431–505</code></a></div>
 </div>
 
@@ -287,11 +287,11 @@
 <div class="finding">
   <div class="finding-head"><h3>TST-06 · Two tests assert constants rather than behavior</h3><span class="severity medium">Medium</span></div>
   <p><code>test_records_limits.py</code> asserts that six aliases equal a dependency constant and that a count is “extraordinarily high.” Neither proves a user-visible contract, and both entrench the defensive payload layer.</p>
-  <div class="evidence"><a href="../tests/test_records_limits.py"><code>tests/test_records_limits.py:17–24</code></a></div>
+  <div class="evidence"><code>tests/test_records_limits.py:17–24</code> (removed by <code>cleanup-payload-validation</code>)</div>
 </div>
 
 <div class="callout good">
-  <strong>Current status:</strong> all 99 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
+  <strong>Current status:</strong> all 98 retained unit tests pass. No integration marker, global integration fixtures, or integration cases remain. The residual question is scope and test value, not a currently failing suite.
 </div>
 
 <div class="section-head" id="downstream"><h2>HumanEval and platform choices shape core records and APIs</h2></div>
@@ -366,7 +366,7 @@
     <tr><td class="path"><code>platform/dataset_snapshot.py</code>, <code>scoring.py</code>, <code>scoring_workflow.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval snapshot and scoring runtime behavior remains for the later design gate.</td></tr>
     <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
     <tr><td class="path"><code>platform/persistence.py</code>, <code>db/**</code>, <code>alembic.ini</code></td><td><span class="status fail">Remove</span></td><td>Application PostgreSQL persistence and migrations. If persistence remains a requirement, move it to an optional adapter with no core import path.</td></tr>
-    <tr><td class="path"><code>records/models.py</code>, <code>hashing.py</code>, <code>providers.py</code>, <code>limits.py</code></td><td><span class="status partial">Refactor</span></td><td>Keep only generic graph/LM result contracts; remove HumanEval metrics, DR Platform properties, dataset defaults, storage-size policy, and duplicated stable identities not required by the public API.</td></tr>
+    <tr><td class="path"><code>records/models.py</code>, <code>hashing.py</code>, <code>providers.py</code></td><td><span class="status partial">Refactor</span></td><td>Repeated storage-size validation and <code>limits.py</code> are gone; HumanEval metrics, DR Platform properties, dataset defaults, and duplicated identities remain.</td></tr>
     <tr><td class="path"><code>eval_failures/**</code></td><td><span class="status partial">Simplify</span></td><td>Retain a minimal explicit error contract; remove DBOS/psycopg heuristics, dynamic exports, import-order design, and duplicate provider taxonomy.</td></tr>
     <tr><td class="path"><code>dspy_serialization.py</code></td><td><span class="status addressed">Addressed</span></td><td>DSPy-specific serialization adapter removed; generic <code>dr-serialize</code> behavior remains.</td></tr>
     <tr><td class="path"><code>lm/boundary.py</code>, <code>lm/utils.py</code></td><td><span class="status pass">Retain</span></td><td>Closest existing core: prompt-to-provider request mapping, provider response mapping, text/cost extraction, and credential sanitization. Rename and trim around a public contract.</td></tr>
@@ -402,7 +402,7 @@
     <tr><td class="path"><code>test_platform_schema_contract.py</code></td><td class="num">1</td><td><span class="status fail">Remove</span></td><td>AST-based implementation contract remains for the final test-cleanup slice.</td></tr>
     <tr><td class="path"><code>test_dspy_serialization.py</code></td><td class="num">7</td><td><span class="status addressed">Addressed</span></td><td>DSPy adapter tests removed with their owning module.</td></tr>
     <tr><td class="path"><code>test_eval_failures_policy.py</code>, <code>test_lm_imports.py</code></td><td class="num">19</td><td><span class="status partial">Rewrite</span></td><td>The DSPy import-order assertion is gone; remove remaining private third-party exception and <code>sys.modules</code> tests in the failure-policy slice.</td></tr>
-    <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status fail">Remove</span></td><td>Constant-alias assertions provide no core behavioral evidence.</td></tr>
+    <tr><td class="path"><code>test_records_limits.py</code></td><td class="num">2</td><td><span class="status addressed">Addressed</span></td><td>Constant-alias assertions removed with the duplicated byte-cap layer.</td></tr>
     <tr><td class="path"><code>test_eval_failures_generation.py</code>, <code>test_eval_failures_recording.py</code></td><td class="num">22</td><td><span class="status partial">Trim</span></td><td>Keep empty-output and explicit serialization-boundary behavior; delete direct/encdec naming and duplicated wrapper cases.</td></tr>
     <tr><td class="path"><code>test_lm_boundary.py</code>, <code>test_lm_utils.py</code></td><td class="num">31</td><td><span class="status pass">Retain</span></td><td>Best match for necessary request/response mapping, text extraction, cost extraction, and sanitization behavior.</td></tr>
     <tr><td class="path"><code>tests/conftest.py</code></td><td class="num">—</td><td><span class="status addressed">Addressed</span></td><td>Global database/runtime fixtures removed with the integration harness.</td></tr>
@@ -419,7 +419,7 @@
   <div class="step"><h3>Visualization and experiment residue · addressed</h3><p>Marimo, Matplotlib, tracked artifacts, and committed HumanEval experiment/model/split configurations are gone.</p></div>
   <div class="step"><h3>Platform application · partial</h3><p>Cutover, live sweep, publication, release parity, COPRO, operator/worker modules, and the explicit integration suite are gone. DBOS workflows, targets, persistence, and PostgreSQL schema/migrations remain.</p></div>
   <div class="step"><h3>Define one standalone public contract</h3><p>Choose the smallest reusable behavior—likely graph/LM request execution and typed outcomes—export it from <code>whetstone</code>, document it, and make benchmark, provider, persistence, and orchestration adapters explicit and optional.</p></div>
-  <div class="step"><h3>Simplify records and failures around that contract</h3><p>Remove HumanEval metrics and defaults, redundant identities, storage-size policy, dynamic failure exports, third-party exception heuristics, and silent fallbacks. Validate only at real input boundaries.</p></div>
+  <div class="step"><h3>Simplify records and failures around that contract</h3><p>PostgreSQL byte limits now live only at JSONB adapters. Remove HumanEval metrics and defaults, redundant identities, dynamic failure exports, third-party exception heuristics, and silent fallbacks after choosing the public contract and persistence boundary.</p></div>
   <div class="step"><h3>Rebuild tests from public behavior</h3><p>Retain deterministic request/response, parsing, sanitization, and explicit error tests. Delete source inspection, workflow text, import-order, crash-boundary, database, runtime, and downstream scenario tests.</p></div>
 </div>
 
@@ -446,7 +446,7 @@
       <li>AST inventory of imports, classes, functions, tests, exception handlers, raises, and assertions.</li>
       <li>Dependency-tree inspection with <code>uv tree</code>.</li>
       <li><code>uv run pytest --collect-only -q</code>: 291 cases.</li>
-      <li><code>uv run pytest tests/ -q</code>: 99 passed after the current cleanup stack.</li>
+      <li><code>uv run pytest tests/ -q</code>: 98 passed after the current cleanup stack.</li>
     </ul>
   </div>
 </div>

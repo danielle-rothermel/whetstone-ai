@@ -35,7 +35,6 @@ from whetstone.records import (
     ScoreHarnessFailureRecord,
     stable_score_attempt_id,
 )
-from whetstone.records.limits import METRICS_STAGES_MAX_COUNT
 
 type ScoreSubmissionRunRecord = ScoreAttemptRecord | ScoreHarnessFailureRecord
 
@@ -323,12 +322,6 @@ def score_metrics_payload(
     completed_score: CompletedScore,
 ) -> MetricsPayload:
     node_output_sources = node_output_metrics_sources(node_attempts)
-    max_node_sources = METRICS_STAGES_MAX_COUNT - 1
-    if len(node_output_sources) > max_node_sources:
-        raise ValueError(
-            f"node output metrics sources cannot exceed {max_node_sources} "
-            f"entries (metrics.stages cap is {METRICS_STAGES_MAX_COUNT})"
-        )
     metrics_payload = build_metrics_payload(
         raw_submission=completed_score.raw_submission,
         extracted_code=completed_score.extraction.extracted_code,
