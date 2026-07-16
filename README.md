@@ -11,12 +11,3 @@ Run the local checks with:
 ./scripts/ci/lint.sh
 DATABASE_URL=postgresql+psycopg:///dr_dspy ./scripts/ci/integration.sh
 ```
-
-Publication has two explicit, independently promoted surfaces:
-
-- the six-table Analysis Bundle: experiments, predictions, generation runs,
-  score attempts, sweep metrics, and failure metrics;
-- the root-cascaded Detail Bundle, including application-snapshot platform
-  attempts.
-
-Consumers pin a bundle before reading it.

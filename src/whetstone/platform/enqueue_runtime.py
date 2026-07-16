@@ -1,6 +1,6 @@
 """Shared operator-process DBOS runtime that never consumes paid queues.
 
-Operator surfaces (live sweep submission/reconciliation, publication export)
+Operator surfaces (live sweep submission/reconciliation)
 need a launched in-process DBOS to enqueue and observe workflows, but they
 must never claim paid generation/scoring work and must never clobber the
 long-lived worker's queue configuration.  ``DBOSClient`` cannot open SQLite
