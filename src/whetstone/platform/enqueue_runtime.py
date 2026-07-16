@@ -1,9 +1,8 @@
 """Shared operator-process DBOS runtime that never consumes paid queues.
 
-Operator surfaces (live sweep submission/reconciliation)
-need a launched in-process DBOS to enqueue and observe workflows, but they
-must never claim paid generation/scoring work and must never clobber the
-long-lived worker's queue configuration.  ``DBOSClient`` cannot open SQLite
+Platform operations need a launched in-process DBOS to enqueue and observe
+workflows, but they must never claim paid generation/scoring work or clobber
+the long-lived worker's queue configuration.  ``DBOSClient`` cannot open SQLite
 system databases (it applies pool keyword arguments SQLite rejects), so all
 system-database access runs over the launched in-process runtime instead.
 """

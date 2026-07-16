@@ -65,11 +65,12 @@
     <tr><td><code>DCK-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-visualization-deps</code></td><td>The Marimo dependency path is gone; DuckDB remains transitively through <code>dr-platform</code>.</td></tr>
     <tr><td><code>UNT-01</code>–<code>UNT-03</code>, <code>DEF-02</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-unitbench-release</code></td><td>None. Workflow, fixture implementation, CLI routes, and both test modules are gone.</td></tr>
     <tr><td><code>DEF-04</code>, <code>GEN-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code></td><td>None. The COPRO operator, crash-safe checkpoint store, CLI, and tests are gone.</td></tr>
-    <tr><td><code>DEF-01</code>, <code>DEF-03</code>, <code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove whole defensive subsystems first; retained-core validation requires a later design pass.</td></tr>
-    <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code></td><td>Release rollback suppression is gone; live-sweep and retained workflow fallbacks remain.</td></tr>
-    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code>, <code>TST-05</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>Release, COPRO, projection, signing, and publication integration tests are gone; other application and structural tests remain.</td></tr>
+    <tr><td><code>DEF-01</code>, <code>TST-05</code></td><td><span class="status addressed">Addressed</span></td><td><code>cleanup-copro</code>, <code>cleanup-live-sweep</code></td><td>None. The live-sweep durability application and both private fault-injection suites are gone.</td></tr>
+    <tr><td><code>DEF-03</code>, <code>DEF-05</code>, <code>DEF-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove the cutover subsystem; retained-core validation requires a later design pass.</td></tr>
+    <tr><td><code>DEF-07</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-live-sweep</code></td><td>Release and live-sweep cleanup suppression are gone; retained workflow fallbacks remain.</td></tr>
+    <tr><td><code>TST-01</code>, <code>TST-03</code>, <code>TST-04</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-unitbench-release</code>, <code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code></td><td>Release, COPRO, publication, and 62 live-sweep unit cases are gone; other application and structural tests remain.</td></tr>
     <tr><td><code>TST-02</code>, <code>TST-06</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove residual integration fixtures and constant tests.</td></tr>
-    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code></td><td>COPRO and publication entry points are gone; live-sweep, cutover, and platform exports remain.</td></tr>
+    <tr><td><code>GEN-06</code></td><td><span class="status partial">Partial</span></td><td><code>cleanup-copro</code>, <code>cleanup-publication-duckdb</code>, <code>cleanup-live-sweep</code></td><td>Three application entry points are gone; cutover and platform exports remain.</td></tr>
     <tr><td><code>GEN-01</code>–<code>GEN-04</code>, <code>GEN-07</code>, <code>GEN-08</code></td><td><span class="status open">Open</span></td><td>—</td><td>Remove application-only slices; public API and retained HumanEval/core boundaries remain a design gate.</td></tr>
   </tbody>
 </table>
@@ -192,7 +193,7 @@
 <div class="finding">
   <div class="finding-head"><h3>DEF-01 · Live sweep is a 2,812-line durability application inside the package</h3><span class="severity blocker">Blocker</span></div>
   <p>It implements HumanEval campaign generation, deterministic canaries, content-addressed lock generations, fsync/atomic writes, a WAL-backed SQLite ledger, submission intents, retry lineage, reconciliation, cost accounting, and a private diagnostic allowlist. It contains 68 raises; its 1,901-line test module collects 62 cases.</p>
-  <div class="evidence"><a href="../src/whetstone/platform/live_sweep.py"><code>src/whetstone/platform/live_sweep.py</code></a> · <a href="../tests/test_live_sweep.py"><code>tests/test_live_sweep.py</code></a></div>
+  <div class="evidence"><code>src/whetstone/platform/live_sweep.py</code> and <code>tests/test_live_sweep.py</code> (removed by <code>cleanup-live-sweep</code>)</div>
 </div>
 
 <div class="finding">
@@ -235,7 +236,7 @@
     <li>Unknown harness failure classes become <code>UNKNOWN</code> instead of failing at the ingest boundary.</li>
     <li>Cutover and release rollback suppress secondary failures, retaining only optional trace evidence in the latter case.</li>
   </ul>
-  <div class="evidence"><a href="../src/whetstone/platform/graph_workflow.py"><code>graph_workflow.py:298–304, 352–386</code></a> · <a href="../src/whetstone/platform/node_execution.py"><code>node_execution.py:288–307</code></a> · <a href="../src/whetstone/platform/live_sweep.py"><code>live_sweep.py:284–299</code></a> · <a href="../src/whetstone/platform/scoring.py"><code>scoring.py:283–289</code></a> · <code>release_parity_fixture.py:1036–1134</code> (removed)</div>
+  <div class="evidence"><a href="../src/whetstone/platform/graph_workflow.py"><code>graph_workflow.py:298–304, 352–386</code></a> · <a href="../src/whetstone/platform/node_execution.py"><code>node_execution.py:288–307</code></a> · <code>live_sweep.py:284–299</code> (removed) · <a href="../src/whetstone/platform/scoring.py"><code>scoring.py:283–289</code></a> · <code>release_parity_fixture.py:1036–1134</code> (removed)</div>
 </div>
 
 <div class="section-head" id="tests"><h2>The test suite protects the application architecture more than a core contract</h2></div>
@@ -272,7 +273,7 @@
 <div class="finding">
   <div class="finding-head"><h3>TST-05 · Fault-injection tests over-specify private durability protocols</h3><span class="severity high">High</span></div>
   <p>Live-sweep tests depend on private helpers, exact lock generations, SQLite intent ordering, retry lineage, diagnostic allowlists, and canary behavior. COPRO tests inject failures after each internal write and fsync boundary. These are fragile because they freeze the implementation that should be removed.</p>
-  <div class="evidence"><a href="../tests/test_live_sweep.py"><code>tests/test_live_sweep.py:237–379, 933–1188, 1491–1901</code></a> · <code>tests/test_optimization_copro_checkpoint.py:86–289</code> (removed)</div>
+  <div class="evidence"><code>tests/test_live_sweep.py:237–379, 933–1188, 1491–1901</code> (removed) · <code>tests/test_optimization_copro_checkpoint.py:86–289</code> (removed)</div>
 </div>
 
 <div class="finding">
@@ -348,7 +349,7 @@
     <tr><td class="path"><code>platform/__init__.py</code>, <code>cli_env.py</code>, <code>enqueue_runtime.py</code>, <code>graph_workflow.py</code>, <code>submission.py</code>, <code>targets.py</code>, <code>worker.py</code></td><td><span class="status fail">Remove</span></td><td>DR Platform and DBOS workflow execution, queues, manifests, targets, CLI plumbing, and worker bootstrap.</td></tr>
     <tr><td class="path"><code>platform/release_parity_fixture.py</code></td><td><span class="status addressed">Addressed</span></td><td>Unitbench release-parity implementation and CLI routes removed.</td></tr>
     <tr><td class="path"><code>platform/integrity.py</code>, <code>publication.py</code></td><td><span class="status addressed">Addressed</span></td><td>Signed bundle publication and its CLI removed.</td></tr>
-    <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval campaign/ledger/reconciliation application.</td></tr>
+    <tr><td class="path"><code>platform/live_sweep.py</code></td><td><span class="status addressed">Addressed</span></td><td>HumanEval campaign/ledger/reconciliation application removed.</td></tr>
     <tr><td class="path"><code>platform/dataset_snapshot.py</code>, <code>scoring.py</code>, <code>scoring_workflow.py</code>, <code>spec_builder.py</code></td><td><span class="status fail">Remove</span></td><td>HumanEval snapshots, scoring, prompts, encoder/decoder compression, and experiment expansion.</td></tr>
     <tr><td class="path"><code>platform/node_execution.py</code>, <code>prompts.py</code></td><td><span class="status partial">Extract</span></td><td>Potentially reusable LM-node and prompt formatting behavior is mixed with platform records and failure policy. Keep only behavior that fits the new public API.</td></tr>
     <tr><td class="path"><code>platform/persistence.py</code>, <code>db/**</code>, <code>alembic.ini</code></td><td><span class="status fail">Remove</span></td><td>Application PostgreSQL persistence and migrations. If persistence remains a requirement, move it to an optional adapter with no core import path.</td></tr>
@@ -375,7 +376,7 @@
   <thead><tr><th>Test files</th><th>Collected cases</th><th>Disposition</th><th>Reason</th></tr></thead>
   <tbody>
     <tr><td class="path"><code>tests/integration/test_*.py</code> (7 modules)</td><td class="num">18</td><td><span class="status fail">Remove</span></td><td>Explicit PostgreSQL, DBOS, DuckDB, MotherDuck, migration, publication, and release-fixture integration tests.</td></tr>
-    <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status fail">Remove</span></td><td>Tests removable campaign ledger and reconciliation implementation.</td></tr>
+    <tr><td class="path"><code>test_live_sweep.py</code></td><td class="num">62</td><td><span class="status addressed">Addressed</span></td><td>Campaign ledger and reconciliation tests removed.</td></tr>
     <tr><td class="path"><code>test_cutover_tooling.py</code>, <code>test_connections.py</code></td><td class="num">40</td><td><span class="status fail">Remove</span></td><td>Tests MotherDuck/Neon/PostgreSQL/DBOS deployment boundaries.</td></tr>
     <tr><td class="path"><code>test_optimization_copro.py</code>, <code>test_optimization_copro_checkpoint.py</code></td><td class="num">23</td><td><span class="status addressed">Addressed</span></td><td>Downstream optimization lifecycle and private durability-protocol tests removed.</td></tr>
     <tr><td class="path"><code>test_release_parity_fixture.py</code></td><td class="num">15</td><td><span class="status addressed">Addressed</span></td><td>Unitbench delivery fixture and workflow-text tests removed.</td></tr>

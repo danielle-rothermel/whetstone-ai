@@ -1,4 +1,4 @@
-"""Fail-closed operator tooling for live-sweep run stores."""
+"""Fail-closed operator tooling for isolated run stores."""
 
 from __future__ import annotations
 
