@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>An external agent runs on the same contract: schemas cross a bridge, and the tool is the whole interface</title>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Design: Codex agent</div>
+  <a href="#config">This configuration</a>
+  <div class="group">The system</div>
+  <a href="#system">Component diagram</a>
+  <a href="#decisions">Where decisions live</a>
+  <div class="group">In action</div>
+  <a href="#run">Full run walkthrough</a>
+  <a href="#output">What lands on the plot</a>
+</nav>
+
+<main>
+<h1>An external agent runs on the same contract: schemas cross a bridge, and the tool is the whole interface</h1>
+<div class="byline">whetstone-ai · system design walkthrough 5 of 5 · 2026-07-19</div>
+
+<div class="family-nav">
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <a href="gepa-run.html">GEPA</a>
+  <span class="here">Codex CLI agent</span>
+</div>
+
+<div class="hero">
+  This configuration is the payoff of making both contracts <span class="key">serializable data</span>: the optimizer is a gpt-5.6 agent inside the codex CLI harness — a process we don't own, running a loop we can't see. It receives the <code>OptimizationRequest</code> as a prompt plus files, holds exactly one capability — an <code>evaluate_prompt</code> tool that <span class="key">holds 20 evaluations</span> — and hands back an <code>OptimizationResult</code> file. From the ledger's point of view, <span class="key">nothing distinguishes this run from COPRO</span>: same request schema, same record shapes, same certification path. Only the transport changed.
+</div>
+
+<div class="legend">
+  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
+  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
+  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+</div>
+
+<div class="section-head" id="config"><h2>This configuration: one seed, one tool, an opaque loop</h2></div>
+
+<p>The experiment optimizes <strong>one seed treatment's encoder prompt</strong>. The designer issues a single tool, fully specified as data: <code>evaluate_prompt</code> runs a candidate spec over a <strong>10-task sample with a cheaper proxy decoder model</strong> than certification uses — deliberately different from the experiment's own dataset and models, because the tool's design is itself part of the experimental design. Guidance asks the agent to <strong>return its best 3, ranked</strong>; selection certifies the top 2 as ranked under C<sub>cert</sub>. Everything between receiving the request and writing the result is the agent's business.</p>
+
+<div class="callout">The 20-call capacity is <strong>not budget enforcement</strong>. Nothing is enforced <em>on</em> the agent — the designer simply provided a tool that holds 20 evaluations, the same way a different experiment might provide a 5-call tool, an unlimited tool, or two tools with different proxies. Call 21 receives a structured refusal because that is what this tool <em>is</em>, not because a policy layer intervened. Constraints live in tool design; guidance lives in the request; the experiment decides both.</div>
+
+<div class="section-head" id="system"><h2>Component diagram: an opaque control plane over an unchanged environment</h2></div>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Seed treatment ×1</b><span class="note">GraphSpec; identity = <code>graph_digest</code></span></div>
+      <div class="comp settled"><b>Mutation surface</b><span class="note">encoder prompt parameter only</span></div>
+      <div class="comp viz"><b>Tool spec: <code>evaluate_prompt</code></b><span class="note">capacity 20 · 10-task sample · proxy decoder model · its own config digest</span></div>
+      <div class="comp settled"><b>Guidance: return best 3, ranked</b><span class="note">guidance, not enforcement; over-return is data</span></div>
+      <div class="comp settled"><b>Selection policy: certify top 2 as ranked</b><span class="note">named, recorded experiment config</span></div>
+      <div class="comp viz"><b>Certification config C<sub>cert</sub></b><span class="note">40 HumanEval+ tasks · full decoder model · zstd-19 metric</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><code>OptimizationRequest</code> rendered as prompt + files (seed spec, mutation surface, guidance)</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Control plane <span class="sub">· agent-owned territory — internals unknown and unowned</span></div>
+    <div class="comps">
+      <div class="comp viz"><b>codex CLI harness</b><span class="note">spawns the agent; connects the bridge; reports token usage at exit</span></div>
+      <div class="comp settled"><b>gpt-5.6 agent — opaque</b><span class="note">the contract neither knows nor cares how it iterates; it owns everything inside the optimization step</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>⇄ up to 20 <code>evaluate_prompt</code> calls over the bridge</span> <span class="glyph">▼</span> <span><code>OptimizationResult</code> written as a JSON file</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="comps">
+      <div class="comp viz"><b>MCP bridge</b><span class="note">exposes the tool to the codex harness; same eval-engine API every other optimizer calls — COPRO calls a Python function, this agent calls a tool, the ledger cannot tell the difference</span></div>
+      <div class="comp settled"><b>Tool: <code>evaluate_prompt</code></b><span class="note">frozen partial application of the eval engine: this sample, this proxy model, 20 calls</span></div>
+      <div class="comp viz"><b>Result-file ingestion</b><span class="note">parses the agent's JSON against the <code>OptimizationResult</code> schema</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp discussed"><b>Diff validator</b><span class="note">returned specs diffed against seed; only the encoder prompt may differ</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 2 as ranked</span></div>
+      <div class="comp discussed"><b>Certifier</b><span class="note">runs selected candidates under C<sub>cert</sub>; only certified records feed the plot</span></div>
+      <div class="comp settled"><b>Ledger</b><span class="note">tool calls land automatically under the tool-config digest; agent tokens recorded as control-plane cost</span></div>
+      <div class="comp settled"><b>Provenance store</b><span class="note">the agent's annotations: untested variants, rationale, self-ranking — advisory, never scores</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>tool and certifier both execute treatments × tasks via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="hflow">
+      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Decoder LM</b><span class="note">proxy model under the tool; full model under C<sub>cert</sub></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
+  <tbody>
+    <tr><td>Tool design is experimental design: any dataset, any models, any capacity — nothing is enforced on the agent</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>The agent owns everything inside the optimization step; the contract sees only tool calls and the result</td><td>Control plane</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Tracking is unconditional: tool calls <em>and</em> the agent's own tokens both land in the ledger</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Result is an ordered list; requested count is guidance; over-return is data about the agent</td><td>Contract</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Selection policy is named, recorded experiment config</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Ledger records tagged by eval-config digest; proxy and certified measurements never mix</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Both contracts are serializable schemas first; this configuration is why</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Optimizer proposes; environment certifies; full-spec return validated by diff</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>MCP as the bridge transport</td><td>Boundary</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Result delivered as a JSON file the agent writes</td><td>Boundary</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Tool specifics: 20 calls · 10 tasks · proxy decoder model</td><td>Experiment design</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Harness reports agent conversation tokens at exit as control-plane cost</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Whether certification tasks are held out from the tool's sample — sharpest here: nothing stops the designer's tool from containing C<sub>cert</sub> tasks</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="run"><h2>Full run walkthrough: 18 observed calls around an unobserved loop</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes the experiment config: seed spec, mutation surface = encoder prompt, the <code>evaluate_prompt</code> tool spec (capacity 20, 10-task proxy sample, cheap decoder model), guidance "return your best 3, ranked", selection = certify top 2 as ranked, C<sub>cert</sub>. Everything serialized and digested.</p>
+      <div class="ledger"><b>ledger</b>experiment config, seed treatment digest, and tool-config digest registered</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Harness</div>
+    <div class="what"><p>Spawns the codex CLI with the gpt-5.6 agent. The <code>OptimizationRequest</code> is rendered as a prompt plus files — seed spec JSON, mutation-surface declaration, guidance — and the MCP bridge is connected, exposing exactly one tool.</p></div>
+  </div>
+</div>
+
+<div class="repeat">
+  <div class="repeat-label">Agent's inner loop — structure unknown, calls observed</div>
+  <div class="run">
+    <div class="tick">
+      <div class="who optimizer">Agent</div>
+      <div class="what"><p><em>Probe (inferred):</em> drafts six differently-shaped encoder prompts — terse spec, pseudocode, invariants-first — and calls <code>evaluate_prompt</code> on each to map the space.</p>
+        <div class="ledger"><b>ledger</b>6 proxy records tagged with the tool-config digest; capacity 6/20</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who optimizer">Agent</div>
+      <div class="what"><p><em>Refine (inferred):</em> iterates on the two most promising directions — tightening wording, trading description length against decoder success — spending nine more calls. How it chose these variants is invisible and irrelevant to the contract.</p>
+        <div class="ledger"><b>ledger</b>9 proxy records; capacity 15/20</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who optimizer">Agent</div>
+      <div class="what"><p><em>Confirm (inferred):</em> re-runs its final three candidates on the sample to settle its ranking. Stops at 18 of 20 calls — under capacity, by its own choice. A 21st call would have received the tool's structured refusal.</p>
+        <div class="ledger"><b>ledger</b>3 proxy records; capacity 18/20, final</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who optimizer">Agent</div>
+    <div class="what"><p>Writes the <code>OptimizationResult</code> JSON file: <strong>four</strong> ordered candidate specs — one more than the guidance asked — plus annotations: two untested variants it considered, its rationale, and its self-ranking. The over-return is not an error; it is recorded as data about this agent.</p>
+      <div class="ledger"><b>ledger</b>result ingested; over-return noted; annotations stored as provenance, never as scores</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Harness</div>
+    <div class="what"><p>Agent exits; the harness reports the gpt-5.6 conversation's token usage. This run is now comparable to a COPRO or GEPA run on total-resources-consumed axes: proxy eval cost from the ledger, control-plane cost from the harness.</p>
+      <div class="ledger"><b>ledger</b>control-plane cost recorded: agent tokens + 18 tool-call costs already itemized</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Diff-validates all four returned specs against the seed: only the encoder prompt parameter differs — consistent with the mutation surface. Selection applies the recorded policy: <strong>top 2 as ranked</strong>. (A different experiment could select using the ledger's proxy scores, or the compression axis — free to compute on all four descriptions — without a new contract.)</p></div>
+  </div>
+  <div class="tick">
+    <div class="who certifier">Certifier</div>
+    <div class="what"><p>Runs the two selected candidates × 40 tasks under C<sub>cert</sub> — full decoder model, the experiment's own dataset. Failures classified by the whetstone taxonomy; transient ones retry.</p>
+      <div class="ledger"><b>ledger</b>80 certified per-task records tagged (T<sub>i</sub>, C<sub>cert</sub>): pass/fail, compressed bytes, ground-truth bytes, tokens, provider cost</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Aggregates from certified records only and emits the report. The 18 proxy records remain in the ledger — queryable, cost-accounted, and excluded from the plot by construction because they carry the tool-config digest, not C<sub>cert</sub>'s.</p>
+      <div class="ledger"><b>ledger</b>2 certified aggregates; pareto contribution derived as a view</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: two certified points from an unowned loop</h2></div>
+
+<p>Two certified points join the correctness–compression plot, each traceable through the ledger to the run that produced them: 18 proxy evaluations under one tool-config digest, one opaque control plane with its token cost on record, one selection decision applied as configured. The agent's self-assessments and untested variants sit in provenance — available to seed a future run's proposals, structurally incapable of contaminating the plot.</p>
+
+<div class="callout">This configuration is the reason the contracts are data. Nothing here required new machinery — only a new transport (a bridge instead of a function call) and a designer-specified tool. The same rails carry the distant-future control plane that edits graph structure: widen the mutation surface declaration, and the diff validator, selection, certification, and ledger already know what to do.</div>
+
+</main>
+</body>
+</html>

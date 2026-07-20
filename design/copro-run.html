@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>COPRO is a deterministic policy: propose from ranked history, spend the tool, return a ranked list</title>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Design: COPRO</div>
+  <a href="#config">This configuration</a>
+  <div class="group">The system</div>
+  <a href="#system">Component diagram</a>
+  <a href="#decisions">Where decisions live</a>
+  <div class="group">In action</div>
+  <a href="#run">Full run walkthrough</a>
+  <a href="#output">What lands on the plot</a>
+</nav>
+
+<main>
+<h1>COPRO is a deterministic policy: propose from ranked history, spend the tool, return a ranked list</h1>
+<div class="byline">whetstone-ai · system design walkthrough 2 of 5 · 2026-07-19</div>
+
+<div class="family-nav">
+  <a href="eval-run.html">Eval</a>
+  <span class="here">COPRO</span>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <a href="gepa-run.html">GEPA</a>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+</div>
+
+<div class="hero">
+  COPRO is the simplest real optimizer on the contract: a <span class="key">deterministic in-process loop</span> that owns two meta-prompts and nothing else. It proposes encoder-prompt rewrites with a proposal LM, scores every candidate by <span class="key">spending its one eval tool</span>, feeds the score-ranked attempt history back to the proposal LM for a fixed number of rounds, and returns an <span class="key">ordered candidate list</span>. All scores it ranks by are ledger records; all state it keeps is ephemeral loop state. Nothing about the environment changes from the Eval configuration — only the control plane grew a brain.
+</div>
+
+<div class="legend">
+  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
+  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
+  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+</div>
+
+<div class="section-head" id="config"><h2>This configuration: one seed, breadth 4 × depth 2, one unlimited tool</h2></div>
+
+<p>The experiment optimizes <strong>one seed treatment's encoder prompt</strong>. The mutation surface is a single parameter: the encoder prompt of the encode node — the decoder prompt, models, and graph shape are untouchable. The toolkit holds one eval tool, <strong>E<sub>eval</sub></strong> (20 fixed HumanEval+ tasks, same encoder/decoder models as certification, unlimited call capacity — faithful to dspy COPRO's full-sample scoring). Guidance asks for <strong>breadth 4, depth 2, return 3</strong>; the selection policy certifies the top 2 as ranked. Breadth and depth are knobs of this optimizer, not the contract.</p>
+
+<div class="callout">Unlike dspy's COPRO, which hard-codes a full-trainset evaluation for every candidate, eval cost here is entirely a property of the tool the designer issues. A minibatch COPRO is the <em>same optimizer</em> handed a different toolkit config — that substitution without code change is the whole point of toolkit-as-experiment-design.</div>
+
+<div class="section-head" id="system"><h2>Component diagram: the control plane grows a proposal LM and a loop</h2></div>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Seed treatment T<sub>0</sub></b><span class="note">GraphSpec; identity = <code>graph_digest</code></span></div>
+      <div class="comp settled"><b>Mutation surface</b><span class="note">encoder prompt of the encode node only; declared, then enforced by diff. This surface is the experiment's choice</span></div>
+      <div class="comp settled"><b>Toolkit: {E<sub>eval</sub>}</b><span class="note">frozen eval-config partial; specifics below are viz-only</span></div>
+      <div class="comp viz"><b>E<sub>eval</sub> specifics</b><span class="note">20 fixed HumanEval+ tasks · certification models · unlimited calls</span></div>
+      <div class="comp settled"><b>Selection policy: certify top 2 as ranked</b><span class="note">named, recorded experiment config</span></div>
+      <div class="comp viz"><b>Certification config C<sub>cert</sub></b><span class="note">40 HumanEval+ tasks · fixed decoder model · zstd-19 metric</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: seed, surface, toolkit, guidance (breadth 4 · depth 2 · return 3)</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Control plane <span class="sub">· deterministic COPRO loop, in-process</span></div>
+    <div class="comps">
+      <div class="comp viz"><b>Seed meta-prompt</b><span class="note">asks the proposal LM for breadth−1 rewrites of the current encoder prompt</span></div>
+      <div class="comp viz"><b>History meta-prompt</b><span class="note">score-ranked attempts, ascending, OPRO-style; asks for the next breadth candidates</span></div>
+      <div class="comp settled"><b>Proposal LM</b><span class="note">optimizer-owned dr-providers calls; token costs tracked unconditionally. Routing mechanism is viz-only</span></div>
+      <div class="comp settled"><b>Ephemeral loop state</b><span class="note">candidate list + ranks for this step only; scores come from ledger records, archive lives in the environment</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>tool calls: <code>evaluate(candidate, E<sub>eval</sub>)</code></span> <span class="glyph">▼</span> <span>per-task records back</span> <span class="glyph">▲</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Tool E<sub>eval</sub></b><span class="note">frozen partial application of the one eval engine; every call lands in the ledger under E<sub>eval</sub>'s config digest</span></div>
+      <div class="comp discussed"><b>Diff validator</b><span class="note">each returned spec must differ from T<sub>0</sub> only inside the declared surface</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 2 of the returned ranking</span></div>
+      <div class="comp discussed"><b>Certifier</b><span class="note">runs survivors under C<sub>cert</sub>; only certified records feed the plot</span></div>
+      <div class="comp settled"><b>Ledger</b><span class="note">every record tagged (treatment digest, eval-config digest, true costs) — proxy and certified never mix</span></div>
+      <div class="comp settled"><b>Provenance store</b><span class="note">COPRO's returned attempt history; advisory, never scores</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>tool and certifier both execute treatments via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="hflow">
+      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm — the prompt COPRO rewrites lives here</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Decoder LM</b><span class="note">dr-providers</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
+  <tbody>
+    <tr><td>Eval cost is a property of the issued tool, not the optimizer; toolkit is experiment design</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Tracking is unconditional: every tool call and proposal-LM token lands in the ledger with true costs</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Result is an ordered list; requested count (3) is guidance, not enforcement</td><td>Contract</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Selection policy is named, recorded experiment config (certify top 2 as ranked)</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Optimizer owns only inside-step state; scores it ranks by are ledger records</td><td>Control plane</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Optimizer proposes; environment certifies; only certified records reach the plot</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Result carries full specs; environment validates by diffing against the mutation surface</td><td>Environment boundary</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Both contracts are serializable schemas first; Python bindings are wrappers</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Breadth 4, depth 2; greedy ascent with fixed rounds (COPRO's own algorithm)</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>E<sub>eval</sub> specifics: 20 tasks, certification models, unlimited capacity</td><td>Experiment design</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Return 3, certify top 2; C<sub>cert</sub>: 40 tasks, fixed decoder model, zstd-19</td><td>Experiment design</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Whether E<sub>eval</sub>'s 20 tasks overlap C<sub>cert</sub>'s 40 (held-out question)</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="run"><h2>Full run walkthrough: seed round, two history rounds, ranked return</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes the experiment config: seed spec T<sub>0</sub>, mutation surface (encoder prompt of the encode node), toolkit {E<sub>eval</sub>}, guidance (breadth 4, depth 2, return 3), selection = certify top 2, C<sub>cert</sub>. Everything serialized and digested.</p>
+      <div class="ledger"><b>ledger</b>experiment config registered under its digest; T<sub>0</sub> and E<sub>eval</sub> config digests recorded</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the COPRO policy and hands it the E<sub>eval</sub> tool handle.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Seed proposal: the seed meta-prompt asks the proposal LM for 3 rewrites of T<sub>0</sub>'s encoder prompt; the seed prompt itself is kept as the 4th candidate. Four candidate specs are built by substituting each prompt into T<sub>0</sub> — four new treatment digests.</p>
+      <div class="ledger"><b>ledger</b>proposal-LM tokens recorded as control-plane cost of this optimizer step</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Spends the tool: 4 calls of <code>evaluate(candidate, E<sub>eval</sub>)</code>, one per candidate, each scoring 20 tasks. COPRO ranks the four by the returned aggregate — pass rate first, compression as tiebreak (its score-only view of the records).</p>
+      <div class="ledger"><b>ledger</b>80 per-task records tagged (candidate digest, E<sub>eval</sub> digest): pass/fail, compressed bytes, tokens, provider cost</div>
+    </div>
+  </div>
+</div>
+
+<div class="repeat">
+  <div class="repeat-label">Depth loop × 2</div>
+  <div class="run">
+    <div class="tick">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>History proposal: formats every attempt so far as (prompt, score) ranked ascending — OPRO-style, best last — and asks the proposal LM for the next 4 candidates.</p>
+        <div class="ledger"><b>ledger</b>proposal-LM tokens recorded as control-plane cost</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>Spends the tool again: 4 calls of <code>evaluate(candidate, E<sub>eval</sub>)</code>; re-ranks the pooled attempt history with the new scores. Loop state stays ephemeral — every score it ranks by already lives in the ledger.</p>
+        <div class="ledger"><b>ledger</b>80 per-task records per round tagged (candidate digest, E<sub>eval</sub> digest)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Pools all 12 evaluated candidates, drops duplicates, and returns the <code>OptimizationResult</code>: the top 3 as full specs, ordered by tool score, plus the full attempt history as an optional annotation.</p>
+      <div class="ledger"><b>ledger</b>optimizer step closed: 12 tool calls, proposal-LM totals; result recorded under its digest</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Diff validation: each returned spec differs from T<sub>0</sub> only in the encoder prompt parameter — inside the declared surface. The attempt-history annotation goes to the provenance store as advisory context, never as scores. Selection admits the top 2 to certification.</p>
+      <div class="ledger"><b>ledger</b>3 validated candidates; provenance annotations stored</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who certifier">Certifier</div>
+    <div class="what"><p>Runs the 2 survivors × 40 tasks under C<sub>cert</sub>: encoder → description → decoder → preprocess → sandbox tests, compression metric on every description, whetstone failure classification throughout.</p>
+      <div class="ledger"><b>ledger</b>80 per-task records tagged (candidate digest, C<sub>cert</sub>) — disjoint by config digest from the 240 E<sub>eval</sub> records</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Aggregates from certified records only; the 2 certified points join the experiment's pareto plot alongside the seed's certified baseline.</p>
+      <div class="ledger"><b>ledger</b>2 certified aggregates; front recomputed as a view</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: two certified points, and a fully priced run</h2></div>
+
+<p>Only the two certified candidates reach the correctness–compression plot. The 240 E<sub>eval</sub> per-task records stay in the ledger as proxy measurements — excluded from the plot by config digest, but available to selection policies and to post-hoc analysis of how well tool scores predicted certified scores. Because proposal-LM tokens and all 12 tool calls were metered, this run has a <span class="key">total price</span>: COPRO's certified front can be compared against any other optimizer's on quality <em>and</em> on resources consumed, without COPRO having cooperated in any way.</p>
+
+<div class="callout">What changed from dspy's COPRO: full-trainset evaluation is no longer hard-coded — the tool defines eval cost, so minibatch COPRO is a toolkit swap, not a rewrite; deepcopy-per-candidate and <code>id()</code>-keyed bookkeeping are replaced by treatment digests; and spend is visible in the ledger instead of invisible inside the loop. What stayed, deliberately: greedy coordinate ascent, a fixed depth with no convergence check, and a score-only signal — COPRO is the baseline optimizer, and its simplicity is the point.</div>
+
+</main>
+</body>
+</html>

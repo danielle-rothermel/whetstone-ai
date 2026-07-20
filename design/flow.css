@@ -16,6 +16,22 @@
   color: #fff; background: var(--accent); border-color: var(--accent);
 }
 
+/* Decision-provenance legend */
+.legend {
+  display: flex; flex-wrap: wrap; gap: 20px;
+  margin: 14px 0; padding: 10px 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--surface); font-size: 13px; color: var(--muted);
+}
+.legend .sw {
+  display: inline-block; width: 11px; height: 11px;
+  border-radius: 3px; border: 2px solid var(--line);
+  vertical-align: -1px; margin-right: 7px; background: #fff;
+}
+.sw.settled { border-color: var(--green); }
+.sw.discussed { border-color: var(--accent); }
+.sw.viz { border-color: var(--amber); border-style: dashed; }
+
 /* Block code (prompt templates, formulas) */
 pre {
   margin: 10px 0; padding: 12px 16px;
@@ -50,10 +66,11 @@ pre code {
 .comp b { display: block; font-size: 13px; margin-bottom: 1px; }
 .comp .note { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
 .comp.settled { border-color: var(--green); }
+.comp.discussed { border-color: var(--accent); }
+.comp.viz { border-color: var(--amber); border-style: dashed; }
 .comp.breach { border-color: var(--red); }
 .comp hr { border: none; border-top: 1px solid var(--line); margin: 6px 0; }
 .comp.substrate { background: var(--bg); border-style: solid; border-color: var(--line); }
-.comp.node { border-color: var(--accent); }
 
 /* Arrows between planes */
 .flow-arrow {
@@ -63,10 +80,21 @@ pre code {
 .flow-arrow .glyph { color: var(--accent); font-weight: 700; font-size: 14px; }
 .flow-arrow code { font-size: 11.5px; }
 
-/* Horizontal flow (e.g., the encoder → decoder → score pipeline) */
+/* Horizontal flow (e.g., the treatment pipeline) */
 .hflow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 2px; }
 .hflow .comp { flex: 1 1 110px; min-width: 104px; }
 .hflow .harrow { color: var(--accent); font-weight: 700; flex: 0 0 auto; }
+
+/* Inline decision pin */
+.dpin {
+  display: inline-block; font: 700 10.5px/1.5 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase;
+  padding: 0 7px; border-radius: 999px; border: 1.5px solid var(--line);
+  margin-left: 6px; vertical-align: 1px;
+}
+.dpin.settled { color: var(--green); border-color: var(--green); }
+.dpin.discussed { color: var(--accent); border-color: var(--accent); }
+.dpin.viz { color: var(--amber); border-color: var(--amber); border-style: dashed; }
 
 /* Run walkthrough timeline. The tick counter is page-scoped so
    numbering continues across .run and .repeat blocks. */
@@ -93,7 +121,7 @@ main { counter-reset: tick; }
 .who.designer { color: var(--muted); }
 .who.optimizer { color: var(--accent); }
 .who.env { color: var(--green); }
-.who.evaluator { color: var(--ink); }
+.who.certifier { color: var(--ink); }
 .tick .what { font-size: 14px; }
 .tick .what p { margin: 0 0 4px; }
 .tick .ledger {
@@ -114,18 +142,6 @@ main { counter-reset: tick; }
   text-transform: uppercase; color: var(--accent);
 }
 .repeat .run { margin: 8px 0; }
-
-/* Optimization-specific marking. `.optim` on a comp, plane, card, or tick
-   colors the parts of an optimizer run that differ from the Eval flow;
-   unmarked elements match Eval. Kept last so `.optim` wins on combined
-   classes (e.g. `comp settled optim`). */
-:root { --optim: #6f42c1; --optim-soft: #f6f1fc; }
-.comp.optim { border-color: var(--optim); }
-.plane.optim { border-color: var(--optim); background: var(--optim-soft); }
-.plane.optim > .plane-label { color: var(--optim); }
-.card.optim { border-color: var(--optim); }
-.tick.optim { border-color: var(--optim); }
-.tick.optim::before { background: var(--optim); }
 
 @media (max-width: 760px) {
   .tick { grid-template-columns: 1fr; gap: 4px; }

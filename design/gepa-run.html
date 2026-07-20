@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>GEPA evolves against the ledger: the archive lives environment-side, reflection is the mutator</title>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Design: GEPA</div>
+  <a href="#config">This configuration</a>
+  <div class="group">The system</div>
+  <a href="#system">Component diagram</a>
+  <a href="#decisions">Where decisions live</a>
+  <div class="group">In action</div>
+  <a href="#run">Full run walkthrough</a>
+  <a href="#output">What lands on the plot</a>
+</nav>
+
+<main>
+<h1>GEPA evolves against the ledger: the archive lives environment-side, reflection is the mutator</h1>
+<div class="byline">whetstone-ai · system design walkthrough 4 of 5 · 2026-07-19</div>
+
+<div class="family-nav">
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <span class="here">GEPA</span>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+</div>
+
+<div class="hero">
+  GEPA is the richest control plane in the family: an evolutionary loop whose mutation operator is a <span class="key">reflection LM</span> reading real failure evidence. The key structural move here is that GEPA's candidate archive — the per-task score matrix its pareto frontier is computed from — is <span class="key">not internal state</span>. It is a <span class="key">ledger view</span>, read back through the environment each iteration. That one move buys crash-resume for free, lets concurrent optimizer runs share memoized evaluations, and makes the frontier auditable after the run. And because the archive's frontier <em>is</em> a candidate set spanning trade-offs, GEPA is where <span class="key">multi-return</span> earns its keep: the run returns a front, not a point.
+</div>
+
+<div class="legend">
+  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
+  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
+  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+</div>
+
+<div class="section-head" id="config"><h2>This configuration: one seed prompt, four evolution iterations, a frontier returned</h2></div>
+
+<p>One seed treatment (baseline encoder prompt); mutation surface = <strong>the encoder prompt parameter only</strong>. The toolkit holds two tools: <code>E_mini</code> (3-task minibatch whose records carry full feedback material) and <code>E_val</code> (25-task validation sample). The loop runs four iterations of reflective mutation with strict-improvement acceptance, then returns the <span class="key">two-objective frontier</span> from the archive as an ordered list of at most 4 candidates. The experiment certifies the top 3.</p>
+
+<p>Two adaptations of reference GEPA, both flagged as recommendations: the <strong>reflective dataset comes from ledger records</strong> (sandbox test failures, preprocessing failure causes, code-leakage flags) rather than framework trace capture; and selection is a <strong>hybrid</strong> — per-task frontier for parent diversity, correctness×compression front for what gets returned.</p>
+
+<div class="section-head" id="system"><h2>Component diagram: the loop runs between the control plane and the ledger</h2></div>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Seed treatment ×1</b><span class="note">baseline encoder prompt; GraphSpec, identity = <code>graph_digest</code></span></div>
+      <div class="comp settled"><b>Mutation surface</b><span class="note">encoder prompt parameter only — declared, diffable</span></div>
+      <div class="comp viz"><b>Toolkit: E<sub>mini</sub> · E<sub>val</sub></b><span class="note">tools-as-frozen-eval-configs is settled; 3-task / 25-task sizes are illustrative</span></div>
+      <div class="comp settled"><b>Requested return: frontier, max 4</b><span class="note">guidance, not enforcement; over-return is data</span></div>
+      <div class="comp settled"><b>Selection policy: certify top 3</b><span class="note">named, recorded experiment config</span></div>
+      <div class="comp viz"><b>Certification config C<sub>cert</sub></b><span class="note">40 HumanEval+ tasks · fixed decoder model · zstd-19 metric</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><code>OptimizationRequest</code> (serializable schema)</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Control plane <span class="sub">· GEPA loop — owns only inside-step state</span></div>
+    <div class="comps">
+      <div class="comp viz"><b>Parent sampler</b><span class="note">per-task pareto frontier computed fresh from the ledger view; stochastic pick preserves diversity</span></div>
+      <div class="comp settled"><b>Reflection LM</b><span class="note">optimizer-owned strong model; its tokens tracked unconditionally as control-plane cost</span></div>
+      <div class="comp discussed"><b>Child assembler</b><span class="note">emits a full spec differing from parent only inside the mutation surface</span></div>
+      <div class="comp viz"><b>Acceptance check</b><span class="note">child must strictly beat parent on the <em>same</em> minibatch task ids</span></div>
+      <div class="comp settled"><b>Ephemeral state only</b><span class="note">current parent, current minibatch, loop counter — nothing that outlives the step</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>during the loop: <code>E_mini</code> / <code>E_val</code> tool calls, <code>read_archive</code> queries</span> <span class="glyph">▼</span><span class="glyph">▲</span> <span>per-task records with feedback material</span></div>
+  <div class="flow-arrow"><span>at the end: <code>OptimizationResult</code> — the two-objective frontier, ordered, max 4</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="comps">
+      <div class="comp viz"><b>read_archive</b><span class="note">new capability: query ledger records by treatment digest, eval-config, task — the archive is this view</span></div>
+      <div class="comp settled"><b>Eval engine + tools</b><span class="note">E<sub>mini</sub> and E<sub>val</sub> are frozen partial applications of the one engine</span></div>
+      <div class="comp discussed"><b>Diff validator</b><span class="note">each returned spec must differ from the seed lineage only in the encoder prompt</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 3 of the returned order proceed</span></div>
+      <div class="comp discussed"><b>Certifier</b><span class="note">runs survivors under C<sub>cert</sub>; only certified records feed the plot</span></div>
+      <div class="comp settled"><b>Ledger</b><span class="note">every record tagged (treatment digest, eval-config digest); task-LM and reflection-LM costs tracked separately</span></div>
+      <div class="comp settled"><b>Provenance store</b><span class="note">lineage annotations — which parent, which feedback drove each mutation; advisory, never scores</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>tools and certifier execute each treatment × task via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="hflow">
+      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm — the mutated prompt lives here</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Decoder LM</b><span class="note">dr-providers</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp viz"><b>Feedback material</b><span class="note">per-task records carry failing test details, preprocessing failure causes (typed <code>Absent</code> values), <code>CodeLeakage</code> flags on the description, whetstone failure summaries — the reflective dataset is assembled from these, not framework traces</span></div>
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
+  <tbody>
+    <tr><td>The archive lives environment-side; the optimizer owns only inside-step state</td><td>Environment / contract</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Both cost kinds tracked unconditionally — task-LM and reflection-LM, separately</td><td>Ledger</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Ordered multi-return; the experiment decides how many to use and how to choose</td><td>Contract / experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Selection policy is named, recorded experiment config</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Constraints live in tool design (frozen eval-configs), not in an enforcement layer</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Optimizer proposes; environment certifies; only certified records reach the plot</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Result carries full specs; environment validates by diffing against the mutation surface</td><td>Environment boundary</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Both contracts are serializable schemas first; Python bindings are wrappers</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td><code>read_archive</code> capability shape (query by treatment digest / eval-config / task)</td><td>Environment</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Reflective feedback assembled from ledger records instead of framework trace capture</td><td>Environment → control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Hybrid selection: per-task frontier for parents, two-objective front for the returned set</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>E<sub>mini</sub>=3 tasks, E<sub>val</sub>=25 tasks, 4 iterations, strict-sum acceptance on the same minibatch</td><td>Experiment design / control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Whether E<sub>mini</sub>/E<sub>val</sub> tasks overlap the C<sub>cert</sub> set</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="run"><h2>Full run walkthrough: seed, evolve four times, return the front</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes the experiment config: seed spec T<sub>0</sub>, mutation surface = encoder prompt, toolkit {E<sub>mini</sub>, E<sub>val</sub>}, requested return "the frontier, max 4", selection = certify top 3, C<sub>cert</sub>. Everything serialized and digested.</p>
+      <div class="ledger"><b>ledger</b>experiment config registered under its digest; T<sub>0</sub>, E<sub>mini</sub>, E<sub>val</sub>, C<sub>cert</sub> digests recorded</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code>: seed, mutation surface, tool handles, guidance ("evolve toward the correctness–compression front").</p></div>
+  </div>
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Seeds the archive: calls E<sub>val</sub>(T<sub>0</sub>). The archive now has one row of 25 per-task scores — held in the ledger, not in GEPA.</p>
+      <div class="ledger"><b>ledger</b>25 records (T<sub>0</sub>, E<sub>val</sub>): pass/fail, compressed bytes, costs</div>
+    </div>
+  </div>
+</div>
+
+<div class="repeat">
+  <div class="repeat-label">Evolution loop · iterations 1–4</div>
+  <div class="run">
+    <div class="tick">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><code>read_archive</code> query → per-task score matrix for all treatments so far. Computes the <span class="key">per-task pareto frontier</span> (a candidate survives if it is best on at least one task) and stochastically samples a parent P from it — diversity pressure, not greedy best.</p>
+        <div class="ledger"><b>ledger</b>archive query logged; zero eval cost</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who env">Environment</div>
+      <div class="what"><p>E<sub>mini</sub>(P) on 3 sampled tasks. Records return with full <span class="key">feedback material</span>: which tests failed and how, preprocessing <code>Absent</code> causes, whether the description leaked literal code.</p>
+        <div class="ledger"><b>ledger</b>3 records (P, E<sub>mini</sub>) incl. failure text and leakage flags</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>The reflection LM reads P's current encoder prompt plus the feedback-annotated examples and writes a <span class="key">new encoder prompt</span> (e.g., iteration 2: "descriptions dropped edge-case behavior the tests exercise — state boundary conditions explicitly"). The child spec C is assembled: identical to P except inside the mutation surface.</p>
+        <div class="ledger"><b>ledger</b>reflection-LM tokens tracked as control-plane cost, separate from task-LM cost</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who env">Environment</div>
+      <div class="what"><p>E<sub>mini</sub>(C) on the <em>same 3 task ids</em>. Acceptance is strict: sum of child scores must exceed the parent's. <strong>Iteration 3 fails here</strong> — the child compressed harder but regressed correctness on 2 of 3 tasks, and is dropped. Its records stay in the ledger: a rejected child is still a memoized, auditable data point, and a later run that proposes the same prompt gets the answer for free.</p>
+        <div class="ledger"><b>ledger</b>3 records (C, E<sub>mini</sub>); acceptance verdict recorded either way</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who env">Environment</div>
+      <div class="what"><p>On acceptance (iterations 1, 2, 4): E<sub>val</sub>(C) promotes the child to the archive — 25 per-task records — and the frontier recomputes on the next <code>read_archive</code>.</p>
+        <div class="ledger"><b>ledger</b>25 records (C, E<sub>val</sub>); archive grows to 2, 3, then 4 rows</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Final <code>read_archive</code>: aggregates E<sub>val</sub> scores per treatment and computes the <span class="key">correctness×compression front</span> — this, not the per-task frontier, ranks the return. Returns <code>OptimizationResult</code>: ordered list of 4 specs spanning the trade-off (best-correctness first) plus advisory annotations — each candidate's parent and the feedback excerpt that drove its mutation.</p>
+      <div class="ledger"><b>ledger</b>result recorded; annotations land in the provenance store, never as scores</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Diff validation: all 4 specs differ from the seed lineage only in the encoder prompt parameter — consistent with the declared mutation surface. Selection policy certifies the top 3.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who certifier">Certifier</div>
+    <div class="what"><p>3 treatments × 40 tasks under C<sub>cert</sub>. Compression computed on every description; correctness from the sandbox; failures classified and retried per the whetstone taxonomy.</p>
+      <div class="ledger"><b>ledger</b>120 records tagged (T<sub>i</sub>, C<sub>cert</sub>) — the only records the plot may use</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Aggregates certified records; the plot gains 3 points and the front updates. The run report shows total spend split by kind: task-LM (tool + certification evals) vs reflection-LM (control plane).</p>
+      <div class="ledger"><b>ledger</b>3 certified aggregates; run cost totals: ~206 task-LM executions, 4 reflection calls</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: a certified slice of the evolved front</h2></div>
+
+<p>GEPA's returned set is not one prompt but a front — in this run, one candidate holding the correctness ceiling, one trading a few points of pass rate for markedly shorter descriptions, one in between. All three certified points carry C<sub>cert</sub>'s digest; every E<sub>mini</sub>/E<sub>val</sub> measurement made during evolution coexists in the same ledger and is excluded from the plot by construction. The rejected iteration-3 child is visible in the ledger too — the run's full search history is reconstructible from records alone, with no GEPA-internal state to recover.</p>
+
+<div class="callout">Versus dspy's GEPA: no two-package engine/adapter split — the environment <em>is</em> the engine's world; no framework trace capture — ledger records carry the feedback; the archive is externalized to the ledger instead of living in optimizer memory; and the two-objective front becomes the native selection structure for what the run returns, rather than a per-task proxy. What stayed, because it works: reflective mutation from real failures, strict-improvement acceptance on the same minibatch, and frontier-based parent sampling for diversity.</div>
+
+</main>
+</body>
+</html>

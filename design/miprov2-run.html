@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>MIPROv2 builds its candidate pool up front, then spends two tools searching it</title>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Design: MIPROv2</div>
+  <a href="#config">This configuration</a>
+  <div class="group">The system</div>
+  <a href="#system">Component diagram</a>
+  <a href="#decisions">Where decisions live</a>
+  <div class="group">In action</div>
+  <a href="#run">Full run walkthrough</a>
+  <a href="#output">What lands on the plot</a>
+</nav>
+
+<main>
+<h1>MIPROv2 builds its candidate pool up front, then spends two tools searching it</h1>
+<div class="byline">whetstone-ai · system design walkthrough 3 of 5 · 2026-07-19</div>
+
+<div class="family-nav">
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <span class="here">MIPROv2</span>
+  <a href="gepa-run.html">GEPA</a>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+</div>
+
+<div class="hero">
+  MIPROv2 is a deterministic in-process policy with three internal stages: <span class="key">bootstrap demos</span> from seed-treatment runs that passed their tests, <span class="key">propose grounded instructions</span> with a proposal LM, then <span class="key">search the instruction×demo grid</span>. The search sampler is internal state the contract never sees; what the contract sees is two designer-issued tools — a cheap noisy <span class="key">minibatch tool</span> and an expensive <span class="key">promotion tool</span> — whose records land in the ledger under separate config digests. The pool is <span class="key">frozen after proposal</span>: nothing in the search loop can invent a new instruction in response to failures, and this doc leaves that limitation visible on purpose.
+</div>
+
+<div class="legend">
+  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
+  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
+  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+</div>
+
+<div class="section-head" id="config"><h2>This configuration: two mutable regions, two tools, one grid search</h2></div>
+
+<p>One seed treatment; the mutation surface declares <strong>two named mutable regions</strong> of the encoder node — the <span class="key">instruction text</span> and a <span class="key">demo block</span> — which is the first configuration in the family where the mutation-surface declaration does real work: the diff validator checks each returned spec against exactly these two regions. The toolkit holds <strong>E<sub>mini</sub></strong> (8-task minibatch per call, cheap, noisy) and <strong>E<sub>promote</sub></strong> (35-task sample, expensive, reserved for promoting the best-average combination). The request asks for 3 returned candidates; the selection policy certifies the top 2 under C<sub>cert</sub>.</p>
+
+<div class="callout warn">The demo mapping is a real adaptation decision, not a port: in our encoder-optimization setting, "demos" are few-shot <em>(ground-truth code → description)</em> pairs embedded in the encoder prompt, and bootstrapping keeps the pairs from seed runs where the <strong>full pipeline passed its tests</strong> — pass/fail replaces dspy's per-trace metric filter. Marked visualization-only throughout.</div>
+
+<div class="section-head" id="system"><h2>Component diagram: three internal stages above the boundary, two tools across it</h2></div>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Seed treatment</b><span class="note">GraphSpec; identity = <code>graph_digest</code></span></div>
+      <div class="comp discussed"><b>Mutation surface</b><span class="note">encoder instruction text + demo block — two named regions</span></div>
+      <div class="comp settled"><b>Toolkit: E<sub>mini</sub>, E<sub>promote</sub></b><span class="note">tools are frozen eval-config partials; each has its own digest</span></div>
+      <div class="comp settled"><b>Selection policy: certify top 2</b><span class="note">named, recorded experiment config</span></div>
+      <div class="comp viz"><b>Knobs &amp; sizes</b><span class="note">return 3 · E<sub>mini</sub>=8 tasks · E<sub>promote</sub>=35 tasks · 10 trials · C<sub>cert</sub> = 40 HumanEval+ tasks, zstd-19</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: seed, mutation surface, toolkit, guidance</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Control plane <span class="sub">· deterministic three-stage policy; internals optimizer-owned</span></div>
+    <div class="hflow">
+      <div class="comp viz"><b>1 · Bootstrap demos</b><span class="note">run the seed via E<sub>mini</sub>; keep (code → description) pairs from pipeline-passing runs → 4 demo sets</span></div>
+      <span class="harrow">→</span>
+      <div class="comp viz"><b>2 · Grounded proposal</b><span class="note">proposal LM sees dataset summary + treatment-spec summary + a prompting tip → 4 instructions; seed instruction is candidate 0</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>3 · Grid search</b><span class="note">sampler walks the 4×4 instruction×demo grid; sampler state never crosses the boundary</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp viz"><b>Search sampler</b><span class="note">TPE via a BO library — or a simpler bandit; the contract doesn't care which</span></div>
+      <div class="comp viz"><b>Pool frozen after stage 2</b><span class="note">preserved dspy weakness, on display: no mid-run invention of new instructions in response to failures</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>during the run: tool calls <span class="glyph">▼</span> <span class="glyph">▲</span> per-task records · at the end: <code>OptimizationResult</code> (ordered top-3 + attempt annotations)</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="comps">
+      <div class="comp discussed"><b>Diff validator</b><span class="note">returned specs diffed against seed; only the two declared regions may differ</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 2 of the ordered list proceed</span></div>
+      <div class="comp discussed"><b>Certifier</b><span class="note">runs the selected 2 under C<sub>cert</sub>; only certified records feed the plot</span></div>
+      <div class="comp settled"><b>Ledger</b><span class="note">E<sub>mini</sub>, E<sub>promote</sub>, and C<sub>cert</sub> records carry distinct config digests — noisy minibatch scores never mix with promotion or certification scores</span></div>
+      <div class="comp settled"><b>Provenance store</b><span class="note">the 10-trial attempt history arrives as advisory annotations, never as scores</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>tools and certifier execute each (treatment, task) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="hflow">
+      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm; instruction + demo block live here</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Decoder LM</b><span class="note">dr-providers</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
+  <tbody>
+    <tr><td>Constraints live in tool design; the toolkit is experiment-designer-specified data</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Tracking is unconditional: every tool call, proposal-LM call, and bootstrap run lands in the ledger with true costs</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Result is an ordered list; requested count (3) is guidance, not enforcement</td><td>Contract</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Selection policy (certify top 2) is named, recorded experiment config</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Sampler state is inside-step state the optimizer owns; nothing else</td><td>Control plane</td><td><span class="dpin settled">settled</span></td></tr>
+    <tr><td>Optimizer proposes; environment certifies; only certified records reach the plot</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Result carries full specs; environment validates by diffing against the two declared regions</td><td>Environment boundary</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Both contracts are serializable schemas first; Python bindings are wrappers</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
+    <tr><td>Demo semantics: few-shot (code → description) pairs; bootstrap filter = full-pipeline pass</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Two-tool split and sizes (E<sub>mini</sub>=8, E<sub>promote</sub>=35), 10 trials, promotion every 5</td><td>Experiment design</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Sampler choice (TPE vs bandit)</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
+    <tr><td>Task overlap between E<sub>mini</sub>, E<sub>promote</sub>, and C<sub>cert</sub> (held-out or not)</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="run"><h2>Full run walkthrough: bootstrap, propose once, then search</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes the experiment config: seed spec, two-region mutation surface, E<sub>mini</sub> + E<sub>promote</sub> tool configs, requested return 3, selection = certify top 2, C<sub>cert</sub>. Everything serialized and digested.</p>
+      <div class="ledger"><b>ledger</b>experiment config, seed treatment digest, and both tool-config digests registered</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code>: seed, mutation surface, toolkit handles for E<sub>mini</sub> and E<sub>promote</sub>, guidance (return 3).</p></div>
+  </div>
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p><strong>Stage 1 — bootstrap.</strong> Runs the unmodified seed through E<sub>mini</sub> ~10 times; harvests (code → description) pairs from tasks where the full pipeline passed; assembles 4 candidate demo sets.</p>
+      <div class="ledger"><b>ledger</b>~10 E<sub>mini</sub> calls × 8 tasks, tagged (seed digest, E<sub>mini</sub> digest); costs accrue to this optimization step</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p><strong>Stage 2 — grounded proposal.</strong> One proposal-LM pass grounded in a dataset summary, a treatment-spec summary, and a prompting tip yields 4 instruction candidates; the seed instruction is kept as candidate 0. <strong>The pool is now frozen</strong> — 4 instructions × 4 demo sets = 16 combinations.</p>
+      <div class="ledger"><b>ledger</b>proposal-LM tokens tracked as control-plane cost; no eval records</div>
+    </div>
+  </div>
+
+  <div class="repeat">
+    <div class="repeat-label">Search loop · ×10 trials</div>
+    <div class="run">
+      <div class="tick">
+        <div class="who optimizer">Optimizer</div>
+        <div class="what"><p>Sampler picks a combination (instruction<sub>i</sub>, demoset<sub>j</sub>); assembles the candidate spec by rewriting the two mutable regions; spends <strong>one E<sub>mini</sub> call</strong> on it; feeds the noisy 8-task score back into its internal sampler state.</p>
+          <div class="ledger"><b>ledger</b>1 E<sub>mini</sub> call × 8 per-task records, tagged (candidate digest, E<sub>mini</sub> digest)</div>
+        </div>
+      </div>
+      <div class="tick">
+        <div class="who optimizer">Optimizer</div>
+        <div class="what"><p><strong>Every 5 trials:</strong> the combination with the best average minibatch score so far is promoted to <strong>one E<sub>promote</sub> call</strong> (35 tasks) — the trustworthy score that ranks finalists.</p>
+          <div class="ledger"><b>ledger</b>1 E<sub>promote</sub> call × 35 per-task records, tagged (candidate digest, E<sub>promote</sub> digest)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tick">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Returns <code>OptimizationResult</code>: the top 3 combinations as full specs, ordered by promotion score (combinations never promoted rank below promoted ones), plus the 10-trial attempt history as advisory annotations.</p>
+      <div class="ledger"><b>ledger</b>optimization step totals: ~22 tool calls (~150 pipeline runs), proposal-LM tokens, wall time</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Diff validation: each returned spec differs from the seed only in the instruction text and demo block — the two declared regions. Selection policy admits the top 2 to certification. Annotations go to the provenance store as advisory context.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who certifier">Certifier</div>
+    <div class="what"><p>Runs the 2 selected candidates × 40 C<sub>cert</sub> tasks through the full pipeline; compression measured on every description, correctness from the sandbox; whetstone failure taxonomy classifies and retries.</p>
+      <div class="ledger"><b>ledger</b>80 per-task records tagged (candidate digest, C<sub>cert</sub> digest)</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Environment</div>
+    <div class="what"><p>Aggregates from certified records only; emits the report and the two certified points against the seed's baseline.</p>
+      <div class="ledger"><b>ledger</b>2 certified aggregates; pareto front derived as a view</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: two certified points from a 16-combination pool</h2></div>
+
+<p>Only the two certified candidates reach the correctness–compression plot, tagged with C<sub>cert</sub>'s digest. The ~150 pipeline runs the search consumed remain queryable in the ledger under the E<sub>mini</sub> and E<sub>promote</sub> digests — visible as the run's true cost, excluded from the plot by construction. The third returned candidate stays uncertified but recorded: a later experiment can certify it without re-running the search.</p>
+
+<div class="callout">Against dspy's MIPROv2: the hard Optuna dependency disappears from the contract (the sampler is an optimizer internal), and the hard-coded minibatch/full-eval constants become two explicit designer-issued tools with separate ledger identities. What survives unchanged is the fixed pool — stage 3 can only recombine what stages 1–2 produced, never react to failures with a new instruction. That limitation is exactly what <a href="gepa-run.html">GEPA's reflection loop</a> addresses.</div>
+
+</main>
+</body>
+</html>
