@@ -11,15 +11,15 @@
 <body class="with-toc">
 <nav class="toc" aria-label="Contents">
   <div class="brand">Design: Eval</div>
-  <a href="#vocab">Vocabulary</a>
-  <a href="#target">Target setup</a>
-  <a href="#specified">How each element is specified</a>
+  <a href="vocab_and_defs.html">Vocabulary</a>
+  <a href="#target">Example setup</a>
+  <a href="#specified">Run configurations</a>
   <div class="group">The system</div>
-  <a href="#system">Component diagram</a>
-  <a href="#decisions">Where decisions live</a>
+  <a href="#system">Official evaluation run</a>
   <div class="group">In action</div>
   <a href="#run">Full run walkthrough</a>
   <a href="#output">What lands on the plot</a>
+  <a href="#notes">Additional notes</a>
 </nav>
 
 <main>
@@ -27,6 +27,7 @@
 <div class="byline">whetstone-ai · 2026-07-19</div>
 
 <div class="family-nav">
+  <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
   <span class="here">Eval</span>
   <a href="copro-run.html">COPRO</a>
   <a href="miprov2-run.html">MIPROv2</a>
@@ -38,35 +39,12 @@
   A diagram of how a full eval sweep would be configured and run in our proposed design.
 </div>
 
-<div class="legend">
-  <span><span class="sw settled"></span><strong>Settled</strong></span>
-  <span><span class="sw discussed"></span><strong>Discussed</strong></span>
-  <span><span class="sw viz"></span><strong>Open</strong></span>
-</div>
-
-<div class="section-head" id="vocab"><h2>Vocab</h2></div>
-
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Term</th><th>Definition</th></tr></thead>
-  <tbody>
-
-    <tr><td><strong>Provider</strong></td><td>A service that provides an api endpoint that we can hit with a request for a specific model and a prompt/history to get the llm generation.  Currently our system supports OpenAI and OpenRouter.</td></tr>
-    <tr><td><strong>Model</strong></td><td>A specific model available from a given provider, eg. gpt-5.4-nano is provided by the openai provider and openai/gpt-5.4-nano is provided by openrouter.</td></tr>
-    <tr><td><strong>Architecture</strong></td><td>A graph shape with variable names specified per node.</td></tr>
-    <tr><td><strong>Candidate</strong></td><td>The architecture with all the variable values specified.</td></tr>
-    <tr><td><strong>Task</strong></td><td>A single element of the dataset which should provide a way to get (1) a ground truth code sample and (2) tests for this usecase.</td></tr>
-    <tr><td><strong>Seed</strong></td><td>A repeat of the exact same configuration to capture randomness in the evaluation.  In fully controlled experiments this would be defined by a rng seed but in our experiments the randomness is coming from the API calls to the model providers so we don't change the seeds we just repeat the calls.</td></tr>
-  </tbody>
-</table>
-</div>
-
 <div class="section-head" id="target"><h2>Example Setup</h2></div>
 
 <div class="grid-4">
   <div class="card">
-    <h3>4 (Provider, Model) Pairs<span class="dpin settled">settled</span></h3>
-    <p class="small muted space-top">Same model plays encoder and decoder within a candidate.</p>
+    <h3>4 (Provider, Model) Pairs</h3>
+    <p class="small muted space-top">Same model plays encoder and decoder within a rollout config.</p>
     <ul>
       <li>openai, <code>gpt-5.4-nano</code></li>
       <li>openrouter, <code>deepseek/deepseek-v4-flash</code></li>
@@ -75,299 +53,240 @@
     </ul>
   </div>
   <div class="card">
-    <h3>2 Encoder User Prompt Templates<span class="dpin settled">settled</span></h3>
-    <p class="small muted space-top">Full text below. Both use the same prompt variables: <code>MAX_BUDGET</code> and <code>GT_CODE_SAMPLE</code></p>
+    <h3>2 Encoder User Prompt Templates</h3>
+    <p class="small muted space-top">Full text below. Both use the same prompt variables: <code>MAX_BUDGET</code> and <code>INPUT_CODE</code></p>
     <ul>
       <li><strong>A</strong> — "concise description"</li>
       <li><strong>B</strong> — "compress for reconstruction by another agent"</li>
     </ul>
   </div>
   <div class="card">
-    <h3>Prompt Template Values<span class="dpin settled">settled</span></h3>
+    <h3>Prompt Template Values</h3>
     <p class="small muted space-top">Some variables are defined by the task and some derived from a swept value.</p>
     <ul>
-      <li><code>GT_CODE_SAMPLE</code> comes from task inputs</li>
+      <li><code>INPUT_CODE</code> comes from task inputs</li>
       <li><code>BUDGET_RATIO = 0.25, 0.5, 0.75, 1.0</code></li>
-      <li><code>MAX_BUDGET = BUDGET_RATIO * num_chars(GT_CODE_SAMPLE)</code></li>
+      <li><code>MAX_BUDGET = BUDGET_RATIO * num_chars(INPUT_CODE)</code></li>
 
     </ul>
     <p class="small muted space-top"> </p>
   </div>
   <div class="card">
-    <h3>Tasks and Seeds <span class="dpin settled">settled</span></h3>
+    <h3>Tasks and Seeds</h3>
     <ul>
       <li><b>Tasks:</b> Full HumanEval+, 164 tasks</li>
-      <li><b>Seeds:</b> 3 evals per (candidate, task)</li>
+      <li><b>Seeds:</b> 3 rollouts per (rollout config, task)</li>
     </ul>
-    <p class="small muted space-top">32 candidates × 164 × 3</p>
-    <p class="small muted">=15,744 pipeline runs.</p>
+    <p class="small muted space-top">32 rollout configs × 164 × 3</p>
+    <p class="small muted">=15,744 rollouts.</p>
     <p class="small muted">≈31,500 LLM calls.</p>
   </div>
 </div>
 
-<div class="callout space-top"><strong>Note on "budget" computation and usage:</strong> <code>MAX_BUDGET = round(ratio × chars(gt_stripped))</code>, where <code>gt_stripped</code> is dr-code's <code>HumanEvalTask.ground_truth_code_without_comments</code>. At ratio 1.0 the description may be as long as the stripped code itself — the calibration anchor. Consistent with our guidance-not-enforcement stance, <code>MAX_BUDGET</code> steers the encoder but nothing clips its output: the <em>measured</em> objective is the actual description's compressed bytes, so budget-blowing candidates simply land further right on the plot, and a budget-compliance ratio (<code>chars_used / MAX_BUDGET</code>) is recorded per run.</div>
-
-<h4>Encoder User Prompt Template A <span class="dpin settled">settled</span></h4>
+<h4>Encoder User Prompt Template A</h4>
 <pre><code>Provide a concise description of the following code.
 Use at most {MAX_BUDGET} characters.
 
 ```python
-{GT_CODE_SAMPLE}
+{INPUT_CODE}
 ```</code></pre>
 
-<h4>Encoder User Prompt Template B <span class="dpin settled">settled</span></h4>
+<h4>Encoder User Prompt Template B</h4>
 <pre><code>Compress the following code into a description another agent can use
 to reconstruct a function with the same behavior.
 Use at most {MAX_BUDGET} characters.
 
 ```python
-{GT_CODE_SAMPLE}
+{INPUT_CODE}
 ```</code></pre>
 
-<h4>Decoder User Prompt Template<span class="dpin settled">settled</span></h4>
+<h4>Decoder User Prompt Template</h4>
 <pre><code>Decode the description into functional Python code. Output only Python code.
 
 {ENCODER_OUTPUT}</code></pre>
 
-<div class="callout good"><strong>GT_CODE_SAMPLE Usage<span class="dpin settled">settled</span>:</strong> <code>{GT_CODE_SAMPLE}</code> is the <em>stripped</em> code — no comments, no docstrings — so the budget basis, the prompt content, and the measurement denominator all share the same text. Measured compression is <code>zstd_bytes(description) ÷ utf8_bytes(gt_stripped)</code> with zstd level 19.</div>
-
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
 <div class="plane">
-  <div class="plane-label">Architecture <span class="sub">· the shared shape — slots named, no values filled</span></div>
+  <div class="plane-label">Architecture</div>
   <div class="hflow">
-    <div class="comp settled"><b>Task inputs</b><span class="note">slots: <code>{code}</code> <code>{tests}</code></span></div>
+    <div class="comp node"><b>Encoder LM Node</b><span class="note">inputs: <code>input_code</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>encoded_code_rep</code><hr>strong default: <code>input_code</code> = <code>task.gt_code_wo_comments</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp settled"><b>Encoder LM node</b><span class="note">slots: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code></div>
+    <div class="comp node"><b>Decoder LM Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>code_generation</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp settled"><b>Description</b><span class="note">encoder output</span></div>
-    <span class="harrow">→</span>
-    <div class="comp settled"><b>Decoder LM node</b><span class="note">slots: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code></div>
-    <span class="harrow">→</span>
-    <div class="comp breach"><b>Score node</b><span class="note">slot: <code>{codec}</code><hr>Runs <code>preprocess</code> and <code>metrics extraction</code>. Returns <code>f(compression, correctness)</code> derived from the extracted metrics.</span></div>
-  </div>
-</div>
-<h4>This is where we stopped. --------------------------------------------------------</h4>
-
-<div class="card space-top">
-  <h3>Notes on the architecture</h3>
-  <ul>
-    <li>The shape and every generator-filled slot value are part of each candidate's digest.</li>
-    <li>The task-input slots (<code>{code}</code>, <code>{tests}</code>) are filled per task at run time — the one kind of slot the generator never fills and the digest never covers.</li>
-    <li>The candidate generator fills the remaining slots to produce the 32 candidates — including <code>{codec}</code> = zstd-19, which is why the score node is red (see the break note below).</li>
-    <li><code>{prompt_kvs}</code> keeps the architecture template-agnostic: which keys exist, and any derived values (<code>budget_ratio</code> → <code>MAX_BUDGET</code>), are a convention between the template text and its kvs — template implementation detail, not architecture. The derivation code is versioned with the encoder op so identical kvs always mean identical prompts.</li>
-    <li>Correctness-scoring config (preprocessing version, sandbox image, timeout) comes from C<sub>cert</sub>, not from any slot.</li>
-    <li>A future control plane that edits the shape itself is architecture search — the same contract, with a wider mutation surface. An <em>architecture digest</em> (shape with slots blanked) is the natural plot grouping key. <span class="dpin viz">viz</span></li>
-  </ul>
-</div>
-
-<div class="flow-arrow"><span>the generator fills the slots — <code>{codec}</code> = zstd-19 for all 32 — over the 4 × 2 × 4 grid</span> <span class="glyph">▼</span></div>
-
-<div class="grid-3">
-  <div class="card">
-    <h3>Candidate</h3>
-    <p class="small muted">The architecture with its slots bound — the system being measured. Digest-covered: any change here is a <em>new candidate</em> with a new <code>graph_digest</code>.</p>
-    <ul>
-      <li><code>provider</code> + <code>model</code> — split slots on both LM nodes; this run binds matched encoder/decoder pairs</li>
-      <li>Encoder <code>user_prompt_template</code> — A | B, id + full text; <code>system_prompt_template</code> bound empty this run</li>
-      <li>Encoder <code>{prompt_kvs}</code> — <code>{"budget_ratio": 0.25 | 0.5 | 0.75 | 1.0}</code>; decoder kvs empty</li>
-      <li>Decoder <code>user_prompt_template</code> — constant across all 32, still digested; system empty</li>
-      <li><code>temperature: 1.0</code> on both nodes, pinned</li>
-      <li><code>{codec}</code> = zstd-19 on the score node — measurement config inside the candidate, by decision</li>
-    </ul>
-    <p class="small muted space-top">Same-model pairing is a rule of the candidate <em>generator</em>, not the schema — mixed pairs need no contract change.</p>
-  </div>
-  <div class="card">
-    <h3>C<sub>cert</sub> eval config</h3>
-    <p class="small muted">How we measure. Digest-tagged on every record: changing it is a <em>new measurement</em>, never a new candidate.</p>
-    <ul>
-      <li>Task set — full HumanEval+, 164 tasks @ pinned revision</li>
-      <li>Repetitions — 3 per (candidate, task)</li>
-      <li>Correctness scoring — <code>{preprocessing}</code> = v1 hash, <code>{sandbox_image}</code> = pinned digest, <code>{timeout}</code></li>
-      <li>Compression denominator — stripped-GT utf-8 bytes</li>
-      <li>Aggregation — per-task mean over reps, then task mean</li>
-    </ul>
-    <p class="small muted space-top">The plot reads only records carrying this digest.</p>
-  </div>
-  <div class="card">
-    <h3>Run-time derivation</h3>
-    <p class="small muted">Computed per task during execution. Appears on <em>records</em>, never in specs.</p>
-    <ul>
-      <li><code>MAX_BUDGET = round(ratio × chars(gt_stripped))</code></li>
-      <li>The instantiated encoder prompt (template + budget + sample)</li>
-      <li>Description length + budget compliance ratio</li>
-      <li>Measured zstd bytes, pass/fail — per rep</li>
-    </ul>
-    <p class="small muted space-top">The <em>formula</em> is a candidate-plane rule; the <em>values</em> are data about one run.</p>
+    <div class="comp node"><b>Score Node</b><span class="note">inputs: <code>encoded_code_rep</code> <code>code_generation</code> <code>input_code</code> <code>tests</code><br>variables: <code>{task_set}</code> <code>{seeds}</code> <code>{reference_length}</code> <code>{codec}</code> <code>{preprocess_config}</code> <code>{metrics_extract_config}</code> <code>{aggregation_method}</code><br>outputs: <code>score</code> + <code>score_metadata</code><hr>strong default: <code>tests</code> = <code>task.tests</code><br>The variables form the Score Node Eval Config. Runs <code>preprocess</code> and <code>metrics extraction</code>; returns <code>f(compression, Binary Test Pass Score)</code> derived from the extracted metrics. <code>{task_set}</code>, <code>{seeds}</code>, <code>{aggregation_method}</code> describe the sweep around a run — used by whoever drives it, not within a single run.</span></div>
   </div>
 </div>
 
-<div class="callout danger"><strong>Recorded break in the identity model <span class="dpin settled">settled</span>:</strong> <code>{codec}</code> is a score-node slot bound by the generator, so compression-measurement config now lives <em>inside</em> the candidate digest. This breaks the rule the record keying was built on — "changing C<sub>cert</sub> is a new measurement, never a new candidate": re-measuring under a different codec would mint new candidates rather than new records for the same candidates, and "same system, different measurement" is no longer expressible as a (candidate digest, protocol digest) pair. Decided with the break understood; the identity model and its ledger implications will be revisited when there's enough context to redo them properly. The red box above registers my objection for the record.</div>
+<div class="flow-arrow"><span>the generator sets every variable — one of the 32 rollout configs below</span> <span class="glyph">▼</span></div>
 
-<p class="space-top">Element by element:</p>
-
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Element</th><th>Specified in</th><th>Concrete form</th><th>Provenance</th></tr></thead>
-  <tbody>
-    <tr><td>Provider + model (×4)</td><td>Candidate — <code>{provider}</code> + <code>{model}</code> slots on both LM nodes</td><td>Bound pairs map to dr-providers presets: <code>openai_chat_config(model="gpt-5.4-nano")</code>, <code>openrouter_chat_config(model="deepseek/deepseek-v4-flash")</code>, etc.</td><td><span class="dpin settled">settled</span> split + values; <span class="dpin viz">viz</span> endpoint kind (chat)</td></tr>
-    <tr><td>Same model as encoder and decoder</td><td>Candidate <em>generator</em> — the cross-product builder emits only matched pairs</td><td>A constraint of this experiment's grid, not a contract rule; the spec schema would happily hold mixed pairs</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Encoder prompts (A | B)</td><td>Candidate — encoder <code>{user_prompt_template}</code> slot</td><td><code>template_id</code> + full text, digest-covered; <code>{system_prompt_template}</code> bound empty this run</td><td><span class="dpin settled">settled</span> slots; <span class="dpin viz">viz</span> empty system binding</td></tr>
-    <tr><td>Budget ratio (0.25 … 1.0)</td><td>Candidate — encoder <code>{prompt_kvs}</code> entry</td><td><code>prompt_kvs: {"budget_ratio": 0.5}</code>; the template layer derives <code>MAX_BUDGET</code> from it per task</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td><code>MAX_BUDGET</code> value</td><td><strong>Nowhere in the spec</strong> — derived per task inside the encoder stage</td><td><code>round(budget_ratio × chars(task.gt_stripped))</code>; recorded on every run record</td><td><span class="dpin settled">settled</span> formula; <span class="dpin viz">viz</span> placement in the encoder op</td></tr>
-    <tr><td>Ground-truth sample + stripping</td><td>Task external bindings (<code>task.*</code> namespace)</td><td>dr-code <code>HumanEvalTask.ground_truth_code_without_comments</code>; the stripped text fills <code>{GT_CODE_SAMPLE}</code>, sizes the budget, and is the measurement denominator</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Decoder prompt</td><td>Candidate — decoder <code>{user_prompt_template}</code> slot</td><td>Constant text across all 32 specs, digest-covered — a future decoder-prompt experiment is just more candidates; <code>{system_prompt_template}</code> bound empty this run</td><td><span class="dpin settled">settled</span> slots; <span class="dpin viz">viz</span> empty system binding</td></tr>
-    <tr><td>Sampling parameters</td><td>Candidate — both LM nodes</td><td><code>temperature: 1.0</code> pinned explicitly (repetitions are meaningless if unstated)</td><td><span class="dpin viz">viz</span></td></tr>
-    <tr><td>Task set</td><td>C<sub>cert</sub> eval config</td><td>Full HumanEval+ (164 tasks), dr-code's pinned HF revision + benchmark-bug overrides digest</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>3 evals per task</td><td>C<sub>cert</sub> eval config</td><td><code>reps: 3</code>; each run keyed (candidate digest, task id, rep) — also the idempotency key for safe retries</td><td><span class="dpin settled">settled</span> count; <span class="dpin viz">viz</span> keying mechanics</td></tr>
-    <tr><td>Compression codec</td><td>Candidate — score-node slot <code>{codec}</code></td><td>zstd-19, generator-bound, inside the candidate digest (recorded break — see note above)</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Compression denominator</td><td>C<sub>cert</sub> eval config</td><td>utf-8 bytes of <code>gt_stripped</code>; measured value = dr-code <code>compressed_bytes</code> ÷ denominator</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Correctness measurement</td><td>C<sub>cert</sub> eval config</td><td>dr-code preprocessing <code>humaneval-function-candidates@v1</code> (definition hash) + sandbox scoring (image digest, timeout)</td><td><span class="dpin viz">viz</span> pinned versions</td></tr>
-    <tr><td>Aggregation rule</td><td>C<sub>cert</sub> eval config</td><td>Per-task pass fraction over 3 reps, then unweighted mean over 164 tasks; same shape for compression</td><td><span class="dpin viz">viz</span></td></tr>
-    <tr><td>Selection policy</td><td>Experiment config</td><td>Certify all returned (all 32)</td><td><span class="dpin settled">settled</span> policy-as-config</td></tr>
-    <tr><td>Optimizer</td><td>Experiment config</td><td>Identity; mutation surface ∅; toolkit ∅</td><td><span class="dpin settled">settled</span></td></tr>
-  </tbody>
-</table>
+<div class="plane">
+  <div class="plane-label">Rollout Config Example <span class="sub">· candidate (template B, openrouter/deepseek-v4-flash) at budget_ratio 0.5 — one of the 32</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Encoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code><hr>maps to the dr-providers preset <code>openrouter_chat_config(model="deepseek/deepseek-v4-flash")</code></span></div>
+    <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>full Template B text above<br>derived per task at rollout time, not a variable: <code>MAX_BUDGET = round(budget_ratio × chars(input_code))</code><br>instantiates the prompt: template + <code>MAX_BUDGET</code> + <code>input_code</code></span></div>
+    <div class="comp node"><b>Decoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code><hr>same model as encoder — a rule of this sweep's generator</span></div>
+    <div class="comp node"><b>Decoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Decoder Template<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{}</code><hr>same text across all 32 rollout configs</span></div>
+    <div class="comp node"><b>Score Node Eval Config</b><span class="note"><code>{task_set}</code> = HumanEval+ (164) @ pinned revision<br><code>{seeds}</code> = <code>3</code><br><code>{reference_length}</code> = <code>utf8_bytes(input_code)</code><br><code>{codec}</code> = <code>zstd-19</code><br><code>{preprocess_config}</code> = <code>humaneval-function-candidates@v1</code><br><code>{metrics_extract_config}</code> = Binary Test Pass Score (sandbox: pinned image digest, timeout) + compressed bytes<br><code>{aggregation_method}</code> = Average Binary Test Pass Rate (mean over seeds, then over tasks)<hr>matches the Official Eval Config — the point of an Eval run; all of it inside the rollout config hash (identity note in Additional Notes)<br>derived per rollout, on the rollout result not in the config: <code>encoded_code_rep</code> length · measured zstd bytes ÷ reference length · Binary Test Pass Score</span></div>
+  </div>
 </div>
 
-<div class="section-head" id="system"><h2>Component diagram: 32 seeds in, 32 certified points out</h2></div>
+<div class="section-head" id="system"><h2>Run Official Evaluation on All Rollout Configs</h2></div>
 
 <div class="flow">
   <div class="plane">
-    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Candidate generator</b><span class="note">4 models × 2 templates × 4 ratios → 32 GraphSpecs (encoder → decoder → score); identity = <code>graph_digest</code></span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">8 candidates (template, provider, model) × 4 ratios → 32 rollout configs (encoder → decoder → score); identity = <code>graph_hash</code></span></div>
       <div class="comp settled"><b>Mutation surface: ∅ · Toolkit: ∅</b><span class="note">nothing may change; no tools issued — this <em>is</em> Eval</span></div>
-      <div class="comp settled"><b>Selection: certify all</b><span class="note">named, recorded policy</span></div>
-      <div class="comp viz"><b>C<sub>cert</sub></b><span class="note">164 tasks @ pinned revision · reps 3 · zstd-19 ÷ stripped-GT bytes · preprocessing v1 hash · sandbox image digest</span></div>
+      <div class="comp settled"><b>Selection: evaluate all</b><span class="note">named, hashed policy</span></div>
+      <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 32 seeds, surface ∅, toolkit ∅</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 32 initial rollout configs, mutation surface ∅, toolkit ∅, guidance ∅</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Control plane <span class="sub">· the optimizer</span></div>
+    <div class="plane-label">Optimization stage <span class="sub">· the optimizer</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Identity optimizer</b><span class="note">returns the 32 seeds unchanged, ordered as given; zero tool calls, zero LM calls</span></div>
+      <div class="comp settled"><b>Identity optimizer</b><span class="note">returns the 32 initial rollout configs unchanged, ordered as given; zero tool calls, zero LM calls</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationResult</code>: ordered list = the 32 seeds</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationResult</code>: ordered list = the 32 initial rollout configs</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="plane-label">Evaluation harness <span class="sub">· runs official evaluation</span></div>
     <div class="comps">
-      <div class="comp discussed"><b>Diff validator</b><span class="note">empty mutation surface ⇒ returned specs must be byte-identical to seeds; 32/32 pass</span></div>
-      <div class="comp settled"><b>Selection</b><span class="note">certify-all admits 32</span></div>
-      <div class="comp discussed"><b>Certifier</b><span class="note">runs 32 × 164 × 3 under C<sub>cert</sub>; only these records feed the plot</span></div>
-      <div class="comp settled"><b>Ledger</b><span class="note">15,744 records tagged (candidate digest, C<sub>cert</sub> digest, task, rep) with true costs</span></div>
-      <div class="comp viz"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (candidate, task, rep), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
+      <div class="comp settled"><b>Diff check</b><span class="note">empty mutation surface ⇒ returned rollout configs must be byte-identical to the initial ones; 32/32 pass</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">evaluate-all admits 32</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>certifier executes each (candidate, task, rep) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>Evaluator executes each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Candidate plane <span class="sub">· one run = one (candidate, task, rep)</span></div>
+    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed)</span></div>
     <div class="hflow">
-      <div class="comp settled"><b>Ground truth</b><span class="note"><code>gt_stripped</code> via dr-code</span></div>
+      <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code><br><code>tests</code> = <code>task.tests</code><hr>via dr-code; sizes the budget, supplies the reference length</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Budget derivation</b><span class="note"><code>round(ratio × chars)</code> — run-time, per task</span></div>
+      <div class="comp settled"><b>Encoder LM Node</b><span class="note">emits <code>encoded_code_rep</code><hr><code>MAX_BUDGET</code> derived here per task; template instantiated; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM</b><span class="note">template instantiated with <code>MAX_BUDGET</code> + sample; dr-providers</span></div>
+      <div class="comp settled"><b>Decoder LM Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Description</b><span class="note">zstd-19 metric measured here — a metric, not a stage</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM</b><span class="note">fixed prompt; same model as encoder</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Sandbox tests</b><span class="note">HumanEval+ suite, hardened OCI</span></div>
+      <div class="comp settled"><b>Score Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code> — a metric, not a stage</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests specs, requests, and records; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>15,744 rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744 in all, persisted for analysis</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout config results</span></div>
+      <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the budget ratios; pareto front — views derived from the rollout results, never stored as truth</span></div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
-
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
-  <tbody>
-    <tr><td>The sweep grid: models, templates, ratios, full dataset, 3 reps, shared encoder/decoder model</td><td>Experiment design</td><td><span class="dpin settled">settled</span> — specified by you for this run</td></tr>
-    <tr><td>Budget formula over stripped ground truth; budget steers, never clips</td><td>Candidate plane rule</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td><code>{codec}</code> is a generator-bound candidate slot — a recorded exception to "measurement config never enters candidate identity"; identity model to be revisited</td><td>Architecture</td><td><span class="dpin settled">settled</span> — decided with the break understood</td></tr>
-    <tr><td>LM nodes split <code>{provider}</code> from <code>{model}</code> and carry <code>{system_prompt_template}</code> + <code>{user_prompt_template}</code></td><td>Architecture</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Compression is a metric on the description, not a pipeline stage</td><td>Candidate plane</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Eval follows the optimizer contract (identity optimizer)</td><td>Contract design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Candidate identity = <code>graph_digest</code>; ledger authoritative, config-tagged; selection policy recorded</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Optimizer proposes; environment certifies; plot reads only C<sub>cert</sub> records</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Full-spec return validated by diff against the mutation surface</td><td>Environment boundary</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Serializable-schema contracts with in-process bindings</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Encoder prompt carries the stripped code sample (no comments or docstrings)</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Plot denominator = stripped-GT utf-8 bytes; codec = zstd-19</td><td>C<sub>cert</sub></td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Temperature 1.0; chat endpoints; aggregation = per-task mean then task mean; dr-platform as substrate</td><td>Spec / C<sub>cert</sub> / infra</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Held-out question (tools vs C<sub>cert</sub> tasks)</td><td>Experiment design</td><td><span class="dpin viz">open</span>; moot for Eval — no tools exist</td></tr>
-  </tbody>
-</table>
-</div>
-
-<div class="section-head" id="run"><h2>Full run walkthrough: one pass, 15,744 executions</h2></div>
+<div class="section-head" id="run"><h2>Full run walkthrough: one pass, 15,744 rollouts</h2></div>
 
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: the generator expands the grid into 32 GraphSpecs (each carrying provider preset, template text + id, ratio, temperature, decoder prompt); C<sub>cert</sub>, selection policy, and the empty surface/toolkit are serialized alongside.</p>
-      <div class="ledger"><b>ledger</b>32 candidate digests + experiment and C<sub>cert</sub> config digests registered</div>
-    </div>
+    <div class="what"><p>Freezes the experiment: the generator expands 8 candidates × 4 budget ratios into 32 rollout configs, each carrying its provider preset, template id + text, budget ratio, temperature, decoder prompt, and Score Node Eval Config (matching the official one). The official eval config, the selection policy, and the empty mutation surface and toolkit are serialized alongside.</p></div>
   </div>
   <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the identity optimizer: 32 seeds, mutation surface ∅, toolkit ∅, guidance ∅.</p></div>
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the identity optimizer: 32 initial rollout configs, mutation surface ∅, toolkit ∅, guidance ∅.</p></div>
   </div>
   <div class="tick">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Identity policy returns the ordered list [T1…T32] unchanged, no annotations.</p>
-      <div class="ledger"><b>ledger</b>optimizer step: 0 tool calls, 0 tokens</div>
+    <div class="what"><p>Returns the ordered list of 32 rollout configs unchanged — zero tool calls, zero LM calls, no extras.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Diff check: 32/32 byte-identical to the initial rollout configs, consistent with the empty mutation surface. Selection (evaluate all) admits all 32 to official evaluation.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Submits 15,744 jobs — one per (rollout config, task, seed) — as a dr-platform campaign with labels <code>{model, template, ratio}</code>. Per-model selector capacity keeps a rate-limited provider from stalling the other three; whetstone's failure taxonomy retries transient errors and keeps permanent failures as rollout results without aborting the sweep.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p><strong>One rollout, concretely</strong> — candidate (template B, deepseek-v4-flash) at budget_ratio 0.5, task HumanEval/36, seed 2: <code>task.gt_code_wo_comments</code> is 412 chars → <code>MAX_BUDGET = 206</code>. The encoder emits a 198-char <code>encoded_code_rep</code> → zstd-19 → 121 bytes → measured compression 121/412 ≈ 0.29. The decoder returns a fenced code block → preprocessing extracts one compilable function → the sandbox runs the HumanEval+ suite → all tests pass: Binary Test Pass Score = 1.</p>
+      <div class="ledger"><b>output</b>one rollout result: (rollout config hash, official eval config hash, HumanEval/36, seed 2) → binary_test_pass_score=1, rep_chars=198, budget=206, zstd_bytes=121, reference_bytes=412, tokens, provider cost, latency</div>
     </div>
   </div>
   <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Diff validation: 32/32 byte-identical to seeds, consistent with the empty surface. Selection admits all 32 to certification.</p></div>
-  </div>
-  <div class="tick">
-    <div class="who certifier">Certifier</div>
-    <div class="what"><p>Submits 15,744 jobs — one per (candidate, task, rep) — as a dr-platform campaign with labels <code>{model, template, ratio}</code>. Per-model selector capacity keeps a rate-limited provider from stalling the other three; whetstone's failure taxonomy classifies errors, retrying transient/rate-limited ones and recording permanent ones without aborting the sweep.</p>
-      <div class="ledger"><b>ledger</b>work ledger opens: 15,744 items, idempotent top-up if the run is interrupted and resubmitted</div>
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>The campaign drains: 15,744 rollout results accumulate, including classified failures (an empty generation here, a provider timeout there) — failures are rollout results, not gaps.</p>
+      <div class="ledger"><b>output</b>every (rollout config, task, seed) ends with a rollout result — passed, failed, or permanently-failed-with-cause</div>
     </div>
   </div>
   <div class="tick">
-    <div class="who certifier">Certifier</div>
-    <div class="what"><p><strong>One run, concretely</strong> — T = (deepseek-v4-flash, template B, ratio 0.5), task HumanEval/36, rep 2: <code>gt_stripped</code> is 412 chars → <code>MAX_BUDGET = 206</code>. Encoder emits a 198-char description (compliance 0.96) → zstd-19 → 121 bytes → measured compression 121/412 ≈ 0.29. Decoder returns a fenced code block → preprocessing extracts one compilable candidate → sandbox runs the HumanEval+ suite → all tests pass.</p>
-      <div class="ledger"><b>ledger</b>one record: (T-digest, C<sub>cert</sub>-digest, HumanEval/36, rep 2) → passed=true, desc_chars=198, budget=206, zstd_bytes=121, gt_bytes=412, tokens, provider cost, latency</div>
-    </div>
-  </div>
-  <div class="tick">
-    <div class="who certifier">Certifier</div>
-    <div class="what"><p>The campaign drains: 15,744 records accumulate, including classified failures (an empty generation here, a provider timeout there) — failures are records, not gaps.</p>
-      <div class="ledger"><b>ledger</b>completion ledger reconciles: every (candidate, task, rep) accounted for, passed, failed, or permanently-failed-with-cause</div>
-    </div>
-  </div>
-  <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Aggregates per candidate from certified records only: per-task pass fraction over 3 reps → unweighted mean over 164 tasks; same aggregation for measured compression. Emits 32 certified points and derives the front.</p>
-      <div class="ledger"><b>ledger</b>32 certified aggregates; pareto front derived as a view, never stored as truth</div>
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates from official rollout results only: for each rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks — the Average Binary Test Pass Rate — and the same aggregation for measured compression. Emits 32 rollout config results: 8 candidates × 4 ratios.</p>
+      <div class="ledger"><b>output</b>32 rollout config results — each candidate's distribution of 4 across the ratios; the pareto front is derived from them</div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: 32 points, eight curves, one front</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot: eight candidates, 32 rollout config results, one front</h2></div>
 
-<p>Each candidate contributes one certified point: mean pass rate vs mean measured compression. The natural readings: <span class="key">eight budget-response curves</span> (4 models × 2 templates, each traced across the four ratios), the <span class="key">template A vs B</span> comparison at matched model and ratio, and the overall front. Because the x-axis is <em>measured</em> compression, the budget knob's honesty is itself visible: a model that ignores <code>MAX_BUDGET</code> drifts right of its ratio cohort, and the recorded compliance ratio quantifies it per run.</p>
+<p>Each candidate lands as its own distribution of 4 rollout config results — the variance source unrolled across the budget ratios — each result one rollout config averaged over 164 tasks × 3 seeds: Average Binary Test Pass Rate vs mean measured compression. The natural readings: <span class="key">eight budget-response curves</span> (one per candidate, traced across the ratios), the <span class="key">template A vs B</span> comparison at matched model and ratio, and the overall <span class="key">pareto front</span> — derived from the official rollout results. Because the x-axis is <em>measured</em> compression, the budget knob's honesty is itself visible: a model that ignores <code>MAX_BUDGET</code> drifts right of its ratio cohort.</p>
 
-<div class="callout">What this concreteness proved about the contracts: the entire experiment specification landed in existing boxes — candidate spec, eval config, or run-time derivation — with exactly one new mechanism needed: the <span class="key">per-task budget derivation</span> inside the encoder stage. The two choices it surfaced along the way (stripped-vs-full sample in the prompt; the plot denominator) were experiment-design decisions, not contract gaps, and both are now settled: stripped text everywhere, zstd-19 over stripped-GT bytes.</div>
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>INPUT_CODE, the budget, and the reference length</h3>
+    <ul>
+      <li><code>{INPUT_CODE}</code> is set to <code>task.gt_code_wo_comments</code> — stripped ground truth, dr-code's <code>HumanEvalTask.ground_truth_code_without_comments</code>; that choice is part of the rollout config, not the architecture</li>
+      <li>Reference length = <code>utf8_bytes(task.gt_code_wo_comments)</code>; measured compression = <code>zstd_bytes(encoded_code_rep) ÷ reference length</code>, zstd-19</li>
+      <li><code>MAX_BUDGET = round(BUDGET_RATIO × chars(task.gt_code_wo_comments))</code>, derived per task — at ratio 1.0 the description may be as long as the reference</li>
+      <li>Guidance, not enforcement: the budget steers, nothing clips; rollouts that blow it land further right on the plot</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Candidates and the variance source</h3>
+    <ul>
+      <li>8 candidates = (encoder user template, provider, model) — one plotted line each</li>
+      <li>Variance source = <code>budget_ratio</code> — spreads each candidate into its distribution of rollout config results</li>
+      <li>Seeds are repetition, not variance: averaged into each rollout config result for confidence — large even at temperature 0, provider generations aren't deterministic</li>
+      <li>8 × 4 ratios = 32 rollout configs; × 164 tasks × 3 seeds = 15,744 rollouts</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Tasks are not a variance source</h3>
+    <ul>
+      <li>The task set defines the quantity each rollout config result estimates: the average score over it</li>
+      <li>Fewer or sampled tasks → a noisier estimate of the <em>same</em> average</li>
+      <li>A different task set (train / validation / test) → a <em>different</em> quantity: a different eval config</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Identity: rollout config vs candidate</h3>
+    <ul>
+      <li>The rollout config hash covers every variable, including the Score Node Eval Config — it shapes the reward an optimizer steers by</li>
+      <li>Candidate identity is only the candidate variables' values</li>
+      <li>Same candidate, different measurement = two rollout configs sharing candidate values</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Contract fit</h3>
+    <ul>
+      <li>The full experiment lands in existing boxes: rollout config, official eval config, or rollout-time derivation</li>
+      <li>One new mechanism: the <span class="key">per-task budget derivation</span> inside the encoder stage</li>
+    </ul>
+  </div>
+</div>
 
 </main>
 </body>

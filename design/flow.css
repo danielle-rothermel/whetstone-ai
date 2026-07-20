@@ -71,6 +71,8 @@ pre code {
 .comp.breach { border-color: var(--red); }
 .comp hr { border: none; border-top: 1px solid var(--line); margin: 6px 0; }
 .comp.substrate { background: var(--bg); border-style: solid; border-color: var(--line); }
+/* .node is provenance-free: same blue as .discussed, but carries no legend meaning */
+.comp.node { border-color: var(--accent); }
 
 /* Arrows between planes */
 .flow-arrow {
@@ -121,7 +123,8 @@ main { counter-reset: tick; }
 .who.designer { color: var(--muted); }
 .who.optimizer { color: var(--accent); }
 .who.env { color: var(--green); }
-.who.certifier { color: var(--ink); }
+.who.certifier { color: var(--ink); }  /* stale docs 2-5 only; remove after their overhaul */
+.who.evaluator { color: var(--ink); }
 .tick .what { font-size: 14px; }
 .tick .what p { margin: 0 0 4px; }
 .tick .ledger {

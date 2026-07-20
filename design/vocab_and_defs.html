@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Vocabulary &amp; Definitions</title>
+</head>
+<body>
+<main>
+<h1>Vocabulary &amp; Definitions</h1>
+<div class="byline">whetstone-ai · 2026-07-20</div>
+
+<div class="family-nav">
+  <span class="here">Vocab &amp; Defs</span>
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <a href="gepa-run.html">GEPA</a>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+</div>
+
+<div class="hero">
+  The shared vocabulary of the whetstone design-doc family. Terms defined here carry these exact meanings across every design doc.
+</div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Definition</th></tr></thead>
+  <tbody>
+
+    <tr><td><strong>Provider</strong></td><td>A service that provides an api endpoint that we can hit with a request for a specific model and a prompt/history to get the llm generation.  Currently our system supports OpenAI and OpenRouter.</td></tr>
+    <tr><td><strong>Model</strong></td><td>A specific model available from a given provider, eg. gpt-5.4-nano is provided by the openai provider and openai/gpt-5.4-nano is provided by openrouter.</td></tr>
+    <tr><td><strong>Architecture</strong></td><td>A graph shape with each node's inputs, variables, and outputs named, but no values set.</td></tr>
+    <tr><td><strong>Candidate</strong></td><td>A choice of values for the candidate variables — the variables whose settings the experiment compares, one candidate per plotted line. In the eval experiment, a candidate is an (encoder user template, provider, model) tuple. An optimizer proposes new candidates: new values for the candidate variables it is allowed to change.</td></tr>
+    <tr><td><strong>Rollout config</strong></td><td>The architecture with every variable value set — candidate variables, variance-source variables, and fixed values. The executable unit of the system, identified by its hash (<code>graph_hash</code>). In the eval experiment: 8 candidates × 4 budget ratios = 32 rollout configs.</td></tr>
+    <tr><td><strong>Rollout</strong></td><td>One execution of a rollout config on a (task, seed): encoder → decoder → score, producing one rollout result. Evaluation collects rollouts and aggregates their scores.</td></tr>
+    <tr><td><strong>Rollout result</strong></td><td>The output of one rollout, keyed (rollout config hash, official eval config hash, task, seed): Binary Test Pass Score, measured zstd bytes, and metadata (tokens, cost, latency). Failures are rollout results too, with a cause — never gaps.</td></tr>
+    <tr><td><strong>Rollout config result</strong></td><td>The aggregate of one rollout config's official rollout results: (Average Binary Test Pass Rate, mean measured compression). 32 in the eval experiment — 4 per candidate; what lands on the plot.</td></tr>
+    <tr><td><strong>Variance source</strong></td><td>The settings swept within one candidate to turn it into a distribution of rollout config results on the plot axes — in the eval experiment, just <code>budget_ratio</code>, which distinguishes rollout configs and traces the candidate's curve. Seeds and tasks are not variance sources: both are averaged into each rollout config result. Seed captures generation stochasticity and buys confidence in the result; the task set defines the quantity the result estimates (see the <a href="eval-run.html#notes">eval doc’s Additional Notes</a>).</td></tr>
+    <tr><td><strong>Initial candidates</strong></td><td>The candidate values an optimization run starts with — carried inside the initial rollout configs handed to the optimizer as the basis for its proposals.</td></tr>
+    <tr><td><strong>Task</strong></td><td>A single element of the dataset which should provide a way to get (1) a ground truth code sample and (2) tests for this usecase.</td></tr>
+    <tr><td><strong>Seed</strong></td><td>A repeat of the exact same configuration to capture randomness in the evaluation.  In fully controlled experiments this would be defined by a rng seed but in our experiments the randomness is coming from the API calls to the model providers so we don't change the seeds we just repeat the calls.</td></tr>
+    <tr><td><strong>Hash</strong></td><td>The content hash of a serialized object (rollout config, architecture, eval config), used as its identity: same bytes give the same hash, any change makes a new one. Also keys the rollout results. The one exception in wording: the sandbox image keeps the OCI term "image digest".</td></tr>
+    <tr><td><strong>Official evaluation</strong></td><td>The evaluation harness's authoritative measurement pass: collecting rollouts under the official eval config produces the official rollout results that feed the plots. "Evaluate" alone is the general verb — an optimizer may evaluate however its tools allow, but only official evaluation produces official rollout results.</td></tr>
+    <tr><td><strong>Score Node Eval Config</strong></td><td>The eval config the rollout config itself carries, as Score Node variables: <code>{task_set}</code>, <code>{seeds}</code>, <code>{reference_length}</code>, <code>{codec}</code>, <code>{preprocess_config}</code>, <code>{metrics_extract_config}</code>, <code>{aggregation_method}</code> — all inside the rollout config hash. In an Eval run it matches the Official Eval Config — that is the point. In another setting an optimizer might set a cheaper one while it iterates: same preprocess and metrics extraction, but a smaller task subset and fewer seeds. The cross-run fields (task set, seeds, aggregation) direct whoever drives the sweep; a single rollout uses the rest.</td></tr>
+    <tr><td><strong>Binary Test Pass Score</strong></td><td>The correctness score of a single rollout (rollout config, task, seed): 1 if the reconstructed code passes the task's full test suite, 0 otherwise — never a fraction of tests passed.</td></tr>
+    <tr><td><strong>Average Binary Test Pass Rate</strong></td><td>The aggregate correctness of one rollout config: per-task mean Binary Test Pass Score over the seeds, then unweighted mean over the eval config's task set — the correctness axis of that rollout config's result.</td></tr>
+    <tr><td><strong>Diff check</strong></td><td>The evaluation harness's comparison of each returned rollout config against the initial ones, confirming only permitted changes were made.</td></tr>
+    <tr><td><strong>Reference length</strong></td><td>The length of the code sample the encoder is asked to compress (<code>task.gt_code_wo_comments</code> in the eval experiment): the budget is set as a fraction of it, and official compression is the description's compressed bytes divided by it.</td></tr>
+  </tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>
