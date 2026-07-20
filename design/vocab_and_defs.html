@@ -87,6 +87,78 @@
 </table>
 </div>
 
+<div class="section-head" id="draft-dr-code-vocabulary"><h2>Draft dr-code Vocabulary</h2></div>
+
+<p>This section records dr-code-owned contracts for integration with Whetstone. It is a first-pass draft for discussion, is not yet Whetstone normative vocabulary, and does not rename any dr-code API.</p>
+<p class="small muted">The concrete vocabulary follows dr-code's public types and behavior: it uses Definition, Runner, and Trace rather than “Preprocess Flow,” because configuration, bound execution, and retained runtime evidence are separate contracts; likewise, “Metric Extraction” names the behavior of <code>extract_metrics</code>, not a nonexistent “Metric Extraction Flow” API.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Draft definition</th></tr></thead>
+  <tbody>
+    <tr class="term-group"><th colspan="2" scope="colgroup">Inputs and artifacts</th></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-submission-text">Submission Text</dfn></td><td>The runtime role of the raw string supplied for dr-code processing from an upstream Whetstone LLM generation; the generation itself remains a Whetstone generation, and the string is not yet an artifact.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-text-artifact">Text Artifact</dfn></td><td>A dr-code <code>TextArtifact</code> wrapper carrying arbitrary text, with no claim that the text is code, constructed from <a class="term-ref" href="#dr-code-term-submission-text">submission text</a> before preprocessing.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-python-source">Python Source</dfn></td><td>A raw string interpreted as Python source, without by itself asserting that compilation succeeds.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-code-artifact">Code Artifact</dfn></td><td>A dr-code <code>CodeArtifact</code> carrying a source string under the stronger producer contract that it has passed an upstream compilation check.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-code-candidate">Code Candidate</dfn></td><td>One <a class="term-ref" href="#dr-code-term-python-source">Python source</a> string at an ordered position in a <a class="term-ref" href="#dr-code-term-code-candidate-set-artifact">code candidate set artifact</a>, distinct from Whetstone's experiment-level <a class="term-ref" href="#term-candidate">candidate</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-code-candidate-set-artifact">Code Candidate Set Artifact</dfn></td><td>A dr-code <code>CodeCandidateSetArtifact</code> containing zero or more ordered <a class="term-ref" href="#dr-code-term-code-candidate">code candidate</a> source strings and optionally aligned lineage; an empty set is a present artifact, not <a class="term-ref" href="#dr-code-term-absent">absent</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-absent">Absent</dfn></td><td>A dr-code <code>Absent</code> causal sentinel for a step that failed while processing a present input, retaining failure and propagation lineage; a missing upstream submission produces no preprocessing trace, while a missing trace key is a wiring error.</td></tr>
+
+    <tr class="term-group"><th colspan="2" scope="colgroup">Preprocessing</th></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-preprocessing-definition">Preprocessing Definition</dfn></td><td>A dr-code <code>PreprocessingDefinition</code>, the fully concrete, immutable, versioned specification of ordered named steps and settings, which therefore behaves like a Whetstone <a class="term-ref" href="#term-config">config</a> despite its existing class name.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-bound-preprocessing-runner">Bound Preprocessing Runner</dfn></td><td>A reusable <code>BoundPreprocessingRunner</code> produced by resolving a <a class="term-ref" href="#dr-code-term-preprocessing-definition">preprocessing definition</a>'s steps, validating settings and artifact-kind wiring, and pinning producer identity before it accepts and kind-checks input artifacts.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-preprocessing-trace">Preprocessing Trace</dfn></td><td>The dr-code <code>Trace</code> returned for one input, generically retaining artifact-or-<a class="term-ref" href="#dr-code-term-absent">absent</a> values, step facts, and producer identity; the named HumanEval function-candidates definition specifically ends in <code>Absent</code> or one <code>CodeCandidateSetArtifact</code>, not a list of <code>CodeArtifact</code>s.</td></tr>
+
+    <tr class="term-group"><th colspan="2" scope="colgroup">Metric extraction</th></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metric-family">Metric Family</dfn></td><td>A stable kind of metric question identified by dr-code's <code>MetricName</code>, such as <code>code_test</code> or <code>compressed_length</code>, and implemented by a versioned operator.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metric-question">Metric Question</dfn></td><td>A dr-code <code>MetricQuestion</code> declaring one <a class="term-ref" href="#dr-code-term-metric-family">metric family</a>, one trace key to evaluate, and the operator settings that determine its semantics.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metrics-definition">Metrics Definition</dfn></td><td>A dr-code <code>MetricsDefinition</code>, the fully concrete, immutable, versioned specification of an ordered collection of <a class="term-ref" href="#dr-code-term-metric-question">metric questions</a>, which therefore behaves like a Whetstone <a class="term-ref" href="#term-config">config</a> despite its existing class name.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metric-extraction">Metric Extraction</dfn></td><td>The <code>extract_metrics</code> operation that evaluates one dr-code <code>Trace</code> once per <a class="term-ref" href="#dr-code-term-metric-question">metric question</a> in declaration order and returns ordered <a class="term-ref" href="#dr-code-term-metric-record">metric records</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metric-record">Metric Record</dfn></td><td>A self-describing dr-code <code>MetricRecord</code> answering one declared question with one or more named <a class="term-ref" href="#dr-code-term-metric-value">metric values</a> when measured, or with explicit <code>not_applicable</code> or <code>operator_failure</code> state.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-metric-value">Metric Value</dfn></td><td>One named scalar fact in a measured <a class="term-ref" href="#dr-code-term-metric-record">metric record</a>'s <code>values</code> mapping, not a Whetstone score or objective unless Whetstone derives one.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-code-test-facts">Code-Test Facts</dfn></td><td>The <code>code_test</code> record values describing case counts, pass/fail/error/timeout counts, coverage completeness, function count, and selected function name, not Whetstone's <a class="term-ref" href="#term-binary-test-pass-score">binary test pass score</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-code-term-compressed-length-facts">Compressed-Length Facts</dfn></td><td>The <code>compressed_length</code> record values for UTF-8 representation bytes, compressed bytes, and optional reference ratio and percent reduction under pinned codec, level, and reference-source semantics, not automatically Whetstone's chosen compression objective.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 class="space-top">Proposed Whetstone integration</h3>
+<div class="hflow">
+  <div class="comp"><b>Whetstone LLM generation</b><span class="note">Upstream generation remains Whetstone-owned</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><a class="term-ref" href="#dr-code-term-submission-text">Submission text</a><span class="note">Raw string, not yet an artifact</span></div>
+  <span class="harrow">→</span>
+  <div class="comp">Wrap as <a class="term-ref" href="#dr-code-term-text-artifact">text artifact</a><span class="note">Whetstone supplies the typed input</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><a class="term-ref" href="#dr-code-term-preprocessing-definition">Preprocessing definition</a> + <a class="term-ref" href="#dr-code-term-bound-preprocessing-runner">bound runner</a><span class="note">Runner enforces the input artifact kind</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><a class="term-ref" href="#dr-code-term-preprocessing-trace">Preprocessing trace</a><span class="note">Retained values, facts, and provenance</span></div>
+  <span class="harrow">→</span>
+  <div class="comp">Named HumanEval output: <a class="term-ref" href="#dr-code-term-absent">absent</a> or <a class="term-ref" href="#dr-code-term-code-candidate-set-artifact">code candidate set</a><span class="note">Causal step failure or non-empty ordered set</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><b>Whetstone adapter / policy</b><span class="note">Selects or fans out sources; compile-checks and wraps accepted sources as <a class="term-ref" href="#dr-code-term-code-artifact">code artifacts</a></span></div>
+  <span class="harrow">→</span>
+  <div class="comp">Per-candidate <code>Trace</code><span class="note">Includes code artifact plus required task/reference auxiliary artifacts</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><a class="term-ref" href="#dr-code-term-metric-question">Metric questions</a> / <a class="term-ref" href="#dr-code-term-metric-extraction">extraction</a><span class="note"><code>extract_metrics</code> resolves each question from trace keys</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><a class="term-ref" href="#dr-code-term-metric-record">Metric records</a><span class="note">Ordered facts or explicit state</span></div>
+  <span class="harrow">→</span>
+  <div class="comp"><b>Whetstone derivation / reduction</b><span class="note">Correctness, compression, reward, aggregation, and plotting</span></div>
+</div>
+
+<p class="small muted space-top"><strong>Current-behavior caveat.</strong> dr-code's exhaustive <code>evaluate_preprocessing_candidates</code> currently evaluates raw candidate sources and directly constructs <code>MetricRecord</code>s, bypassing the generic per-candidate trace and <code>extract_metrics</code> path; the diagram is a target boundary, not a description of that evaluator's current API behavior.</p>
+<p class="small muted"><strong>Proposed Whetstone integration boundary.</strong> dr-code owns artifact, trace, metric-operator, and metric-fact contracts; Whetstone owns the adapter, config selection, candidate reduction, score and objective derivation, aggregation, plotting, and official authority. The legacy dr-code <code>score_humaneval_submission</code> currently performs candidate reduction and scoring, while this target facts-first integration assigns that policy to Whetstone.</p>
+
+<div class="callout warn">
+  <strong>Unresolved discussion items.</strong>
+  <ul>
+    <li>Multi-candidate correctness reduction: first, best, any, or another policy.</li>
+    <li>Compression denominator and reference representation: bytes or characters, and comments included or removed.</li>
+  </ul>
+</div>
+
 <div class="section-head" id="running-example"><h2>Running Example: Eval Experiment</h2></div>
 
 <div class="table-wrap">
