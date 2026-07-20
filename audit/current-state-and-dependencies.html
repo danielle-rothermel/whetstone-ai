@@ -14,7 +14,7 @@
   <div class="group">Repository contents</div>
   <a href="#inventory">What remains</a>
   <a href="#deleted">What was deleted</a>
-  <a href="#residue">Flagged residue</a>
+  <a href="#residue">Vocabulary check</a>
   <div class="group">Dependencies</div>
   <a href="#deps">Alignment</a>
   <a href="#targets">Rebuild targets</a>
@@ -27,7 +27,7 @@
 <div class="byline">whetstone-ai · post-deletion state and dependency alignment · 2026-07-19</div>
 
 <div class="hero">
-  The legacy <code>platform/</code>, <code>db/</code>, and <code>records/</code> layers — ~6,900 lines built on the superseded dr-platform kernel contract — are deleted, along with their tests, the Alembic configuration, and the old-design documentation. What remains is a <strong>722-line neutral core</strong> (failure taxonomy and classification, the dr-providers LM boundary, a clock, and a node-op constant) with <strong>71 passing tests</strong> and clean lint/typecheck. Because nothing imports <code>dr_code</code>, <code>dr_graph</code>, or <code>dr_platform</code> anymore, the dependency drift that previously blocked updates is no longer breaking: the rebuild will target the current APIs — dr-platform's staging contract (PR&nbsp;#47 rebuild stack) and <code>dr_code.metrics</code> — directly, with no migration debt.
+  The legacy <code>platform/</code>, <code>db/</code>, and <code>records/</code> layers — ~6,900 lines built on the superseded dr-platform kernel contract — are deleted, along with their tests, the Alembic configuration, the old-design documentation, and the last old-design vocabulary (the encdec validators, the graph-node naming, and the node-op constant). What remains is a <strong>693-line neutral core</strong> (failure taxonomy and classification, the dr-providers LM boundary, and a clock) with <strong>66 passing tests</strong> and clean lint/typecheck. Because nothing imports <code>dr_code</code>, <code>dr_graph</code>, or <code>dr_platform</code> anymore, the dependency drift that previously blocked updates is no longer breaking: the rebuild will target the current APIs — dr-platform's staging contract (PR&nbsp;#47 rebuild stack) and <code>dr_code.metrics</code> — directly, with no migration debt.
 </div>
 
 <div class="section-head" id="verdict"><h2>The core is green and unbiased; no dependency blocks the rebuild</h2></div>
@@ -36,8 +36,8 @@
 <table>
   <thead><tr><th>Component</th><th>Verdict</th><th>Evidence</th></tr></thead>
   <tbody>
-    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>11 source files, 722 lines; zero references to the deleted layers in tracked source, tests, scripts, CI, or README.</td></tr>
-    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 71 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
+    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>10 source files, 693 lines; zero references to the deleted layers or the old design's vocabulary in tracked source, tests, scripts, CI, or README.</td></tr>
+    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 66 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
     <tr><td><code>dr-providers</code> · <code>dr-serialize</code></td><td><span class="status addressed">In use, compatible</span></td><td>The only imported dr-* deps. Behind by docs-only commits; bumping is a no-op.</td></tr>
     <tr><td><code>dr-graph</code></td><td><span class="status addressed">Current, unimported</span></td><td>Locked rev equals <code>origin/main</code>; kept as rebuild foundation.</td></tr>
     <tr><td><code>dr-code</code> · <code>dr-platform</code></td><td><span class="status partial">Behind, no longer breaking</span></td><td>The code that imported their retired APIs is deleted. Pins are stale but harmless; advance them deliberately when the rebuild starts.</td></tr>
@@ -48,9 +48,9 @@
 <div class="section-head" id="inventory"><h2>What remains: failure classification, the LM boundary, and two utilities</h2></div>
 
 <div class="grid-4">
-  <div class="card"><div class="metric">11</div><div class="label">source files</div></div>
-  <div class="card"><div class="metric">722</div><div class="label">production Python lines</div></div>
-  <div class="card"><div class="metric">71</div><div class="label">passing unit tests (5 files)</div></div>
+  <div class="card"><div class="metric">10</div><div class="label">source files</div></div>
+  <div class="card"><div class="metric">693</div><div class="label">production Python lines</div></div>
+  <div class="card"><div class="metric">66</div><div class="label">passing unit tests (5 files)</div></div>
   <div class="card"><div class="metric">2</div><div class="label">of 5 dr-* deps currently imported</div></div>
 </div>
 
@@ -58,9 +58,9 @@
 <table>
   <thead><tr><th>Module</th><th>Lines</th><th>Role</th></tr></thead>
   <tbody>
-    <tr><td class="path"><code>eval_failures/</code></td><td class="num">426</td><td><span class="key">Failure taxonomy</span> (12 explicit exception classes), classification into <code>FailureClass</code> with <span class="key">retry policy</span> (<code>policy.py</code>), design-neutral <span class="key">JSON-safe serialization</span> and exception-chain diagnostics (<code>recording.py</code>, trimmed of its Postgres/records parts), and generation-output validation (<code>generation.py</code> — flagged below).</td></tr>
-    <tr><td class="path"><code>lm/</code></td><td class="num">259</td><td>Thin <span class="key">dr-providers boundary</span>: request building, response/cost mapping into <code>ProviderResult</code>, provider-failure translation, credential sanitization.</td></tr>
-    <tr><td class="path"><code>clock.py</code> · <code>node_ops.py</code> · <code>__init__.py</code></td><td class="num">37</td><td>Injectable UTC clock, the <code>LLM_CALL_OP</code> vocabulary constant, package marker.</td></tr>
+    <tr><td class="path"><code>eval_failures/</code></td><td class="num">409</td><td><span class="key">Failure taxonomy</span> (12 explicit exception classes), classification into <code>FailureClass</code> with <span class="key">retry policy</span> (<code>policy.py</code>), design-neutral <span class="key">JSON-safe serialization</span> and exception-chain diagnostics (<code>recording.py</code>, trimmed of its Postgres/records parts), and the shared <span class="key">empty-output guard</span> (<code>generation.py</code>).</td></tr>
+    <tr><td class="path"><code>lm/</code></td><td class="num">259</td><td>Thin <span class="key">dr-providers boundary</span>: request building via <code>llm_request_from_parameters</code>, response/cost mapping into <code>ProviderResult</code>, provider-failure translation, credential sanitization.</td></tr>
+    <tr><td class="path"><code>clock.py</code> · <code>__init__.py</code></td><td class="num">25</td><td>Injectable UTC clock, package marker.</td></tr>
   </tbody>
 </table>
 </div>
@@ -80,17 +80,13 @@
   <li><span class="key">Tests</span>: the five platform/connection/records suites, plus the records-dependent cases and support fixtures of the recording tests.</li>
   <li><span class="key">Trimmed, not deleted</span>: <code>eval_failures/recording.py</code> lost <code>recordable_jsonb</code> and the deleted-payload builder (persistence-design servants) but kept <code>ensure_recordable</code>, <code>recordable_text</code>, and the diagnostics extractor that <code>policy.summarize_exception</code> depends on.</li>
   <li><span class="key">Docs and config</span>: the old-design scope audit (<code>repository-scope-audit.html</code>), the README's description of the old setup (rewritten to an honest minimal state), and the now-unused <code>alembic</code>/<code>sqlalchemy</code> direct dependencies. <code>dbos</code> and <code>psycopg</code> remain only because the retained failure-policy tests verify classification of their error types.</li>
+  <li><span class="key">Old-design vocabulary</span> (follow-up removal after the initial deletion): <code>node_ops.py</code> and its <code>LLM_CALL_OP</code> graph-op constant; <code>validate_encdec_generation</code> and <code>validate_direct_generation</code> — the direct/encdec pair was the old experiment shape (the neutral <code>require_generation_text</code> empty-output guard stays); and the graph-node naming in <code>lm/boundary.py</code>, where <code>llm_request_for_node</code> became <code>llm_request_from_parameters</code>.</li>
 </ul>
 
-<div class="section-head" id="residue"><h2>Flagged residue: three survivors still speak old-design vocabulary</h2></div>
+<div class="section-head" id="residue"><h2>No old-design vocabulary survives</h2></div>
 
-<div class="callout warn">
-  These were retained deliberately (outside the confirmed deletion scope) and need a follow-up decision during the rebuild design:
-  <ul>
-    <li><code>eval_failures/generation.py</code> — <code>validate_encdec_generation</code> and the direct/encdec distinction encode the old encoder/decoder experiment shape.</li>
-    <li><code>lm/boundary.py</code> — <code>llm_request_for_node</code> and "node parameters" naming encode the old graph-node execution model (the code itself is design-neutral).</li>
-    <li><code>node_ops.py</code> — the "node op" concept and <code>LLM_CALL_OP</code> come from the old graph vocabulary.</li>
-  </ul>
+<div class="callout good">
+  The three residue items flagged after the initial deletion were resolved by removal: <code>node_ops.py</code> is gone, the encdec/direct validators are gone, and the LM boundary speaks in caller parameters rather than graph nodes. A vocabulary grep for the deleted layers, "node", and "encdec" across tracked source and tests returns nothing.
 </div>
 
 <div class="section-head" id="deps"><h2>Dependency alignment: stale pins are now harmless, and the lock did not move</h2></div>
@@ -128,10 +124,9 @@
 <div class="section-head" id="sequencing"><h2>Recommended sequencing: settle the residue, then design upward from the deps</h2></div>
 
 <div class="steps">
-  <div class="step"><h3>1 · Decide the flagged residue before new code accretes around it</h3><p>Keep, rename, or delete <code>validate_encdec_generation</code>, the node-vocabulary naming in <code>lm/boundary.py</code>, and <code>node_ops.py</code>. Each is small now; renaming later means touching the rebuild's callers.</p></div>
-  <div class="step"><h3>2 · Advance the dr-code and dr-graph pins when their consumption starts</h3><p>Both are safe to bump at any time now; do it as each library enters the new design so the rebuild is written against current APIs from the first line.</p></div>
-  <div class="step"><h3>3 · Design the new platform integration against the staging API</h3><p>Whetstone-side ownership of the failure taxonomy and any throttling is now a design requirement, not a migration artifact — dr-platform no longer provides either. The platform database starts fresh (old tables already dropped; the staging schema has no bridge).</p></div>
-  <div class="step"><h3>4 · Grow tests with the new code, then run experiments</h3><p>The remaining suite covers everything that exists. Keep that property as layers return: each new boundary lands with its direct tests, and experiments run only once the rebuilt pipeline is the intended design end-to-end.</p></div>
+  <div class="step"><h3>1 · Advance the dr-code and dr-graph pins when their consumption starts</h3><p>Both are safe to bump at any time now; do it as each library enters the new design so the rebuild is written against current APIs from the first line.</p></div>
+  <div class="step"><h3>2 · Design the new platform integration against the staging API</h3><p>Whetstone-side ownership of the failure taxonomy and any throttling is now a design requirement, not a migration artifact — dr-platform no longer provides either. The platform database starts fresh (old tables already dropped; the staging schema has no bridge).</p></div>
+  <div class="step"><h3>3 · Grow tests with the new code, then run experiments</h3><p>The remaining suite covers everything that exists. Keep that property as layers return: each new boundary lands with its direct tests, and experiments run only once the rebuilt pipeline is the intended design end-to-end.</p></div>
 </div>
 
 <div class="callout">

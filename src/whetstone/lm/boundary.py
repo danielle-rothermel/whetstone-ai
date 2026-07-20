@@ -3,7 +3,7 @@
 The wire mechanics (config records, payload building, transport,
 parsing, failure classification) live in dr-providers. This module keeps
 only whetstone's domain shapes: ``ProviderResult`` (the provider outcome
-surface), the ``LlmRequest`` construction from node parameters, the
+surface), the ``LlmRequest`` construction from caller parameters, the
 ``LlmResponse`` → ``ProviderResult`` conversion, and translation of
 kernel failure carriers into whetstone eval-failure exceptions.
 """
@@ -42,7 +42,7 @@ __all__ = [
     "OUTPUT_FIELD_TEXT",
     "PlainPromptAdapter",
     "ProviderResult",
-    "llm_request_for_node",
+    "llm_request_from_parameters",
     "provider_result_from_response",
     "reasoning_effort_from_parameter",
     "translate_provider_failure",
@@ -94,14 +94,14 @@ class PlainPromptAdapter(BaseModel):
 
 
 def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
-    """Coerce a node's ``reasoning`` parameter into a typed effort level.
+    """Coerce a ``reasoning`` parameter into a typed effort level.
 
     dr-providers 0.2 made ``LlmRequest.reasoning`` a ``ReasoningEffort``
-    enum (was a free-form dict). Whetstone's node parameter surface still
-    supplies the effort either as the legacy ``{"effort": "low"}`` mapping
-    or as a bare effort string; both map to the enum here. Absent or empty
-    values mean "no reasoning override" (``None``); an unrecognized effort
-    fails loudly, consistent with the kernel's no-silent-defaults stance.
+    enum (was a free-form dict). Callers may supply the effort either as
+    the legacy ``{"effort": "low"}`` mapping or as a bare effort string;
+    both map to the enum here. Absent or empty values mean "no reasoning
+    override" (``None``); an unrecognized effort fails loudly, consistent
+    with the kernel's no-silent-defaults stance.
     """
     if value is None:
         return None
@@ -125,14 +125,14 @@ def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
         ) from exc
 
 
-def llm_request_for_node(
+def llm_request_from_parameters(
     *,
     config: ProviderConfig,
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
     idempotency_key: str | None = None,
 ) -> LlmRequest:
-    """Build the kernel request from a node's merged parameters.
+    """Build the kernel request from a caller's merged parameters.
 
     Legacy ``extra_kwargs`` merge into ``extra_body``: the kernel's
     raw-httpx payload is the request body, so both land inline exactly

@@ -28,11 +28,7 @@ from whetstone.eval_failures.exceptions import (
     TransientFailureError,
     UnknownFailureError,
 )
-from whetstone.eval_failures.generation import (
-    require_generation_text,
-    validate_direct_generation,
-    validate_encdec_generation,
-)
+from whetstone.eval_failures.generation import require_generation_text
 from whetstone.eval_failures.policy import (
     FailureSummary,
     classify_exception,
@@ -79,6 +75,4 @@ __all__ = [
     "should_retry_step",
     "summarize_exception",
     "unwrap_exception",
-    "validate_direct_generation",
-    "validate_encdec_generation",
 ]
