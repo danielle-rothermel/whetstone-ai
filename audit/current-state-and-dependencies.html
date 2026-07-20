@@ -27,7 +27,7 @@
 <div class="byline">whetstone-ai · post-deletion state and dependency alignment · 2026-07-19</div>
 
 <div class="hero">
-  The legacy <code>platform/</code>, <code>db/</code>, and <code>records/</code> layers — ~6,900 lines built on the superseded dr-platform kernel contract — are deleted, along with their tests, the Alembic configuration, the old-design documentation, and the last old-design vocabulary (the encdec validators, the graph-node naming, and the node-op constant). What remains is a <strong>693-line neutral core</strong> (failure taxonomy and classification, the dr-providers LM boundary, and a clock) with <strong>66 passing tests</strong> and clean lint/typecheck. Because nothing imports <code>dr_code</code>, <code>dr_graph</code>, or <code>dr_platform</code> anymore, the dependency drift that previously blocked updates is no longer breaking: the rebuild will target the current APIs — dr-platform's staging contract (PR&nbsp;#47 rebuild stack) and <code>dr_code.metrics</code> — directly, with no migration debt.
+  The legacy <code>platform/</code>, <code>db/</code>, and <code>records/</code> layers — ~6,900 lines built on the superseded dr-platform kernel contract — are deleted, along with their tests, the Alembic configuration, the old-design documentation, and the last old-design vocabulary (the encdec validators, the graph-node naming, and the node-op constant). What remains is a <strong>673-line neutral core</strong> (failure taxonomy and classification, the dr-providers LM boundary, and a clock) with <strong>68 passing tests</strong> and clean lint/typecheck. Because nothing imports <code>dr_code</code>, <code>dr_graph</code>, or <code>dr_platform</code> anymore, the dependency drift that previously blocked updates is no longer breaking: the rebuild will target the current APIs — dr-platform's staging contract (PR&nbsp;#47 rebuild stack) and <code>dr_code.metrics</code> — directly, with no migration debt.
 </div>
 
 <div class="section-head" id="verdict"><h2>The core is green and unbiased; no dependency blocks the rebuild</h2></div>
@@ -36,8 +36,8 @@
 <table>
   <thead><tr><th>Component</th><th>Verdict</th><th>Evidence</th></tr></thead>
   <tbody>
-    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>10 source files, 693 lines; zero references to the deleted layers or the old design's vocabulary in tracked source, tests, scripts, CI, or README.</td></tr>
-    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 66 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
+    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>10 source files, 673 lines; zero references to the deleted layers or the old design's vocabulary in tracked source, tests, scripts, CI, or README.</td></tr>
+    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 68 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
     <tr><td><code>dr-providers</code> · <code>dr-serialize</code></td><td><span class="status addressed">In use, compatible</span></td><td>The only imported dr-* deps. Behind by docs-only commits; bumping is a no-op.</td></tr>
     <tr><td><code>dr-graph</code></td><td><span class="status addressed">Current, unimported</span></td><td>Locked rev equals <code>origin/main</code>; kept as rebuild foundation.</td></tr>
     <tr><td><code>dr-code</code> · <code>dr-platform</code></td><td><span class="status partial">Behind, no longer breaking</span></td><td>The code that imported their retired APIs is deleted. Pins are stale but harmless; advance them deliberately when the rebuild starts.</td></tr>
@@ -49,8 +49,8 @@
 
 <div class="grid-4">
   <div class="card"><div class="metric">10</div><div class="label">source files</div></div>
-  <div class="card"><div class="metric">693</div><div class="label">production Python lines</div></div>
-  <div class="card"><div class="metric">66</div><div class="label">passing unit tests (5 files)</div></div>
+  <div class="card"><div class="metric">673</div><div class="label">production Python lines</div></div>
+  <div class="card"><div class="metric">68</div><div class="label">passing unit tests (5 files)</div></div>
   <div class="card"><div class="metric">2</div><div class="label">of 5 dr-* deps currently imported</div></div>
 </div>
 
@@ -59,7 +59,7 @@
   <thead><tr><th>Module</th><th>Lines</th><th>Role</th></tr></thead>
   <tbody>
     <tr><td class="path"><code>eval_failures/</code></td><td class="num">409</td><td><span class="key">Failure taxonomy</span> (12 explicit exception classes), classification into <code>FailureClass</code> with <span class="key">retry policy</span> (<code>policy.py</code>), design-neutral <span class="key">JSON-safe serialization</span> and exception-chain diagnostics (<code>recording.py</code>, trimmed of its Postgres/records parts), and the shared <span class="key">empty-output guard</span> (<code>generation.py</code>).</td></tr>
-    <tr><td class="path"><code>lm/</code></td><td class="num">259</td><td>Thin <span class="key">dr-providers boundary</span>: request building via <code>llm_request_from_parameters</code>, response/cost mapping into <code>ProviderResult</code>, provider-failure translation, credential sanitization.</td></tr>
+    <tr><td class="path"><code>lm/</code></td><td class="num">239</td><td>Thin <span class="key">dr-providers boundary</span>: request building via <code>llm_request_from_parameters</code> (legacy <code>extra_kwargs</code> and <code>{"effort": …}</code> dual paths collapsed), response/cost mapping into <code>ProviderResult</code>, provider-failure translation, credential sanitization.</td></tr>
     <tr><td class="path"><code>clock.py</code> · <code>__init__.py</code></td><td class="num">25</td><td>Injectable UTC clock, package marker.</td></tr>
   </tbody>
 </table>
