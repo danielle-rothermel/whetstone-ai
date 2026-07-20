@@ -5,16 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
-<title>Whetstone is now a minimal failure-and-LM core; the legacy layers are gone and the rebuild targets are known</title>
+<title>Whetstone is a minimal evaluation core, ready to rebuild upward on the dr-* libraries</title>
 </head>
 <body class="with-toc">
 <nav class="toc" aria-label="Contents">
   <div class="brand">Whetstone state &amp; deps</div>
   <a href="#verdict">Verdict</a>
   <div class="group">Repository contents</div>
-  <a href="#inventory">What remains</a>
-  <a href="#deleted">What was deleted</a>
-  <a href="#residue">Vocabulary check</a>
+  <a href="#inventory">The core</a>
   <div class="group">Dependencies</div>
   <a href="#deps">Alignment</a>
   <a href="#targets">Rebuild targets</a>
@@ -23,73 +21,54 @@
 </nav>
 
 <main>
-<h1>Whetstone is now a minimal failure-and-LM core; the legacy layers are gone and the rebuild targets are known</h1>
-<div class="byline">whetstone-ai · post-deletion state and dependency alignment · 2026-07-19</div>
+<h1>Whetstone is a minimal evaluation core, ready to rebuild upward on the dr-* libraries</h1>
+<div class="byline">whetstone-ai · current state and dependency alignment · 2026-07-19</div>
 
 <div class="hero">
-  The legacy <code>platform/</code>, <code>db/</code>, and <code>records/</code> layers — ~6,900 lines built on the superseded dr-platform kernel contract — are deleted, along with their tests, the Alembic configuration, the old-design documentation, and the last old-design vocabulary (the encdec validators, the graph-node naming, and the node-op constant). What remains is a <strong>673-line neutral core</strong> (failure taxonomy and classification, the dr-providers LM boundary, and a clock) with <strong>68 passing tests</strong> and clean lint/typecheck. Because nothing imports <code>dr_code</code>, <code>dr_graph</code>, or <code>dr_platform</code> anymore, the dependency drift that previously blocked updates is no longer breaking: the rebuild will target the current APIs — dr-platform's staging contract (PR&nbsp;#47 rebuild stack) and <code>dr_code.metrics</code> — directly, with no migration debt.
+  The repository is a <strong>576-line neutral core</strong>: an explicit failure taxonomy with classification and retry policy, a recordability boundary for JSON-safe failure payloads, and a thin LM provider boundary over dr-providers. Every exported symbol is load-bearing — raised, called, or covered by one of the <strong>47 passing tests</strong> — and lint/typecheck are clean. The runtime dependency contract is exactly the <span class="key">five dr-* libraries</span>; only <code>dr-providers</code> and <code>dr-serialize</code> are imported so far, leaving <code>dr-code</code>, <code>dr-graph</code>, and <code>dr-platform</code> as the declared foundation for the platform, metrics, and graph layers still to be designed.
 </div>
 
-<div class="section-head" id="verdict"><h2>The core is green and unbiased; no dependency blocks the rebuild</h2></div>
+<div class="section-head" id="verdict"><h2>The core is green, fully covered, and free of legacy assumptions</h2></div>
 
 <div class="table-wrap">
 <table>
   <thead><tr><th>Component</th><th>Verdict</th><th>Evidence</th></tr></thead>
   <tbody>
-    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>10 source files, 673 lines; zero references to the deleted layers or the old design's vocabulary in tracked source, tests, scripts, CI, or README.</td></tr>
-    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 68 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
-    <tr><td><code>dr-providers</code> · <code>dr-serialize</code></td><td><span class="status addressed">In use, compatible</span></td><td>The only imported dr-* deps. Behind by docs-only commits; bumping is a no-op.</td></tr>
-    <tr><td><code>dr-graph</code></td><td><span class="status addressed">Current, unimported</span></td><td>Locked rev equals <code>origin/main</code>; kept as rebuild foundation.</td></tr>
-    <tr><td><code>dr-code</code> · <code>dr-platform</code></td><td><span class="status partial">Behind, no longer breaking</span></td><td>The code that imported their retired APIs is deleted. Pins are stale but harmless; advance them deliberately when the rebuild starts.</td></tr>
+    <tr><td>Repository contents</td><td><span class="status addressed">Minimal core</span></td><td>8 source files, 576 lines; every module has direct test coverage and no symbol is unused.</td></tr>
+    <tr><td>Checks</td><td><span class="status addressed">Passing</span></td><td><code>pytest</code>: 47 passed. <code>ruff</code> and <code>ty</code>: clean (2026-07-19).</td></tr>
+    <tr><td>Runtime dependencies</td><td><span class="status addressed">dr-* only</span></td><td>Five dr-* git deps. <code>dbos</code> and <code>psycopg</code> live in the dev group solely because failure-policy tests verify classification against their real error types.</td></tr>
+    <tr><td><code>dr-providers</code> · <code>dr-serialize</code></td><td><span class="status addressed">In use, compatible</span></td><td>The two imported deps. Behind their mains by docs-only commits; bumping is a no-op.</td></tr>
+    <tr><td><code>dr-graph</code></td><td><span class="status addressed">Current, unimported</span></td><td>Locked rev equals <code>origin/main</code>.</td></tr>
+    <tr><td><code>dr-code</code> · <code>dr-platform</code></td><td><span class="status partial">Stale pins, harmless</span></td><td>Both moved past the locked revs, but nothing imports them; advance each pin deliberately when the rebuild starts consuming it.</td></tr>
   </tbody>
 </table>
 </div>
 
-<div class="section-head" id="inventory"><h2>What remains: failure classification, the LM boundary, and two utilities</h2></div>
+<div class="section-head" id="inventory"><h2>The core: failure semantics and the provider boundary</h2></div>
 
 <div class="grid-4">
-  <div class="card"><div class="metric">10</div><div class="label">source files</div></div>
-  <div class="card"><div class="metric">673</div><div class="label">production Python lines</div></div>
-  <div class="card"><div class="metric">68</div><div class="label">passing unit tests (5 files)</div></div>
-  <div class="card"><div class="metric">2</div><div class="label">of 5 dr-* deps currently imported</div></div>
+  <div class="card"><div class="metric">8</div><div class="label">source files</div></div>
+  <div class="card"><div class="metric">576</div><div class="label">production Python lines</div></div>
+  <div class="card"><div class="metric">47</div><div class="label">passing unit tests (4 files)</div></div>
+  <div class="card"><div class="metric">5</div><div class="label">runtime deps, all dr-*</div></div>
 </div>
 
 <div class="table-wrap space-top">
 <table>
-  <thead><tr><th>Module</th><th>Lines</th><th>Role</th></tr></thead>
+  <thead><tr><th>Package</th><th>Lines</th><th>Role</th></tr></thead>
   <tbody>
-    <tr><td class="path"><code>eval_failures/</code></td><td class="num">409</td><td><span class="key">Failure taxonomy</span> (12 explicit exception classes), classification into <code>FailureClass</code> with <span class="key">retry policy</span> (<code>policy.py</code>), design-neutral <span class="key">JSON-safe serialization</span> and exception-chain diagnostics (<code>recording.py</code>, trimmed of its Postgres/records parts), and the shared <span class="key">empty-output guard</span> (<code>generation.py</code>).</td></tr>
-    <tr><td class="path"><code>lm/</code></td><td class="num">239</td><td>Thin <span class="key">dr-providers boundary</span>: request building via <code>llm_request_from_parameters</code> (legacy <code>extra_kwargs</code> and <code>{"effort": …}</code> dual paths collapsed), response/cost mapping into <code>ProviderResult</code>, provider-failure translation, credential sanitization.</td></tr>
-    <tr><td class="path"><code>clock.py</code> · <code>__init__.py</code></td><td class="num">25</td><td>Injectable UTC clock, package marker.</td></tr>
+    <tr><td class="path"><code>eval_failures/</code></td><td class="num">385</td><td>An explicit <span class="key">failure taxonomy</span>: one base class carrying <code>underlying</code> and <code>metadata</code>, five classes mapping 1:1 onto dr-providers <code>FailureClass</code> values, plus <code>RecordingFailureError</code> and <code>EmptyGenerationError</code> for the two failures the core itself raises. <code>policy.py</code> classifies exceptions, decides <span class="key">retry</span>, and builds <code>FailureSummary</code> payloads; <code>recording.py</code> converts values into <span class="key">JSON-safe storable payloads</span> via dr-serialize and extracts diagnostics by walking every exception link (<code>__cause__</code>, <code>__context__</code>, <code>underlying</code>); <code>generation.py</code> holds the shared <span class="key">empty-output guard</span>.</td></tr>
+    <tr><td class="path"><code>lm/</code></td><td class="num">190</td><td>A thin <span class="key">dr-providers boundary</span>: <code>llm_request_from_parameters</code> builds kernel requests from caller parameters (single-path contract: <code>extra_body</code> and bare effort strings only), <code>provider_result_from_response</code> maps responses, diagnostics, and cost into <code>ProviderResult</code>, and <code>translate_provider_failure</code> wraps kernel failure carriers into the eval-failure taxonomy 1:1.</td></tr>
+    <tr><td class="path"><code>__init__.py</code></td><td class="num">1</td><td>Package marker.</td></tr>
   </tbody>
 </table>
 </div>
 
 <p>
-  Tests mirror the source one-to-one: <code>test_eval_failures_generation/policy/recording</code>, <code>test_lm_boundary</code>, <code>test_lm_utils</code>. Everything that remains has direct coverage — the untested-core problem left by the earlier cleanup was resolved by deleting the untested core.
+  Tests mirror the source: <code>test_eval_failures_generation/policy/recording</code> and <code>test_lm_boundary</code>. The policy tests exercise classification against real third-party error types (dbos, psycopg) to prove unclassified errors propagate rather than being absorbed.
 </p>
 
-<div class="section-head" id="deleted"><h2>What this branch deleted, and why</h2></div>
-
-<p>
-  The deleted layers hardcoded the superseded design at every level: <code>platform/</code> (4,623 lines) was built on dr-platform's deleted kernel vocabulary (<code>ExecutionTarget</code>, registration, <code>PlatformOperationCut</code>, throttle ledger); <code>db/</code> (1,432 lines) persisted the v6 schema whose tables have already been dropped; <code>records/</code> (837 lines) carried the retired <code>dr_code</code> metrics payloads, a <code>ServiceClass</code> property from a deleted dr-platform concept, and kernel-shaped record types. Deleting rather than migrating removes both the dead contract and the <span class="key">anchoring bias</span> the old code shape would exert on the rebuild.
-</p>
-
-<ul>
-  <li><span class="key">Source</span>: <code>src/whetstone/platform/</code>, <code>src/whetstone/db/</code> (including migrations), <code>src/whetstone/records/</code>, <code>alembic.ini</code>.</li>
-  <li><span class="key">Tests</span>: the five platform/connection/records suites, plus the records-dependent cases and support fixtures of the recording tests.</li>
-  <li><span class="key">Trimmed, not deleted</span>: <code>eval_failures/recording.py</code> lost <code>recordable_jsonb</code> and the deleted-payload builder (persistence-design servants) but kept <code>ensure_recordable</code>, <code>recordable_text</code>, and the diagnostics extractor that <code>policy.summarize_exception</code> depends on.</li>
-  <li><span class="key">Docs and config</span>: the old-design scope audit (<code>repository-scope-audit.html</code>), the README's description of the old setup (rewritten to an honest minimal state), and the now-unused <code>alembic</code>/<code>sqlalchemy</code> direct dependencies. <code>dbos</code> and <code>psycopg</code> remain only because the retained failure-policy tests verify classification of their error types.</li>
-  <li><span class="key">Old-design vocabulary</span> (follow-up removal after the initial deletion): <code>node_ops.py</code> and its <code>LLM_CALL_OP</code> graph-op constant; <code>validate_encdec_generation</code> and <code>validate_direct_generation</code> — the direct/encdec pair was the old experiment shape (the neutral <code>require_generation_text</code> empty-output guard stays); and the graph-node naming in <code>lm/boundary.py</code>, where <code>llm_request_for_node</code> became <code>llm_request_from_parameters</code>.</li>
-</ul>
-
-<div class="section-head" id="residue"><h2>No old-design vocabulary survives</h2></div>
-
-<div class="callout good">
-  The three residue items flagged after the initial deletion were resolved by removal: <code>node_ops.py</code> is gone, the encdec/direct validators are gone, and the LM boundary speaks in caller parameters rather than graph nodes. A vocabulary grep for the deleted layers, "node", and "encdec" across tracked source and tests returns nothing.
-</div>
-
-<div class="section-head" id="deps"><h2>Dependency alignment: stale pins are now harmless, and the lock did not move</h2></div>
+<div class="section-head" id="deps"><h2>Dependency alignment: the lock is stable and re-locking is safe</h2></div>
 
 <div class="table-wrap">
 <table>
@@ -105,32 +84,32 @@
 </div>
 
 <p>
-  All five dr-* git dependencies stay declared in <code>pyproject.toml</code> — they are the foundation the rebuild targets. The lock was regenerated without <code>--upgrade</code>, so every dr-* pin resolves to the same revision as before this branch. The earlier hazard — <code>branch = "main"</code> pins breaking the build on re-lock — is defused: nothing imports the moved APIs, so re-locking is safe, and the pins should simply be advanced deliberately when the rebuild begins consuming each library.
+  The dr-code and dr-platform pins track <code>branch = "main"</code> but resolve to revisions predating breaking upstream changes. Because nothing imports either library, re-locking cannot break the build; each pin should simply be advanced deliberately when the rebuild begins consuming that library, so new code is written against current APIs from the first line.
 </p>
 
-<div class="section-head" id="targets"><h2>Rebuild targets: the staging API and dr_code.metrics, not the retired contracts</h2></div>
+<div class="section-head" id="targets"><h2>Rebuild targets: the staging API and dr_code.metrics</h2></div>
 
 <div class="grid-2">
   <div class="card">
     <h3>dr-platform · build on the staging contract</h3>
-    <p>The rebuild consumes PR&nbsp;#47's surface (branch <code>rebuild/09-kernel-deletion</code>, tip of the unmerged stack #39–#47): <span class="key">PipelineDefinition</span>/<code>StageDefinition</code> registered via <code>PipelineRegistry</code>, <span class="key">submit()</span>&nbsp;+&nbsp;<code>WorkInput</code>&nbsp;→&nbsp;<code>SubmissionReceipt</code>, <span class="key">wrap_pipeline_workflows</span> and <code>register_scheduled_dispatcher</code>, staging inspection/operations, and schema via <code>upgrade_platform_schema</code> only. The old kernel vocabulary (targets, registration, operation cuts, throttle ledger, <code>FailureClass</code>, <code>ServiceClass</code>) no longer exists and must not be reintroduced. Pin to the rebuild-stack head until it merges to <code>main</code>, then re-pin.</p>
+    <p>The platform layer targets PR&nbsp;#47's surface (branch <code>rebuild/09-kernel-deletion</code>, tip of the unmerged stack #39–#47): <span class="key">PipelineDefinition</span>/<code>StageDefinition</code> registered via <code>PipelineRegistry</code>, <span class="key">submit()</span>&nbsp;+&nbsp;<code>WorkInput</code>&nbsp;→&nbsp;<code>SubmissionReceipt</code>, <span class="key">wrap_pipeline_workflows</span> and <code>register_scheduled_dispatcher</code>, staging inspection/operations, and schema via <code>upgrade_platform_schema</code>. dr-platform no longer provides a failure taxonomy or throttle ledger — <span class="key">whetstone owns both</span>, and the failure taxonomy here is already positioned for that role. The platform database starts fresh; the staging schema has no bridge from earlier schemas. Pin to the rebuild-stack head until it merges to <code>main</code>, then re-pin.</p>
   </div>
   <div class="card">
     <h3>dr-code · build on dr_code.metrics</h3>
-    <p>The retired <code>dr_code.humaneval</code> payload family (<code>MetricsPayload</code>, <code>build_metrics_payload</code>, <code>metric_models</code>) is gone from <code>main</code>; new metrics contracts live in the <span class="key">dr_code.metrics</span> package. Sampling, scoring profiles, <code>SubmissionOutcome</code>, and dataset parsing survive unchanged and remain available to the new design.</p>
+    <p>Metrics contracts live in the <span class="key">dr_code.metrics</span> package on current <code>main</code>. Sampling, scoring profiles, <code>SubmissionOutcome</code>, and dataset parsing are available unchanged for the scoring layer.</p>
   </div>
 </div>
 
-<div class="section-head" id="sequencing"><h2>Recommended sequencing: settle the residue, then design upward from the deps</h2></div>
+<div class="section-head" id="sequencing"><h2>Recommended sequencing: design upward from the deps, grow tests with the code</h2></div>
 
 <div class="steps">
-  <div class="step"><h3>1 · Advance the dr-code and dr-graph pins when their consumption starts</h3><p>Both are safe to bump at any time now; do it as each library enters the new design so the rebuild is written against current APIs from the first line.</p></div>
-  <div class="step"><h3>2 · Design the new platform integration against the staging API</h3><p>Whetstone-side ownership of the failure taxonomy and any throttling is now a design requirement, not a migration artifact — dr-platform no longer provides either. The platform database starts fresh (old tables already dropped; the staging schema has no bridge).</p></div>
-  <div class="step"><h3>3 · Grow tests with the new code, then run experiments</h3><p>The remaining suite covers everything that exists. Keep that property as layers return: each new boundary lands with its direct tests, and experiments run only once the rebuilt pipeline is the intended design end-to-end.</p></div>
+  <div class="step"><h3>1 · Advance the dr-code and dr-graph pins when their consumption starts</h3><p>Both are safe to bump at any time; do it as each library enters the new design so the rebuild is written against current APIs from the first line.</p></div>
+  <div class="step"><h3>2 · Design the new platform integration against the staging API</h3><p>Pipelines/stages, submission, and wrapped workflows come from dr-platform; failure classification and any throttling are whetstone-side responsibilities built on the existing <code>eval_failures</code> contract. Recreate the platform database against the staging schema.</p></div>
+  <div class="step"><h3>3 · Grow tests with the new code, then run experiments</h3><p>The suite currently covers everything that exists. Keep that property as layers are added: each new boundary lands with its direct tests, and experiments run only once the rebuilt pipeline is the intended design end-to-end.</p></div>
 </div>
 
 <div class="callout">
-  This document reports repository state on branch <code>cleanup-legacy-core-removal</code> as of 2026-07-19. The sequencing section is a recommendation, not applied work.
+  The sequencing section is a recommendation, not applied work.
 </div>
 
 </main>
