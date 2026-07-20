@@ -33,7 +33,7 @@
     <li><strong>Proposal LM</strong> — the optimizer-owned model that writes new encoder user prompt templates. Needed because COPRO makes its own LM calls, distinct from the encoder and decoder inside a rollout.</li>
     <li><strong>Breadth / depth</strong> — COPRO's two knobs: templates proposed per round, and number of proposal rounds. Needed to name the loop's shape; they travel in guidance.</li>
     <li><strong>Attempt history</strong> — the score-ranked list of (template, tool score) pairs fed back to the proposal LM. Needed because it is COPRO's only state.</li>
-    <li><strong>Tool score</strong> — the aggregate a tool call returns to the optimizer: Average Binary Test Pass Rate and mean measured compression under the tool's Score Node Eval Config. Needed to keep what COPRO ranks by distinct from official rollout aggregates.</li>
+    <li><strong>Tool score</strong> — the aggregate a tool call returns to the optimizer: Average Binary Test Pass Rate and mean measured compression under the tool's Internal Eval Config. Needed to keep what COPRO ranks by distinct from official rollout aggregates.</li>
   </ul>
 </div>
 
@@ -53,7 +53,7 @@
   <div class="card optim">
     <h3>Mutation Surface and Initial Candidates</h3>
     <ul>
-      <li><b>Mutation surface:</b> <code>{user_prompt_template}</code> of the Encoder LM Node — the only variable the optimizer may change</li>
+      <li><b>Mutation surface:</b> <code>{user_prompt_template}</code> of the Encoder LLM Call Node — the only variable the optimizer may change</li>
       <li><b>Initial candidates:</b> encoder templates <strong>A</strong> and <strong>B</strong> from the eval experiment (full text in the <a href="eval-run.html#target">eval doc</a>)</li>
       <li>A candidate here is one template value; provider and model are fixed within a run</li>
     </ul>
@@ -61,7 +61,7 @@
   <div class="card optim">
     <h3>Toolkit and Optimization Budget</h3>
     <ul>
-      <li>One tool: <code>evaluate_candidate(template)</code> — 20 rollouts under a cheaper Score Node Eval Config: 20-task HumanEval+ subset · 1 seed · budget ratio 0.5 · same codec, preprocess, and metrics extraction</li>
+      <li>One tool: <code>evaluate_candidate(template)</code> — 20 rollouts with budget ratio fixed at 0.5, under a cheaper Internal Eval Config: 20-task HumanEval+ subset · 1 seed · same codec, preprocess, and metrics extraction</li>
       <li>Capacity 12 calls — a constraint of the tool definition</li>
       <li><b>Guidance:</b> breadth 4 · depth 2 · return 3</li>
     </ul>
@@ -78,7 +78,7 @@
 
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
-<p>The architecture is unchanged from the <a href="eval-run.html#specified">eval doc</a>: Encoder LM Node → Decoder LM Node → Score Node. What changes is who sets the variables — the harness sets everything except the mutation surface, and the optimizer proposes values for <code>{user_prompt_template}</code>.</p>
+<p>The Graph is unchanged from the <a href="eval-run.html#specified">eval doc</a>: Encoder LLM Call Node → Decoder LLM Call Node → Eval Node. The Eval Definition there supplies the canonical Eval Config semantics. What changes is who sets the variables — the harness sets everything except the mutation surface, and the optimizer proposes values for <code>{user_prompt_template}</code>.</p>
 
 <div class="plane">
   <div class="plane-label">Initial rollout configs <span class="sub">· 2 initial candidates × 4 budget ratios = 8, handed to the optimizer</span></div>
@@ -86,15 +86,15 @@
     <div class="comp node"><b>Candidate Variable</b><span class="note"><code>{user_prompt_template}</code> = Template A or Template B<hr>the initial candidates; every other variable is fixed for the run</span></div>
     <div class="comp node"><b>Fixed Within the Run</b><span class="note"><code>{provider}</code> = <code>openrouter</code> · <code>{model}</code> = <code>deepseek/deepseek-v4-flash</code> (encoder and decoder) · <code>{temperature}</code> = <code>1.0</code> · decoder prompt as in the eval experiment</span></div>
     <div class="comp node"><b>Variance Source</b><span class="note"><code>budget_ratio</code> ∈ {0.25, 0.5, 0.75, 1.0}<hr>spreads each candidate into 4 rollout configs — its curve on the plot</span></div>
-    <div class="comp node"><b>Score Node Eval Config</b><span class="note">matches the official eval config: HumanEval+ (164) @ pinned revision · 3 seeds · zstd-19 · preprocessing v1 · Average Binary Test Pass Rate<hr>inside each rollout config hash</span></div>
+    <div class="comp node"><b>Internal Eval Config</b><span class="note">its hash matches the Official Eval Config: HumanEval+ (164) @ pinned revision · 3 seeds · zstd-19 · preprocessing v1 · Average Binary Test Pass Rate<hr>included in <code>rollout_config_hash</code></span></div>
   </div>
 </div>
 
 <div class="plane optim">
-  <div class="plane-label">Two rollout configs for the same template <span class="sub">· why tool results and official results can never collide</span></div>
+  <div class="plane-label">Two rollout configs for the same template <span class="sub">· distinct measurement identities and execution contexts</span></div>
   <div class="comps">
-    <div class="comp node"><b>Tool Rollout Config — internal to the tool</b><span class="note"><code>{user_prompt_template}</code> = P<sub>6</sub><br>Score Node Eval Config: 20-task subset · 1 seed · ratio 0.5 · same codec, preprocess, metrics extraction<hr>built and run by <code>evaluate_candidate</code>; its hash differs from every official rollout config, so its rollout results are proxies by key — never returned, never plotted</span></div>
-    <div class="comp node"><b>Returned Rollout Config</b><span class="note"><code>{user_prompt_template}</code> = P<sub>6</sub><br>Score Node Eval Config = official<hr>differs from an initial rollout config only inside the mutation surface — exactly what the diff check confirms</span></div>
+    <div class="comp node"><b>Tool Rollout Config — internal to the tool</b><span class="note"><code>{user_prompt_template}</code> = P<sub>6</sub> · <code>{budget_ratio}</code> = 0.5<br>Internal Eval Config: 20-task subset · 1 seed · same codec, preprocess, metrics extraction<hr>built and executed by <code>evaluate_candidate</code>, outside the official harness context; its differing Eval Config hash also keeps its identity disjoint</span></div>
+    <div class="comp node"><b>Returned Rollout Config</b><span class="note"><code>{user_prompt_template}</code> = P<sub>6</sub><br>Internal Eval Config hash matches the Official Eval Config hash<hr>differs from an initial rollout config only inside the mutation surface — exactly what the diff check confirms</span></div>
   </div>
 </div>
 
@@ -104,9 +104,9 @@
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Rollout config generator</b><span class="note">2 initial candidates × 4 ratios → 8 initial rollout configs; identity = <code>graph_hash</code></span></div>
-      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> of the Encoder LM Node only</span></div>
-      <div class="comp settled optim"><b>Toolkit: {evaluate_candidate}</b><span class="note">20 rollouts per call under the tool's cheaper Score Node Eval Config; capacity 12 calls — constraints live in the tool definition</span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">2 initial candidates × 4 ratios → 8 initial rollout configs; identity = <code>rollout_config_hash</code></span></div>
+      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> of the Encoder LLM Call Node only</span></div>
+      <div class="comp settled optim"><b>Toolkit: {evaluate_candidate}</b><span class="note">20 rollouts per call under the tool's cheaper Internal Eval Config; capacity 12 calls — constraints live in the tool definition</span></div>
       <div class="comp settled optim"><b>Guidance: breadth 4 · depth 2 · return 3</b><span class="note">requests, does not compel — guidance, not enforcement</span></div>
       <div class="comp settled optim"><b>Selection: official-evaluate top 2</b><span class="note">named, hashed policy</span></div>
       <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
@@ -133,7 +133,7 @@
     <div class="comps">
       <div class="comp settled optim"><b>Diff check</b><span class="note">each of the 12 returned rollout configs differs from an initial one only in <code>{user_prompt_template}</code>; 12/12 pass</span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">top-2-candidates policy admits 8 rollout configs (2 candidates × 4 ratios)</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 8 × 164 × 3 under the official eval config; only this pass produces official rollout results</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 8 × 164 × 3 in the official harness context under the Official Eval Config; only this pass produces official rollout results</span></div>
       <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed); per-model selector capacity throttles each provider independently</span></div>
     </div>
   </div>
@@ -145,11 +145,11 @@
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code><br><code>tests</code> = <code>task.tests</code><hr>via dr-code; sizes the budget, supplies the reference length</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM Node</b><span class="note">emits <code>encoded_code_rep</code><hr>the template COPRO rewrites is set here; <code>MAX_BUDGET</code> derived per task; one dr-providers call</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">emits <code>encoded_code_rep</code><hr>the template COPRO rewrites is set here; <code>MAX_BUDGET</code> derived per task; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Score Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
     </div>
     <div class="comps space-top">
       <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
@@ -173,7 +173,7 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: the generator expands initial candidates A and B across the 4 budget ratios into 8 initial rollout configs, each carrying the official Score Node Eval Config. The mutation surface, toolkit, guidance, selection policy, and official eval config are serialized alongside. One such run per (provider, model) pair; this walkthrough follows (openrouter, <code>deepseek/deepseek-v4-flash</code>).</p></div>
+    <div class="what"><p>Freezes the experiment: the generator expands initial candidates A and B across the 4 budget ratios into 8 initial rollout configs, each carrying an Internal Eval Config whose hash matches the Official Eval Config. The mutation surface, toolkit, guidance, selection policy, and Official Eval Config are serialized alongside. One such run per (provider, model) pair; this walkthrough follows (openrouter, <code>deepseek/deepseek-v4-flash</code>).</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
@@ -181,8 +181,8 @@
   </div>
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Baselines the initial candidates: <code>evaluate_candidate(A)</code> and <code>evaluate_candidate(B)</code>, 20 rollouts each under the tool's Score Node Eval Config. The attempt history is seeded — A: 0.60 pass / 0.34 compression, B: 0.65 / 0.36.</p>
-      <div class="ledger"><b>output</b>40 rollout results keyed by the tool rollout config hashes — proxies by key, never official</div>
+    <div class="what"><p>Baselines the initial candidates: <code>evaluate_candidate(A)</code> and <code>evaluate_candidate(B)</code>, 20 rollouts each under the tool's Internal Eval Config. The attempt history is seeded — A: 0.60 pass / 0.34 compression, B: 0.65 / 0.36.</p>
+      <div class="ledger"><b>output</b>40 internal rollout results from tool execution, keyed by the tool rollout config hashes</div>
     </div>
   </div>
   <div class="tick optim">
@@ -193,7 +193,7 @@
   </div>
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p><strong>One tool call, concretely</strong> — <code>evaluate_candidate(P<sub>3</sub>)</code>: the tool sets <code>{user_prompt_template}</code> = P<sub>3</sub> in its tool rollout config (20-task subset, 1 seed, ratio 0.5) — a hash distinct from every official rollout config — and runs 20 rollouts through the rollout generation stage. The aggregate comes back as the tool score: 0.70 pass, 0.33 compression.</p>
+    <div class="what"><p><strong>One tool call, concretely</strong> — <code>evaluate_candidate(P<sub>3</sub>)</code>: the tool sets <code>{user_prompt_template}</code> = P<sub>3</sub> in its tool rollout config (20-task subset, 1 seed, ratio 0.5), whose Eval Config hash differs from the returned configs', and runs 20 rollouts through the rollout generation stage. The aggregate comes back as the tool score: 0.70 pass, 0.33 compression.</p>
       <div class="ledger"><b>output</b>20 rollout results under the tool rollout config hash; one (template, tool score) pair appended to the attempt history</div>
     </div>
   </div>
@@ -231,7 +231,7 @@
 
 <div class="section-head" id="output"><h2>What lands on the plot: two optimized curves per pair, priced end to end</h2></div>
 
-<p>Per (provider, model) pair, the two surviving candidates land as their own distributions of 4 rollout aggregates across the budget ratios, next to the A and B baseline curves reused from the eval experiment; the pareto front is recomputed from official rollout results only. The 200 tool rollout results stay out of the plot by key — their rollout config hashes carry the tool's Score Node Eval Config — but remain available for post-hoc analysis of <span class="key">how well tool scores predicted official results</span>. Because proposal-LM tokens and every tool rollout were metered, the run has a <span class="key">total price</span>: COPRO's curves can be compared against any other optimizer's on quality and on resources consumed, without COPRO's cooperation.</p>
+<p>Per (provider, model) pair, the two surviving candidates land as their own distributions of 4 rollout aggregates across the budget ratios, next to the A and B baseline curves reused from the eval experiment; the pareto front is recomputed from official rollout results only. The 200 tool rollout results stay out of the plot because they came from internal tool execution, while their cheaper Internal Eval Config also gives them disjoint identities; they remain available for post-hoc analysis of <span class="key">how well tool scores predicted official results</span>. Because proposal-LM tokens and every tool rollout were metered, the run has a <span class="key">total price</span>: COPRO's curves can be compared against any other optimizer's on quality and on resources consumed, without COPRO's cooperation.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -247,8 +247,8 @@
   <div class="card">
     <h3>Tool results and official results never mix</h3>
     <ul>
-      <li>The tool's cheaper Score Node Eval Config sits inside the tool rollout config hash — disjoint by key from every official rollout config</li>
-      <li>Only the Evaluator's official evaluation produces official rollout results; plots read nothing else</li>
+      <li>The tool's cheaper Internal Eval Config sits inside <code>rollout_config_hash</code>, keeping its measurement identity disjoint from returned configs whose Internal Eval Config hash matches the Official Eval Config</li>
+      <li>Only execution by the Evaluator in the official harness context produces official rollout results; plots read nothing else</li>
       <li>Tool scores may inform selection policies and post-hoc analysis — never the plot</li>
     </ul>
   </div>

@@ -23,7 +23,7 @@
 </div>
 
 <div class="intro">
-  <p>GEPA uses a reflection LM to evolve encoder templates from rollout traces under cheap tool evaluation; official evaluation remains authoritative.</p>
+  <p>GEPA uses a reflection LM to evolve encoder templates from rollout traces under internal tool evaluation; official evaluation remains authoritative.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the eval design.</p>
@@ -45,7 +45,7 @@
   <div class="card optim">
     <h3>Mutation Surface &amp; Initial Candidates</h3>
     <ul>
-      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder LM Node — nothing else may change</li>
+      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder LLM Call Node — nothing else may change</li>
       <li>Initial candidates: encoder Templates <strong>A</strong> and <strong>B</strong> (full text in the <a href="eval-run.html#target">eval doc</a>)</li>
       <li>One GEPA run per (provider, model) pair — the same 4 pairs as the eval experiment</li>
     </ul>
@@ -57,7 +57,7 @@
       <li><code>evaluate_minibatch</code> — 3 tasks × 1 seed at budget ratio 0.5; returns rollout results <em>with rollout traces</em></li>
       <li><code>evaluate_subset</code> — 24 tasks × 1 seed at budget ratio 0.5; scores only</li>
     </ul>
-    <p class="small muted space-top">Each tool swaps in its own cheaper Score Node Eval Config: same preprocess and metrics extraction as official, smaller task set, fewer seeds. Minibatches are sampled per iteration from the 24-task subset.</p>
+    <p class="small muted space-top">Each tool swaps in its own cheaper Internal Eval Config: same preprocess and metrics extraction as the Official Eval Config, smaller task set, fewer seeds. Minibatches are sampled per iteration from the 24-task subset.</p>
   </div>
   <div class="card optim">
     <h3>Optimization Budget &amp; Return</h3>
@@ -82,13 +82,13 @@
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
 <div class="plane">
-  <div class="plane-label">Architecture <span class="sub">· identical to the eval design</span></div>
+  <div class="plane-label">Graph <span class="sub">· identical to the eval design</span></div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LM Node</b><span class="note">variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><hr>the mutation surface is exactly one of these: <code>{user_prompt_template}</code></span></div>
+    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><hr>the mutation surface is exactly one of these: <code>{user_prompt_template}</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LM Node</b><span class="note">all variables set to the eval design's values; outside the mutation surface</span></div>
+    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">all variables set to the eval design's values; outside the mutation surface</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Score Node</b><span class="note">carries the Score Node Eval Config as variables, inside the rollout config hash<hr>official in initial and returned rollout configs; a tool call swaps in the tool's cheaper one</span></div>
+    <div class="comp node"><b>Eval Node</b><span class="note">uses the per-rollout fields of the Internal Eval Config carried by the Rollout Config<hr>initial and returned configs carry an Internal Eval Config whose hash matches the Official Eval Config; tool calls use a cheaper one. See the Eval doc's canonical Eval Definition.</span></div>
   </div>
 </div>
 
@@ -98,7 +98,7 @@
   <div class="plane-label">Rollout Config Example <span class="sub">· child candidate G5 (evolved template) at budget_ratio 0.5</span></div>
   <div class="comps">
     <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the reflection LM at iteration 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
-    <div class="comp node"><b>Inherited From Parent</b><span class="note">encoder + decoder model configs = (openrouter, <code>deepseek/deepseek-v4-flash</code>), temperature 1.0 · decoder prompt template config · Score Node Eval Config (official)<hr>byte-identical to the parent's rollout config at ratio 0.5 outside <code>{user_prompt_template}</code>; the hash differs, so this is a new rollout config</span></div>
+    <div class="comp node"><b>Inherited From Parent</b><span class="note">encoder + decoder model configs = (openrouter, <code>deepseek/deepseek-v4-flash</code>), temperature 1.0 · decoder prompt template config · Internal Eval Config whose hash matches the Official Eval Config<hr>byte-identical to the parent's rollout config at ratio 0.5 outside <code>{user_prompt_template}</code>; <code>rollout_config_hash</code> differs, so this is a new Rollout Config</span></div>
   </div>
 </div>
 
@@ -108,9 +108,9 @@
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Rollout config generator</b><span class="note">initial candidates A, B × 4 budget ratios → 8 initial rollout configs; identity = <code>graph_hash</code></span></div>
-      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder LM Node — declared, diff-checkable</span></div>
-      <div class="comp settled optim"><b>Toolkit definitions</b><span class="note"><code>evaluate_minibatch</code> · <code>evaluate_subset</code> — each carries its cheaper Score Node Eval Config; constraints live in the tool definitions: guidance, not enforcement</span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">initial candidates A, B × 4 budget ratios → 8 initial rollout configs; identity = <code>rollout_config_hash</code></span></div>
+      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder LLM Call Node — declared, diff-checkable</span></div>
+      <div class="comp settled optim"><b>Toolkit definitions</b><span class="note"><code>evaluate_minibatch</code> · <code>evaluate_subset</code> — each carries its cheaper Internal Eval Config; constraints live in the tool definitions: guidance, not enforcement</span></div>
       <div class="comp settled optim"><b>Budget &amp; selection</b><span class="note">400 optimization rollouts · 8 reflection calls · return ≤ 4; selection = officially evaluate top 3 (named, hashed policy)</span></div>
       <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
@@ -135,10 +135,10 @@
   <div class="plane">
     <div class="plane-label">Evaluation harness <span class="sub">· serves tools during the run; runs official evaluation after it</span></div>
     <div class="comps">
-      <div class="comp settled optim"><b>Tool service</b><span class="note">executes each tool call as rollouts under that tool's cheaper Score Node Eval Config — a different rollout config hash, so tool results can never pass as official</span></div>
+      <div class="comp settled optim"><b>Tool service</b><span class="note">executes each tool call outside the official harness context under that tool's cheaper Internal Eval Config; the differing Eval Config hash separately keeps measurement identities disjoint</span></div>
       <div class="comp settled optim"><b>Diff check</b><span class="note">every returned rollout config must differ from the initial ones only inside the mutation surface</span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">applies the frozen policy: top 3 candidates (12 rollout configs) admitted</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 12 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 12 × 164 × 3 in the official harness context under the Official Eval Config; only the outputs of this pass feed the plot</span></div>
       <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {template, ratio}</span></div>
     </div>
   </div>
@@ -150,11 +150,11 @@
     <div class="hflow">
       <div class="comp settled"><b>Task Inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM Node</b><span class="note">emits <code>encoded_code_rep</code> — the evolved template lives here</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">emits <code>encoded_code_rep</code> — the evolved template lives here</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM Node</b><span class="note">emits <code>code_generation</code>; same model as encoder</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">emits <code>code_generation</code>; same model as encoder</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Score Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
     </div>
     <div class="comps space-top">
       <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call — for tool rollouts and official rollouts alike</span></div>
@@ -178,7 +178,7 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: initial candidates A and B expanded across the 4 budget ratios into 8 initial rollout configs; mutation surface = <code>{user_prompt_template}</code>; the two tool definitions, each carrying its cheaper Score Node Eval Config; the budget caps; the selection policy (officially evaluate top 3); and the official eval config — identical to the eval run's. Everything serialized, everything hashed.</p></div>
+    <div class="what"><p>Freezes the experiment: initial candidates A and B expanded across the 4 budget ratios into 8 initial rollout configs, each carrying an Internal Eval Config whose hash matches the Official Eval Config; mutation surface = <code>{user_prompt_template}</code>; the two tool definitions, each carrying its cheaper Internal Eval Config; the budget caps; the selection policy (officially evaluate top 3); and the Official Eval Config — identical to the eval run's. Everything serialized, everything hashed.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
@@ -187,7 +187,7 @@
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
     <div class="what"><p>Seeds the archive: <code>evaluate_subset</code> on Templates A and B at ratio 0.5 — 48 rollouts. The archive now holds two rows of 24 per-task scores.</p>
-      <div class="ledger"><b>output</b>48 rollout results under the subset tool's Score Node Eval Config — optimization data, never official</div>
+      <div class="ledger"><b>output</b>48 internal rollout results under the subset tool's Internal Eval Config — optimization data from tool execution</div>
     </div>
   </div>
 </div>
@@ -213,7 +213,7 @@
     </div>
     <div class="tick optim">
       <div class="who env">Evaluation harness</div>
-      <div class="what"><p>Serves <code>evaluate_minibatch</code>(child) on the <em>same 3 task ids</em>. Acceptance is strict: the child's summed Score Node score must exceed the parent's. <strong>Iteration 3 fails here</strong> — the child compressed harder but regressed correctness on 2 of 3 tasks, and is dropped; its rollout results remain optimization data.</p>
+      <div class="what"><p>Serves <code>evaluate_minibatch</code>(child) on the <em>same 3 task ids</em>. Acceptance is strict: the child's summed Eval Node <code>score</code> must exceed the parent's. <strong>Iteration 3 fails here</strong> — the child compressed harder but regressed correctness on 2 of 3 tasks, and is dropped; its rollout results remain optimization data.</p>
         <div class="ledger"><b>output</b>3 rollout results; acceptance verdict either way</div>
       </div>
     </div>
@@ -251,7 +251,7 @@
 
 <div class="section-head" id="output"><h2>What lands on the plot: five curves per pair, and only official results</h2></div>
 
-<p>Per (provider, model) pair: <span class="key">five candidate curves</span> — Templates A and B (reused from the eval run) and the three evolved templates — each a distribution of 4 rollout aggregates across the budget ratios, each aggregate averaged over 164 tasks × 3 seeds. The natural readings: whether evolution <span class="key">beat the initial templates</span> at matched ratio, and how the <span class="key">pareto front</span> moves once the evolved candidates join. Nothing measured during optimization appears here: every minibatch and subset score sits under a different rollout config hash by construction.</p>
+<p>Per (provider, model) pair: <span class="key">five candidate curves</span> — Templates A and B (reused from the eval run) and the three evolved templates — each a distribution of 4 rollout aggregates across the budget ratios, each aggregate averaged over 164 tasks × 3 seeds. The natural readings: whether evolution <span class="key">beat the initial templates</span> at matched ratio, and how the <span class="key">pareto front</span> moves once the evolved candidates join. Nothing measured during optimization appears here because those results came from internal tool execution; their cheaper Internal Eval Configs also give them distinct identities.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -265,10 +265,10 @@
     </ul>
   </div>
   <div class="card optim">
-    <h3>Cheap evaluation vs official evaluation</h3>
+    <h3>Internal Evaluation vs Official Evaluation</h3>
     <ul>
-      <li>A tool's Score Node Eval Config sits inside the rollout config hash — tool rollout results are keyed apart from official ones and can never be confused with them</li>
-      <li>Same preprocess and metrics extraction as official; smaller task set, fewer seeds, one ratio</li>
+      <li>A tool's cheaper Internal Eval Config sits inside <code>rollout_config_hash</code>, keeping measurement identities disjoint from returned configs whose Internal Eval Config hash matches the Official Eval Config</li>
+      <li>Officialness comes from execution in the official harness context; the tool uses the same preprocess and metrics extraction, but a smaller task set, fewer seeds, and one ratio</li>
       <li>Whether the 24-task subset may overlap the official 164 is left to experimental designers</li>
     </ul>
   </div>
@@ -291,7 +291,7 @@
     <h3>Versus reference GEPA</h3>
     <ul>
       <li>Kept, because it works: reflective mutation from real failures, strict-improvement acceptance on the same minibatch, per-task frontier parent sampling</li>
-      <li>Ours: rollout traces come from rollout results, not framework trace capture; cheap evaluation lives in tool definitions as cheaper Score Node Eval Configs — guidance, not enforcement</li>
+      <li>Ours: rollout traces come from rollout results, not framework trace capture; internal evaluation lives in tool definitions as cheaper Internal Eval Configs — guidance, not enforcement</li>
       <li>dspy's GEPA is reference-only, never a dependency</li>
     </ul>
   </div>

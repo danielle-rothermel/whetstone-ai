@@ -94,14 +94,16 @@ Use at most {MAX_BUDGET} characters.
 
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
+<p>The canonical <strong>Eval Definition</strong> defines the shared Eval Config shape, while the <strong>Rollout Definition</strong> describes the evaluation <strong>Graph</strong> below. A Rollout Config carries that Eval Config in the Internal Eval Config role; the official harness supplies the same shape in the Official Eval Config role.</p>
+
 <div class="plane">
-  <div class="plane-label">Architecture</div>
+  <div class="plane-label">Graph</div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LM Node</b><span class="note">inputs: <code>input_code</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>encoded_code_rep</code><hr>strong default: <code>input_code</code> = <code>task.gt_code_wo_comments</code></span></div>
+    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>encoded_code_rep</code><hr>strong default: <code>input_code</code> = <code>task.gt_code_wo_comments</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LM Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>code_generation</code></span></div>
+    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>code_generation</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Score Node</b><span class="note">inputs: <code>encoded_code_rep</code> <code>code_generation</code> <code>input_code</code> <code>tests</code><br>variables: <code>{task_set}</code> <code>{seeds}</code> <code>{reference_length}</code> <code>{codec}</code> <code>{preprocess_config}</code> <code>{metrics_extract_config}</code> <code>{aggregation_method}</code><br>outputs: <code>score</code> + <code>score_metadata</code><hr>strong default: <code>tests</code> = <code>task.tests</code><br>The variables form the Score Node Eval Config. Runs <code>preprocess</code> and <code>metrics extraction</code>; returns <code>f(compression, Binary Test Pass Score)</code> derived from the extracted metrics. <code>{task_set}</code>, <code>{seeds}</code>, <code>{aggregation_method}</code> describe the sweep around a run — used by whoever drives it, not within a single run.</span></div>
+    <div class="comp node"><b>Eval Node</b><span class="note">inputs: <code>encoded_code_rep</code> <code>code_generation</code> <code>input_code</code> <code>tests</code><br>outputs: <code>score</code> + <code>score_metadata</code><hr>strong default: <code>tests</code> = <code>task.tests</code><br>Per rollout, the Eval Node uses <code>{reference_length}</code>, <code>{codec}</code>, <code>{preprocess_config}</code>, and <code>{metrics_extract_config}</code> from the Internal Eval Config to preprocess and extract metrics. The surrounding task/seed/aggregation driver uses <code>{task_set}</code>, <code>{seeds}</code>, and <code>{aggregation_method}</code> from that same config.</span></div>
   </div>
 </div>
 
@@ -114,7 +116,7 @@ Use at most {MAX_BUDGET} characters.
     <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>full Template B text above<br>derived per task at rollout time, not a variable: <code>MAX_BUDGET = round(budget_ratio × chars(input_code))</code><br>instantiates the prompt: template + <code>MAX_BUDGET</code> + <code>input_code</code></span></div>
     <div class="comp node"><b>Decoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code><hr>same model as encoder — a rule of this sweep's generator</span></div>
     <div class="comp node"><b>Decoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Decoder Template<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{}</code><hr>same text across all 32 rollout configs</span></div>
-    <div class="comp node"><b>Score Node Eval Config</b><span class="note"><code>{task_set}</code> = HumanEval+ (164) @ pinned revision<br><code>{seeds}</code> = <code>3</code><br><code>{reference_length}</code> = <code>utf8_bytes(input_code)</code><br><code>{codec}</code> = <code>zstd-19</code><br><code>{preprocess_config}</code> = <code>humaneval-function-candidates@v1</code><br><code>{metrics_extract_config}</code> = Binary Test Pass Score (sandbox: pinned image digest, timeout) + compressed bytes<br><code>{aggregation_method}</code> = Average Binary Test Pass Rate (mean over seeds, then over tasks)<hr>matches the Official Eval Config — the point of an Eval run; all of it inside the rollout config hash (identity note in Additional Notes)<br>derived per rollout, on the rollout result not in the config: <code>encoded_code_rep</code> length · measured zstd bytes ÷ reference length · Binary Test Pass Score</span></div>
+    <div class="comp node"><b>Internal Eval Config</b><span class="note"><code>{task_set}</code> = HumanEval+ (164) @ pinned revision<br><code>{seeds}</code> = <code>3</code><br><code>{reference_length}</code> = <code>utf8_bytes(input_code)</code><br><code>{codec}</code> = <code>zstd-19</code><br><code>{preprocess_config}</code> = <code>humaneval-function-candidates@v1</code><br><code>{metrics_extract_config}</code> = Binary Test Pass Score (sandbox: pinned image digest, timeout) + compressed bytes<br><code>{aggregation_method}</code> = Average Binary Test Pass Rate (mean over seeds, then over tasks)<hr>same Eval Config shape as the harness-supplied Official Eval Config; for this Eval setup, <code>internal_eval_config_hash == official_eval_config_hash</code>. It is included in <code>rollout_config_hash</code>.<br>derived per rollout, on the rollout result not in the config: <code>encoded_code_rep</code> length · measured zstd bytes ÷ reference length · Binary Test Pass Score</span></div>
   </div>
 </div>
 
@@ -124,10 +126,10 @@ Use at most {MAX_BUDGET} characters.
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Rollout config generator</b><span class="note">8 candidates (template, provider, model) × 4 ratios → 32 rollout configs (encoder → decoder → score); identity = <code>graph_hash</code></span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">8 candidates (template, provider, model) × 4 ratios → 32 rollout configs (encoder → decoder → eval); identity = <code>rollout_config_hash</code></span></div>
       <div class="comp settled"><b>Mutation surface: ∅ · Toolkit: ∅</b><span class="note">nothing may change; no tools issued — this <em>is</em> Eval</span></div>
       <div class="comp settled"><b>Selection: evaluate all</b><span class="note">named, hashed policy</span></div>
-      <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
+      <div class="comp settled"><b>Official Eval Config</b><span class="note">supplied by the official harness: 164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
   </div>
 
@@ -147,7 +149,7 @@ Use at most {MAX_BUDGET} characters.
     <div class="comps">
       <div class="comp settled"><b>Diff check</b><span class="note">empty mutation surface ⇒ returned rollout configs must be byte-identical to the initial ones; 32/32 pass</span></div>
       <div class="comp settled"><b>Selection</b><span class="note">evaluate-all admits 32</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 in the official harness context under the Official Eval Config; that execution context makes these results official, and only they feed the plot</span></div>
       <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
     </div>
   </div>
@@ -159,11 +161,11 @@ Use at most {MAX_BUDGET} characters.
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code><br><code>tests</code> = <code>task.tests</code><hr>via dr-code; sizes the budget, supplies the reference length</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM Node</b><span class="note">emits <code>encoded_code_rep</code><hr><code>MAX_BUDGET</code> derived here per task; template instantiated; one dr-providers call</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">emits <code>encoded_code_rep</code><hr><code>MAX_BUDGET</code> derived here per task; template instantiated; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Score Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code> — a metric, not a stage</span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code> — a metric, not a stage</span></div>
     </div>
     <div class="comps space-top">
       <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
@@ -187,7 +189,7 @@ Use at most {MAX_BUDGET} characters.
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: the generator expands 8 candidates × 4 budget ratios into 32 rollout configs, each carrying its provider preset, template id + text, budget ratio, temperature, decoder prompt, and Score Node Eval Config (matching the official one). The official eval config, the selection policy, and the empty mutation surface and toolkit are serialized alongside.</p></div>
+    <div class="what"><p>Freezes the experiment: the generator expands 8 candidates × 4 budget ratios into 32 rollout configs, each carrying its provider preset, template id + text, budget ratio, temperature, decoder prompt, and Internal Eval Config. The official harness supplies the Official Eval Config; here their hashes match. The selection policy and the empty mutation surface and toolkit are serialized alongside.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
@@ -235,7 +237,7 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>INPUT_CODE, the budget, and the reference length</h3>
     <ul>
-      <li><code>{INPUT_CODE}</code> is set to <code>task.gt_code_wo_comments</code> — stripped ground truth, dr-code's <code>HumanEvalTask.ground_truth_code_without_comments</code>; that choice is part of the rollout config, not the architecture</li>
+      <li><code>{INPUT_CODE}</code> is set to <code>task.gt_code_wo_comments</code> — stripped ground truth, dr-code's <code>HumanEvalTask.ground_truth_code_without_comments</code>; that choice is part of the rollout config, not the Graph</li>
       <li>Reference length = <code>utf8_bytes(task.gt_code_wo_comments)</code>; measured compression = <code>zstd_bytes(encoded_code_rep) ÷ reference length</code>, zstd-19</li>
       <li><code>MAX_BUDGET = round(BUDGET_RATIO × chars(task.gt_code_wo_comments))</code>, derived per task — at ratio 1.0 the description may be as long as the reference</li>
       <li>Guidance, not enforcement: the budget steers, nothing clips; rollouts that blow it land further right on the plot</li>
@@ -261,7 +263,7 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>Identity: rollout config vs candidate</h3>
     <ul>
-      <li>The rollout config hash covers every variable, including the Score Node Eval Config — it shapes the reward an optimizer steers by</li>
+      <li><code>rollout_config_hash</code> covers every variable, including the Internal Eval Config — it shapes the reward an optimizer steers by</li>
       <li>Candidate identity is only the candidate variables' values</li>
       <li>Same candidate, different measurement = two rollout configs sharing candidate values</li>
     </ul>
@@ -269,7 +271,7 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>Contract fit</h3>
     <ul>
-      <li>The full experiment lands in existing boxes: rollout config, official eval config, or rollout-time derivation</li>
+      <li>The full experiment lands in existing boxes: Rollout Config, Eval Definition and Eval Config roles, or rollout-time derivation</li>
       <li>One new mechanism: the <span class="key">per-task budget derivation</span> inside the encoder stage</li>
     </ul>
   </div>

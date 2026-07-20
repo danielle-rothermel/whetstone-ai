@@ -42,11 +42,11 @@
   <div class="card">
     <h3>Reused from the Eval run</h3>
     <ul>
-      <li>Same encoder → decoder → score architecture</li>
+      <li>Same encoder → decoder → eval Graph</li>
       <li>Same 4 (provider, model) pairs</li>
       <li>Variance source: <code>budget_ratio</code> = 0.25, 0.5, 0.75, 1.0</li>
       <li>HumanEval+ (164 tasks) @ pinned revision · 3 seeds · zstd-19</li>
-      <li>Same official eval config</li>
+      <li>Same Official Eval Config</li>
     </ul>
   </div>
   <div class="card optim">
@@ -61,7 +61,7 @@
     <p class="small muted space-top"><code>evaluate_candidate</code> — full definition below.</p>
     <ul>
       <li>Input: one proposed encoder user prompt template</li>
-      <li>Runs it on all 4 pairs at ratio 0.5 under a cheaper Score Node Eval Config: 20 tasks, 1 seed</li>
+      <li>Runs it on all 4 pairs at ratio 0.5 under a cheaper Internal Eval Config: 20 tasks, 1 seed</li>
       <li>Capacity: 20 calls</li>
     </ul>
   </div>
@@ -80,7 +80,7 @@
 <div class="plane">
   <div class="plane-label">OptimizationRequest <span class="sub">· frozen data, all hashed — rendered for the agent as a prompt plus files</span></div>
   <div class="comps">
-    <div class="comp node"><b>Initial Rollout Configs</b><span class="note">the Eval run's 32: 8 candidates (template A/B × 4 pairs) × 4 ratios; identity = <code>graph_hash</code><hr>they carry the initial candidates and every value the agent must not change</span></div>
+    <div class="comp node"><b>Initial Rollout Configs</b><span class="note">the Eval run's 32: 8 candidates (template A/B × 4 pairs) × 4 ratios; identity = <code>rollout_config_hash</code><hr>they carry the initial candidates, an Internal Eval Config whose hash matches the Official Eval Config, and every value the agent must not change</span></div>
     <div class="comp node optim"><b>Mutation Surface</b><span class="note">encoder <code>{user_prompt_template}</code> only<hr>outside it, returned rollout configs must match the initial ones byte-for-byte — the diff check's yardstick</span></div>
     <div class="comp node optim"><b>Toolkit</b><span class="note">the single <code>evaluate_candidate</code> definition below<hr>constraints live here, in the tool definition — never "enforced on" the agent</span></div>
     <div class="comp node optim"><b>Guidance</b><span class="note">"return your best 3 encoder user prompt templates, ordered"<hr>guidance, not enforcement; ordered multi-return; anything extra the agent reports is advisory provenance, never a score</span></div>
@@ -92,7 +92,7 @@
   <div class="comps">
     <div class="comp node"><b>Input</b><span class="note">one proposed encoder user prompt template (must use <code>MAX_BUDGET</code> and <code>INPUT_CODE</code>)</span></div>
     <div class="comp node"><b>Expansion</b><span class="note">sets <code>{user_prompt_template}</code> = the proposal on all 4 (provider, model) pairs at <code>budget_ratio</code> 0.5 → 4 rollout configs</span></div>
-    <div class="comp node"><b>Cheaper Score Node Eval Config</b><span class="note"><code>{task_set}</code> = fixed 20-task HumanEval+ subset @ pinned revision<br><code>{seeds}</code> = <code>1</code><br>same <code>{codec}</code> zstd-19, <code>{reference_length}</code>, <code>{preprocess_config}</code>, <code>{metrics_extract_config}</code> as official<hr>carried inside each of these rollout configs' hashes — their results can never be mistaken for official rollout results</span></div>
+    <div class="comp node"><b>Cheaper Internal Eval Config</b><span class="note">uses the Eval Definition's canonical Eval Config shape: fixed 20-task HumanEval+ subset @ pinned revision · 1 seed · same codec, reference length, preprocessing, and metrics extraction as the Official Eval Config<hr>carried by each tool Rollout Config, giving its measurement identity a distinct <code>rollout_config_hash</code>; tool execution remains internal because it is outside the official harness context</span></div>
     <div class="comp node"><b>Return</b><span class="note">per-pair (Average Binary Test Pass Rate, mean measured compression) over 80 rollouts</span></div>
     <div class="comp node"><b>Capacity</b><span class="note">20 calls; call 21 receives a structured refusal — because that is what this tool <em>is</em>, not because a policy layer intervened</span></div>
   </div>
@@ -107,7 +107,7 @@
       <div class="comp settled"><b>Rollout config generator</b><span class="note">reuses the Eval generator: 32 initial rollout configs carrying templates A and B</span></div>
       <div class="comp settled optim"><b>Mutation surface · Toolkit · Guidance</b><span class="note">as specified above — the whole interface the agent gets</span></div>
       <div class="comp settled optim"><b>Selection: official-evaluate top 2 templates</b><span class="note">named, hashed policy</span></div>
-      <div class="comp settled"><b>Official eval config</b><span class="note">identical to the Eval run's: 164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
+      <div class="comp settled"><b>Official Eval Config</b><span class="note">identical to the Eval run's: 164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
   </div>
 
@@ -117,7 +117,7 @@
     <div class="plane-label">Optimization stage <span class="sub">· the optimizer — an out-of-process gpt-5.6 agent in the codex CLI</span></div>
     <div class="comps">
       <div class="comp settled"><b>Codex CLI process</b><span class="note">we don't own it; its loop is unobserved; only tool calls and the written result cross the boundary</span></div>
-      <div class="comp settled"><b><code>evaluate_candidate</code> over the bridge</b><span class="note">each call runs 80 rollouts under the cheaper Score Node Eval Config and returns the 4 per-pair aggregates; capacity counts down in the tool</span></div>
+      <div class="comp settled"><b><code>evaluate_candidate</code> over the bridge</b><span class="note">each call runs 80 rollouts under the cheaper Internal Eval Config and returns the 4 per-pair aggregates; capacity counts down in the tool</span></div>
     </div>
   </div>
 
@@ -128,7 +128,7 @@
     <div class="comps">
       <div class="comp settled optim"><b>Diff check</b><span class="note">each returned rollout config must match an initial one everywhere outside the encoder <code>{user_prompt_template}</code></span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">applies the policy: top 2 templates as ordered → 32 rollout configs (2 × 4 pairs × 4 ratios)</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 in the official harness context under the Official Eval Config; only the outputs of this pass feed the plot</span></div>
       <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
     </div>
   </div>
@@ -136,15 +136,15 @@
   <div class="flow-arrow"><span>tool calls and the Evaluator both execute each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed) — identical machinery for cheap and official rollouts</span></div>
+    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed) — identical machinery for internal and official rollouts</span></div>
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM Node</b><span class="note">proposed or initial template instantiated; <code>MAX_BUDGET</code> derived per task; one dr-providers call</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">proposed or initial template instantiated; <code>MAX_BUDGET</code> derived per task; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM Node</b><span class="note">same model as encoder; one dr-providers call</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">same model as encoder; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Score Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code><hr>the only difference between a tool call's rollout and an official one is the Score Node Eval Config it carries</span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code><hr>tool and official executions use the same Graph; their Eval Config roles and execution contexts differ</span></div>
     </div>
     <div class="comps space-top">
       <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
@@ -156,7 +156,7 @@
   <div class="plane">
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744, persisted for analysis; the tool's 1,440 cheap rollout results persist too, under their own hashes</span></div>
+      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744, persisted for analysis; the tool's 1,440 internal rollout results persist too, under their own hashes</span></div>
       <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the ratios; overlays the Eval run's template A/B baselines directly — same official eval config hash, same axes</span></div>
     </div>
@@ -182,7 +182,7 @@
     <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
       <div class="what"><p><em>Probe (inferred):</em> drafts six differently shaped encoder templates — terse spec, pseudocode, invariants-first — and calls <code>evaluate_candidate</code> on each to map the space.</p>
-        <div class="ledger"><b>output</b>6 × 80 rollout results under the cheaper Score Node Eval Config's hashes; capacity 6/20</div>
+        <div class="ledger"><b>output</b>6 × 80 internal rollout results under Rollout Config hashes carrying the cheaper Internal Eval Config; capacity 6/20</div>
       </div>
     </div>
     <div class="tick optim">
@@ -194,7 +194,7 @@
     <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
       <div class="what"><p><em>Confirm (inferred):</em> re-runs its final three templates to settle its own ordering. Stops at 18 of 20 calls — under capacity, by its own choice. A 21st call would have received the tool's structured refusal.</p>
-        <div class="ledger"><b>output</b>3 more calls' rollout results; capacity 18/20, final — 1,440 cheap rollout results in all</div>
+        <div class="ledger"><b>output</b>3 more calls' rollout results; capacity 18/20, final — 1,440 internal rollout results in all</div>
       </div>
     </div>
   </div>
@@ -203,7 +203,7 @@
 <div class="run">
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Writes the <code>OptimizationResult</code> JSON file: ordered rollout configs for <strong>four</strong> templates — one more than the guidance asked. The over-return is not an error; alongside its annotations (two untested variants, rationale, self-ordering) it is advisory provenance about this agent — never a score.</p>
+    <div class="what"><p>Writes the <code>OptimizationResult</code> JSON file: ordered rollout configs for <strong>four</strong> templates, each retaining the initial config's Internal Eval Config whose hash matches the Official Eval Config — one more template than the guidance asked. The over-return is not an error; alongside its annotations (two untested variants, rationale, self-ordering) it is advisory provenance about this agent — never a score.</p>
       <div class="ledger"><b>output</b>result file parsed against the <code>OptimizationResult</code> schema; annotations kept as advisory provenance</div>
     </div>
   </div>
@@ -225,7 +225,7 @@
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates from official rollout results only: per rollout config, Average Binary Test Pass Rate and mean measured compression. The 1,440 cheap rollout results stay queryable and cost-accounted — excluded from the plot by construction, because they carry the cheaper Score Node Eval Config in their hashes, not the official eval config's.</p>
+    <div class="what"><p>Aggregates from official rollout results only: per rollout config, Average Binary Test Pass Rate and mean measured compression. The 1,440 internal rollout results stay queryable and cost-accounted; they are excluded from the plot because they came from tool execution outside the official harness context. Their cheaper Internal Eval Config also keeps their identities distinct.</p>
       <div class="ledger"><b>output</b>32 rollout aggregates — each winning template's 4 pairs × 4 ratios</div>
     </div>
   </div>
@@ -255,10 +255,10 @@
     </ul>
   </div>
   <div class="card optim">
-    <h3>Cheap evaluation vs official evaluation</h3>
+    <h3>Internal Evaluation vs Official Evaluation</h3>
     <ul>
-      <li>The tool's rollouts run under a cheaper Score Node Eval Config — smaller task set, 1 seed, same preprocess and metrics extraction — carried inside those rollout configs' hashes</li>
-      <li>Only the harness's official evaluation produces official rollout results; plots read only those</li>
+      <li>The tool's rollouts run under a cheaper Internal Eval Config — smaller task set, 1 seed, same preprocess and metrics extraction — carried inside those Rollout Configs</li>
+      <li>Only execution in the official harness context produces official rollout results; plots read only those</li>
       <li>The agent may evaluate however its tools allow — "evaluate" alone is the general verb</li>
     </ul>
   </div>
