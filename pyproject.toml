@@ -7,7 +7,6 @@ authors = [
 ]
 requires-python = ">=3.13, <3.15"
 dependencies = [
-    "alembic>=1.16.2",
     "dbos>=2.25.0",
     "dr-code",
     "dr-graph",
@@ -15,7 +14,6 @@ dependencies = [
     "dr-providers",
     "dr-serialize",
     "psycopg>=3.3.4",
-    "sqlalchemy>=2.0.51",
 ]
 
 [dependency-groups]

@@ -1659,7 +1659,6 @@ name = "whetstone-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "alembic" },
     { name = "dbos" },
     { name = "dr-code" },
     { name = "dr-graph" },
@@ -1667,7 +1666,6 @@ dependencies = [
     { name = "dr-providers" },
     { name = "dr-serialize" },
     { name = "psycopg" },
-    { name = "sqlalchemy" },
 ]
 
 [package.dev-dependencies]
@@ -1680,7 +1678,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "alembic", specifier = ">=1.16.2" },
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
@@ -1688,7 +1685,6 @@ requires-dist = [
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
     { name = "psycopg", specifier = ">=3.3.4" },
-    { name = "sqlalchemy", specifier = ">=2.0.51" },
 ]
 
 [package.metadata.requires-dev]
