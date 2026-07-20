@@ -1,5 +1,0 @@
-"""Fresh v6 Alembic baseline revision identifier."""
-
-V6_MIGRATION_BASE = "20260712_0001"
-V6_MIGRATION_HEAD = "20260713_0002"
-V6_MIGRATION_REVISION_COUNT = 2

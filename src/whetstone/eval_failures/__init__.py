@@ -47,8 +47,6 @@ from whetstone.eval_failures.policy import (
 from whetstone.eval_failures.recording import (
     ensure_recordable,
     failure_metadata_dict_from_exception,
-    failure_metadata_from_exception,
-    recordable_jsonb,
     recordable_text,
 )
 
@@ -74,10 +72,8 @@ __all__ = [
     "error_text",
     "exception_type_name",
     "failure_metadata_dict_from_exception",
-    "failure_metadata_from_exception",
     "failure_summary_payload",
     "find_classified_exception",
-    "recordable_jsonb",
     "recordable_text",
     "require_generation_text",
     "should_retry_step",

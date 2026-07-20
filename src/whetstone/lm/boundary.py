@@ -1,8 +1,8 @@
-"""Thin adapter between the dr-providers kernel and whetstone records.
+"""Thin adapter over the dr-providers kernel.
 
 The wire mechanics (config records, payload building, transport,
 parsing, failure classification) live in dr-providers. This module keeps
-only whetstone's domain shapes: ``ProviderResult`` (the persisted record
+only whetstone's domain shapes: ``ProviderResult`` (the provider outcome
 surface), the ``LlmRequest`` construction from node parameters, the
 ``LlmResponse`` → ``ProviderResult`` conversion, and translation of
 kernel failure carriers into whetstone eval-failure exceptions.
@@ -50,7 +50,7 @@ __all__ = [
 
 
 class ProviderResult(BaseModel):
-    """Record-facing provider outcome persisted by the platform."""
+    """Structured provider outcome surfaced to callers."""
 
     model_config = ConfigDict(extra="forbid")
 

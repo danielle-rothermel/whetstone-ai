@@ -1,18 +1,13 @@
 """Recordability boundary for storable failure and telemetry payloads.
 
-``recordable_jsonb`` is the one Postgres JSONB adapter exception in
-``eval_failures``. Core classification and failure models should remain free of
-database and DBOS workflow imports.
+Core classification and failure models remain free of database and DBOS
+workflow imports; these helpers convert arbitrary values into JSON-safe
+payloads and extract diagnostics from exception chains.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from psycopg.types.json import Jsonb
-
-    from whetstone.records import FailureMetadataPayload
+from typing import Any
 
 from dr_serialize import (
     POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
@@ -48,32 +43,6 @@ def recordable_text(value: Any) -> str:
     from dr_serialize import canonical_json
 
     return canonical_json(value)
-
-
-def recordable_jsonb(
-    value: Any,
-    *,
-    max_bytes: int = POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
-) -> Jsonb:
-    from psycopg.types.json import Jsonb
-
-    return Jsonb(ensure_recordable(value, max_bytes=max_bytes))
-
-
-def failure_metadata_from_exception(
-    error: BaseException,
-) -> FailureMetadataPayload:
-    """Build a storable failure metadata record from any exception."""
-    from whetstone.eval_failures.policy import summarize_exception
-    from whetstone.records import FailureMetadataPayload as Payload
-
-    summary = summarize_exception(error)
-    return Payload(
-        failure_class=summary.failure_class,
-        error_type=summary.failure_exception_type,
-        message=summary.message,
-        metadata=summary.failure_metadata,
-    )
 
 
 def failure_metadata_dict_from_exception(
