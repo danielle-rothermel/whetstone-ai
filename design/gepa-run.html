@@ -8,20 +8,7 @@
 <link rel="stylesheet" href="flow.css">
 <title>GEPA Run Design</title>
 </head>
-<body class="with-toc">
-<nav class="toc" aria-label="Contents">
-  <div class="brand">Design: GEPA</div>
-  <a href="vocab_and_defs.html">Vocabulary</a>
-  <a href="#target">Example setup</a>
-  <a href="#specified">Run configurations</a>
-  <div class="group">The system</div>
-  <a href="#system">Optimization + official evaluation</a>
-  <div class="group">In action</div>
-  <a href="#run">Full run walkthrough</a>
-  <a href="#output">What lands on the plot</a>
-  <a href="#notes">Additional notes</a>
-</nav>
-
+<body>
 <main>
 <h1>GEPA Run Design</h1>
 <div class="byline">whetstone-ai · 2026-07-20</div>
@@ -35,8 +22,8 @@
   <a href="codex-agent-run.html">Codex CLI agent</a>
 </div>
 
-<div class="hero">
-  A concrete GEPA run in our proposed design: an evolutionary loop whose mutation operator is a <span class="key">reflection LM</span> reading real rollout traces. The optimizer searches on a cheap tool budget and returns a small <span class="key">front of evolved encoder templates</span>; only the evaluation harness's official evaluation puts anything on the plot.
+<div class="intro">
+  <p>GEPA uses a reflection LM to evolve encoder templates from rollout traces under cheap tool evaluation; official evaluation remains authoritative.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the eval design.</p>

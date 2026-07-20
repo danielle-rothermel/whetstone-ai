@@ -8,20 +8,7 @@
 <link rel="stylesheet" href="flow.css">
 <title>MIPROv2 Run Design</title>
 </head>
-<body class="with-toc">
-<nav class="toc" aria-label="Contents">
-  <div class="brand">Design: MIPROv2</div>
-  <a href="vocab_and_defs.html">Vocabulary</a>
-  <a href="#target">Example setup</a>
-  <a href="#specified">Run configurations</a>
-  <div class="group">The system</div>
-  <a href="#system">Optimization run</a>
-  <div class="group">In action</div>
-  <a href="#run">Full run walkthrough</a>
-  <a href="#output">What lands on the plot</a>
-  <a href="#notes">Additional notes</a>
-</nav>
-
+<body>
 <main>
 <h1>MIPROv2 Run Design</h1>
 <div class="byline">whetstone-ai · 2026-07-20</div>
@@ -35,8 +22,8 @@
   <a href="codex-agent-run.html">Codex CLI agent</a>
 </div>
 
-<div class="hero">
-  MIPROv2 builds its whole search space up front — <span class="key">bootstrap demo sets</span> from rollouts that passed their tests, <span class="key">propose instructions once</span> with a proposal LM — then a sampler <span class="key">searches the instruction × demo grid</span> on cheap tool evaluations. The pool is frozen after proposal: the search can recombine, never invent. Only the evaluation harness's official evaluation feeds the plot.
+<div class="intro">
+  <p>MIPROv2 bootstraps demo sets, proposes instructions once, and searches a frozen instruction × demo grid with cheap tools before official evaluation.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the Eval flow.</p>

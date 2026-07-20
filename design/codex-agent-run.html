@@ -8,20 +8,7 @@
 <link rel="stylesheet" href="flow.css">
 <title>Codex CLI Agent Run Design</title>
 </head>
-<body class="with-toc">
-<nav class="toc" aria-label="Contents">
-  <div class="brand">Design: Codex CLI agent</div>
-  <a href="vocab_and_defs.html">Vocabulary</a>
-  <a href="#target">Example setup</a>
-  <a href="#specified">Run configurations</a>
-  <div class="group">The system</div>
-  <a href="#system">Out-of-process optimization run</a>
-  <div class="group">In action</div>
-  <a href="#run">Full run walkthrough</a>
-  <a href="#output">What lands on the plot</a>
-  <a href="#notes">Additional notes</a>
-</nav>
-
+<body>
 <main>
 <h1>Codex CLI Agent Run Design</h1>
 <div class="byline">whetstone-ai · 2026-07-20</div>
@@ -35,8 +22,8 @@
   <span class="here">Codex CLI agent</span>
 </div>
 
-<div class="hero">
-  The optimizer is an <span class="key">out-of-process agent</span> — gpt-5.6 inside the codex CLI, a process we don't own, running a loop we can't see. The same serializable <code>OptimizationRequest</code> and <code>OptimizationResult</code> schemas the other optimizers call in-process cross the process boundary as a prompt plus files; one tool crosses back over a bridge; official evaluation is unchanged. This doc is the payoff of contracts being <span class="key">serializable data</span> first.
+<div class="intro">
+  <p>The same serializable optimization contract crosses a process boundary to an unobserved Codex CLI agent loop, while official evaluation remains unchanged.</p>
 </div>
 
 <p class="small muted">Purple marks what this run adds or changes relative to the Eval run; everything unmarked matches it.</p>

@@ -8,20 +8,7 @@
 <link rel="stylesheet" href="flow.css">
 <title>Eval Run Design</title>
 </head>
-<body class="with-toc">
-<nav class="toc" aria-label="Contents">
-  <div class="brand">Design: Eval</div>
-  <a href="vocab_and_defs.html">Vocabulary</a>
-  <a href="#target">Example setup</a>
-  <a href="#specified">Run configurations</a>
-  <div class="group">The system</div>
-  <a href="#system">Official evaluation run</a>
-  <div class="group">In action</div>
-  <a href="#run">Full run walkthrough</a>
-  <a href="#output">What lands on the plot</a>
-  <a href="#notes">Additional notes</a>
-</nav>
-
+<body>
 <main>
 <h1>Eval Run Design</h1>
 <div class="byline">whetstone-ai · 2026-07-19</div>
@@ -35,8 +22,8 @@
   <a href="codex-agent-run.html">Codex CLI agent</a>
 </div>
 
-<div class="hero">
-  A diagram of how a full eval sweep would be configured and run in our proposed design.
+<div class="intro">
+  <p>Fixed rollout configs pass unchanged through official evaluation, establishing the baseline and authoritative results that optimization runs build on.</p>
 </div>
 
 <div class="section-head" id="target"><h2>Example Setup</h2></div>

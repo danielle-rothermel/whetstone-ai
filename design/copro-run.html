@@ -8,20 +8,7 @@
 <link rel="stylesheet" href="flow.css">
 <title>COPRO Run Design</title>
 </head>
-<body class="with-toc">
-<nav class="toc" aria-label="Contents">
-  <div class="brand">Design: COPRO</div>
-  <a href="vocab_and_defs.html">Vocabulary</a>
-  <a href="#target">Example setup</a>
-  <a href="#specified">Run configurations</a>
-  <div class="group">The system</div>
-  <a href="#system">Optimization run</a>
-  <div class="group">In action</div>
-  <a href="#run">Full run walkthrough</a>
-  <a href="#output">What lands on the plot</a>
-  <a href="#notes">Additional notes</a>
-</nav>
-
+<body>
 <main>
 <h1>COPRO Run Design</h1>
 <div class="byline">whetstone-ai · 2026-07-20</div>
@@ -35,8 +22,8 @@
   <a href="codex-agent-run.html">Codex CLI agent</a>
 </div>
 
-<div class="hero">
-  How a COPRO-style optimizer runs on the whetstone contract: a <span class="key">deterministic in-process loop</span> that asks a proposal LM for encoder user prompt template rewrites, scores every attempt by <span class="key">spending its one tool</span>, feeds the score-ranked history back for a fixed number of rounds, and returns an <span class="key">ordered list of rollout configs</span> for official evaluation.
+<div class="intro">
+  <p>COPRO runs an in-process proposal loop that rewrites encoder prompts, scores each attempt through its issued tool, and returns ordered rollout configs for official evaluation.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the <a href="eval-run.html">Eval run</a>; everything unmarked matches it.</p>
