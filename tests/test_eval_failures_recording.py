@@ -90,6 +90,29 @@ def test_failure_metadata_from_wrapped_error() -> None:
     assert metadata["type_name"] == "object"
 
 
+def test_failure_metadata_visits_underlying_despite_context() -> None:
+    underlying = JsonEncodeError(
+        path=("x",),
+        type_name="object",
+        detail="detail",
+        underlying=TypeError("object"),
+        value_preview="preview",
+    )
+    try:
+        try:
+            raise ValueError("being handled")
+        except ValueError:
+            # No `from`: the test needs __context__ set without __cause__.
+            raise RecordingFailureError(  # noqa: B904
+                "wrapped", underlying=underlying
+            )
+    except RecordingFailureError as exc:
+        error = exc
+    assert error.__context__ is not None
+    metadata = failure_metadata_dict_from_exception(error)
+    assert metadata["type_name"] == "object"
+
+
 def test_ensure_recordable_wraps_payload_too_large_error() -> None:
     with pytest.raises(RecordingFailureError) as exc_info:
         ensure_recordable({"data": "x" * 500}, max_bytes=50)

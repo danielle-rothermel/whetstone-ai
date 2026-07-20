@@ -49,28 +49,28 @@ def failure_metadata_dict_from_exception(
     error: BaseException,
 ) -> dict[str, Any]:
     """Extract SerializationError diagnostics or EvalFailureError metadata."""
-    current: BaseException | None = error
+    # Exceptions can carry several links at once (a raise inside an
+    # except block sets __context__ even when an ``underlying`` was
+    # attached), so walk all of them depth-first, __cause__ subtree
+    # before __context__ before ``underlying``.
+    stack: list[BaseException] = [error]
     seen: set[int] = set()
     eval_failure_metadata: dict[str, Any] | None = None
-    while current is not None and id(current) not in seen:
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
         if isinstance(current, SerializationError):
             return current.diagnostics()
         if (
             isinstance(current, EvalFailureError)
             and eval_failure_metadata is None
+            and current.metadata
         ):
-            if current.metadata:
-                eval_failure_metadata = dict(current.metadata)
-        if current.__cause__ is not None:
-            current = current.__cause__
-            continue
-        if current.__context__ is not None:
-            current = current.__context__
-            continue
+            eval_failure_metadata = dict(current.metadata)
         underlying = getattr(current, "underlying", None)
-        if isinstance(underlying, BaseException):
-            current = underlying
-            continue
-        break
+        for link in (underlying, current.__context__, current.__cause__):
+            if isinstance(link, BaseException):
+                stack.append(link)
     return eval_failure_metadata or {}
