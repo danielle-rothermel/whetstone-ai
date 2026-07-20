@@ -6,23 +6,25 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>An external agent runs on the same contract: schemas cross a bridge, and the tool is the whole interface</title>
+<title>Codex CLI Agent Run Design</title>
 </head>
 <body class="with-toc">
 <nav class="toc" aria-label="Contents">
-  <div class="brand">Design: Codex agent</div>
-  <a href="#config">This configuration</a>
+  <div class="brand">Design: Codex CLI agent</div>
+  <a href="vocab_and_defs.html">Vocabulary</a>
+  <a href="#target">Example setup</a>
+  <a href="#specified">Run configurations</a>
   <div class="group">The system</div>
-  <a href="#system">Component diagram</a>
-  <a href="#decisions">Where decisions live</a>
+  <a href="#system">Out-of-process optimization run</a>
   <div class="group">In action</div>
   <a href="#run">Full run walkthrough</a>
   <a href="#output">What lands on the plot</a>
+  <a href="#notes">Additional notes</a>
 </nav>
 
 <main>
-<h1>An external agent runs on the same contract: schemas cross a bridge, and the tool is the whole interface</h1>
-<div class="byline">whetstone-ai · system design walkthrough 5 of 5 · 2026-07-19</div>
+<h1>Codex CLI Agent Run Design</h1>
+<div class="byline">whetstone-ai · 2026-07-20</div>
 
 <div class="family-nav">
   <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
@@ -34,185 +36,260 @@
 </div>
 
 <div class="hero">
-  This configuration is the payoff of making both contracts <span class="key">serializable data</span>: the optimizer is a gpt-5.6 agent inside the codex CLI harness — a process we don't own, running a loop we can't see. It receives the <code>OptimizationRequest</code> as a prompt plus files, holds exactly one capability — an <code>evaluate_prompt</code> tool that <span class="key">holds 20 evaluations</span> — and hands back an <code>OptimizationResult</code> file. From the ledger's point of view, <span class="key">nothing distinguishes this run from COPRO</span>: same request schema, same record shapes, same certification path. Only the transport changed.
+  The optimizer is an <span class="key">out-of-process agent</span> — gpt-5.6 inside the codex CLI, a process we don't own, running a loop we can't see. The same serializable <code>OptimizationRequest</code> and <code>OptimizationResult</code> schemas the other optimizers call in-process cross the process boundary as a prompt plus files; one tool crosses back over a bridge; official evaluation is unchanged. This doc is the payoff of contracts being <span class="key">serializable data</span> first.
 </div>
 
-<div class="legend">
-  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
-  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
-  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+<p class="small muted">Purple marks what this run adds or changes relative to the Eval run; everything unmarked matches it.</p>
+
+<div class="callout"><b>Temporary vocabulary</b> — terms this doc needs beyond the vocab page:
+  <ul>
+    <li><strong>bridge</strong> — the transport that exposes the toolkit to a process we don't own and carries tool calls and results across the process boundary (MCP in this example). Needed because this is the only doc where the contract leaves our process.</li>
+    <li><strong>tool capacity</strong> — the number of calls a tool definition holds; the call after the last receives a structured refusal from the tool itself. Needed to state the optimization budget as tool design — guidance, not enforcement.</li>
+    <li><strong>control cost</strong> — the optimizer's own resource use (agent tokens, wall clock), reported when the agent exits. Advisory metadata for comparing optimizers, never a score. Needed because an agentic optimizer has overhead its tool calls don't show.</li>
+  </ul>
 </div>
 
-<div class="section-head" id="config"><h2>This configuration: one seed, one tool, an opaque loop</h2></div>
+<div class="section-head" id="target"><h2>Example Setup</h2></div>
 
-<p>The experiment optimizes <strong>one seed treatment's encoder prompt</strong>. The designer issues a single tool, fully specified as data: <code>evaluate_prompt</code> runs a candidate spec over a <strong>10-task sample with a cheaper proxy decoder model</strong> than certification uses — deliberately different from the experiment's own dataset and models, because the tool's design is itself part of the experimental design. Guidance asks the agent to <strong>return its best 3, ranked</strong>; selection certifies the top 2 as ranked under C<sub>cert</sub>. Everything between receiving the request and writing the result is the agent's business.</p>
+<div class="grid-4">
+  <div class="card">
+    <h3>Reused from the Eval run</h3>
+    <ul>
+      <li>Same encoder → decoder → score architecture</li>
+      <li>Same 4 (provider, model) pairs</li>
+      <li>Variance source: <code>budget_ratio</code> = 0.25, 0.5, 0.75, 1.0</li>
+      <li>HumanEval+ (164 tasks) @ pinned revision · 3 seeds · zstd-19</li>
+      <li>Same official eval config</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Mutation surface &amp; initial candidates</h3>
+    <ul>
+      <li>Mutation surface: the encoder <code>{user_prompt_template}</code> — nothing else may change</li>
+      <li>Initial candidates: encoder templates <strong>A</strong> and <strong>B</strong>, carried inside the Eval run's 32 initial rollout configs</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Toolkit: one tool</h3>
+    <p class="small muted space-top"><code>evaluate_candidate</code> — full definition below.</p>
+    <ul>
+      <li>Input: one proposed encoder user prompt template</li>
+      <li>Runs it on all 4 pairs at ratio 0.5 under a cheaper Score Node Eval Config: 20 tasks, 1 seed</li>
+      <li>Capacity: 20 calls</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Budget, guidance, selection</h3>
+    <ul>
+      <li>Optimization budget = the tool's capacity: 20 calls ≈ 3,200 LLM calls, ~10% of the official pass</li>
+      <li>Guidance: "return your best 3 encoder user prompt templates, ordered"</li>
+      <li>Selection: official-evaluate the top 2 templates</li>
+    </ul>
+  </div>
+</div>
 
-<div class="callout">The 20-call capacity is <strong>not budget enforcement</strong>. Nothing is enforced <em>on</em> the agent — the designer simply provided a tool that holds 20 evaluations, the same way a different experiment might provide a 5-call tool, an unlimited tool, or two tools with different proxies. Call 21 receives a structured refusal because that is what this tool <em>is</em>, not because a policy layer intervened. Constraints live in tool design; guidance lives in the request; the experiment decides both.</div>
+<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
-<div class="section-head" id="system"><h2>Component diagram: an opaque control plane over an unchanged environment</h2></div>
+<div class="plane">
+  <div class="plane-label">OptimizationRequest <span class="sub">· frozen data, all hashed — rendered for the agent as a prompt plus files</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Initial Rollout Configs</b><span class="note">the Eval run's 32: 8 candidates (template A/B × 4 pairs) × 4 ratios; identity = <code>graph_hash</code><hr>they carry the initial candidates and every value the agent must not change</span></div>
+    <div class="comp node optim"><b>Mutation Surface</b><span class="note">encoder <code>{user_prompt_template}</code> only<hr>outside it, returned rollout configs must match the initial ones byte-for-byte — the diff check's yardstick</span></div>
+    <div class="comp node optim"><b>Toolkit</b><span class="note">the single <code>evaluate_candidate</code> definition below<hr>constraints live here, in the tool definition — never "enforced on" the agent</span></div>
+    <div class="comp node optim"><b>Guidance</b><span class="note">"return your best 3 encoder user prompt templates, ordered"<hr>guidance, not enforcement; ordered multi-return; anything extra the agent reports is advisory provenance, never a score</span></div>
+  </div>
+</div>
+
+<div class="plane space-top optim">
+  <div class="plane-label">Tool definition: <code>evaluate_candidate</code> <span class="sub">· serializable, hashed — part of the experiment design</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Input</b><span class="note">one proposed encoder user prompt template (must use <code>MAX_BUDGET</code> and <code>INPUT_CODE</code>)</span></div>
+    <div class="comp node"><b>Expansion</b><span class="note">sets <code>{user_prompt_template}</code> = the proposal on all 4 (provider, model) pairs at <code>budget_ratio</code> 0.5 → 4 rollout configs</span></div>
+    <div class="comp node"><b>Cheaper Score Node Eval Config</b><span class="note"><code>{task_set}</code> = fixed 20-task HumanEval+ subset @ pinned revision<br><code>{seeds}</code> = <code>1</code><br>same <code>{codec}</code> zstd-19, <code>{reference_length}</code>, <code>{preprocess_config}</code>, <code>{metrics_extract_config}</code> as official<hr>carried inside each of these rollout configs' hashes — their results can never be mistaken for official rollout results</span></div>
+    <div class="comp node"><b>Return</b><span class="note">per-pair (Average Binary Test Pass Rate, mean measured compression) over 80 rollouts</span></div>
+    <div class="comp node"><b>Capacity</b><span class="note">20 calls; call 21 receives a structured refusal — because that is what this tool <em>is</em>, not because a policy layer intervened</span></div>
+  </div>
+</div>
+
+<div class="section-head" id="system"><h2>Out-of-process optimization run: same contract, new transport</h2></div>
 
 <div class="flow">
   <div class="plane">
-    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Seed treatment ×1</b><span class="note">GraphSpec; identity = <code>graph_digest</code></span></div>
-      <div class="comp settled"><b>Mutation surface</b><span class="note">encoder prompt parameter only</span></div>
-      <div class="comp viz"><b>Tool spec: <code>evaluate_prompt</code></b><span class="note">capacity 20 · 10-task sample · proxy decoder model · its own config digest</span></div>
-      <div class="comp settled"><b>Guidance: return best 3, ranked</b><span class="note">guidance, not enforcement; over-return is data</span></div>
-      <div class="comp settled"><b>Selection policy: certify top 2 as ranked</b><span class="note">named, recorded experiment config</span></div>
-      <div class="comp viz"><b>Certification config C<sub>cert</sub></b><span class="note">40 HumanEval+ tasks · full decoder model · zstd-19 metric</span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">reuses the Eval generator: 32 initial rollout configs carrying templates A and B</span></div>
+      <div class="comp settled optim"><b>Mutation surface · Toolkit · Guidance</b><span class="note">as specified above — the whole interface the agent gets</span></div>
+      <div class="comp settled optim"><b>Selection: official-evaluate top 2 templates</b><span class="note">named, hashed policy</span></div>
+      <div class="comp settled"><b>Official eval config</b><span class="note">identical to the Eval run's: 164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code> rendered as prompt + files (seed spec, mutation surface, guidance)</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationRequest</code> serialized to a prompt plus files; codex CLI spawned; the bridge exposes exactly one tool</span> <span class="glyph">▼</span></div>
 
-  <div class="plane">
-    <div class="plane-label">Control plane <span class="sub">· agent-owned territory — internals unknown and unowned</span></div>
+  <div class="plane optim">
+    <div class="plane-label">Optimization stage <span class="sub">· the optimizer — an out-of-process gpt-5.6 agent in the codex CLI</span></div>
     <div class="comps">
-      <div class="comp viz"><b>codex CLI harness</b><span class="note">spawns the agent; connects the bridge; reports token usage at exit</span></div>
-      <div class="comp settled"><b>gpt-5.6 agent — opaque</b><span class="note">the contract neither knows nor cares how it iterates; it owns everything inside the optimization step</span></div>
+      <div class="comp settled"><b>Codex CLI process</b><span class="note">we don't own it; its loop is unobserved; only tool calls and the written result cross the boundary</span></div>
+      <div class="comp settled"><b><code>evaluate_candidate</code> over the bridge</b><span class="note">each call runs 80 rollouts under the cheaper Score Node Eval Config and returns the 4 per-pair aggregates; capacity counts down in the tool</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>⇄ up to 20 <code>evaluate_prompt</code> calls over the bridge</span> <span class="glyph">▼</span> <span><code>OptimizationResult</code> written as a JSON file</span></div>
+  <div class="flow-arrow"><span><code>OptimizationResult</code>: ordered rollout configs, written as a JSON file, parsed by the harness against the same schema</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="plane-label">Evaluation harness <span class="sub">· runs official evaluation</span></div>
     <div class="comps">
-      <div class="comp viz"><b>MCP bridge</b><span class="note">exposes the tool to the codex harness; same eval-engine API every other optimizer calls — COPRO calls a Python function, this agent calls a tool, the ledger cannot tell the difference</span></div>
-      <div class="comp settled"><b>Tool: <code>evaluate_prompt</code></b><span class="note">frozen partial application of the eval engine: this sample, this proxy model, 20 calls</span></div>
-      <div class="comp viz"><b>Result-file ingestion</b><span class="note">parses the agent's JSON against the <code>OptimizationResult</code> schema</span></div>
-    </div>
-    <div class="comps space-top">
-      <div class="comp discussed"><b>Diff validator</b><span class="note">returned specs diffed against seed; only the encoder prompt may differ</span></div>
-      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 2 as ranked</span></div>
-      <div class="comp discussed"><b>Certifier</b><span class="note">runs selected candidates under C<sub>cert</sub>; only certified records feed the plot</span></div>
-      <div class="comp settled"><b>Ledger</b><span class="note">tool calls land automatically under the tool-config digest; agent tokens recorded as control-plane cost</span></div>
-      <div class="comp settled"><b>Provenance store</b><span class="note">the agent's annotations: untested variants, rationale, self-ranking — advisory, never scores</span></div>
+      <div class="comp settled optim"><b>Diff check</b><span class="note">each returned rollout config must match an initial one everywhere outside the encoder <code>{user_prompt_template}</code></span></div>
+      <div class="comp settled optim"><b>Selection</b><span class="note">applies the policy: top 2 templates as ordered → 32 rollout configs (2 × 4 pairs × 4 ratios)</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>tool and certifier both execute treatments × tasks via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>tool calls and the Evaluator both execute each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed) — identical machinery for cheap and official rollouts</span></div>
     <div class="hflow">
-      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm</span></div>
+      <div class="comp settled"><b>Encoder LM Node</b><span class="note">proposed or initial template instantiated; <code>MAX_BUDGET</code> derived per task; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <div class="comp settled"><b>Decoder LM Node</b><span class="note">same model as encoder; one dr-providers call</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM</b><span class="note">proxy model under the tool; full model under C<sub>cert</sub></span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+      <div class="comp settled"><b>Score Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code><hr>the only difference between a tool call's rollout and an official one is the Score Node Eval Config it carries</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>15,744 official rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744, persisted for analysis; the tool's 1,440 cheap rollout results persist too, under their own hashes</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout config results</span></div>
+      <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the ratios; overlays the Eval run's template A/B baselines directly — same official eval config hash, same axes</span></div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
-
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
-  <tbody>
-    <tr><td>Tool design is experimental design: any dataset, any models, any capacity — nothing is enforced on the agent</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>The agent owns everything inside the optimization step; the contract sees only tool calls and the result</td><td>Control plane</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Tracking is unconditional: tool calls <em>and</em> the agent's own tokens both land in the ledger</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Result is an ordered list; requested count is guidance; over-return is data about the agent</td><td>Contract</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Selection policy is named, recorded experiment config</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Ledger records tagged by eval-config digest; proxy and certified measurements never mix</td><td>Environment</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Both contracts are serializable schemas first; this configuration is why</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Optimizer proposes; environment certifies; full-spec return validated by diff</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>MCP as the bridge transport</td><td>Boundary</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Result delivered as a JSON file the agent writes</td><td>Boundary</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Tool specifics: 20 calls · 10 tasks · proxy decoder model</td><td>Experiment design</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Harness reports agent conversation tokens at exit as control-plane cost</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Whether certification tasks are held out from the tool's sample — sharpest here: nothing stops the designer's tool from containing C<sub>cert</sub> tasks</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
-  </tbody>
-</table>
-</div>
-
-<div class="section-head" id="run"><h2>Full run walkthrough: 18 observed calls around an unobserved loop</h2></div>
+<div class="section-head" id="run"><h2>Full run walkthrough: 18 observed tool calls around an unobserved loop</h2></div>
 
 <div class="run">
-  <div class="tick">
+  <div class="tick optim">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment config: seed spec, mutation surface = encoder prompt, the <code>evaluate_prompt</code> tool spec (capacity 20, 10-task proxy sample, cheap decoder model), guidance "return your best 3, ranked", selection = certify top 2 as ranked, C<sub>cert</sub>. Everything serialized and digested.</p>
-      <div class="ledger"><b>ledger</b>experiment config, seed treatment digest, and tool-config digest registered</div>
-    </div>
+    <div class="what"><p>Freezes the experiment: 32 initial rollout configs from the Eval generator, mutation surface = encoder <code>{user_prompt_template}</code>, the <code>evaluate_candidate</code> tool definition (capacity 20, 20-task subset, 1 seed, ratio 0.5, all 4 pairs), guidance "return your best 3 encoder user prompt templates, ordered", selection = official-evaluate top 2, and the official eval config — identical to the Eval run's. Everything serialized and hashed.</p></div>
   </div>
-  <div class="tick">
-    <div class="who env">Harness</div>
-    <div class="what"><p>Spawns the codex CLI with the gpt-5.6 agent. The <code>OptimizationRequest</code> is rendered as a prompt plus files — seed spec JSON, mutation-surface declaration, guidance — and the MCP bridge is connected, exposing exactly one tool.</p></div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Spawns the codex CLI with the gpt-5.6 agent. The <code>OptimizationRequest</code> is rendered as a prompt plus files — initial rollout configs, mutation surface declaration, guidance — and the bridge is connected, exposing exactly one tool.</p></div>
   </div>
 </div>
 
 <div class="repeat">
-  <div class="repeat-label">Agent's inner loop — structure unknown, calls observed</div>
+  <div class="repeat-label">The agent's inner loop — structure unobserved, tool calls observed</div>
   <div class="run">
-    <div class="tick">
-      <div class="who optimizer">Agent</div>
-      <div class="what"><p><em>Probe (inferred):</em> drafts six differently-shaped encoder prompts — terse spec, pseudocode, invariants-first — and calls <code>evaluate_prompt</code> on each to map the space.</p>
-        <div class="ledger"><b>ledger</b>6 proxy records tagged with the tool-config digest; capacity 6/20</div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Probe (inferred):</em> drafts six differently shaped encoder templates — terse spec, pseudocode, invariants-first — and calls <code>evaluate_candidate</code> on each to map the space.</p>
+        <div class="ledger"><b>output</b>6 × 80 rollout results under the cheaper Score Node Eval Config's hashes; capacity 6/20</div>
       </div>
     </div>
-    <div class="tick">
-      <div class="who optimizer">Agent</div>
-      <div class="what"><p><em>Refine (inferred):</em> iterates on the two most promising directions — tightening wording, trading description length against decoder success — spending nine more calls. How it chose these variants is invisible and irrelevant to the contract.</p>
-        <div class="ledger"><b>ledger</b>9 proxy records; capacity 15/20</div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Refine (inferred):</em> iterates on the two most promising directions — tightening wording, trading description length against decoder success — spending nine more calls. How it chose these variants is invisible to, and irrelevant to, the contract.</p>
+        <div class="ledger"><b>output</b>9 more calls' rollout results; capacity 15/20</div>
       </div>
     </div>
-    <div class="tick">
-      <div class="who optimizer">Agent</div>
-      <div class="what"><p><em>Confirm (inferred):</em> re-runs its final three candidates on the sample to settle its ranking. Stops at 18 of 20 calls — under capacity, by its own choice. A 21st call would have received the tool's structured refusal.</p>
-        <div class="ledger"><b>ledger</b>3 proxy records; capacity 18/20, final</div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Confirm (inferred):</em> re-runs its final three templates to settle its own ordering. Stops at 18 of 20 calls — under capacity, by its own choice. A 21st call would have received the tool's structured refusal.</p>
+        <div class="ledger"><b>output</b>3 more calls' rollout results; capacity 18/20, final — 1,440 cheap rollout results in all</div>
       </div>
     </div>
   </div>
 </div>
 
 <div class="run">
+  <div class="tick optim">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Writes the <code>OptimizationResult</code> JSON file: ordered rollout configs for <strong>four</strong> templates — one more than the guidance asked. The over-return is not an error; alongside its annotations (two untested variants, rationale, self-ordering) it is advisory provenance about this agent — never a score.</p>
+      <div class="ledger"><b>output</b>result file parsed against the <code>OptimizationResult</code> schema; annotations kept as advisory provenance</div>
+    </div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>The agent exits; the harness captures the gpt-5.6 conversation's token usage as control cost. This run is now comparable to a COPRO or GEPA run on total-resources-consumed axes: tool-call cost itemized per rollout, control cost from the harness.</p>
+      <div class="ledger"><b>output</b>control cost: agent tokens + wall clock; 18 tool calls' costs already itemized</div>
+    </div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Diff check: all returned rollout configs match their initial counterparts everywhere outside the encoder <code>{user_prompt_template}</code> — consistent with the mutation surface. Selection applies the policy: top 2 templates as ordered, expanded across the 4 pairs × 4 ratios → 32 rollout configs admitted to official evaluation.</p></div>
+  </div>
   <div class="tick">
-    <div class="who optimizer">Agent</div>
-    <div class="what"><p>Writes the <code>OptimizationResult</code> JSON file: <strong>four</strong> ordered candidate specs — one more than the guidance asked — plus annotations: two untested variants it considered, its rationale, and its self-ranking. The over-return is not an error; it is recorded as data about this agent.</p>
-      <div class="ledger"><b>ledger</b>result ingested; over-return noted; annotations stored as provenance, never as scores</div>
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Submits 15,744 jobs — one per (rollout config, task, seed) — as a dr-platform campaign, exactly as in the Eval run: per-model selector capacity, failure taxonomy, retries. Failures land as rollout results with a cause, never gaps.</p>
+      <div class="ledger"><b>output</b>15,744 official rollout results keyed (rollout config hash, official eval config hash, task, seed)</div>
     </div>
   </div>
   <div class="tick">
-    <div class="who env">Harness</div>
-    <div class="what"><p>Agent exits; the harness reports the gpt-5.6 conversation's token usage. This run is now comparable to a COPRO or GEPA run on total-resources-consumed axes: proxy eval cost from the ledger, control-plane cost from the harness.</p>
-      <div class="ledger"><b>ledger</b>control-plane cost recorded: agent tokens + 18 tool-call costs already itemized</div>
-    </div>
-  </div>
-  <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Diff-validates all four returned specs against the seed: only the encoder prompt parameter differs — consistent with the mutation surface. Selection applies the recorded policy: <strong>top 2 as ranked</strong>. (A different experiment could select using the ledger's proxy scores, or the compression axis — free to compute on all four descriptions — without a new contract.)</p></div>
-  </div>
-  <div class="tick">
-    <div class="who certifier">Certifier</div>
-    <div class="what"><p>Runs the two selected candidates × 40 tasks under C<sub>cert</sub> — full decoder model, the experiment's own dataset. Failures classified by the whetstone taxonomy; transient ones retry.</p>
-      <div class="ledger"><b>ledger</b>80 certified per-task records tagged (T<sub>i</sub>, C<sub>cert</sub>): pass/fail, compressed bytes, ground-truth bytes, tokens, provider cost</div>
-    </div>
-  </div>
-  <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Aggregates from certified records only and emits the report. The 18 proxy records remain in the ledger — queryable, cost-accounted, and excluded from the plot by construction because they carry the tool-config digest, not C<sub>cert</sub>'s.</p>
-      <div class="ledger"><b>ledger</b>2 certified aggregates; pareto contribution derived as a view</div>
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates from official rollout results only: per rollout config, Average Binary Test Pass Rate and mean measured compression. The 1,440 cheap rollout results stay queryable and cost-accounted — excluded from the plot by construction, because they carry the cheaper Score Node Eval Config in their hashes, not the official eval config's.</p>
+      <div class="ledger"><b>output</b>32 rollout config results — each winning template's 4 pairs × 4 ratios</div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: two certified points from an unowned loop</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot: two proposed templates against the A/B baselines</h2></div>
 
-<p>Two certified points join the correctness–compression plot, each traceable through the ledger to the run that produced them: 18 proxy evaluations under one tool-config digest, one opaque control plane with its token cost on record, one selection decision applied as configured. The agent's self-assessments and untested variants sit in provenance — available to seed a future run's proposals, structurally incapable of contaminating the plot.</p>
+<p>The two winning templates land as 8 candidates — (template, provider, model) — each a distribution of 4 rollout config results across the budget ratios: Average Binary Test Pass Rate vs mean measured compression. Because the official eval config hash is identical to the Eval run's, the <span class="key">template A/B baselines overlay directly</span> — no re-running, the existing official rollout results already carry the same keys. The natural readings: <span class="key">proposed vs initial templates</span> at matched model and ratio, and each proposal's <span class="key">budget-response curve</span>. The agent's self-ordering sits in provenance, available to compare against the official ordering — but it never touches the plot.</p>
 
-<div class="callout">This configuration is the reason the contracts are data. Nothing here required new machinery — only a new transport (a bridge instead of a function call) and a designer-specified tool. The same rails carry the distant-future control plane that edits graph structure: widen the mutation surface declaration, and the diff validator, selection, certification, and ledger already know what to do.</div>
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+
+<div class="grid-3">
+  <div class="card optim">
+    <h3>The contract crosses the boundary unchanged</h3>
+    <ul>
+      <li>Contracts are serializable schemas first: COPRO, MIPROv2, and GEPA call them in-process; here the same bytes cross a process boundary</li>
+      <li>Request out as a prompt plus files; result back as a JSON file parsed against the schema; tools over a bridge</li>
+      <li>Nothing downstream changes: the diff check, selection, Evaluator, and analysis cannot tell the transport apart</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Guidance, not enforcement</h3>
+    <ul>
+      <li>Constraints live in tool definitions: the capacity is what the tool <em>is</em>, not a policy layer around the agent</li>
+      <li>The requested count ("best 3") is guidance; over-return is advisory provenance about the agent</li>
+      <li>A different experiment can issue a 5-call tool, an unlimited tool, or two tools with different task subsets — tool design is experimental design</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Cheap evaluation vs official evaluation</h3>
+    <ul>
+      <li>The tool's rollouts run under a cheaper Score Node Eval Config — smaller task set, 1 seed, same preprocess and metrics extraction — carried inside those rollout configs' hashes</li>
+      <li>Only the harness's official evaluation produces official rollout results; plots read only those</li>
+      <li>The agent may evaluate however its tools allow — "evaluate" alone is the general verb</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Budget and cost accounting</h3>
+    <ul>
+      <li>Optimization budget = tool capacity: 20 calls × 80 rollouts ≈ 3,200 LLM calls vs ≈ 31,500 in the official pass</li>
+      <li>Control cost (agent tokens, wall clock) is captured at exit — advisory metadata for comparing optimizers, never a score</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Sample holdout is the designer's call</h3>
+    <ul>
+      <li>Whether the tool's 20-task subset may contain official-evaluation tasks is left to experimental designers — the question is sharpest in this doc, and this design does not litigate it</li>
+      <li>The hashes keep the two measurement regimes separate either way</li>
+    </ul>
+  </div>
+</div>
 
 </main>
 </body>

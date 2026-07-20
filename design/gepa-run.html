@@ -6,23 +6,25 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>GEPA evolves against the ledger: the archive lives environment-side, reflection is the mutator</title>
+<title>GEPA Run Design</title>
 </head>
 <body class="with-toc">
 <nav class="toc" aria-label="Contents">
   <div class="brand">Design: GEPA</div>
-  <a href="#config">This configuration</a>
+  <a href="vocab_and_defs.html">Vocabulary</a>
+  <a href="#target">Example setup</a>
+  <a href="#specified">Run configurations</a>
   <div class="group">The system</div>
-  <a href="#system">Component diagram</a>
-  <a href="#decisions">Where decisions live</a>
+  <a href="#system">Optimization + official evaluation</a>
   <div class="group">In action</div>
   <a href="#run">Full run walkthrough</a>
   <a href="#output">What lands on the plot</a>
+  <a href="#notes">Additional notes</a>
 </nav>
 
 <main>
-<h1>GEPA evolves against the ledger: the archive lives environment-side, reflection is the mutator</h1>
-<div class="byline">whetstone-ai · system design walkthrough 4 of 5 · 2026-07-19</div>
+<h1>GEPA Run Design</h1>
+<div class="byline">whetstone-ai · 2026-07-20</div>
 
 <div class="family-nav">
   <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
@@ -34,199 +36,279 @@
 </div>
 
 <div class="hero">
-  GEPA is the richest control plane in the family: an evolutionary loop whose mutation operator is a <span class="key">reflection LM</span> reading real failure evidence. The key structural move here is that GEPA's candidate archive — the per-task score matrix its pareto frontier is computed from — is <span class="key">not internal state</span>. It is a <span class="key">ledger view</span>, read back through the environment each iteration. That one move buys crash-resume for free, lets concurrent optimizer runs share memoized evaluations, and makes the frontier auditable after the run. And because the archive's frontier <em>is</em> a candidate set spanning trade-offs, GEPA is where <span class="key">multi-return</span> earns its keep: the run returns a front, not a point.
+  A concrete GEPA run in our proposed design: an evolutionary loop whose mutation operator is a <span class="key">reflection LM</span> reading real rollout traces. The optimizer searches on a cheap tool budget and returns a small <span class="key">front of evolved encoder templates</span>; only the evaluation harness's official evaluation puts anything on the plot.
 </div>
 
-<div class="legend">
-  <span><span class="sw settled"></span><strong>Settled</strong> — decided in our design discussions</span>
-  <span><span class="sw discussed"></span><strong>Discussed</strong> — I proposed it in conversation; you built on it without objection, not explicitly ratified</span>
-  <span><span class="sw viz"></span><strong>Visualization-only</strong> — a choice I made just to make this walkthrough concrete</span>
+<p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the eval design.</p>
+
+<div class="callout"><b>Temporary vocabulary</b> — terms this doc needs beyond the vocab page; flagged here for review, not added there.
+  <ul>
+    <li><b>archive</b> — the optimizer's in-memory table of per-task scores for every candidate it has evaluated through its tools. Needed: GEPA's parent selection and return ranking read it.</li>
+    <li><b>parent / child</b> — the candidate a mutation starts from and the candidate it produces. Needed: describes lineage during evolution.</li>
+    <li><b>reflection LM</b> — the optimizer-owned LM that reads rollout traces and writes a mutated encoder template. Needed: distinguishes it from the encoder and decoder LMs inside rollouts.</li>
+    <li><b>rollout trace</b> — the node outputs and failure detail a tool attaches to a rollout result: <code>encoded_code_rep</code>, <code>code_generation</code>, failing-test output, preprocess failure cause. Needed: it is GEPA's reflective evidence.</li>
+    <li><b>per-task frontier</b> — the candidates whose archive row is best on at least one task; parents are sampled from it. Needed: must stay distinct from the plot's pareto front.</li>
+    <li><b>minibatch</b> — the 3-task sample a tool evaluates one candidate on per iteration. Needed: names the reflective evidence's scope.</li>
+  </ul>
 </div>
 
-<div class="section-head" id="config"><h2>This configuration: one seed prompt, four evolution iterations, a frontier returned</h2></div>
+<div class="section-head" id="target"><h2>Example Setup</h2></div>
 
-<p>One seed treatment (baseline encoder prompt); mutation surface = <strong>the encoder prompt parameter only</strong>. The toolkit holds two tools: <code>E_mini</code> (3-task minibatch whose records carry full feedback material) and <code>E_val</code> (25-task validation sample). The loop runs four iterations of reflective mutation with strict-improvement acceptance, then returns the <span class="key">two-objective frontier</span> from the archive as an ordered list of at most 4 candidates. The experiment certifies the top 3.</p>
+<div class="grid-4">
+  <div class="card optim">
+    <h3>Mutation Surface &amp; Initial Candidates</h3>
+    <ul>
+      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder LM Node — nothing else may change</li>
+      <li>Initial candidates: encoder Templates <strong>A</strong> and <strong>B</strong> (full text in the <a href="eval-run.html#target">eval doc</a>)</li>
+      <li>One GEPA run per (provider, model) pair — the same 4 pairs as the eval experiment</li>
+    </ul>
+    <p class="small muted space-top">This walkthrough follows (openrouter, <code>deepseek/deepseek-v4-flash</code>).</p>
+  </div>
+  <div class="card optim">
+    <h3>Toolkit</h3>
+    <ul>
+      <li><code>evaluate_minibatch</code> — 3 tasks × 1 seed at budget ratio 0.5; returns rollout results <em>with rollout traces</em></li>
+      <li><code>evaluate_subset</code> — 24 tasks × 1 seed at budget ratio 0.5; scores only</li>
+    </ul>
+    <p class="small muted space-top">Each tool swaps in its own cheaper Score Node Eval Config: same preprocess and metrics extraction as official, smaller task set, fewer seeds. Minibatches are sampled per iteration from the 24-task subset.</p>
+  </div>
+  <div class="card optim">
+    <h3>Optimization Budget &amp; Return</h3>
+    <ul>
+      <li>8 iterations of reflective mutation</li>
+      <li>Caps: 400 optimization rollouts · 8 reflection LM calls</li>
+      <li>Return: ordered list, at most 4 candidates</li>
+    </ul>
+    <p class="small muted space-top">Guidance: "evolve the encoder user prompt template toward the correctness–compression front."</p>
+  </div>
+  <div class="card">
+    <h3>Official Evaluation</h3>
+    <ul>
+      <li>Unchanged from the eval design: HumanEval+ (164) @ pinned revision · 3 seeds · zstd-19 ÷ reference length</li>
+      <li>Variance source: budget ratios 0.25 / 0.5 / 0.75 / 1.0</li>
+      <li>Selection: officially evaluate the top 3 returned candidates</li>
+    </ul>
+    <p class="small muted space-top">3 × 4 ratios × 164 × 3 = 5,904 rollouts per run.</p>
+  </div>
+</div>
 
-<p>Two adaptations of reference GEPA, both flagged as recommendations: the <strong>reflective dataset comes from ledger records</strong> (sandbox test failures, preprocessing failure causes, code-leakage flags) rather than framework trace capture; and selection is a <strong>hybrid</strong> — per-task frontier for parent diversity, correctness×compression front for what gets returned.</p>
+<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
-<div class="section-head" id="system"><h2>Component diagram: the loop runs between the control plane and the ledger</h2></div>
+<div class="plane">
+  <div class="plane-label">Architecture <span class="sub">· identical to the eval design</span></div>
+  <div class="hflow">
+    <div class="comp node"><b>Encoder LM Node</b><span class="note">variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><hr>the mutation surface is exactly one of these: <code>{user_prompt_template}</code></span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b>Decoder LM Node</b><span class="note">all variables set to the eval design's values; outside the mutation surface</span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b>Score Node</b><span class="note">carries the Score Node Eval Config as variables, inside the rollout config hash<hr>official in initial and returned rollout configs; a tool call swaps in the tool's cheaper one</span></div>
+  </div>
+</div>
+
+<div class="flow-arrow"><span>a child candidate differs from its parent in exactly one variable</span> <span class="glyph">▼</span></div>
+
+<div class="plane optim">
+  <div class="plane-label">Rollout Config Example <span class="sub">· child candidate G5 (evolved template) at budget_ratio 0.5</span></div>
+  <div class="comps">
+    <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the reflection LM at iteration 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
+    <div class="comp node"><b>Inherited From Parent</b><span class="note">encoder + decoder model configs = (openrouter, <code>deepseek/deepseek-v4-flash</code>), temperature 1.0 · decoder prompt template config · Score Node Eval Config (official)<hr>byte-identical to the parent's rollout config at ratio 0.5 outside <code>{user_prompt_template}</code>; the hash differs, so this is a new rollout config</span></div>
+  </div>
+</div>
+
+<div class="section-head" id="system"><h2>Run GEPA, Then Official Evaluation on the Returned Candidates</h2></div>
 
 <div class="flow">
   <div class="plane">
-    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all digested</span></div>
+    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Seed treatment ×1</b><span class="note">baseline encoder prompt; GraphSpec, identity = <code>graph_digest</code></span></div>
-      <div class="comp settled"><b>Mutation surface</b><span class="note">encoder prompt parameter only — declared, diffable</span></div>
-      <div class="comp viz"><b>Toolkit: E<sub>mini</sub> · E<sub>val</sub></b><span class="note">tools-as-frozen-eval-configs is settled; 3-task / 25-task sizes are illustrative</span></div>
-      <div class="comp settled"><b>Requested return: frontier, max 4</b><span class="note">guidance, not enforcement; over-return is data</span></div>
-      <div class="comp settled"><b>Selection policy: certify top 3</b><span class="note">named, recorded experiment config</span></div>
-      <div class="comp viz"><b>Certification config C<sub>cert</sub></b><span class="note">40 HumanEval+ tasks · fixed decoder model · zstd-19 metric</span></div>
+      <div class="comp settled"><b>Rollout config generator</b><span class="note">initial candidates A, B × 4 budget ratios → 8 initial rollout configs; identity = <code>graph_hash</code></span></div>
+      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder LM Node — declared, diff-checkable</span></div>
+      <div class="comp settled optim"><b>Toolkit definitions</b><span class="note"><code>evaluate_minibatch</code> · <code>evaluate_subset</code> — each carries its cheaper Score Node Eval Config; constraints live in the tool definitions: guidance, not enforcement</span></div>
+      <div class="comp settled optim"><b>Budget &amp; selection</b><span class="note">400 optimization rollouts · 8 reflection calls · return ≤ 4; selection = officially evaluate top 3 (named, hashed policy)</span></div>
+      <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code> (serializable schema)</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 8 initial rollout configs, mutation surface, tool handles, guidance, budget</span> <span class="glyph">▼</span></div>
 
-  <div class="plane">
-    <div class="plane-label">Control plane <span class="sub">· GEPA loop — owns only inside-step state</span></div>
+  <div class="plane optim">
+    <div class="plane-label">Optimization stage <span class="sub">· the GEPA optimizer</span></div>
     <div class="comps">
-      <div class="comp viz"><b>Parent sampler</b><span class="note">per-task pareto frontier computed fresh from the ledger view; stochastic pick preserves diversity</span></div>
-      <div class="comp settled"><b>Reflection LM</b><span class="note">optimizer-owned strong model; its tokens tracked unconditionally as control-plane cost</span></div>
-      <div class="comp discussed"><b>Child assembler</b><span class="note">emits a full spec differing from parent only inside the mutation surface</span></div>
-      <div class="comp viz"><b>Acceptance check</b><span class="note">child must strictly beat parent on the <em>same</em> minibatch task ids</span></div>
-      <div class="comp settled"><b>Ephemeral state only</b><span class="note">current parent, current minibatch, loop counter — nothing that outlives the step</span></div>
+      <div class="comp settled optim"><b>Archive</b><span class="note">in-memory per-task score table assembled from tool returns — optimizer state, nothing official</span></div>
+      <div class="comp settled optim"><b>Parent sampler</b><span class="note">computes the per-task frontier over the archive; stochastic pick preserves diversity — not greedy best</span></div>
+      <div class="comp settled optim"><b>Reflection LM</b><span class="note">optimizer-owned strong model; reads the parent's template + rollout traces, writes a new template; its cost counted separately from rollout cost</span></div>
+      <div class="comp settled optim"><b>Child assembler</b><span class="note">child rollout configs = the parent's, with only <code>{user_prompt_template}</code> changed</span></div>
+      <div class="comp settled optim"><b>Acceptance check</b><span class="note">child must strictly beat the parent on the <em>same</em> minibatch task ids</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>during the loop: <code>E_mini</code> / <code>E_val</code> tool calls, <code>read_archive</code> queries</span> <span class="glyph">▼</span><span class="glyph">▲</span> <span>per-task records with feedback material</span></div>
-  <div class="flow-arrow"><span>at the end: <code>OptimizationResult</code> — the two-objective frontier, ordered, max 4</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>during the loop: <code>evaluate_minibatch</code> / <code>evaluate_subset</code> calls</span> <span class="glyph">▼</span><span class="glyph">▲</span> <span>rollout results + rollout traces</span></div>
+  <div class="flow-arrow"><span>at the end: <code>OptimizationResult</code> — ordered, ≤ 4 candidates as 16 rollout configs, plus advisory annotations</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Environment <span class="sub">· one eval engine; authoritative ledger</span></div>
+    <div class="plane-label">Evaluation harness <span class="sub">· serves tools during the run; runs official evaluation after it</span></div>
     <div class="comps">
-      <div class="comp viz"><b>read_archive</b><span class="note">new capability: query ledger records by treatment digest, eval-config, task — the archive is this view</span></div>
-      <div class="comp settled"><b>Eval engine + tools</b><span class="note">E<sub>mini</sub> and E<sub>val</sub> are frozen partial applications of the one engine</span></div>
-      <div class="comp discussed"><b>Diff validator</b><span class="note">each returned spec must differ from the seed lineage only in the encoder prompt</span></div>
-      <div class="comp settled"><b>Selection</b><span class="note">applies the recorded policy: top 3 of the returned order proceed</span></div>
-      <div class="comp discussed"><b>Certifier</b><span class="note">runs survivors under C<sub>cert</sub>; only certified records feed the plot</span></div>
-      <div class="comp settled"><b>Ledger</b><span class="note">every record tagged (treatment digest, eval-config digest); task-LM and reflection-LM costs tracked separately</span></div>
-      <div class="comp settled"><b>Provenance store</b><span class="note">lineage annotations — which parent, which feedback drove each mutation; advisory, never scores</span></div>
+      <div class="comp settled optim"><b>Tool service</b><span class="note">executes each tool call as rollouts under that tool's cheaper Score Node Eval Config — a different rollout config hash, so tool results can never pass as official</span></div>
+      <div class="comp settled optim"><b>Diff check</b><span class="note">every returned rollout config must differ from the initial ones only inside the mutation surface</span></div>
+      <div class="comp settled optim"><b>Selection</b><span class="note">applies the frozen policy: top 3 candidates (12 rollout configs) admitted</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 12 × 164 × 3 under the official eval config; only the outputs of this pass feed the plot</span></div>
+      <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {template, ratio}</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>tools and certifier execute each treatment × task via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>tool calls and the Evaluator both execute each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Treatment plane <span class="sub">· the optimized flow, run per (treatment, task)</span></div>
+    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed)</span></div>
     <div class="hflow">
-      <div class="comp settled"><b>Ground truth</b><span class="note">dr-code <code>HumanEvalTask</code></span></div>
+      <div class="comp settled"><b>Task Inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LM</b><span class="note">dr-providers via whetstone.lm — the mutated prompt lives here</span></div>
+      <div class="comp settled"><b>Encoder LM Node</b><span class="note">emits <code>encoded_code_rep</code> — the evolved template lives here</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Description</b><span class="note">compression measured here as a <em>metric</em>, not a stage</span></div>
+      <div class="comp settled"><b>Decoder LM Node</b><span class="note">emits <code>code_generation</code>; same model as encoder</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LM</b><span class="note">dr-providers</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Preprocess</b><span class="note">dr-code candidate extraction</span></div>
-      <span class="harrow">→</span>
-      <div class="comp settled"><b>Sandbox tests</b><span class="note">dr-code hardened OCI scoring</span></div>
+      <div class="comp settled"><b>Score Node</b><span class="note">preprocess → sandbox tests → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp viz"><b>Feedback material</b><span class="note">per-task records carry failing test details, preprocessing failure causes (typed <code>Absent</code> values), <code>CodeLeakage</code> flags on the description, whetstone failure summaries — the reflective dataset is assembled from these, not framework traces</span></div>
-      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences and records; dr-serialize digests everything; whetstone eval_failures classifies and retries; dr-platform available for at-scale sweeps</span></div>
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call — for tool rollouts and official rollouts alike</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>5,904 official rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 5,904 per run, persisted for analysis</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">12 rollout config results (3 evolved candidates × 4 ratios); Templates A and B's 8 already exist from the eval run — same hashes, reused</span></div>
+      <div class="comp settled"><b>Analysis</b><span class="note">5 candidate curves per (provider, model) pair; pareto front — views derived from official rollout results, never stored as truth</span></div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="decisions"><h2>Where decisions live in this configuration</h2></div>
-
-<div class="table-wrap">
-<table>
-  <thead><tr><th>Decision</th><th>Made where</th><th>Provenance</th></tr></thead>
-  <tbody>
-    <tr><td>The archive lives environment-side; the optimizer owns only inside-step state</td><td>Environment / contract</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Both cost kinds tracked unconditionally — task-LM and reflection-LM, separately</td><td>Ledger</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Ordered multi-return; the experiment decides how many to use and how to choose</td><td>Contract / experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Selection policy is named, recorded experiment config</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Constraints live in tool design (frozen eval-configs), not in an enforcement layer</td><td>Experiment design</td><td><span class="dpin settled">settled</span></td></tr>
-    <tr><td>Optimizer proposes; environment certifies; only certified records reach the plot</td><td>Environment</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Result carries full specs; environment validates by diffing against the mutation surface</td><td>Environment boundary</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td>Both contracts are serializable schemas first; Python bindings are wrappers</td><td>Contract</td><td><span class="dpin discussed">discussed</span></td></tr>
-    <tr><td><code>read_archive</code> capability shape (query by treatment digest / eval-config / task)</td><td>Environment</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Reflective feedback assembled from ledger records instead of framework trace capture</td><td>Environment → control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Hybrid selection: per-task frontier for parents, two-objective front for the returned set</td><td>Control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>E<sub>mini</sub>=3 tasks, E<sub>val</sub>=25 tasks, 4 iterations, strict-sum acceptance on the same minibatch</td><td>Experiment design / control plane</td><td><span class="dpin viz">viz-only</span></td></tr>
-    <tr><td>Whether E<sub>mini</sub>/E<sub>val</sub> tasks overlap the C<sub>cert</sub> set</td><td>Experiment design</td><td><span class="dpin viz">viz-only — open question</span></td></tr>
-  </tbody>
-</table>
-</div>
-
-<div class="section-head" id="run"><h2>Full run walkthrough: seed, evolve four times, return the front</h2></div>
+<div class="section-head" id="run"><h2>Full run walkthrough: seed the archive, evolve eight times, return the front</h2></div>
 
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment config: seed spec T<sub>0</sub>, mutation surface = encoder prompt, toolkit {E<sub>mini</sub>, E<sub>val</sub>}, requested return "the frontier, max 4", selection = certify top 3, C<sub>cert</sub>. Everything serialized and digested.</p>
-      <div class="ledger"><b>ledger</b>experiment config registered under its digest; T<sub>0</sub>, E<sub>mini</sub>, E<sub>val</sub>, C<sub>cert</sub> digests recorded</div>
-    </div>
+    <div class="what"><p>Freezes the experiment: initial candidates A and B expanded across the 4 budget ratios into 8 initial rollout configs; mutation surface = <code>{user_prompt_template}</code>; the two tool definitions, each carrying its cheaper Score Node Eval Config; the budget caps; the selection policy (officially evaluate top 3); and the official eval config — identical to the eval run's. Everything serialized, everything hashed.</p></div>
   </div>
   <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Issues the <code>OptimizationRequest</code>: seed, mutation surface, tool handles, guidance ("evolve toward the correctness–compression front").</p></div>
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the GEPA optimizer: 8 initial rollout configs, the mutation surface, handles for <code>evaluate_minibatch</code> and <code>evaluate_subset</code>, the guidance string, and the budget caps.</p></div>
   </div>
-  <div class="tick">
+  <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Seeds the archive: calls E<sub>val</sub>(T<sub>0</sub>). The archive now has one row of 25 per-task scores — held in the ledger, not in GEPA.</p>
-      <div class="ledger"><b>ledger</b>25 records (T<sub>0</sub>, E<sub>val</sub>): pass/fail, compressed bytes, costs</div>
+    <div class="what"><p>Seeds the archive: <code>evaluate_subset</code> on Templates A and B at ratio 0.5 — 48 rollouts. The archive now holds two rows of 24 per-task scores.</p>
+      <div class="ledger"><b>output</b>48 rollout results under the subset tool's Score Node Eval Config — optimization data, never official</div>
     </div>
   </div>
 </div>
 
 <div class="repeat">
-  <div class="repeat-label">Evolution loop · iterations 1–4</div>
+  <div class="repeat-label">Evolution loop · iterations 1–8</div>
   <div class="run">
-    <div class="tick">
+    <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
-      <div class="what"><p><code>read_archive</code> query → per-task score matrix for all treatments so far. Computes the <span class="key">per-task pareto frontier</span> (a candidate survives if it is best on at least one task) and stochastically samples a parent P from it — diversity pressure, not greedy best.</p>
-        <div class="ledger"><b>ledger</b>archive query logged; zero eval cost</div>
+      <div class="what"><p>Computes the <span class="key">per-task frontier</span> over the archive — a candidate survives if its row is best on at least one task — and stochastically samples a parent P from it. Diversity pressure, not greedy best. Zero rollouts spent.</p></div>
+    </div>
+    <div class="tick optim">
+      <div class="who env">Evaluation harness</div>
+      <div class="what"><p>Serves <code>evaluate_minibatch</code>(P): 3 tasks sampled from the subset, 1 seed, ratio 0.5.</p>
+        <div class="ledger"><b>output</b>3 rollout results with rollout traces: <code>encoded_code_rep</code>, <code>code_generation</code>, failing-test output, preprocess failure causes</div>
       </div>
     </div>
-    <div class="tick">
-      <div class="who env">Environment</div>
-      <div class="what"><p>E<sub>mini</sub>(P) on 3 sampled tasks. Records return with full <span class="key">feedback material</span>: which tests failed and how, preprocessing <code>Absent</code> causes, whether the description leaked literal code.</p>
-        <div class="ledger"><b>ledger</b>3 records (P, E<sub>mini</sub>) incl. failure text and leakage flags</div>
-      </div>
-    </div>
-    <div class="tick">
+    <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
-      <div class="what"><p>The reflection LM reads P's current encoder prompt plus the feedback-annotated examples and writes a <span class="key">new encoder prompt</span> (e.g., iteration 2: "descriptions dropped edge-case behavior the tests exercise — state boundary conditions explicitly"). The child spec C is assembled: identical to P except inside the mutation surface.</p>
-        <div class="ledger"><b>ledger</b>reflection-LM tokens tracked as control-plane cost, separate from task-LM cost</div>
+      <div class="what"><p>The <span class="key">reflection LM</span> reads P's template plus the traces and writes a new template. Iteration 2, concretely: the traces show descriptions dropping edge-case behavior the tests exercise, so the new template adds "state the boundary conditions the tests exercise." The child candidate's rollout configs are assembled: the parent's, with only <code>{user_prompt_template}</code> changed.</p>
+        <div class="ledger"><b>output</b>one reflection LM call counted against the reflection cap, separate from rollout spend</div>
       </div>
     </div>
-    <div class="tick">
-      <div class="who env">Environment</div>
-      <div class="what"><p>E<sub>mini</sub>(C) on the <em>same 3 task ids</em>. Acceptance is strict: sum of child scores must exceed the parent's. <strong>Iteration 3 fails here</strong> — the child compressed harder but regressed correctness on 2 of 3 tasks, and is dropped. Its records stay in the ledger: a rejected child is still a memoized, auditable data point, and a later run that proposes the same prompt gets the answer for free.</p>
-        <div class="ledger"><b>ledger</b>3 records (C, E<sub>mini</sub>); acceptance verdict recorded either way</div>
+    <div class="tick optim">
+      <div class="who env">Evaluation harness</div>
+      <div class="what"><p>Serves <code>evaluate_minibatch</code>(child) on the <em>same 3 task ids</em>. Acceptance is strict: the child's summed Score Node score must exceed the parent's. <strong>Iteration 3 fails here</strong> — the child compressed harder but regressed correctness on 2 of 3 tasks, and is dropped; its rollout results remain optimization data.</p>
+        <div class="ledger"><b>output</b>3 rollout results; acceptance verdict either way</div>
       </div>
     </div>
-    <div class="tick">
-      <div class="who env">Environment</div>
-      <div class="what"><p>On acceptance (iterations 1, 2, 4): E<sub>val</sub>(C) promotes the child to the archive — 25 per-task records — and the frontier recomputes on the next <code>read_archive</code>.</p>
-        <div class="ledger"><b>ledger</b>25 records (C, E<sub>val</sub>); archive grows to 2, 3, then 4 rows</div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>On acceptance (iterations 1, 2, 4, 6, 8): <code>evaluate_subset</code>(child) — 24 rollouts — adds the child's row to the archive; the per-task frontier recomputes on the next iteration.</p>
+        <div class="ledger"><b>output</b>archive grows to 7 rows: A, B, and five evolved candidates</div>
       </div>
     </div>
   </div>
 </div>
 
 <div class="run">
-  <div class="tick">
+  <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Final <code>read_archive</code>: aggregates E<sub>val</sub> scores per treatment and computes the <span class="key">correctness×compression front</span> — this, not the per-task frontier, ranks the return. Returns <code>OptimizationResult</code>: ordered list of 4 specs spanning the trade-off (best-correctness first) plus advisory annotations — each candidate's parent and the feedback excerpt that drove its mutation.</p>
-      <div class="ledger"><b>ledger</b>result recorded; annotations land in the provenance store, never as scores</div>
+    <div class="what"><p>Aggregates each archive row and computes the archive's correctness×compression front — 4 of the 7 candidates. Returns the <code>OptimizationResult</code>: an ordered list of 4 candidates as 16 rollout configs (each candidate = its 4 budget-ratio configs), plus advisory annotations — each candidate's parent and the reflection excerpt that produced it. Advisory provenance, never a score. Spend: ≈216 of 400 rollouts, 8 of 8 reflection calls.</p></div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Diff check: all 16 returned rollout configs differ from the initial ones only in <code>{user_prompt_template}</code> — consistent with the mutation surface; 16/16 pass. Selection applies the frozen policy and admits the top 3 candidates — 12 rollout configs — to official evaluation.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Submits 5,904 jobs — one per (rollout config, task, seed) — as a dr-platform campaign with labels <code>{template, ratio}</code>. Whetstone's failure taxonomy retries transient errors; permanent failures land as rollout results with a cause, not gaps.</p>
+      <div class="ledger"><b>output</b>5,904 official rollout results keyed (rollout config hash, official eval config hash, task, seed)</div>
     </div>
   </div>
   <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Diff validation: all 4 specs differ from the seed lineage only in the encoder prompt parameter — consistent with the declared mutation surface. Selection policy certifies the top 3.</p></div>
-  </div>
-  <div class="tick">
-    <div class="who certifier">Certifier</div>
-    <div class="what"><p>3 treatments × 40 tasks under C<sub>cert</sub>. Compression computed on every description; correctness from the sandbox; failures classified and retried per the whetstone taxonomy.</p>
-      <div class="ledger"><b>ledger</b>120 records tagged (T<sub>i</sub>, C<sub>cert</sub>) — the only records the plot may use</div>
-    </div>
-  </div>
-  <div class="tick">
-    <div class="who env">Environment</div>
-    <div class="what"><p>Aggregates certified records; the plot gains 3 points and the front updates. The run report shows total spend split by kind: task-LM (tool + certification evals) vs reflection-LM (control plane).</p>
-      <div class="ledger"><b>ledger</b>3 certified aggregates; run cost totals: ~206 task-LM executions, 4 reflection calls</div>
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates from official rollout results only: per rollout config, the Average Binary Test Pass Rate and mean measured compression — 12 rollout config results. Templates A and B's 8 rollout config results carry over from the eval run unchanged, because their rollout config and official eval config hashes are identical.</p>
+      <div class="ledger"><b>output</b>20 rollout config results for this (provider, model) pair — five candidate curves of 4</div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: a certified slice of the evolved front</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot: five curves per pair, and only official results</h2></div>
 
-<p>GEPA's returned set is not one prompt but a front — in this run, one candidate holding the correctness ceiling, one trading a few points of pass rate for markedly shorter descriptions, one in between. All three certified points carry C<sub>cert</sub>'s digest; every E<sub>mini</sub>/E<sub>val</sub> measurement made during evolution coexists in the same ledger and is excluded from the plot by construction. The rejected iteration-3 child is visible in the ledger too — the run's full search history is reconstructible from records alone, with no GEPA-internal state to recover.</p>
+<p>Per (provider, model) pair: <span class="key">five candidate curves</span> — Templates A and B (reused from the eval run) and the three evolved templates — each a distribution of 4 rollout config results across the budget ratios, each result averaged over 164 tasks × 3 seeds. The natural readings: whether evolution <span class="key">beat the initial templates</span> at matched ratio, and how the <span class="key">pareto front</span> moves once the evolved candidates join. Nothing measured during optimization appears here: every minibatch and subset score sits under a different rollout config hash by construction.</p>
 
-<div class="callout">Versus dspy's GEPA: no two-package engine/adapter split — the environment <em>is</em> the engine's world; no framework trace capture — ledger records carry the feedback; the archive is externalized to the ledger instead of living in optimizer memory; and the two-objective front becomes the native selection structure for what the run returns, rather than a per-task proxy. What stayed, because it works: reflective mutation from real failures, strict-improvement acceptance on the same minibatch, and frontier-based parent sampling for diversity.</div>
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+
+<div class="grid-3">
+  <div class="card optim">
+    <h3>Three fronts, only one is a result</h3>
+    <ul>
+      <li>The <span class="key">per-task frontier</span> steers parent sampling — diversity machinery</li>
+      <li>The archive's <span class="key">correctness×compression front</span> ranks the return — selection machinery</li>
+      <li>The plot's <span class="key">pareto front</span> is computed from official rollout config results — the only front that is a result</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Cheap evaluation vs official evaluation</h3>
+    <ul>
+      <li>A tool's Score Node Eval Config sits inside the rollout config hash — tool rollout results are keyed apart from official ones and can never be confused with them</li>
+      <li>Same preprocess and metrics extraction as official; smaller task set, fewer seeds, one ratio</li>
+      <li>Whether the 24-task subset may overlap the official 164 is left to experimental designers</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>The archive is optimizer state</h3>
+    <ul>
+      <li>In-memory, assembled entirely from tool returns; the harness owns none of it</li>
+      <li>Persistence enters only at the final results &amp; analysis stage, and is deliberately not detailed here</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Candidate = one plotted line</h3>
+    <ul>
+      <li>A child inherits everything outside the mutation surface from its parent</li>
+      <li>Each candidate spans 4 rollout configs — the variance source unrolled across the budget ratios</li>
+      <li>Ordered multi-return: 4 candidates back, the frozen selection policy decides how many go on</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Versus reference GEPA</h3>
+    <ul>
+      <li>Kept, because it works: reflective mutation from real failures, strict-improvement acceptance on the same minibatch, per-task frontier parent sampling</li>
+      <li>Ours: rollout traces come from rollout results, not framework trace capture; cheap evaluation lives in tool definitions as cheaper Score Node Eval Configs — guidance, not enforcement</li>
+      <li>dspy's GEPA is reference-only, never a dependency</li>
+    </ul>
+  </div>
+</div>
 
 </main>
 </body>
