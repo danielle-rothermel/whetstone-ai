@@ -176,7 +176,7 @@ Use at most {MAX_BUDGET} characters.
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
       <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744 in all, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout config results</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the budget ratios; pareto front — views derived from the rollout results, never stored as truth</span></div>
     </div>
   </div>
@@ -219,15 +219,15 @@ Use at most {MAX_BUDGET} characters.
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates from official rollout results only: for each rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks — the Average Binary Test Pass Rate — and the same aggregation for measured compression. Emits 32 rollout config results: 8 candidates × 4 ratios.</p>
-      <div class="ledger"><b>output</b>32 rollout config results — each candidate's distribution of 4 across the ratios; the pareto front is derived from them</div>
+    <div class="what"><p>Aggregates from official rollout results only: for each rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks — the Average Binary Test Pass Rate — and the same aggregation for measured compression. Emits 32 rollout aggregates: 8 candidates × 4 ratios.</p>
+      <div class="ledger"><b>output</b>32 rollout aggregates — each candidate's distribution of 4 across the ratios; the pareto front is derived from them</div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: eight candidates, 32 rollout config results, one front</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot: eight candidates, 32 rollout aggregates, one front</h2></div>
 
-<p>Each candidate lands as its own distribution of 4 rollout config results — the variance source unrolled across the budget ratios — each result one rollout config averaged over 164 tasks × 3 seeds: Average Binary Test Pass Rate vs mean measured compression. The natural readings: <span class="key">eight budget-response curves</span> (one per candidate, traced across the ratios), the <span class="key">template A vs B</span> comparison at matched model and ratio, and the overall <span class="key">pareto front</span> — derived from the official rollout results. Because the x-axis is <em>measured</em> compression, the budget knob's honesty is itself visible: a model that ignores <code>MAX_BUDGET</code> drifts right of its ratio cohort.</p>
+<p>Each candidate lands as its own distribution of 4 rollout aggregates — the variance source unrolled across the budget ratios — each aggregate one rollout config averaged over 164 tasks × 3 seeds: Average Binary Test Pass Rate vs mean measured compression. The natural readings: <span class="key">eight budget-response curves</span> (one per candidate, traced across the ratios), the <span class="key">template A vs B</span> comparison at matched model and ratio, and the overall <span class="key">pareto front</span> — derived from the official rollout results. Because the x-axis is <em>measured</em> compression, the budget knob's honesty is itself visible: a model that ignores <code>MAX_BUDGET</code> drifts right of its ratio cohort.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -245,15 +245,15 @@ Use at most {MAX_BUDGET} characters.
     <h3>Candidates and the variance source</h3>
     <ul>
       <li>8 candidates = (encoder user template, provider, model) — one plotted line each</li>
-      <li>Variance source = <code>budget_ratio</code> — spreads each candidate into its distribution of rollout config results</li>
-      <li>Seeds are repetition, not variance: averaged into each rollout config result for confidence — large even at temperature 0, provider generations aren't deterministic</li>
+      <li>Variance source = <code>budget_ratio</code> — spreads each candidate into its distribution of rollout aggregates</li>
+      <li>Seeds are repetition, not variance: averaged into each rollout aggregate for confidence — large even at temperature 0, provider generations aren't deterministic</li>
       <li>8 × 4 ratios = 32 rollout configs; × 164 tasks × 3 seeds = 15,744 rollouts</li>
     </ul>
   </div>
   <div class="card">
     <h3>Tasks are not a variance source</h3>
     <ul>
-      <li>The task set defines the quantity each rollout config result estimates: the average score over it</li>
+      <li>The task set defines the quantity each rollout aggregate estimates: the average score over it</li>
       <li>Fewer or sampled tasks → a noisier estimate of the <em>same</em> average</li>
       <li>A different task set (train / validation / test) → a <em>different</em> quantity: a different eval config</li>
     </ul>

@@ -33,7 +33,7 @@
     <li><strong>Proposal LM</strong> — the optimizer-owned model that writes new encoder user prompt templates. Needed because COPRO makes its own LM calls, distinct from the encoder and decoder inside a rollout.</li>
     <li><strong>Breadth / depth</strong> — COPRO's two knobs: templates proposed per round, and number of proposal rounds. Needed to name the loop's shape; they travel in guidance.</li>
     <li><strong>Attempt history</strong> — the score-ranked list of (template, tool score) pairs fed back to the proposal LM. Needed because it is COPRO's only state.</li>
-    <li><strong>Tool score</strong> — the aggregate a tool call returns to the optimizer: Average Binary Test Pass Rate and mean measured compression under the tool's Score Node Eval Config. Needed to keep what COPRO ranks by distinct from official rollout config results.</li>
+    <li><strong>Tool score</strong> — the aggregate a tool call returns to the optimizer: Average Binary Test Pass Rate and mean measured compression under the tool's Score Node Eval Config. Needed to keep what COPRO ranks by distinct from official rollout aggregates.</li>
   </ul>
 </div>
 
@@ -162,7 +162,7 @@
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
       <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 3,936 per (provider, model) pair, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 8 rollout config results</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 8 rollout aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">2 optimized candidate curves join the A and B baseline curves from the eval experiment; pareto front recomputed — views derived from official rollout results</span></div>
     </div>
   </div>
@@ -224,14 +224,14 @@
   <div class="tick">
     <div class="who env">Evaluation harness</div>
     <div class="what"><p>Aggregates from official rollout results only: per rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over 164 tasks, plus mean measured compression. A and B need no new work — their rollout configs are hash-identical to the eval experiment's, so their official rollout results are reused.</p>
-      <div class="ledger"><b>output</b>8 new rollout config results — P<sub>6</sub> and P<sub>2</sub>'s curves across the ratios, joining the A and B baselines</div>
+      <div class="ledger"><b>output</b>8 new rollout aggregates — P<sub>6</sub> and P<sub>2</sub>'s curves across the ratios, joining the A and B baselines</div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What lands on the plot: two optimized curves per pair, priced end to end</h2></div>
 
-<p>Per (provider, model) pair, the two surviving candidates land as their own distributions of 4 rollout config results across the budget ratios, next to the A and B baseline curves reused from the eval experiment; the pareto front is recomputed from official rollout results only. The 200 tool rollout results stay out of the plot by key — their rollout config hashes carry the tool's Score Node Eval Config — but remain available for post-hoc analysis of <span class="key">how well tool scores predicted official results</span>. Because proposal-LM tokens and every tool rollout were metered, the run has a <span class="key">total price</span>: COPRO's curves can be compared against any other optimizer's on quality and on resources consumed, without COPRO's cooperation.</p>
+<p>Per (provider, model) pair, the two surviving candidates land as their own distributions of 4 rollout aggregates across the budget ratios, next to the A and B baseline curves reused from the eval experiment; the pareto front is recomputed from official rollout results only. The 200 tool rollout results stay out of the plot by key — their rollout config hashes carry the tool's Score Node Eval Config — but remain available for post-hoc analysis of <span class="key">how well tool scores predicted official results</span>. Because proposal-LM tokens and every tool rollout were metered, the run has a <span class="key">total price</span>: COPRO's curves can be compared against any other optimizer's on quality and on resources consumed, without COPRO's cooperation.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -264,7 +264,7 @@
     <h3>Candidates and the variance source</h3>
     <ul>
       <li>Within a run, a candidate is one <code>{user_prompt_template}</code> value; provider and model are fixed</li>
-      <li>Variance source = <code>budget_ratio</code>, spreading each returned candidate into 4 rollout config results — its curve</li>
+      <li>Variance source = <code>budget_ratio</code>, spreading each returned candidate into 4 rollout aggregates — its curve</li>
       <li>Ordered multi-return: an initial candidate (here B) may be returned; identical rollout configs pass the diff check trivially</li>
     </ul>
   </div>

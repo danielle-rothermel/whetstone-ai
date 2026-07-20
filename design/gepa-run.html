@@ -167,7 +167,7 @@
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
       <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 5,904 per run, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">12 rollout config results (3 evolved candidates × 4 ratios); Templates A and B's 8 already exist from the eval run — same hashes, reused</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">12 rollout aggregates (3 evolved candidates × 4 ratios); Templates A and B's 8 already exist from the eval run — same hashes, reused</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">5 candidate curves per (provider, model) pair; pareto front — views derived from official rollout results, never stored as truth</span></div>
     </div>
   </div>
@@ -243,15 +243,15 @@
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates from official rollout results only: per rollout config, the Average Binary Test Pass Rate and mean measured compression — 12 rollout config results. Templates A and B's 8 rollout config results carry over from the eval run unchanged, because their rollout config and official eval config hashes are identical.</p>
-      <div class="ledger"><b>output</b>20 rollout config results for this (provider, model) pair — five candidate curves of 4</div>
+    <div class="what"><p>Aggregates from official rollout results only: per rollout config, the Average Binary Test Pass Rate and mean measured compression — 12 rollout aggregates. Templates A and B's 8 rollout aggregates carry over from the eval run unchanged, because their rollout config and official eval config hashes are identical.</p>
+      <div class="ledger"><b>output</b>20 rollout aggregates for this (provider, model) pair — five candidate curves of 4</div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What lands on the plot: five curves per pair, and only official results</h2></div>
 
-<p>Per (provider, model) pair: <span class="key">five candidate curves</span> — Templates A and B (reused from the eval run) and the three evolved templates — each a distribution of 4 rollout config results across the budget ratios, each result averaged over 164 tasks × 3 seeds. The natural readings: whether evolution <span class="key">beat the initial templates</span> at matched ratio, and how the <span class="key">pareto front</span> moves once the evolved candidates join. Nothing measured during optimization appears here: every minibatch and subset score sits under a different rollout config hash by construction.</p>
+<p>Per (provider, model) pair: <span class="key">five candidate curves</span> — Templates A and B (reused from the eval run) and the three evolved templates — each a distribution of 4 rollout aggregates across the budget ratios, each aggregate averaged over 164 tasks × 3 seeds. The natural readings: whether evolution <span class="key">beat the initial templates</span> at matched ratio, and how the <span class="key">pareto front</span> moves once the evolved candidates join. Nothing measured during optimization appears here: every minibatch and subset score sits under a different rollout config hash by construction.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -261,7 +261,7 @@
     <ul>
       <li>The <span class="key">per-task frontier</span> steers parent sampling — diversity machinery</li>
       <li>The archive's <span class="key">correctness×compression front</span> ranks the return — selection machinery</li>
-      <li>The plot's <span class="key">pareto front</span> is computed from official rollout config results — the only front that is a result</li>
+      <li>The plot's <span class="key">pareto front</span> is computed from official rollout aggregates — the only front that is a result</li>
     </ul>
   </div>
   <div class="card optim">

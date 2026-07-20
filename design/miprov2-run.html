@@ -172,7 +172,7 @@
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
       <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 3,936 in all, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 8 rollout config results</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 8 rollout aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">2 optimized candidate curves across the budget ratios, plotted against the template A and B baseline curves from the Eval run</span></div>
     </div>
   </div>
@@ -243,14 +243,14 @@
   <div class="tick">
     <div class="who env">Evaluation harness</div>
     <div class="what"><p>Aggregates from official rollout results only: per rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks, plus the same aggregation for measured compression.</p>
-      <div class="ledger"><b>output</b>8 rollout config results — each optimized candidate's distribution of 4 across the budget ratios</div>
+      <div class="ledger"><b>output</b>8 rollout aggregates — each optimized candidate's distribution of 4 across the budget ratios</div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What lands on the plot: two optimized candidates against the A/B baselines</h2></div>
 
-<p>The two admitted candidates land as <span class="key">two new budget-response curves</span> — 8 rollout config results, each one rollout config averaged over 164 tasks × 3 seeds — read directly against the <span class="key">template A and B baselines</span> from the Eval run: those official rollout results are reusable as-is, since the baseline rollout configs and the official eval config hash to the same identities in both experiments. The ~214 rollouts the search consumed stay queryable under the tool rollout config hashes — the run's true cost, excluded from the plot by construction. The third returned rollout config stays un-evaluated but persisted: a later experiment can officially evaluate it without re-running the search.</p>
+<p>The two admitted candidates land as <span class="key">two new budget-response curves</span> — 8 rollout aggregates, each one rollout config averaged over 164 tasks × 3 seeds — read directly against the <span class="key">template A and B baselines</span> from the Eval run: those official rollout results are reusable as-is, since the baseline rollout configs and the official eval config hash to the same identities in both experiments. The ~214 rollouts the search consumed stay queryable under the tool rollout config hashes — the run's true cost, excluded from the plot by construction. The third returned rollout config stays un-evaluated but persisted: a later experiment can officially evaluate it without re-running the search.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 

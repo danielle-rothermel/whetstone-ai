@@ -157,7 +157,7 @@
     <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
     <div class="comps">
       <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744, persisted for analysis; the tool's 1,440 cheap rollout results persist too, under their own hashes</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout config results</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the ratios; overlays the Eval run's template A/B baselines directly — same official eval config hash, same axes</span></div>
     </div>
   </div>
@@ -226,14 +226,14 @@
   <div class="tick">
     <div class="who env">Evaluation harness</div>
     <div class="what"><p>Aggregates from official rollout results only: per rollout config, Average Binary Test Pass Rate and mean measured compression. The 1,440 cheap rollout results stay queryable and cost-accounted — excluded from the plot by construction, because they carry the cheaper Score Node Eval Config in their hashes, not the official eval config's.</p>
-      <div class="ledger"><b>output</b>32 rollout config results — each winning template's 4 pairs × 4 ratios</div>
+      <div class="ledger"><b>output</b>32 rollout aggregates — each winning template's 4 pairs × 4 ratios</div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What lands on the plot: two proposed templates against the A/B baselines</h2></div>
 
-<p>The two winning templates land as 8 candidates — (template, provider, model) — each a distribution of 4 rollout config results across the budget ratios: Average Binary Test Pass Rate vs mean measured compression. Because the official eval config hash is identical to the Eval run's, the <span class="key">template A/B baselines overlay directly</span> — no re-running, the existing official rollout results already carry the same keys. The natural readings: <span class="key">proposed vs initial templates</span> at matched model and ratio, and each proposal's <span class="key">budget-response curve</span>. The agent's self-ordering sits in provenance, available to compare against the official ordering — but it never touches the plot.</p>
+<p>The two winning templates land as 8 candidates — (template, provider, model) — each a distribution of 4 rollout aggregates across the budget ratios: Average Binary Test Pass Rate vs mean measured compression. Because the official eval config hash is identical to the Eval run's, the <span class="key">template A/B baselines overlay directly</span> — no re-running, the existing official rollout results already carry the same keys. The natural readings: <span class="key">proposed vs initial templates</span> at matched model and ratio, and each proposal's <span class="key">budget-response curve</span>. The agent's self-ordering sits in provenance, available to compare against the official ordering — but it never touches the plot.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
