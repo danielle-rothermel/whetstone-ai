@@ -1,5 +1,5 @@
-"""LM helpers for the graph platform path.
+"""LM provider boundary.
 
-``whetstone.lm.boundary`` is the forward prompt/provider boundary.
-``whetstone.lm.utils`` holds shared JSON/text helpers used by the boundary.
+``whetstone.lm.boundary`` adapts dr-providers requests and responses to
+whetstone's domain shapes.
 """

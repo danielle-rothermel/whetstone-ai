@@ -1659,18 +1659,18 @@ name = "whetstone-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "dbos" },
     { name = "dr-code" },
     { name = "dr-graph" },
     { name = "dr-platform" },
     { name = "dr-providers" },
     { name = "dr-serialize" },
-    { name = "psycopg" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "dbos" },
     { name = "pre-commit" },
+    { name = "psycopg" },
     { name = "pytest" },
     { name = "ruff" },
     { name = "ty" },
@@ -1678,18 +1678,18 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
     { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=main" },
     { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
     { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
-    { name = "psycopg", specifier = ">=3.3.4" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "dbos", specifier = ">=2.25.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "psycopg", specifier = ">=3.3.4" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "ruff", specifier = ">=0.15.10" },
     { name = "ty", specifier = ">=0.0.54" },

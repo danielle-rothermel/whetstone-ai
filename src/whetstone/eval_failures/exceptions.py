@@ -47,23 +47,7 @@ class RecordingFailureError(PermanentFailureError):
 
 
 class EmptyGenerationError(PermanentFailureError):
-    """Predictor returned no usable text for a required output field."""
-
-
-class PredictionParseError(PermanentFailureError):
-    """Predictor failed to parse structured output from an LM response."""
-
-
-class ProviderResponseParseError(PermanentFailureError):
-    """Provider response could not be parsed into an LM result."""
-
-
-class StrandedGenerationError(TransientFailureError):
-    pass
-
-
-class StrandedScoringError(TransientFailureError):
-    pass
+    """LM returned no usable text for a required output field."""
 
 
 DEFAULT_FAILURE_EXCEPTION_TYPES: dict[FailureClass, type[EvalFailureError]] = {

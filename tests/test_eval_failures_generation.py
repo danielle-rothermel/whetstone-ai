@@ -5,7 +5,7 @@ import pytest
 from whetstone.eval_failures import (
     EmptyGenerationError,
     FailureClass,
-    PredictionParseError,
+    PermanentFailureError,
     failure_metadata_dict_from_exception,
     require_generation_text,
     should_retry_step,
@@ -38,9 +38,9 @@ def test_summarize_empty_generation_failure_is_permanent() -> None:
     assert "EmptyGenerationError" in summary.failure_exception_type
 
 
-def test_summarize_prediction_parse_failure_preserves_underlying() -> None:
-    error = PredictionParseError(
-        "predictor failed for output field 'code'",
+def test_summarize_permanent_failure_preserves_underlying() -> None:
+    error = PermanentFailureError(
+        "parse failed for output field 'code'",
         underlying=ValueError("invalid output"),
         metadata={
             "output_field": "code",
@@ -56,7 +56,7 @@ def test_summarize_prediction_parse_failure_preserves_underlying() -> None:
 
 
 def test_failure_metadata_from_eval_failure_error() -> None:
-    error = PredictionParseError(
+    error = PermanentFailureError(
         "parse failed",
         underlying=ValueError("bad"),
         metadata={"output_field": "description"},
