@@ -1,18 +1,13 @@
 """Recordability boundary for storable failure and telemetry payloads.
 
-``recordable_jsonb`` is the one Postgres JSONB adapter exception in
-``eval_failures``. Core classification and failure models should remain free of
-database and DBOS workflow imports.
+Core classification and failure models remain free of database and DBOS
+workflow imports; these helpers convert arbitrary values into JSON-safe
+payloads and extract diagnostics from exception chains.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from psycopg.types.json import Jsonb
-
-    from whetstone.records import FailureMetadataPayload
+from typing import Any
 
 from dr_serialize import (
     POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
@@ -50,58 +45,32 @@ def recordable_text(value: Any) -> str:
     return canonical_json(value)
 
 
-def recordable_jsonb(
-    value: Any,
-    *,
-    max_bytes: int = POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
-) -> Jsonb:
-    from psycopg.types.json import Jsonb
-
-    return Jsonb(ensure_recordable(value, max_bytes=max_bytes))
-
-
-def failure_metadata_from_exception(
-    error: BaseException,
-) -> FailureMetadataPayload:
-    """Build a storable failure metadata record from any exception."""
-    from whetstone.eval_failures.policy import summarize_exception
-    from whetstone.records import FailureMetadataPayload as Payload
-
-    summary = summarize_exception(error)
-    return Payload(
-        failure_class=summary.failure_class,
-        error_type=summary.failure_exception_type,
-        message=summary.message,
-        metadata=summary.failure_metadata,
-    )
-
-
 def failure_metadata_dict_from_exception(
     error: BaseException,
 ) -> dict[str, Any]:
     """Extract SerializationError diagnostics or EvalFailureError metadata."""
-    current: BaseException | None = error
+    # Exceptions can carry several links at once (a raise inside an
+    # except block sets __context__ even when an ``underlying`` was
+    # attached), so walk all of them depth-first, __cause__ subtree
+    # before __context__ before ``underlying``.
+    stack: list[BaseException] = [error]
     seen: set[int] = set()
     eval_failure_metadata: dict[str, Any] | None = None
-    while current is not None and id(current) not in seen:
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
         seen.add(id(current))
         if isinstance(current, SerializationError):
             return current.diagnostics()
         if (
             isinstance(current, EvalFailureError)
             and eval_failure_metadata is None
+            and current.metadata
         ):
-            if current.metadata:
-                eval_failure_metadata = dict(current.metadata)
-        if current.__cause__ is not None:
-            current = current.__cause__
-            continue
-        if current.__context__ is not None:
-            current = current.__context__
-            continue
+            eval_failure_metadata = dict(current.metadata)
         underlying = getattr(current, "underlying", None)
-        if isinstance(underlying, BaseException):
-            current = underlying
-            continue
-        break
+        for link in (underlying, current.__context__, current.__cause__):
+            if isinstance(link, BaseException):
+                stack.append(link)
     return eval_failure_metadata or {}

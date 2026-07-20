@@ -1,9 +1,9 @@
-"""Thin adapter between the dr-providers kernel and whetstone records.
+"""Thin adapter over the dr-providers kernel.
 
 The wire mechanics (config records, payload building, transport,
 parsing, failure classification) live in dr-providers. This module keeps
-only whetstone's domain shapes: ``ProviderResult`` (the persisted record
-surface), the ``LlmRequest`` construction from node parameters, the
+only whetstone's domain shapes: ``ProviderResult`` (the provider outcome
+surface), the ``LlmRequest`` construction from caller parameters, the
 ``LlmResponse`` → ``ProviderResult`` conversion, and translation of
 kernel failure carriers into whetstone eval-failure exceptions.
 """
@@ -36,13 +36,12 @@ TEMPERATURE_PARAMETER = "temperature"
 TOKEN_LIMIT_PARAMETER = "token_limit"
 REASONING_PARAMETER = "reasoning"
 EXTRA_BODY_PARAMETER = "extra_body"
-EXTRA_KWARGS_PARAMETER = "extra_kwargs"
 
 __all__ = [
     "OUTPUT_FIELD_TEXT",
     "PlainPromptAdapter",
     "ProviderResult",
-    "llm_request_for_node",
+    "llm_request_from_parameters",
     "provider_result_from_response",
     "reasoning_effort_from_parameter",
     "translate_provider_failure",
@@ -50,7 +49,7 @@ __all__ = [
 
 
 class ProviderResult(BaseModel):
-    """Record-facing provider outcome persisted by the platform."""
+    """Structured provider outcome surfaced to callers."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -94,54 +93,35 @@ class PlainPromptAdapter(BaseModel):
 
 
 def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
-    """Coerce a node's ``reasoning`` parameter into a typed effort level.
+    """Coerce a ``reasoning`` parameter into a typed effort level.
 
-    dr-providers 0.2 made ``LlmRequest.reasoning`` a ``ReasoningEffort``
-    enum (was a free-form dict). Whetstone's node parameter surface still
-    supplies the effort either as the legacy ``{"effort": "low"}`` mapping
-    or as a bare effort string; both map to the enum here. Absent or empty
-    values mean "no reasoning override" (``None``); an unrecognized effort
-    fails loudly, consistent with the kernel's no-silent-defaults stance.
+    Accepts a ``ReasoningEffort`` or a bare effort string. Absent or
+    empty values mean "no reasoning override" (``None``); an
+    unrecognized effort fails loudly, consistent with the kernel's
+    no-silent-defaults stance.
     """
-    if value is None:
+    if value is None or value == "":
         return None
     if isinstance(value, ReasoningEffort):
         return value
-    if isinstance(value, Mapping):
-        if not value:
-            return None
-        effort = value.get("effort")
-    else:
-        effort = value
-    if effort is None or effort == "":
-        return None
     try:
-        return ReasoningEffort(effort)
+        return ReasoningEffort(value)
     except ValueError as exc:
         valid = ", ".join(level.value for level in ReasoningEffort)
         raise ValueError(
-            f"invalid reasoning effort {effort!r}; "
+            f"invalid reasoning effort {value!r}; "
             f"expected one of: {valid}"
         ) from exc
 
 
-def llm_request_for_node(
+def llm_request_from_parameters(
     *,
     config: ProviderConfig,
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
     idempotency_key: str | None = None,
 ) -> LlmRequest:
-    """Build the kernel request from a node's merged parameters.
-
-    Legacy ``extra_kwargs`` merge into ``extra_body``: the kernel's
-    raw-httpx payload is the request body, so both land inline exactly
-    as the SDK-era indirection did on the wire.
-    """
-    extra_body = {
-        **dict(parameters.get(EXTRA_BODY_PARAMETER) or {}),
-        **dict(parameters.get(EXTRA_KWARGS_PARAMETER) or {}),
-    }
+    """Build the kernel request from a caller's merged parameters."""
     return LlmRequest(
         provider_config=config,
         messages=messages,
@@ -150,7 +130,7 @@ def llm_request_for_node(
         reasoning=reasoning_effort_from_parameter(
             parameters.get(REASONING_PARAMETER)
         ),
-        extra_body=extra_body,
+        extra_body=dict(parameters.get(EXTRA_BODY_PARAMETER) or {}),
         idempotency_key=idempotency_key,
     )
 

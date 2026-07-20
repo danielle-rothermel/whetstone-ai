@@ -2,8 +2,8 @@
 
 Wire mechanics (payload building, parsing, transport, classification)
 are tested in dr-providers; these cover whetstone's adapter surface:
-node parameters → LlmRequest, LlmResponse → ProviderResult, and kernel
-failure translation.
+caller parameters → LlmRequest, LlmResponse → ProviderResult, and
+kernel failure translation.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from whetstone.eval_failures import (
 )
 from whetstone.lm.boundary import (
     PlainPromptAdapter,
-    llm_request_for_node,
+    llm_request_from_parameters,
     provider_result_from_response,
     translate_provider_failure,
 )
@@ -56,9 +56,9 @@ class TestPlainPromptAdapter:
         assert messages[0].role is MessageRole.USER
 
 
-class TestLlmRequestForNode:
-    def test_maps_parameters_and_merges_extra_kwargs(self) -> None:
-        request = llm_request_for_node(
+class TestLlmRequestFromParameters:
+    def test_maps_parameters(self) -> None:
+        request = llm_request_from_parameters(
             config=openrouter_chat_config(model="m"),
             messages=(
                 PromptMessage(role=MessageRole.USER, content="hi"),
@@ -66,24 +66,32 @@ class TestLlmRequestForNode:
             parameters={
                 "temperature": 0.2,
                 "token_limit": 10,
-                "reasoning": {"effort": "low"},
+                "reasoning": "low",
                 "extra_body": {"a": 1},
-                "extra_kwargs": {"b": 2},
             },
             idempotency_key="attempt-1",
         )
         assert request.temperature == 0.2
         assert request.token_limit == 10
         assert request.reasoning is ReasoningEffort.LOW
-        assert request.extra_body == {"a": 1, "b": 2}
+        assert request.extra_body == {"a": 1}
         assert request.idempotency_key == "attempt-1"
         payload = build_payload(request)
         assert payload["max_completion_tokens"] == 10
         assert payload["a"] == 1
-        assert payload["b"] == 2
+
+    def test_rejects_unrecognized_reasoning_effort(self) -> None:
+        with pytest.raises(ValueError, match="invalid reasoning effort"):
+            llm_request_from_parameters(
+                config=openrouter_chat_config(model="m"),
+                messages=(
+                    PromptMessage(role=MessageRole.USER, content="hi"),
+                ),
+                parameters={"reasoning": {"effort": "low"}},
+            )
 
     def test_absent_parameters_stay_unset(self) -> None:
-        request = llm_request_for_node(
+        request = llm_request_from_parameters(
             config=openai_responses_config(model="m"),
             messages=(
                 PromptMessage(role=MessageRole.USER, content="hi"),

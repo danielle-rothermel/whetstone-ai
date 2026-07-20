@@ -18,21 +18,13 @@ from whetstone.eval_failures.exceptions import (
     EmptyGenerationError,
     EvalFailureError,
     PermanentFailureError,
-    PredictionParseError,
-    ProviderResponseParseError,
     RateLimitedFailureError,
     RecordingFailureError,
     ResourceExhaustionFailureError,
-    StrandedGenerationError,
-    StrandedScoringError,
     TransientFailureError,
     UnknownFailureError,
 )
-from whetstone.eval_failures.generation import (
-    require_generation_text,
-    validate_direct_generation,
-    validate_encdec_generation,
-)
+from whetstone.eval_failures.generation import require_generation_text
 from whetstone.eval_failures.policy import (
     FailureSummary,
     classify_exception,
@@ -47,8 +39,6 @@ from whetstone.eval_failures.policy import (
 from whetstone.eval_failures.recording import (
     ensure_recordable,
     failure_metadata_dict_from_exception,
-    failure_metadata_from_exception,
-    recordable_jsonb,
     recordable_text,
 )
 
@@ -60,13 +50,9 @@ __all__ = [
     "FailureClass",
     "FailureSummary",
     "PermanentFailureError",
-    "PredictionParseError",
-    "ProviderResponseParseError",
     "RateLimitedFailureError",
     "RecordingFailureError",
     "ResourceExhaustionFailureError",
-    "StrandedGenerationError",
-    "StrandedScoringError",
     "TransientFailureError",
     "UnknownFailureError",
     "classify_exception",
@@ -74,15 +60,11 @@ __all__ = [
     "error_text",
     "exception_type_name",
     "failure_metadata_dict_from_exception",
-    "failure_metadata_from_exception",
     "failure_summary_payload",
     "find_classified_exception",
-    "recordable_jsonb",
     "recordable_text",
     "require_generation_text",
     "should_retry_step",
     "summarize_exception",
     "unwrap_exception",
-    "validate_direct_generation",
-    "validate_encdec_generation",
 ]

@@ -1,8 +1,9 @@
 # Whetstone
 
-Whetstone evaluates graph-shaped HumanEval workloads through the Whetstone
-generation and scoring Operations. Domain outcomes are append-only; platform
-execution is provided by `dr-platform`.
+Whetstone is being rebuilt from scratch on the `dr-*` libraries. The previous
+design has been removed; this repository currently holds only the minimal core
+that survives that removal, and new functionality will be built on the `dr-*`
+foundation.
 
 Run the local checks with:
 
