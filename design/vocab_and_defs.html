@@ -87,6 +87,119 @@
 </table>
 </div>
 
+<p class="small muted space-top">The next five sections place implementation-derived, repository-owned vocabularies side by side for comparison before any Whetstone normalization; all remain provisional.</p>
+
+<div class="section-head" id="draft-dr-serialize-vocabulary"><h2>Draft dr-serialize Vocabulary</h2></div>
+
+<p>This section is a first-pass draft for discussion, is not Whetstone normative vocabulary, and does not rename the dr-serialize API. dr-serialize owns normalization policy, canonical JSON rendering, and a digest primitive; it does not own domain schemas, artifacts, references, decoding, or Whetstone <a class="term-ref" href="#term-definition">definition</a>, <a class="term-ref" href="#term-config">config</a>, <a class="term-ref" href="#term-run">run</a>, and <a class="term-ref" href="#term-result">result</a> contracts.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Draft definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-json-safe-normalization">JSON-Safe Normalization</dfn></td><td>The potentially lossy <code>Serializer.to_jsonable</code> conversion of an arbitrary Python value into a <a class="term-ref" href="#dr-serialize-term-jsonable-value">JSONable value</a> under explicit limits and handlers.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-jsonable-value">JSONable Value</dfn></td><td>A value in the recursive <code>Jsonable</code> union of JSON-shaped scalars, lists, and string-keyed dictionaries; the type and normalization admit non-finite floats, but canonicalization rejects them.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-serializer">Serializer</dfn></td><td>A frozen reusable <code>Serializer</code> binding one <a class="term-ref" href="#dr-serialize-term-serialization-limits">serialization limits</a> value to an ordered, instance-local tuple of <a class="term-ref" href="#dr-serialize-term-jsonable-handler">JSONable handlers</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-serialization-limits">Serialization Limits</dfn></td><td>A frozen <code>SerializationLimits</code> value specifying normalization depth, payload-byte, and optional storage hard ceilings.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-jsonable-handler">JSONable Handler</dfn></td><td>An instance-local <code>JsonableHandler</code> returning a <code>JsonableHandle</code> and recursing through <code>ConversionContext</code>, with no global handler registry.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-canonical-json-text">dr-serialize Canonical JSON Text</dfn></td><td>The <code>canonical_json</code> rendering of an already-<code>Jsonable</code> value under dr-serialize's pinned compact, sorted-key Python JSON profile, without claiming RFC 8785 conformance.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-sha-256-json-digest">SHA-256 JSON Digest</dfn></td><td>The full hexadecimal or consumer-selected prefix returned by <code>sha256_json_digest</code> over <a class="term-ref" href="#dr-serialize-term-canonical-json-text">dr-serialize canonical JSON text</a>, becoming a domain <a class="term-ref" href="#term-hash">hash</a> only when a consumer assigns identity semantics.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-json-path">JSON Path</dfn></td><td>A <code>JsonPath</code> tuple of string keys and integer indexes locating a value within normalization or encoding diagnostics.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-serialize-term-serialization-error-diagnostic">Serialization Error Diagnostic</dfn></td><td>The error-specific, persistence-safe mapping returned by a <code>SerializationError.diagnostics</code> implementation, including its <a class="term-ref" href="#dr-serialize-term-json-path">JSON path</a> and bounded detail.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Open integration questions.</strong>
+  <ul>
+    <li>What protocol or version guarantee pins canonical text and normalization behavior?</li>
+    <li>Should normalization and canonicalization use one consistent non-finite-float policy?</li>
+    <li>What deterministic policy, if any, should govern sets and non-string mapping keys?</li>
+    <li>Which consumer owns digest length and the decision that a digest establishes identity?</li>
+  </ul>
+</div>
+
+<div class="section-head" id="draft-dr-providers-vocabulary"><h2>Draft dr-providers Vocabulary</h2></div>
+
+<p>This section is a first-pass draft for discussion, is not Whetstone normative vocabulary, and does not rename the dr-providers API. dr-providers owns provider-call configuration, transcripts, wire translation, success normalization, telemetry, failure classification, and local transport retry; it does not own graph or run identity, persistence, latency, scoring, officialness, or streaming.</p>
+<p class="small muted">Native dr-providers <code>Provider</code> means the executor protocol represented below as <a class="term-ref" href="#dr-providers-term-provider-client">provider client</a>; Whetstone <a class="term-ref" href="#term-provider">provider</a> means the external service, so matching words do not establish a normalized role.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Draft definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-service">Provider Service</dfn></td><td>The external vendor or service family identified by <code>ProviderKind</code>, distinct from both its endpoint protocol and the native <code>Provider</code> executor protocol.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-client">Provider Client</dfn></td><td>A synchronous executor implementing native <code>Provider.complete</code>, such as <code>HttpProvider</code> or <code>ScriptedProvider</code>, that returns <code>LlmResponse</code> on success or raises a provider exception.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-call-config">Provider Call Config</dfn></td><td>A concrete request-carried <code>ProviderConfig</code> describing service, endpoint, model, credentials source, supported controls, and wire shape, with no separate Provider Definition or bound-client lifecycle.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-requested-model-name">Requested Model Name</dfn></td><td>The model string in <code>ProviderConfig.model</code> sent on the wire for a provider call.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-reported-model-name">Reported Model Name</dfn></td><td>The response-side <code>LlmResponse.model</code>, populated from the provider body when present and otherwise from the requested config by built-in parsers.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-prompt-message">Prompt Message</dfn></td><td>A frozen <code>PromptMessage</code> pairing one <code>MessageRole</code> with a content string.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-transcript">Transcript</dfn></td><td>The ordered, possibly empty <code>LlmRequest.messages</code> tuple of <a class="term-ref" href="#dr-providers-term-prompt-message">prompt messages</a>, for which dr-providers defines no separate History type.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-call-request">Provider Call Request</dfn></td><td>A frozen <code>LlmRequest</code> containing one <a class="term-ref" href="#dr-providers-term-provider-call-config">provider call config</a>, a <a class="term-ref" href="#dr-providers-term-transcript">transcript</a>, explicit generation controls, optional extra body, and optional idempotency key.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-call-response">Provider Call Response</dfn></td><td>An <code>LlmResponse</code> success envelope containing normalized text and optional telemetry, warnings, identifiers, diagnostics, and raw metadata, but neither its request nor a failure and therefore not a generic Whetstone <a class="term-ref" href="#term-result">result</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-generation">Generation</dfn></td><td>A possible Whetstone role mapping for accepted nonblank <code>LlmResponse.text</code>; dr-providers exposes the text field but no native Generation type.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-token-usage">Token Usage</dfn></td><td>Optional <code>TokenUsage</code> counters for prompt, completion, total, and reasoning tokens normalized from a provider response.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-cost">Provider Cost</dfn></td><td>The optional <code>LlmResponse.cost</code>, when present, is a <code>CostInfo</code> containing a required numeric total parsed from supported response-body fields plus a currency field that currently defaults to <code>USD</code>; it is not a Whetstone reward or objective.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-response-diagnostics">Provider Response Diagnostics</dfn></td><td>Content-free, allowlisted <code>ResponsesDiagnostics</code> observations from an OpenAI Responses body, distinct from unbounded <a class="term-ref" href="#dr-providers-term-raw-provider-response">raw provider response</a> metadata.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-conformance-warning">Provider Conformance Warning</dfn></td><td>An <code>LlmWarning</code> recording observed response or request-response conformance evidence while leaving fatality policy to the caller.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-provider-failure">Provider Failure</dfn></td><td>A frozen <code>ProviderFailure</code> classified by <code>FailureClass</code> and carried by typed exceptions, with dr-providers classifying the condition while callers own broader recovery policy.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-transport-retry-policy">Transport Retry Policy</dfn></td><td>A local <code>TransportPolicy</code> for timeout and bounded retry/backoff inside <code>HttpProvider</code>, separate from any Whetstone or durable-workflow retry layer.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-providers-term-raw-provider-response">Raw Provider Response</dfn></td><td>The unbounded provider-specific response body retained in <code>LlmResponse.provider_metadata</code>, not the content-free diagnostic projection.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Open integration questions.</strong>
+  <ul>
+    <li>Does model identity include endpoint or protocol as well as provider service and model name?</li>
+    <li>Should an LLM node output generation text or a projection of the full provider response?</li>
+    <li>Which layer owns latency measurement?</li>
+    <li>How do transport retries compose with Whetstone and durable-workflow retries?</li>
+    <li>Can raw provider metadata be stored durably, and under what retention and redaction contract?</li>
+  </ul>
+</div>
+
+<div class="section-head" id="draft-dr-graph-vocabulary"><h2>Draft dr-graph Vocabulary</h2></div>
+
+<p>This section is a first-pass draft for discussion, is not Whetstone normative vocabulary, and does not rename the dr-graph API. dr-graph owns concrete flat graph specifications, routing validation, a sequential interpreter, runner-local summaries, and graph digests; it does not own variable-bearing Whetstone <a class="term-ref" href="#term-rollout-definition">rollout definitions</a>, node semantics, provider or evaluation behavior, durability, or a complete <a class="term-ref" href="#term-rollout-result">rollout result</a>.</p>
+<p class="small muted"><code>GraphSpec</code> and <code>NodeConfig</code> are already concrete rather than Whetstone definitions with unset variables, and native <code>GraphRunResult</code> is intentionally narrower than Whetstone's generic result contract.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Draft definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="dr-graph-term-graph-spec">Graph Spec</dfn></td><td>A concrete validated flat DAG in <code>GraphSpec</code>, containing an ordered non-empty tuple of nodes and one terminal node identifier, with declared node order included in its digest payload.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-spec">Node Spec</dfn></td><td>A <code>NodeSpec</code> pairing a validated node identifier with an open operation name and concrete <a class="term-ref" href="#dr-graph-term-node-configuration">node configuration</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-operation">Node Operation</dfn></td><td>The open string <code>NodeSpec.op</code> interpreted by the caller's execution callback, with no registry or built-in LLM or Eval meaning in dr-graph.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-configuration">Node Configuration</dfn></td><td>A concrete <code>NodeConfig</code> containing field declarations, input bindings, an output field, and parameters, with no Definition lifecycle or unset variables.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-field">Node Field</dfn></td><td>A <code>FieldSpec</code> declaration of name, input/output role, type-name string, and optional description, without runtime validation of the declared <code>type_name</code>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-binding-ref">Binding Ref</dfn></td><td>A string-serialized <code>BindingRef</code> naming either an external field or an upstream node output and thereby deriving a graph connection.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-external-input">External Input</dfn></td><td>A value supplied through the reserved <code>task.&lt;field&gt;</code> binding namespace, whose “task” spelling does not require the value to be a Whetstone <a class="term-ref" href="#term-task">task</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-parameters">Node Parameters</dfn></td><td>The fully assigned, digest-covered <code>NodeConfig.parameters</code> mapping passed as part of the concrete spec, not a set of unset Whetstone <a class="term-ref" href="#term-variable">variables</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-terminal-node">Terminal Node</dfn></td><td>The node named by <code>GraphSpec.terminal_node_id</code> whose configured output or terminal error becomes the graph run's terminal summary.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-graph-digest">Graph Digest</dfn></td><td>The consumer-length SHA-256 prefix returned by <code>graph_digest</code> over a dr-serialize-canonical graph payload, assigned content-identity meaning by dr-graph.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-inlined-subgraph">Inlined Subgraph</dfn></td><td>A subgraph transformed by <code>inline_subgraph</code> into prefixed and rewired parent nodes at build time, leaving no subgraph boundary at runtime.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-graph-execution">Graph Execution</dfn></td><td>An <code>execute_graph</code> interpretation that deterministically visits nodes in topological order and routes values while the supplied <code>RunNode</code> callback owns node effects and semantics.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-output">Node Output</dfn></td><td>A <code>NodeOutput</code> mapping of named values plus optional metadata returned or validated for a successful node invocation.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-node-outcome">Node Outcome</dfn></td><td>A <code>NodeOutcome</code> recording one node's <code>SUCCESS</code>, <code>ERROR</code>, or derived <code>BLOCKED</code> state with the corresponding output, error snapshot, or blocking dependencies.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-graph-term-graph-run-result">Graph Run Result</dfn></td><td>A runner-local <code>GraphRunResult</code> containing node outcomes, execution order, status, and terminal summary, but omitting config identity, original inputs, and measurements and therefore not a Whetstone <a class="term-ref" href="#term-rollout-result">rollout result</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Open integration questions.</strong>
+  <ul>
+    <li>Does <code>GraphSpec</code> sit inside an enclosing Whetstone Rollout Config, and which values remain outside it?</li>
+    <li>What concrete parameter and output schemas identify LLM and Eval node operations?</li>
+    <li>What wrapper supplies complete inputs, config identity, measurements, and failure context around <code>GraphRunResult</code>?</li>
+    <li>Should deep immutability and declared node-order identity become explicit contracts?</li>
+    <li>What digest length and versioning rule is stable across persisted graph identities?</li>
+  </ul>
+</div>
+
 <div class="section-head" id="draft-dr-code-vocabulary"><h2>Draft dr-code Vocabulary</h2></div>
 
 <p>This section records dr-code-owned contracts for integration with Whetstone. It is a first-pass draft for discussion, is not yet Whetstone normative vocabulary, and does not rename any dr-code API.</p>
@@ -156,6 +269,48 @@
   <ul>
     <li>Multi-candidate correctness reduction: first, best, any, or another policy.</li>
     <li>Compression denominator and reference representation: bytes or characters, and comments included or removed.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="draft-dr-platform-vocabulary"><h2>Draft dr-platform Vocabulary</h2></div>
+
+<p>This section is a first-pass draft for discussion, is not Whetstone normative vocabulary, and does not rename the dr-platform API. dr-platform owns durable work identity, submission, stage state, admission, selector capacity, controls, retry and cancellation intent, and inspection; it does not own durable workflow execution and recovery, which DBOS owns, or domain input and output resolution, configuration, stage logic, results, and officialness, which the application owns.</p>
+<p class="small muted">Native <code>PipelineDefinition</code> is concrete and linear, a <code>StageDefinition</code> is not a Whetstone node, operation DTOs whose names end in <code>Result</code> are not generic Whetstone results, references remain opaque and application-owned, and deterministic DBOS workflow IDs are recipes rather than content hashes.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Term</th><th>Draft definition</th></tr></thead>
+  <tbody>
+    <tr><td><dfn class="term-name" id="dr-platform-term-platform-campaign">Platform Campaign</dfn></td><td>The application namespace identified by <code>CampaignKey</code> for related logical work, without defining that work's domain meaning.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-platform-submission-run">Platform Submission Run</dfn></td><td>One immutable pipeline submission invocation identified by <code>RunKey</code> and persisted as <code>PipelineRunRecord</code>, not the generic Whetstone <a class="term-ref" href="#term-run">run</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-platform-work-item">Platform Work Item</dfn></td><td>Logical work identified by <code>CampaignWorkIdentity</code> and persisted with an origin run, opaque input reference, and labels, whose mapping to a Whetstone rollout unit remains undecided.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-pipeline-definition">Pipeline Definition</dfn></td><td>A concrete, immutable, versioned <code>PipelineDefinition</code> containing an ordered non-empty linear sequence of stages, not a Whetstone <a class="term-ref" href="#term-definition">definition</a> or <a class="term-ref" href="#term-graph">graph</a>.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-pipeline-identity">Pipeline Identity</dfn></td><td>The <code>PipelineIdentity</code> pair of <code>PipelineKey</code> and positive version, assigned by declaration rather than derived as a content hash.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-stage-definition">Stage Definition</dfn></td><td>One ordered <code>StageDefinition</code> naming a stage key, DBOS queue, application callable, and argument adapter in a linear pipeline, not a dr-graph or Whetstone node.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-pipeline-registry">Pipeline Registry</dfn></td><td>An in-memory <code>PipelineRegistry</code> mapping pipeline identity to the registered authoritative <code>PipelineDefinition</code>; production dispatcher wiring separately requires wrapped definitions, while submission-only registries may contain unwrapped definitions.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-stage-execution">Stage Execution</dfn></td><td>The single logical <code>StageExecutionRecord</code> for one work-item stage across all of its retries.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-stage-attempt">Stage Attempt</dfn></td><td>One physical attempt in an append-only numbered sequence for a <a class="term-ref" href="#dr-platform-term-stage-execution">stage execution</a>; its persisted row advances through controlled admission and terminal fields, while <code>StageAttemptRecord</code> is a frozen snapshot DTO.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-stage-state">Stage State</dfn></td><td>The logical <code>StageExecutionState</code> value <code>READY</code>, <code>ADMITTED</code>, <code>SUCCEEDED</code>, <code>FAILED</code>, or <code>CANCELLED</code>; there is no <code>RUNNING</code> state.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-admission">Admission</dfn></td><td>The transactional act that selects eligible <code>READY</code> work under controls, appends or admits its attempt, transitions the logical stage to <code>ADMITTED</code>, and enqueues the DBOS workflow.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-input-reference">Input Reference</dfn></td><td>A non-empty opaque application-owned string stored as <code>WorkInput.input_ref</code> and <code>WorkItemRecord.input_reference</code>, whose target and resolution protocol dr-platform does not interpret.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-output-reference">Output Reference</dfn></td><td>A non-empty opaque application-owned string returned by successful stage logic and stored on <code>StageExecutionRecord.output_reference</code>, not the output value itself.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-work-labels">Work Labels</dfn></td><td>The immutable string mapping on <code>WorkInput.labels</code> and <code>WorkItemRecord.labels</code> used to match selector-scoped controls without defining domain semantics.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-stage-control">Stage Control</dfn></td><td>A persisted <code>StageControlRecord</code> scoped by pipeline identity, stage, and exact label selector, carrying capacity and pause settings.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-selector-capacity">Selector Capacity</dfn></td><td>The maximum concurrent <code>ADMITTED</code> occupancy allowed by a matching <a class="term-ref" href="#dr-platform-term-stage-control">stage control</a>, not a provider request-rate or token limit.</td></tr>
+    <tr><td><dfn class="term-name" id="dr-platform-term-terminal-summary">Terminal Summary</dfn></td><td>The optional diagnostic JSON mapping in <code>StageAttemptRecord.terminal_summary</code> describing a physical attempt's terminal outcome, not a generic Whetstone <a class="term-ref" href="#term-result">result</a>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>Open integration questions.</strong>
+  <ul>
+    <li>Is a platform work item a rollout, a task/config pair, or another scheduling unit?</li>
+    <li>What exactly does <code>execution_config_reference</code> identify and who resolves it?</li>
+    <li>Which result and reference store resolves domain inputs, outputs, and complete Whetstone results?</li>
+    <li>How do provider, graph, platform, and application retry layers coordinate?</li>
+    <li>Where does concurrent selector occupancy end and provider rate limiting begin?</li>
+    <li>Which Whetstone lifecycle or authority boundary, if any, should a campaign represent?</li>
   </ul>
 </div>
 
