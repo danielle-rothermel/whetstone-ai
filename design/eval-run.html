@@ -15,23 +15,25 @@
 
 <div class="family-nav">
   <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
   <span class="here">Eval</span>
   <a href="copro-run.html">COPRO</a>
   <a href="miprov2-run.html">MIPROv2</a>
   <a href="gepa-run.html">GEPA</a>
   <a href="codex-agent-run.html">Codex CLI agent</a>
+  <a href="quick-test-rubric.html">Quick Test</a>
 </div>
 
 <div class="intro">
-  <p>Fixed rollout configs pass unchanged through official evaluation, establishing the baseline and authoritative results that optimization runs build on.</p>
+  <p>The identity optimizer returns unchanged proposals; the harness materializes fixed Rollout Configs and evaluates them through an authorized official context, establishing the baseline for optimization runs.</p>
 </div>
 
 <div class="section-head" id="target"><h2>Example Setup</h2></div>
 
 <div class="grid-4">
   <div class="card">
-    <h3>4 (Provider, Model) Pairs</h3>
-    <p class="small muted space-top">Same model plays encoder and decoder within a rollout config.</p>
+    <h3>4 Model Routes</h3>
+    <p class="small muted space-top">Each list item is display shorthand for (Provider Service, requested Model). Treatment identity is the complete encoder/decoder Provider Call Config ref/hash — endpoint/protocol, requested Model, temperature, every sampling control and provider extension included. The same route plays encoder and decoder within a Rollout Config.</p>
     <ul>
       <li>openai, <code>gpt-5.4-nano</code></li>
       <li>openrouter, <code>deepseek/deepseek-v4-flash</code></li>
@@ -59,10 +61,10 @@
     <p class="small muted space-top"> </p>
   </div>
   <div class="card">
-    <h3>Tasks and Seeds</h3>
+    <h3>Tasks and Repeats</h3>
     <ul>
       <li><b>Tasks:</b> Full HumanEval+, 164 tasks</li>
-      <li><b>Seeds:</b> 3 rollouts per (rollout config, task)</li>
+      <li><b>Repeats:</b> 3 deliberate observations per (rollout config, task); <code>repeat_id</code> is identity, while an RNG seed is optional metadata</li>
     </ul>
     <p class="small muted space-top">32 rollout configs × 164 × 3</p>
     <p class="small muted">=15,744 rollouts.</p>
@@ -94,16 +96,16 @@ Use at most {MAX_BUDGET} characters.
 
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
-<p>The canonical <strong>Eval Definition</strong> defines the shared Eval Config shape, while the <strong>Rollout Definition</strong> describes the evaluation <strong>Graph</strong> below. A Rollout Config carries that Eval Config in the Internal Eval Config role; the official harness supplies the same shape in the Official Eval Config role.</p>
+<p>The canonical <a class="term-ref" href="vocab_and_defs.html#term-eval-definition">Eval Definition</a> defines the measurement-policy shape, while one <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> defines the graph shape. Fully assigning one treatment materializes one concrete <a class="term-ref" href="vocab_and_defs.html#term-graph-spec">Graph Spec</a> and <a class="term-ref" href="vocab_and_defs.html#term-rollout-config">Rollout Config</a>; the independent <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> is bound through an <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> when that treatment is measured.</p>
 
 <div class="plane">
-  <div class="plane-label">Graph</div>
+  <div class="plane-label">Graph Spec</div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>encoded_code_rep</code><hr>strong default: <code>input_code</code> = <code>task.gt_code_wo_comments</code></span></div>
+    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>variables: complete Provider Call Config ref/hash, system/user prompt templates and prompt KVs<br>outputs: <code>encoded_code_rep</code><hr>strong default: <code>input_code</code> = <code>task.gt_code_wo_comments</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>code_generation</code></span></div>
+    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: complete Provider Call Config ref/hash, system/user prompt templates and prompt KVs<br>outputs: <code>code_generation</code></span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Eval Node</b><span class="note">inputs: <code>encoded_code_rep</code> <code>code_generation</code> <code>input_code</code> <code>tests</code><br>outputs: <code>score</code> + <code>score_metadata</code><hr>strong default: <code>tests</code> = <code>task.tests</code><br>Per rollout, the Eval Node uses <code>{reference_length}</code>, <code>{codec}</code>, <code>{preprocess_config}</code>, and <code>{metrics_extract_config}</code> from the Internal Eval Config to preprocess and extract metrics. The surrounding task/seed/aggregation driver uses <code>{task_set}</code>, <code>{seeds}</code>, and <code>{aggregation_method}</code> from that same config.</span></div>
+    <div class="comp node"><b>Eval Node</b><span class="note">inputs: encoder representation, Submission Text, reference Code Artifact and tests<br>outputs: Preprocessing Trace, Code Artifact refs, Metric Facts/Records, integer Compressed Description Length, and evaluation metadata<hr>the Evaluation Procedure owns preprocessing, fan-out, sandbox tests, per-observation score derivation, and compression measurement; Aggregation only reduces observations</span></div>
   </div>
 </div>
 
@@ -112,12 +114,22 @@ Use at most {MAX_BUDGET} characters.
 <div class="plane">
   <div class="plane-label">Rollout Config Example <span class="sub">· candidate (template B, openrouter/deepseek-v4-flash) at budget_ratio 0.5 — one of the 32</span></div>
   <div class="comps">
-    <div class="comp node"><b>Encoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code><hr>maps to the dr-providers preset <code>openrouter_chat_config(model="deepseek/deepseek-v4-flash")</code></span></div>
+    <div class="comp node"><b>Encoder Provider Call Config</b><span class="note">identity-bearing route, requested <code>model=deepseek/deepseek-v4-flash</code>, temperature 1.0, generation controls and provider extensions<hr>materialized by the explicitly qualified dr-providers factory <code>openrouter_chat_config(...)</code>; the complete config ref/hash is part of treatment assignment</span></div>
     <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>full Template B text above<br>derived per task at rollout time, not a variable: <code>MAX_BUDGET = round(budget_ratio × chars(input_code))</code><br>instantiates the prompt: template + <code>MAX_BUDGET</code> + <code>input_code</code></span></div>
-    <div class="comp node"><b>Decoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code><hr>same model as encoder — a rule of this sweep's generator</span></div>
+    <div class="comp node"><b>Decoder Provider Call Config</b><span class="note">complete identity-bearing config ref/hash with the same route, requested Model field, controls and extensions as the encoder — a rule of this sweep's materializer</span></div>
     <div class="comp node"><b>Decoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Decoder Template<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{}</code><hr>same text across all 32 rollout configs</span></div>
-    <div class="comp node"><b>Internal Eval Config</b><span class="note"><code>{task_set}</code> = HumanEval+ (164) @ pinned revision<br><code>{seeds}</code> = <code>3</code><br><code>{reference_length}</code> = <code>utf8_bytes(input_code)</code><br><code>{codec}</code> = <code>zstd-19</code><br><code>{preprocess_config}</code> = <code>humaneval-function-candidates@v1</code><br><code>{metrics_extract_config}</code> = Binary Test Pass Score (sandbox: pinned image digest, timeout) + compressed bytes<br><code>{aggregation_method}</code> = Average Binary Test Pass Rate (mean over seeds, then over tasks)<hr>same Eval Config shape as the harness-supplied Official Eval Config; for this Eval setup, <code>internal_eval_config_hash == official_eval_config_hash</code>. It is included in <code>rollout_config_hash</code>.<br>derived per rollout, on the rollout result not in the config: <code>encoded_code_rep</code> length · measured zstd bytes ÷ reference length · Binary Test Pass Score</span></div>
+    <div class="comp node"><b>Treatment Identity</b><span class="note">the concrete Graph Spec contains complete encoder/decoder Provider Call Config refs/hashes, templates, and <code>budget_ratio</code><hr><code>graph_digest</code> identifies that fully assigned Graph Spec; <code>rollout_config_hash</code> identifies the schema-versioned treatment and excludes Eval Config</span></div>
   </div>
+</div>
+
+<div class="plane space-top">
+  <div class="plane-label">Concrete Eval Config <span class="sub">· independent measurement policy bound by an Evaluation Context</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Sampling</b><span class="note">HumanEval+ 164-task manifest at a pinned revision and full manifest hash<br>ordered task identities · repeat IDs <code>0, 1, 2</code></span></div>
+    <div class="comp node"><b>Evaluation Procedure</b><span class="note"><code>humaneval-function-candidates@v1</code> · Submission Text → Code Artifacts · all candidates tested · per-observation score 1 iff any candidate fully passes<br>integer Compressed Description Length = zstd-19 bytes of UTF-8 <code>encoded_code_rep</code>; reference = UTF-8 bytes of comment-stripped ground truth</span></div>
+    <div class="comp node"><b>Aggregation</b><span class="note">mean over repeats per task, then unweighted mean over the complete task set<br>missing or infrastructure-unknown Rollouts make the official aggregate incomplete</span></div>
+  </div>
+  <p class="small muted space-top">This Eval setup binds the same serialized Eval Config in its internal and official contexts, so <code>internal_eval_config_hash == official_eval_config_hash</code>. Equal hashes prove equal measurement policy; the authorized context and write path alone confer officialness.</p>
 </div>
 
 <div class="section-head" id="system"><h2>Run Official Evaluation on All Rollout Configs</h2></div>
@@ -126,59 +138,62 @@ Use at most {MAX_BUDGET} characters.
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Rollout config generator</b><span class="note">8 candidates (template, provider, model) × 4 ratios → 32 rollout configs (encoder → decoder → eval); identity = <code>rollout_config_hash</code></span></div>
+      <div class="comp settled"><b>Rollout Config materializer</b><span class="note">one Rollout Definition/graph shape; 8 starting Experiment Candidates × 4 ratios → 32 Rollout Configs, each paired with its own fully assigned concrete Graph Spec</span></div>
       <div class="comp settled"><b>Mutation surface: ∅ · Toolkit: ∅</b><span class="note">nothing may change; no tools issued — this <em>is</em> Eval</span></div>
       <div class="comp settled"><b>Selection: evaluate all</b><span class="note">named, hashed policy</span></div>
-      <div class="comp settled"><b>Official Eval Config</b><span class="note">supplied by the official harness: 164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
+      <div class="comp settled"><b>Official Evaluation Context</b><span class="note">binds the concrete Eval Config above, authorized official write path, task manifest, environment and policy attestations; its <code>evaluation_context_id</code> is independent of all config hashes</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 32 initial rollout configs, mutation surface ∅, toolkit ∅, guidance ∅</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 8 starting Experiment Candidates, fixed materialization axes, mutation surface ∅, toolkit ∅, guidance ∅</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Optimization stage <span class="sub">· the optimizer</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Identity optimizer</b><span class="note">returns the 32 initial rollout configs unchanged, ordered as given; zero tool calls, zero LM calls</span></div>
+      <div class="comp settled"><b>Identity optimizer</b><span class="note">returns 8 ordered Optimization Proposals, one unchanged proposal for each starting Experiment Candidate; zero tool calls, zero LM calls</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationResult</code>: ordered list = the 32 initial rollout configs</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationResult</code>: ordered list of 8 unchanged Optimization Proposals</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Evaluation harness <span class="sub">· runs official evaluation</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Diff check</b><span class="note">empty mutation surface ⇒ returned rollout configs must be byte-identical to the initial ones; 32/32 pass</span></div>
-      <div class="comp settled"><b>Selection</b><span class="note">evaluate-all admits 32</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 in the official harness context under the Official Eval Config; that execution context makes these results official, and only they feed the plot</span></div>
-      <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed), labels {model, template, ratio}; per-model selector capacity throttles each provider independently</span></div>
+      <div class="comp settled"><b>Diff check &amp; materialization</b><span class="note">empty mutation surface ⇒ 8/8 proposal payloads match their starting candidates; the harness applies the four fixed ratio values and materializes 32 Rollout Configs</span></div>
+      <div class="comp settled"><b>Selection</b><span class="note">evaluate-all admits all 32 materialized configs, preserving proposal order and then ratio order</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs 32 × 164 × 3 in the authorized Official Evaluation Context; only Rollout Results written through that context may feed the official plot</span></div>
+      <div class="comp settled"><b>Platform mapping</b><span class="note">one Platform Campaign per Evaluation Campaign/context; Submission Batches top up capacity; one Work Item per Rollout Execution Key. dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>; the Whetstone Result Store, not dr-platform, owns result uniqueness</span></div>
+      <div class="comp settled"><b>Attempts &amp; replay</b><span class="note">a native Platform Stage Attempt may contain multiple Stage Invocations caused by DBOS replay. Whetstone automatic Node retries exhaust inside execution before terminal persistence and binding; provider-native retries remain 0</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>Evaluator executes each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>Rollout Key = (<code>rollout_config_hash</code>, <code>eval_config_hash</code>, task identity, <code>repeat_id</code>); Rollout Execution Key adds <code>evaluation_context_id</code></span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed)</span></div>
+    <div class="plane-label">Rollout execution <span class="sub">· graph nodes inside one execute-rollout Platform Stage</span></div>
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code><br><code>tests</code> = <code>task.tests</code><hr>via dr-code; sizes the budget, supplies the reference length</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">emits <code>encoded_code_rep</code><hr><code>MAX_BUDGET</code> derived here per task; template instantiated; one dr-providers call</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references Provider Call Config + Transcript + idempotency; native LlmRequest materializes once without duplicated controls<hr>accepted nonblank LlmResponse text becomes the Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">same request/config boundary as encoder; Whetstone rejects blank native response text before it can become a Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Eval Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code> — a metric, not a stage</span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">emits facts first: Preprocessing Trace, ordered Code Artifact refs, candidate code-test Metric Facts/Records, integer Compressed Description Length, and metadata<hr>the Evaluation Procedure derives per-observation binary score 1 iff any candidate fully passes; Aggregation only reduces those scores</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
+      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph executes each concrete Graph Spec; Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0. Evidence records Provider Call Config, Provider Call Request, Provider Response, requested Model field, usage, cost and latency</span></div>
     </div>
   </div>
 
   <div class="flow-arrow"><span>15,744 rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
+    <div class="plane-label">Rollout Results &amp; analysis <span class="sub">· durable facts, then derived views</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 15,744 in all, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 32 rollout aggregates</span></div>
+      <div class="comp settled"><b>Official Rollout Results</b><span class="note">15,744 expected Rollout Execution Keys. A Stage succeeds only after its terminal success or exhausted-failure Result is immutable in dr-store and atomic binding resolves its key to that Object Reference: unbound binds; the same ref replays idempotently</span></div>
+      <div class="comp settled"><b>Failure &amp; conflict</b><span class="note">failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry is allowed only while unbound. A different-ref identity conflict never overwrites the authoritative binding, marks the conflicting attempt successful, or authorizes retry replacement</span></div>
+      <div class="comp settled"><b>Graph Run Summary</b><span class="note">operational index over stage and attempt state; useful for replay and diagnosis, but never metric, Reward, Objective, or Rollout Result truth</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">decisive candidate failures yield score 0; exhausted infrastructure failures make the official aggregate incomplete. Complete results reduce to Average Binary Test Pass Rate and Mean Compression Ratio derived from integer Compressed Description Length</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">8 candidate curves across the budget ratios; pareto front — views derived from the rollout results, never stored as truth</span></div>
     </div>
   </div>
@@ -189,39 +204,39 @@ Use at most {MAX_BUDGET} characters.
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: the generator expands 8 candidates × 4 budget ratios into 32 rollout configs, each carrying its provider preset, template id + text, budget ratio, temperature, decoder prompt, and Internal Eval Config. The official harness supplies the Official Eval Config; here their hashes match. The selection policy and the empty mutation surface and toolkit are serialized alongside.</p></div>
+    <div class="what"><p>Freezes one Rollout Definition/graph shape, 8 starting Experiment Candidates and four ratios. Materialization produces one fully assigned Graph Spec per Rollout Config. The official harness independently binds the Eval Config in an authorized Evaluation Context.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the identity optimizer: 32 initial rollout configs, mutation surface ∅, toolkit ∅, guidance ∅.</p></div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code> to the identity optimizer: 8 starting Experiment Candidates, fixed materialization axes, mutation surface ∅, toolkit ∅, guidance ∅.</p></div>
   </div>
   <div class="tick">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Returns the ordered list of 32 rollout configs unchanged — zero tool calls, zero LM calls, no extras.</p></div>
+    <div class="what"><p>Returns 8 ordered Optimization Proposals unchanged — zero tool calls, zero LM calls, no extras.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Diff check: 32/32 byte-identical to the initial rollout configs, consistent with the empty mutation surface. Selection (evaluate all) admits all 32 to official evaluation.</p></div>
+    <div class="what"><p>Diff-checks the 8 proposal payloads against their starting candidates, then applies the four fixed ratio values to materialize 32 concrete Rollout Configs. Selection (evaluate all) admits all 32 to official evaluation.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Submits 15,744 jobs — one per (rollout config, task, seed) — as a dr-platform campaign with labels <code>{model, template, ratio}</code>. Per-model selector capacity keeps a rate-limited provider from stalling the other three; whetstone's failure taxonomy retries transient errors and keeps permanent failures as rollout results without aborting the sweep.</p></div>
+    <div class="what"><p>Creates one Platform Campaign for the Evaluation Campaign/context and submits top-up Submission Batches. Its 15,744 Work Items are unique by Rollout Execution Key: Rollout Key plus <code>evaluation_context_id</code>. Selector Capacity controls Rollouts; Provider Call Limiters gate calls. A Platform Stage Attempt may contain multiple replayed Stage Invocations.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p><strong>One rollout, concretely</strong> — candidate (template B, deepseek-v4-flash) at budget_ratio 0.5, task HumanEval/36, seed 2: <code>task.gt_code_wo_comments</code> is 412 chars → <code>MAX_BUDGET = 206</code>. The encoder emits a 198-char <code>encoded_code_rep</code> → zstd-19 → 121 bytes → measured compression 121/412 ≈ 0.29. The decoder returns a fenced code block → preprocessing extracts one compilable function → the sandbox runs the HumanEval+ suite → all tests pass: Binary Test Pass Score = 1.</p>
-      <div class="ledger"><b>output</b>one rollout result: (rollout config hash, official eval config hash, HumanEval/36, seed 2) → binary_test_pass_score=1, rep_chars=198, budget=206, zstd_bytes=121, reference_bytes=412, tokens, provider cost, latency</div>
+    <div class="what"><p><strong>One rollout, concretely</strong> — at ratio 0.5, HumanEval/36, repeat 2, the 412-character reference gives <code>MAX_BUDGET=206</code>. The encoder representation's integer Compressed Description Length is 121 zstd-19 bytes. Submission Text preprocesses to ordered Code Artifacts; every candidate is tested and any full pass yields score 1. Mean Compression Ratio uses 121/412 ≈ 0.29.</p>
+      <div class="ledger"><b>output</b>one immutable dr-store Rollout Result Object Reference bound by Rollout Execution Key → Preprocessing Trace, Code Artifact refs, Metric Facts/Records, binary score=1, Compressed Description Length=121 bytes, reference_bytes=412, cost, latency and provenance</div>
     </div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>The campaign drains: 15,744 rollout results accumulate, including classified failures (an empty generation here, a provider timeout there) — failures are rollout results, not gaps.</p>
-      <div class="ledger"><b>output</b>every (rollout config, task, seed) ends with a rollout result — passed, failed, or permanently-failed-with-cause</div>
+    <div class="what"><p>After automatic Node retries, Whetstone immutably persists the terminal Result to dr-store and atomically binds its Rollout Execution Key in the Whetstone Result Store. An unbound key binds; replay of the same ref succeeds idempotently; only then does dr-platform return that authoritative ref as <code>output_reference</code> and mark the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED and permits operator retry only while it remains unbound. A different-ref conflict preserves the existing binding, fails the conflicting attempt, and never authorizes overwrite or retry replacement. Deliberate re-evaluation instead uses a new Evaluation Context or Repeat.</p>
+      <div class="ledger"><b>output</b>the authoritative bound Object Reference for each completed key; otherwise an explicit FAILED Stage — never replacement of an existing binding</div>
     </div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates from official rollout results only: for each rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks — the Average Binary Test Pass Rate — and the same aggregation for measured compression. Emits 32 rollout aggregates: 8 candidates × 4 ratios.</p>
+    <div class="what"><p>Aggregates only complete, officially attested results: for each Rollout Config, per-task mean Binary Test Pass Score over 3 repeats, then unweighted mean over all 164 tasks, plus mean Compressed Description Length ratio. An exhausted infrastructure failure keeps the aggregate incomplete; deliberate re-evaluation needs a new context or Repeat. Emits 32 Rollout Aggregates.</p>
       <div class="ledger"><b>output</b>32 rollout aggregates — each candidate's distribution of 4 across the ratios; the pareto front is derived from them</div>
     </div>
   </div>
@@ -229,7 +244,7 @@ Use at most {MAX_BUDGET} characters.
 
 <div class="section-head" id="output"><h2>What lands on the plot: eight candidates, 32 rollout aggregates, one front</h2></div>
 
-<p>Each candidate lands as its own distribution of 4 rollout aggregates — the variance source unrolled across the budget ratios — each aggregate one rollout config averaged over 164 tasks × 3 seeds: Average Binary Test Pass Rate vs mean measured compression. The natural readings: <span class="key">eight budget-response curves</span> (one per candidate, traced across the ratios), the <span class="key">template A vs B</span> comparison at matched model and ratio, and the overall <span class="key">pareto front</span> — derived from the official rollout results. Because the x-axis is <em>measured</em> compression, the budget knob's honesty is itself visible: a model that ignores <code>MAX_BUDGET</code> drifts right of its ratio cohort.</p>
+<p>Each candidate yields 4 Rollout Aggregates across ratios, each averaged over 164 tasks × 3 repeats: Average Binary Test Pass Rate vs Mean Compression Ratio derived from integer Compressed Description Length. These form eight budget-response curves and the official Pareto front.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -237,8 +252,8 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>INPUT_CODE, the budget, and the reference length</h3>
     <ul>
-      <li><code>{INPUT_CODE}</code> is set to <code>task.gt_code_wo_comments</code> — stripped ground truth, dr-code's <code>HumanEvalTask.ground_truth_code_without_comments</code>; that choice is part of the rollout config, not the Graph</li>
-      <li>Reference length = <code>utf8_bytes(task.gt_code_wo_comments)</code>; measured compression = <code>zstd_bytes(encoded_code_rep) ÷ reference length</code>, zstd-19</li>
+      <li><code>{INPUT_CODE}</code> is populated from the pinned task's <code>task.gt_code_wo_comments</code>; the Graph Spec declares the input port while the task binding belongs to the Rollout Key and Evaluation Context, not the Rollout Config hash</li>
+      <li>Compressed Description Length = integer <code>zstd_bytes(encoded_code_rep)</code> at level 19; Compression Ratio divides it by UTF-8 reference bytes</li>
       <li><code>MAX_BUDGET = round(BUDGET_RATIO × chars(task.gt_code_wo_comments))</code>, derived per task — at ratio 1.0 the description may be as long as the reference</li>
       <li>Guidance, not enforcement: the budget steers, nothing clips; rollouts that blow it land further right on the plot</li>
     </ul>
@@ -246,10 +261,10 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>Candidates and the variance source</h3>
     <ul>
-      <li>8 candidates = (encoder user template, provider, model) — one plotted line each</li>
+      <li>8 candidates = encoder user template × Model Route — one plotted line each; the route label is display shorthand, while complete Provider Call Config refs/hashes define treatment identity</li>
       <li>Variance source = <code>budget_ratio</code> — spreads each candidate into its distribution of rollout aggregates</li>
-      <li>Seeds are repetition, not variance: averaged into each rollout aggregate for confidence — large even at temperature 0, provider generations aren't deterministic</li>
-      <li>8 × 4 ratios = 32 rollout configs; × 164 tasks × 3 seeds = 15,744 rollouts</li>
+      <li>Repeat IDs are repetition, not retry attempt numbers: averaged into each rollout aggregate for confidence. An RNG seed may be recorded as optional metadata but is not the repeat's identity</li>
+      <li>8 × 4 ratios = 32 Rollout Configs; × 164 tasks × 3 repeats = 15,744 Rollouts</li>
     </ul>
   </div>
   <div class="card">
@@ -263,9 +278,10 @@ Use at most {MAX_BUDGET} characters.
   <div class="card">
     <h3>Identity: rollout config vs candidate</h3>
     <ul>
-      <li><code>rollout_config_hash</code> covers every variable, including the Internal Eval Config — it shapes the reward an optimizer steers by</li>
+      <li><code>graph_digest</code>, <code>rollout_config_hash</code>, <code>eval_config_hash</code>, context IDs, and result IDs are separate, full schema-versioned SHA-256 identities</li>
+      <li><code>rollout_config_hash</code> covers only generation treatment inputs and the Graph Spec reference; it never includes an Eval Config</li>
       <li>Candidate identity is only the candidate variables' values</li>
-      <li>Same candidate, different measurement = two rollout configs sharing candidate values</li>
+      <li>Same Rollout Config under a different measurement policy has the same <code>rollout_config_hash</code> and a different <code>eval_config_hash</code>, producing different Rollout Keys</li>
     </ul>
   </div>
   <div class="card">

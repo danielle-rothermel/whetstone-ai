@@ -15,21 +15,23 @@
 
 <div class="family-nav">
   <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
   <a href="eval-run.html">Eval</a>
   <a href="copro-run.html">COPRO</a>
   <span class="here">MIPROv2</span>
   <a href="gepa-run.html">GEPA</a>
   <a href="codex-agent-run.html">Codex CLI agent</a>
+  <a href="quick-test-rubric.html">Quick Test</a>
 </div>
 
 <div class="intro">
-  <p>MIPROv2 bootstraps demo sets, proposes instructions once, and searches a frozen instruction × demo grid with cheap tools before official evaluation.</p>
+  <p>MIPROv2 bootstraps demo sets, proposes instructions once, and searches a frozen instruction × demo grid through runtime Handles constructed from serialized Tool Specs before returning three ordered Optimization Proposals.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the Eval flow.</p>
 
 <div class="callout">
-  <b>Temporary vocabulary</b> — terms this doc needs beyond the <a href="vocab_and_defs.html">vocab page</a>:
+  <b>Algorithm-local vocabulary</b> — defined here because these terms are specific to this optimizer, not shared Whetstone ontology terms:
   <ul>
     <li><span class="key">instruction</span> — the directive text of an encoder user prompt template, apart from the demo block and the prompt variables. Needed: proposing instructions is one axis of MIPROv2's search.</li>
     <li><span class="key">demo block</span> — a formatted run of few-shot (ground-truth code → encoded representation) pairs inside the encoder user prompt template. Needed: choosing its contents is the other axis.</li>
@@ -37,20 +39,30 @@
     <li><span class="key">combination</span> — one (instruction, demo set) pair, assembled into a full encoder user prompt template. Needed: the unit the sampler scores.</li>
     <li><span class="key">proposal LM</span> — the LM the optimizer calls to draft instructions; an optimizer internal, not a node of the Graph. Needed: to charge optimizer-side LM cost to the right place.</li>
     <li><span class="key">trial</span> — one sampler step: pick a combination, spend one minibatch tool call on it. Needed: the unit of the search budget.</li>
-    <li><span class="key">minibatch tool · promotion tool</span> — this example's two designer-issued evaluation tools (8-task and 35-task cheaper Internal Eval Configs). Needed: the walkthrough charges rollouts to one tool or the other.</li>
+    <li><span class="key">minibatch tool · promotion tool</span> — two Tool Specs referencing versioned interface Definitions and configuring 8-task and 35-task internal measurement.</li>
   </ul>
+</div>
+
+<div class="callout">
+  <b>Algorithm-local identity.</b> MIPROv2 owns three versioned identity domains. For each one, the owning code selects the stated Identity Payload, wraps it in the exact Identity Document <code>{schema, schema_version, payload}</code>, and computes the full 64-character lowercase SHA-256 Identity Hash over canonical identity JSON.
+  <ul>
+    <li><span class="key">Demo Set Identity Document</span> — <code>schema=miprov2.demo-set</code>, <code>schema_version=1</code>; payload selects the ordered demo pairs, each with exact <code>ground_truth_code</code> and <code>encoded_representation</code>. The empty set has an empty pair list.</li>
+    <li><span class="key">Instruction Identity Document</span> — <code>schema=miprov2.instruction</code>, <code>schema_version=1</code>; payload selects only the exact validated <code>instruction_text</code>. Templates A/B and generated instructions use this same identity domain; attempt nonce, evidence and cost are excluded.</li>
+    <li><span class="key">Trial Combination Identity Document</span> — <code>schema=miprov2.trial-combination</code>, <code>schema_version=1</code>; payload selects the full <code>instruction_identity_hash</code> and <code>demo_set_identity_hash</code>. Trial ID, score, Reward and attempt evidence are excluded.</li>
+  </ul>
+  Identity Hash equality in the matching schema and version establishes algorithm-local equality. A Content Hash instead covers a complete canonical persisted object for storage integrity and never substitutes for any of these identities.
 </div>
 
 <div class="section-head" id="target"><h2>Example Setup</h2></div>
 
 <div class="grid-4">
   <div class="card">
-    <h3>1 (Provider, Model) Pair</h3>
+    <h3>1 Model Route</h3>
     <p class="small muted space-top">Same model plays encoder and decoder, as in the eval experiment.</p>
     <ul>
       <li>openrouter, <code>deepseek/deepseek-v4-flash</code></li>
     </ul>
-    <p class="small muted space-top">The eval experiment's other three pairs get three more independent optimization runs; this doc walks one.</p>
+    <p class="small muted space-top">Display grouping: one (Provider Service, requested Model). The complete encoder/decoder Provider Call Config Object References and Identity Hashes remain treatment identity. The other three Model Routes get independent runs.</p>
   </div>
   <div class="card optim">
     <h3>Initial Candidates &amp; Mutation Surface</h3>
@@ -62,19 +74,21 @@
   </div>
   <div class="card optim">
     <h3>Toolkit: Two Evaluation Tools</h3>
-    <p class="small muted space-top">Each tool fixes <code>budget_ratio</code> at 0.5 and runs rollouts under a cheaper Internal Eval Config — same preprocess and metrics extraction as the Official Eval Config, smaller task subset, 1 seed.</p>
+    <p class="small muted space-top">Each Tool Spec is a concrete Config: Definition ref/version, endpoint, internal Eval Config, Reward Policy, capacity/timeout/policy refs, ledger namespace, idempotency and refusal rules.</p>
     <ul>
-      <li><strong>minibatch tool</strong> — 8 tasks × 1 seed: cheap, noisy</li>
-      <li><strong>promotion tool</strong> — 35 tasks × 1 seed: the trustworthy in-run score</li>
+      <li><strong>minibatch tool</strong> — 8 tasks × 1 repeat: cheap, noisy</li>
+      <li><strong>promotion tool</strong> — 35 tasks × 1 repeat: the trustworthy in-run Reward</li>
+      <li>Optimization Request serializes Tool Specs; non-serializable runtime Handles bind them to services</li>
+      <li>Whetstone Tool Call Ledgers keyed by full Tool Spec Identity Hash plus <code>call_id</code>, spelled <code>tool_spec_hash + call_id</code>, own acceptance/refusal/completion and capacity accounting across retry/restart</li>
     </ul>
   </div>
   <div class="card optim">
     <h3>Budgets and Official Evaluation</h3>
     <ul>
       <li><b>Optimization budget:</b> ≤ 250 tool-run rollouts + proposal LM tokens (guidance)</li>
-      <li><b>Return:</b> 3 rollout configs, ordered (guidance)</li>
+      <li><b>Result shape:</b> on success, exactly 3 ordered Optimization Proposals; cardinality failure returns an explicit failed Optimization Result and permits no official materialization</li>
       <li><b>Selection:</b> officially evaluate the top 2</li>
-      <li><b>Official eval config:</b> the eval experiment's — HumanEval+ (164) @ pinned revision, 3 seeds, zstd-19</li>
+      <li><b>Official Eval Config:</b> the eval experiment's — HumanEval+ (164) @ pinned revision, 3 repeats, zstd-19</li>
     </ul>
   </div>
 </div>
@@ -82,97 +96,100 @@
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
 <div class="plane">
-  <div class="plane-label">Graph <span class="sub">· identical to the eval experiment's</span></div>
+  <div class="plane-label">Rollout Definition / graph shape <span class="sub">· identical to the eval experiment's</span></div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>encoded_code_rep</code><hr>mutation surface: <code>{user_prompt_template}</code> only — MIPROv2's instruction + demo block structure lives inside this one variable</span></div>
+    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>treatment includes the complete Provider Call Config Object Reference and Identity Hash plus prompt templates/KVs<br>output: encoder representation<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">inputs: <code>encoded_code_rep</code><br>variables: <code>{provider}</code> <code>{model}</code> <code>{system_prompt_template}</code> <code>{user_prompt_template}</code> <code>{prompt_kvs}</code> <code>{temperature}</code><br>outputs: <code>code_generation</code><hr>outside the mutation surface — fixed for the whole run</span></div>
+    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">complete Provider Call Config Object Reference and Identity Hash plus decoder prompt are fixed outside the mutation surface</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Eval Node</b><span class="note">inputs: <code>encoded_code_rep</code> <code>code_generation</code> <code>input_code</code> <code>tests</code><br>outputs: <code>score</code> + <code>score_metadata</code><hr>uses the per-rollout fields of the Internal Eval Config carried by the Rollout Config; initial and returned configs match the Official Eval Config hash, while tool-run configs carry cheaper Internal Eval Configs. See the canonical Eval Definition in the Eval doc.</span></div>
+    <div class="comp node"><b>Eval Node</b><span class="note">outputs Preprocessing Trace, Code Artifact refs, Metric Facts/Records and integer Compressed Description Length<hr>Evaluation Procedure derives per-observation score 1 iff any candidate fully passes; Aggregation only reduces</span></div>
   </div>
 </div>
 
-<div class="flow-arrow"><span>the generator sets every variable — the two initial rollout configs below</span> <span class="glyph">▼</span></div>
+<div class="flow-arrow"><span>the harness materializes one starting treatment at ratio 0.5 below</span> <span class="glyph">▼</span></div>
 
 <div class="plane">
   <div class="plane-label">Initial Rollout Config Example <span class="sub">· candidate (template B) at budget_ratio 0.5 — one of the 2</span></div>
   <div class="comps">
-    <div class="comp node"><b>Encoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code></span></div>
-    <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>the mutation surface — returned rollout configs differ from this one here and nowhere else</span></div>
-    <div class="comp node"><b>Decoder Model Config</b><span class="note"><code>{provider}</code> = <code>openrouter</code><br><code>{model}</code> = <code>deepseek/deepseek-v4-flash</code><br><code>{temperature}</code> = <code>1.0</code></span></div>
+    <div class="comp node"><b>Encoder Provider Call Config</b><span class="note">complete identity-bearing Object Reference and Identity Hash: Provider Service endpoint/protocol, requested Model, temperature and every generation control/provider extension</span></div>
+    <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>the mutation surface — proposals may differ from this starting candidate here and nowhere else</span></div>
+    <div class="comp node"><b>Decoder Provider Call Config</b><span class="note">complete identity-bearing Object Reference and Identity Hash; same displayed route/model/temperature as encoder, with all controls/extensions covered by the Config</span></div>
     <div class="comp node"><b>Decoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Decoder Template<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{}</code></span></div>
-    <div class="comp node"><b>Internal Eval Config</b><span class="note">uses the Eval Definition's canonical shape from the Eval doc<hr>its hash matches the Official Eval Config hash for initial and returned Rollout Configs; tool calls use a cheaper Internal Eval Config (task subset, 1 seed), giving tool-run Rollout Configs distinct identities</span></div>
+    <div class="comp node"><b>Treatment Identity</b><span class="note"><code>graph_digest</code> and <code>rollout_config_hash</code> cover the Graph Spec and generation treatment only<hr>tool and official <code>eval_config_hash</code> values and Evaluation Context IDs are independent and never included in the Rollout Config</span></div>
   </div>
 </div>
+
+<div class="callout"><b>Measurement and Reward.</b> Internal Eval Configs contain Sampling (8 or 35 named tasks × 1 repeat), Evaluation Procedure and Aggregation/objectives only. Each Tool Spec separately owns its Reward Policy. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward. Provider evidence uses Provider Call Config, Provider Call Request, Provider Response and requested Model field.</div>
 
 <div class="section-head" id="system"><h2>Run MIPROv2, Then Official Evaluation on What It Returns</h2></div>
 
 <div class="flow">
   <div class="plane">
-    <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
+    <div class="plane-label">Experiment design <span class="sub">· frozen configs carry their versioned domain identities</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Rollout config generator</b><span class="note">2 initial candidates (templates A, B) at budget_ratio 0.5 → 2 initial rollout configs; identity = <code>rollout_config_hash</code></span></div>
-      <div class="comp settled optim"><b>Mutation surface: encoder <code>{user_prompt_template}</code></b><span class="note">the diff check's reference: returned rollout configs may differ from the initial ones in this variable only</span></div>
-      <div class="comp settled optim"><b>Toolkit: minibatch + promotion tools</b><span class="note">designer-issued tool definitions, each carrying its cheaper Internal Eval Config; constraints live here — guidance, not enforcement</span></div>
-      <div class="comp settled optim"><b>Selection: officially evaluate top 2</b><span class="note">named, hashed policy</span></div>
-      <div class="comp settled"><b>Official eval config</b><span class="note">164 tasks @ pinned revision · 3 seeds · zstd-19 ÷ reference length · preprocessing v1 hash · sandbox image digest</span></div>
+      <div class="comp settled"><b>Starting candidates &amp; materializer</b><span class="note">one graph shape; each fully assigned search or official Rollout Config gets its own concrete Graph Spec</span></div>
+      <div class="comp settled optim"><b>Mutation surface: encoder <code>{user_prompt_template}</code></b><span class="note">the diff check's reference: proposals may differ from starting candidates in this variable only</span></div>
+      <div class="comp settled optim"><b>Tool Specs: minibatch + promotion</b><span class="note">serialized in the request; runtime Handles and durable Tool Call Ledgers are constructed by the harness</span></div>
+      <div class="comp settled optim"><b>Selection: officially evaluate top 2</b><span class="note">named, versioned Selection Policy with its full Identity Hash</span></div>
+      <div class="comp settled"><b>Official Evaluation Context</b><span class="note">binds the 164-task, 3-repeat Eval Config, authorized write path and environment attestation; equal Eval Config Identity Hashes alone never confer official authority</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 2 initial rollout configs, mutation surface, toolkit, guidance (return 3, ≤ 250 tool rollouts)</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>OptimizationRequest</code>: 2 starting candidates, fixed axes, mutation surface, Tool Specs, guidance</span> <span class="glyph">▼</span></div>
 
   <div class="plane optim">
     <div class="plane-label">Optimization stage <span class="sub">· MIPROv2: a deterministic three-stage policy; internals optimizer-owned</span></div>
     <div class="hflow">
-      <div class="comp settled optim"><b>1 · Bootstrap Demo Sets</b><span class="note">run the initial rollout configs via the minibatch tool; keep (ground-truth code → encoded representation) pairs from rollouts with Binary Test Pass Score = 1 → 3 demo sets + the empty one</span></div>
+      <div class="comp settled optim"><b>1 · Bootstrap Demo Sets</b><span class="note">build exactly 3 reproducible nonempty demo sets plus empty; their version-1 Demo Set Identity Documents must produce four distinct full Identity Hashes or pool construction fails explicitly</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled optim"><b>2 · Grounded Instruction Proposal</b><span class="note">one proposal LM pass over a dataset summary, an architecture summary, and a prompting tip → 4 new instructions; A's and B's kept → 6 instructions. <strong>Pool frozen</strong>: 6 × 4 = 24 combinations</span></div>
+      <div class="comp settled optim"><b>2 · Distinct Instruction Identity Pool</b><span class="note">build version-1 Instruction Identity Documents for Templates A/B and every generated instruction. Invalid generations or a repeated Identity Document retry with the deterministic nonce/attempt sequence; every proposal-LM attempt persists evidence, while a different Document with the same full Identity Hash fails explicitly as a detected collision. Success requires 4 generated identities distinct from A/B → 6 instruction identities × 4 demo-set identities = exactly 24 distinct valid Trial Combination identities</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled optim"><b>3 · Grid Search</b><span class="note">a sampler walks the instruction × demo grid: 12 trials on the minibatch tool, promotion every 6; sampler state never crosses the contract</span></div>
+      <div class="comp settled optim"><b>3 · Cheap Search, Then Promotion</b><span class="note">seeded TPE scores choices while deterministic sampling by full Trial Combination Identity Hash selects 12 combinations without replacement from the 24-entry pool; then promote exactly the cheap top 2 distinct proposals</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp settled optim"><b>Sampler</b><span class="note">TPE-style Bayesian sampler — or a simpler bandit; an optimizer internal the contract never sees</span></div>
+      <div class="comp settled optim"><b>Deterministic final order</b><span class="note">successful promoted proposals first by full-eval pass ↑, compression ↓, proposal ID. Any promotion failure ranks below successful promotion and rejoins the cheap-Reward fallback with unpromoted distinct Trial Combination identities; select the first 3 distinct identities</span></div>
+      <div class="comp settled optim"><b>Cardinality failure</b><span class="note">if demo/instruction pool construction or the 12-trial/3-return distinct Trial Combination Identity minimum fails, emit a failed Optimization Result and perform no official materialization</span></div>
       <div class="comp settled optim"><b>Pool frozen after stage 2</b><span class="note">preserved MIPROv2 limitation, on display: the search cannot react to failures with a new instruction — that is <a href="gepa-run.html">GEPA's</a> move</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>during the run: tool calls <span class="glyph">▼</span> <span class="glyph">▲</span> rollout results · at the end: <code>OptimizationResult</code> — ordered top 3 + advisory provenance</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>during the run: stable-ID tool calls <span class="glyph">▼</span> <span class="glyph">▲</span> Tool Results with Rollout refs · at the end: successful <code>OptimizationResult</code> with exactly 3 ordered proposals, or explicit failure with no official materialization</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Evaluation harness <span class="sub">· runs official evaluation</span></div>
     <div class="comps">
-      <div class="comp settled optim"><b>Diff check</b><span class="note">each returned rollout config against the initial ones: only encoder <code>{user_prompt_template}</code> may differ; 3/3 pass</span></div>
+      <div class="comp settled optim"><b>Diff check &amp; materialization</b><span class="note">each returned proposal changes only encoder <code>{user_prompt_template}</code>; 3/3 pass, then fixed axes produce 12 Rollout Configs</span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">applies the frozen policy: top 2 of the ordered list proceed</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">expands each admitted candidate across the 4 budget ratios (the eval experiment's variance source) → 8 rollout configs; runs 8 × 164 × 3 in the official harness context under the Official Eval Config — only this pass feeds the plot</span></div>
-      <div class="comp settled"><b>Execution substrate</b><span class="note">dr-platform campaign: one work item per (rollout config, task, seed); per-model selector capacity throttles the provider</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">expands each admitted proposal across four ratios → 8 Rollout Configs; runs 8 × 164 × 3 in the authorized official Evaluation Context — only attested outputs feed the plot</span></div>
+      <div class="comp settled"><b>Platform mapping</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. A Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations; Selector Capacity and Provider Call Limiter are separate</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>tools and the Evaluator execute each (rollout config, task, seed) via <code>execute_graph</code></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>Rollout Key = (rollout config, eval config, task, repeat); Rollout Execution Key adds context ID</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Rollout generation stage <span class="sub">· one rollout = one (rollout config, task, seed)</span></div>
+    <div class="plane-label">Rollout execution <span class="sub">· graph nodes inside one execute-rollout Platform Stage</span></div>
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code><br><code>tests</code> = <code>task.tests</code><hr>via dr-code; sizes the budget, supplies the reference length</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">emits <code>encoded_code_rep</code><hr>instruction + demo block live in the instantiated template; one dr-providers call</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references config + Transcript + idempotency; accepted nonblank native response text becomes Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">emits <code>code_generation</code><hr>same model as encoder; one dr-providers call</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Eval Node</b><span class="note">emits <code>score</code> + <code>score_metadata</code><hr>preprocess (dr-code extraction) → sandbox tests (HumanEval+, hardened OCI) → Binary Test Pass Score; compression measured on <code>encoded_code_rep</code></span></div>
+      <div class="comp settled"><b>Eval Node</b><span class="note">Submission Text → Code Artifacts → Metric Facts/Records; integer Compressed Description Length is zstd-19 UTF-8 encoder bytes<hr>Evaluation Procedure derives score; Aggregation reduces</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Substrate</b><span class="note">dr-graph sequences the nodes and captures rollout results; dr-serialize hashes specs, requests, and results; whetstone eval_failures classifies failures and drives retries; dr-providers carries every LM call</span></div>
+      <div class="comp substrate"><b>Terminality</b><span class="note">automatic Node retries exhaust before a terminal success/exhausted-failure Result. Stage success requires immutable dr-store persistence and the Whetstone Result Store atomically binding its Rollout Execution Key to that same authoritative Object Reference: an unbound key binds, and the same-reference replay succeeds idempotently. A different reference conflicts without overwrite and cannot authorize replacement. Failure that leaves the key unbound raises Stage FAILED and permits explicit operator retry. dr-platform transports only the authoritative bound reference</span></div>
     </div>
   </div>
 
   <div class="flow-arrow"><span>3,936 official rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Final results &amp; analysis stage <span class="sub">· persistence lives here — deliberately not detailed in this design</span></div>
+    <div class="plane-label">Rollout Results &amp; analysis <span class="sub">· immutable facts, then derived views</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Official rollout results</b><span class="note">one per (rollout config hash, official eval config hash, task, seed) — 3,936 in all, persisted for analysis</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">per rollout config: Average Binary Test Pass Rate + mean measured compression → 8 rollout aggregates</span></div>
+      <div class="comp settled"><b>Official Rollout Results</b><span class="note">one authoritative terminal Result Object Reference bound per Rollout Execution Key; same-reference replay is idempotent, and a different-reference conflict preserves the existing binding without platform replacement. Deliberate re-evaluation uses a new context or Repeat</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">Average Binary Test Pass Rate + Mean Compression Ratio derived from integer Compressed Description Length → 8 Rollout Aggregates</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">2 optimized candidate curves across the budget ratios, plotted against the template A and B baseline curves from the Eval run</span></div>
     </div>
   </div>
@@ -183,22 +200,22 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the experiment: the generator emits 2 initial rollout configs (templates A and B at budget_ratio 0.5, each carrying an Internal Eval Config whose hash matches the Official Eval Config); the mutation surface names encoder <code>{user_prompt_template}</code>; the two tool definitions carry their cheaper Internal Eval Configs; guidance asks for 3 returned rollout configs within ≤ 250 tool-run rollouts; selection = officially evaluate the top 2. Everything serialized and hashed.</p></div>
+    <div class="what"><p>Freezes starting candidates, axes, mutation surface and two concrete Tool Specs. Each references a versioned Tool Definition and owns its internal Eval Config, Reward Policy and ledger/capacity/refusal configuration.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Issues the <code>OptimizationRequest</code>: 2 initial rollout configs, mutation surface, toolkit (minibatch + promotion), guidance.</p></div>
+    <div class="what"><p>Issues the <code>OptimizationRequest</code> with the two Tool Specs; the harness constructs runtime Handles and binds durable Tool Call Ledgers.</p></div>
   </div>
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p><strong>Stage 1 — bootstrap demo sets.</strong> Spends 6 minibatch calls (3 on each initial rollout config) = 48 rollouts; harvests (ground-truth code → encoded representation) pairs from rollouts with Binary Test Pass Score = 1; assembles 3 demo sets of 3 pairs, plus the empty demo set.</p>
-      <div class="ledger"><b>output</b>48 internal rollout results from tool execution, under rollout config hashes that include the cheaper Internal Eval Config; cost charged to the optimization stage</div>
+    <div class="what"><p><strong>Stage 1 — bootstrap demo sets.</strong> Spends 48 Rollouts and deterministically assembles 3 nonempty demo sets plus empty. Build the version-1 Demo Set Identity Document for each and require four distinct full Identity Hashes; a duplicate Demo Set identity, detected Demo Set Identity Hash collision or insufficient valid pairs ends with a failed Optimization Result before official materialization.</p>
+      <div class="ledger"><b>output</b>48 internal Rollout references; treatment and Eval Config identities remain separate; cost charged to optimization</div>
     </div>
   </div>
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p><strong>Stage 2 — grounded instruction proposal.</strong> One proposal LM pass, grounded in a dataset summary, an architecture summary, and a prompting tip, drafts 4 new instructions; templates A's and B's instructions are kept, giving 6. <strong>The pool is now frozen</strong>: 6 instructions × 4 demo sets = 24 combinations.</p>
-      <div class="ledger"><b>output</b>a frozen pool of 24 combinations; proposal LM tokens charged to the optimization stage; no rollout results</div>
+    <div class="what"><p><strong>Stage 2 — distinct instruction identity construction.</strong> Build Instruction Identity Documents for A/B, then generate with the deterministic nonce/attempt sequence until four valid instructions have full Identity Hashes distinct from A/B and each other. Invalid or repeated Documents consume proposal-LM evidence/cost; a different Document with an already-used full Identity Hash is an explicit collision failure. Pair the resulting instruction and demo-set Identity Hashes in version-1 Trial Combination Identity Documents and require exactly 24 distinct identities; any detected Trial Combination Identity Hash collision, terminal proposal-LM failure or exhaustion of the request's fixed, identity-bearing instruction-attempt cap yields a failed Optimization Result and no official materialization.</p>
+      <div class="ledger"><b>output</b>successful path: 6 distinct Instruction Identity Hashes × 4 distinct Demo Set Identity Hashes = 24 distinct Trial Combination Identity Hashes</div>
     </div>
   </div>
 
@@ -207,42 +224,42 @@
     <div class="run">
       <div class="tick optim">
         <div class="who optimizer">Optimizer</div>
-        <div class="what"><p>The sampler picks a combination, assembles it into a full encoder user prompt template, sets it into a tool-run rollout config, and spends <strong>one minibatch call</strong> — 8 tasks × 1 seed. The noisy score feeds the sampler's internal state.</p>
-          <div class="ledger"><b>output</b>8 rollout results under the minibatch tool's rollout config hash</div>
+        <div class="what"><p>Seeded TPE scores remaining choices; deterministic sampling chooses one not-yet-sampled Trial Combination Identity Hash, assigns a trial ID and spends one 8-task minibatch call. Twelve iterations therefore produce 12 distinct trial proposals.</p>
+          <div class="ledger"><b>output</b>8 Rollout refs under minibatch Rollout Execution Keys plus Reward, cost and provenance</div>
         </div>
       </div>
       <div class="tick optim">
         <div class="who optimizer">Optimizer</div>
-        <div class="what"><p><strong>Every 6 trials:</strong> the combination with the best average minibatch score so far gets <strong>one promotion call</strong> — 35 tasks × 1 seed — the trustworthy in-run score that ranks finalists.</p>
-          <div class="ledger"><b>output</b>35 rollout results under the promotion tool's rollout config hash</div>
+        <div class="what"><p><strong>After all 12 cheap trials:</strong> group proposals by their full Trial Combination Identity Hash, order the 12 distinct identities by cheap Reward with stable proposal-ID tie-break, and promote exactly the top 2 to the 35-task Tool Spec.</p>
+          <div class="ledger"><b>output</b>2 × 35 = 70 Rollout refs under promotion Rollout Execution Keys plus Reward, cost and provenance</div>
         </div>
       </div>
       <div class="tick optim">
         <div class="who optimizer">Optimizer</div>
-        <div class="what"><p><strong>One trial, concretely</strong> — trial 7: the sampler picks (instruction 4, "name the function's contract, signature, and edge cases", demo set 2). The minibatch call runs 8 rollouts at budget_ratio 0.5; 6 of 8 pass, mean measured compression ≈ 0.41. The sampler nudges toward instruction 4's region of the grid.</p></div>
+        <div class="what"><p><strong>One trial</strong> — trial 7 evaluates instruction 4 + demo set 2 on 8 tasks: 6 pass, Mean Compression Ratio ≈0.41 from integer Compressed Description Length facts. That cheap Reward updates TPE state.</p></div>
       </div>
     </div>
   </div>
 
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Returns the <code>OptimizationResult</code>: the top 3 combinations as full rollout configs — identical to an initial rollout config everywhere outside encoder <code>{user_prompt_template}</code>, so each carries an Internal Eval Config whose hash matches the Official Eval Config — ordered by promotion score, then average minibatch score. The 12-trial attempt history rides along as advisory provenance, never as a score.</p>
-      <div class="ledger"><b>output</b>run totals: 20 tool calls, 214 of the ≤ 250 budgeted rollouts, proposal LM tokens, wall time — all advisory</div>
+    <div class="what"><p>Orders successful promoted proposals first, then cheap fallback, and returns exactly the first 3 proposals with distinct Trial Combination Identity Hashes. Because the successful path has 12 distinct trial identities, the fallback is constructive. Any violated minimum returns a failed Optimization Result; the harness performs no diff check, selection or official materialization.</p>
+      <div class="ledger"><b>output</b>successful planned path: 20 tool calls, 214 Rollouts + proposal-LM attempts; failure path stops before official materialization</div>
     </div>
   </div>
   <div class="tick optim">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Diff check: each of the 3 returned rollout configs differs from an initial one only in encoder <code>{user_prompt_template}</code> — consistent with the mutation surface; 3/3 pass. Selection admits the top 2 to official evaluation. The attempt history is persisted as advisory provenance.</p></div>
+    <div class="what"><p>Diff-checks the 3 proposals, selects the top 2 while preserving optimizer order, then materializes each across four ratios → 8 Rollout Configs. The attempt history persists as advisory provenance.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Expands each admitted candidate across the 4 budget ratios → 8 rollout configs, and submits 8 × 164 × 3 = 3,936 jobs — one per (rollout config, task, seed) — as a dr-platform campaign. Whetstone's failure taxonomy retries transient errors; permanent failures stay rollout results, not gaps.</p>
-      <div class="ledger"><b>output</b>3,936 official rollout results, each keyed (rollout config hash, official eval config hash, task, seed)</div>
+    <div class="what"><p>Submits 3,936 Work Items, one per Rollout Execution Key. After Node retries exhaust, the executor immutably persists the terminal Result in dr-store and asks the Whetstone Result Store to atomically bind the key to that Object Reference. Unbound plus reference binds; the same reference replays as idempotent success. Only either path resolving to that authoritative bound reference makes the Stage SUCCEEDED, and dr-platform transports only that reference. Failure that leaves the key unbound makes the Stage FAILED and permits an operator-added Stage Attempt. A different-reference conflict keeps the existing authoritative binding, cannot authorize replacement and does not make the conflicting candidate a success.</p>
+      <div class="ledger"><b>output</b>3,936 officially attested Rollout Results with immutable references</div>
     </div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates from official rollout results only: per rollout config, per-task mean Binary Test Pass Score over 3 seeds, then unweighted mean over the 164 tasks, plus the same aggregation for measured compression.</p>
+    <div class="what"><p>Aggregates complete official results only. Exhausted infrastructure failures keep the aggregate incomplete; deliberate re-evaluation uses a new context or Repeat, never replay/replacement of a terminal Result.</p>
       <div class="ledger"><b>output</b>8 rollout aggregates — each optimized candidate's distribution of 4 across the budget ratios</div>
     </div>
   </div>
@@ -250,7 +267,7 @@
 
 <div class="section-head" id="output"><h2>What lands on the plot: two optimized candidates against the A/B baselines</h2></div>
 
-<p>The two admitted candidates land as <span class="key">two new budget-response curves</span> — 8 rollout aggregates, each one rollout config averaged over 164 tasks × 3 seeds — read directly against the <span class="key">template A and B baselines</span> from the Eval run: those official rollout results are reusable as-is, since the baseline rollout configs and Official Eval Config hash to the same identities in both experiments. The ~214 rollouts the search consumed stay queryable under the tool rollout config hashes — the run's true cost, excluded from the plot because they were produced by internal tool execution rather than the official harness context. The third returned rollout config stays un-evaluated but persisted: a later official harness execution can evaluate it without re-running the search.</p>
+<p>The two admitted proposals land as <span class="key">two new budget-response curves</span> — 8 Rollout Aggregates, each one Rollout Config averaged over 164 tasks × 3 repeats — beside eligible A/B baselines. Baseline reuse requires matching Rollout Keys, official attestation and compatible environment. The ~214 internal Rollouts remain queryable as the search's measured cost but stay outside the official plot. The third proposal persists unselected and can later be materialized and officially evaluated without rerunning search.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -266,9 +283,9 @@
   <div class="card optim">
     <h3>Tools carry the internal evaluation</h3>
     <ul>
-      <li>Each tool holds a fixed cheaper Internal Eval Config: task subset and 1 seed, with the same preprocess and metrics extraction as the Official Eval Config; separately, its Rollout Config fixes <code>budget_ratio</code> at 0.5</li>
-      <li>The cheaper config gives tool-run Rollout Configs distinct identities; independently, tool execution is internal because it does not run in the official harness context</li>
-      <li>Only the harness's official evaluation produces official rollout results</li>
+      <li>Each Tool Spec binds a fixed cheaper Eval Config and Reward Policy; its Rollout Config independently fixes <code>budget_ratio</code> at 0.5</li>
+      <li>Different full Eval Config Identity Hashes distinguish measurement policy; the internal Evaluation Context and write path determine authority</li>
+      <li>Only the authorized official Evaluation Context/write path produces official Rollout Results</li>
       <li>Whether tool task subsets may overlap the official 164 is a <span class="key">sample-holdout</span> question for experimental designers — not litigated here</li>
     </ul>
   </div>
@@ -290,8 +307,8 @@
   <div class="card optim">
     <h3>Contract fit</h3>
     <ul>
-      <li><span class="key">Guidance, not enforcement</span>: return count and budget live in the request and tool definitions — never enforced on the optimizer</li>
-      <li>Ordered multi-return; the attempt history is advisory provenance, never a score</li>
+      <li><span class="key">Guidance, not enforcement</span>: search budget and strategy are guidance; proposal schema, allowed diffs and Tool Handle capacity/refusal are hard contract behavior</li>
+      <li>Ordered multi-return; the attempt history is advisory provenance, never Reward or an official Objective</li>
       <li>Both contract schemas are serializable first: in-process here, and the same schemas cross a process boundary for the <a href="codex-agent-run.html">codex CLI agent</a></li>
       <li>Eval is the identity optimizer — empty mutation surface, empty toolkit; this run is the family's first with both nonempty axes of MIPROv2's grid in play</li>
     </ul>

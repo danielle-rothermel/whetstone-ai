@@ -15,16 +15,17 @@
 
 <div class="family-nav">
   <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
   <a href="eval-run.html">Eval</a>
   <a href="copro-run.html">COPRO</a>
   <a href="miprov2-run.html">MIPROv2</a>
   <a href="gepa-run.html">GEPA</a>
   <a href="codex-agent-run.html">Codex CLI agent</a>
-  <span class="here">Quick-test rubric</span>
+  <span class="here">Quick Test</span>
 </div>
 
 <div class="intro">
-  <p>Criteria for choosing a small, cheap test task that validates the optimizer implementations and supports basic hyperparameter selection before the full HumanEval compression experiment.</p>
+  <p>Criteria for choosing a small, cheap task family and pinned dataset that validates the optimizer implementations and shared <a href="vocab_and_defs.html">execution contract</a> before the full HumanEval compression experiment. This is a distinct lightweight Eval Definition, not a weakened mode of the code-generation Eval Definition.</p>
 </div>
 
 <div class="section-head" id="goal"><h2>Goal</h2></div>
@@ -32,10 +33,14 @@
 <div class="verdict">
   <p>Pick one task that every run design — Eval (identity), COPRO, MIPROv2, GEPA, and the Codex CLI agent — can execute end to end for <span class="key">cents per run, in minutes</span>, and that produces an <span class="key">unambiguous signal</span> about whether each optimizer works and which hyperparameters are reasonable.</p>
   <ul>
-    <li>Validate the full contract path: <code>OptimizationRequest</code> → tool calls → <code>OptimizationResult</code> → diff check → selection → official evaluation → aggregation.</li>
+    <li>Validate the full contract path: Optimization Request with Tool Specs → runtime Handles/Tool Call Ledgers → ordered Optimization Proposals → materialization → authorized evaluation.</li>
     <li>Support <span class="key">hyperparameter selection</span>: breadth/depth, minibatch size, promotion cadence, iteration count.</li>
     <li>Serve as the debugging target before any full-scale run spends real money.</li>
   </ul>
+</div>
+
+<div class="callout">
+  <strong>Minimum concrete definition.</strong> Pin a generated task-family schema, generator version, dataset manifest and split identities. Declare one LLM Call Node and one Eval Node in the Rollout Definition; each fully assigned Rollout Config gets one concrete Graph Spec. Eval Config has Sampling, Evaluation Procedure and Aggregation/objectives only. Provider Call Request references Provider Call Config + Transcript + idempotency and materializes native LlmRequest without duplicate controls; only Whetstone-accepted nonblank response text becomes Generation. An Evaluation Context binds authority.
 </div>
 
 <div class="section-head" id="rationale"><h2>Rationale</h2></div>
@@ -54,7 +59,7 @@
   <div class="card">
     <h3>1 · The graph is one LLM call node plus one eval node</h3>
     <ul>
-      <li>No encoder → decoder chain; a single generation is scored directly.</li>
+      <li>No encoder → decoder chain; one LLM Call Node's accepted nonblank native response becomes a Generation/Submission Text, and one Eval Node records Metric Facts/Records before reduction.</li>
       <li>Halves the LLM calls per rollout and removes one model's noise from the signal.</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> The contract machinery — mutation surface, tools, diff check, selection — does not depend on graph depth. The smallest graph that exercises it is enough.</p>
@@ -63,7 +68,7 @@
     <h3>2 · Scoring is an exact check by a simple function</h3>
     <ul>
       <li>Correctness is a <span class="key">deterministic comparison</span> — e.g. two numbers match, or the answer equals the labeled choice.</li>
-      <li>No sandbox, no test suite, no preprocessing pipeline, no partial credit.</li>
+      <li>No sandbox, code-test suite, or candidate-extraction preprocessing. Each example's exact rule returns 1 or 0; there is no per-example partial credit.</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> Removes the most expensive and failure-prone parts of evaluation, and makes every score trustworthy — a wrong aggregate can only come from the machinery under test.</p>
   </div>
@@ -91,24 +96,24 @@
   <div class="card">
     <h3>5 · Runs are deterministic, so prompt differences resolve at small sample sizes</h3>
     <ul>
-      <li>Decode at <span class="key">temperature 0</span> (or the provider's closest equivalent); pin any task sampling with RNG seeds.</li>
+      <li>Decode at <span class="key">temperature 0</span> (or the provider's closest equivalent); pin sampled task identities and record any sampler RNG seed as metadata.</li>
       <li>Per-task behavior is then as close to <span class="key">deterministic given a prompt</span> as the provider allows.</li>
       <li>The <span class="key">effect size</span> of a meaningful prompt change (≥10 points) exceeds the residual noise on a 10–20 task internal eval.</li>
-      <li>Seed repeats still run (e.g. 3) to validate the plumbing; with determinism they should largely agree.</li>
+      <li>Distinct <code>repeat_id</code> values still run (e.g. 3) to validate the plumbing; with determinism they should largely agree. Retry attempt numbers never substitute for repeats.</li>
     </ul>
-    <p class="small muted space-top"><strong>Why.</strong> Optimizers rank candidates with tiny tool evals (3–20 tasks, 1 seed). If noise swamps the effect, tool rankings are garbage and hyperparameter comparisons are meaningless. Determinism is a deliberate choice: score differences should come from prompts, not sampling.</p>
+    <p class="small muted space-top"><strong>Why.</strong> Optimizers rank proposals with tiny internal evaluations (3–20 tasks, 1 repeat). If noise swamps the effect, internal rankings are garbage and hyperparameter comparisons are meaningless. Determinism is a deliberate choice: score differences should come from prompts, not sampling.</p>
   </div>
   <div class="card">
-    <h3>6 · Internal tool scores predict official scores</h3>
+    <h3>6 · Internal rewards predict official objectives</h3>
     <ul>
-      <li>Check the <span class="key">rank correlation</span> between tool scores and official aggregates for the same candidates.</li>
+      <li>Check the <span class="key">rank correlation</span> between Reward values from internal Evaluation Contexts and official Objective aggregates for the same materialized Rollout Configs.</li>
     </ul>
-    <p class="small muted space-top"><strong>Why.</strong> Every optimizer steers by tool scores; selection promotes by them. The quick test is the first cheap chance to measure that predictiveness — the COPRO doc already flags it as post-hoc analysis.</p>
+    <p class="small muted space-top"><strong>Why.</strong> Optimizers may steer by a Reward Policy while official selection reads Objectives. The quick test is the first cheap chance to measure whether that proxy is predictive.</p>
   </div>
   <div class="card">
     <h3>7 · The task pool is large and generated with known ground truth</h3>
     <ul>
-      <li><span class="key">Synthetic, parameterized</span> tasks generated by program, each with an exact label.</li>
+      <li><span class="key">Synthetic, parameterized</span> tasks generated by a pinned program, each with an exact label and stable task identity.</li>
       <li>Hundreds of tasks: disjoint minibatch / subset / official <span class="key">splits</span>, per-iteration minibatch sampling (GEPA), demo bootstrapping (MIPROv2).</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> A big pool exercises the task-set and holdout machinery for real, and generation puts the difficulty under the designer's control.</p>
@@ -154,7 +159,9 @@
     <h3>13 · Failure paths get exercised on purpose</h3>
     <ul>
       <li>The output format is occasionally violated in practice, or failures are <span class="key">injected deliberately</span>.</li>
-      <li>Unparseable outputs, empty generations, and transient provider errors must land as <span class="key">rollout results with a cause</span>, never gaps.</li>
+      <li>Evaluation Procedure derives each exact 0/1 observation; Aggregation only reduces. Exhausted infrastructure-failure Results make official aggregation incomplete, never silently zero.</li>
+      <li>Optimization Request serializes Tool Specs, not Tool Definitions or Handles. Each Spec references a versioned Tool Definition and configures endpoint, internal Eval Config, Reward Policy, capacity/timeout/policies, ledger namespace, idempotency and refusal.</li>
+      <li>A non-serializable runtime Handle binds the Spec. The durable Whetstone Tool Call Ledger keyed by <code>tool_spec_hash + call_id</code> owns acceptance/refusal/completion and capacity across retry/restart.</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> The failure taxonomy and retry paths are part of what needs validation. A task that is too clean never touches them before the expensive run does.</p>
   </div>
@@ -162,10 +169,20 @@
     <h3>14 · Runs finish in minutes, not just cheaply</h3>
     <ul>
       <li>Small model, short outputs, no sandbox — and no <span class="key">rate-limit bottleneck</span> at the intended concurrency.</li>
-      <li>Selector-capacity throttling in dr-platform still gets a realistic workout.</li>
+      <li>One Platform Campaign per Evaluation Campaign/context uses top-up Submission Batches. Rollout Execution Key adds <code>evaluation_context_id</code> to Rollout Key and uniquely owns its Work Item, <code>execute-rollout</code> Stage and terminal Result.</li>
+      <li>A native Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations. Automatic Node retries exhaust before the terminal Result is immutably persisted to dr-store and its Rollout Execution Key is atomically bound in the Whetstone Result Store.</li>
+      <li>Assert the atomic bind contract: unbound + ref binds; the same ref replays idempotently; a different ref raises identity conflict and never overwrites the authoritative binding.</li>
+      <li>A Stage becomes SUCCEEDED only after binding resolves to that persisted Object Reference. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED, and operator retry is allowed only while unbound. A different-ref conflict fails the conflicting attempt and never authorizes overwrite or retry replacement. Deliberate re-evaluation uses a new context or Repeat.</li>
+      <li>dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>; it does not own result uniqueness.</li>
+      <li>A Graph Run Summary may index operational stage/attempt state, but it is never the Metric Record, Reward, Objective, or Rollout Result source of truth.</li>
+      <li>Selector Capacity limits Rollouts; Provider Call Limiter gates calls. Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0.</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> Wall-clock is what makes hyperparameter sweeps iterable. A cheap run that takes hours still blocks the debug loop.</p>
   </div>
+</div>
+
+<div class="callout">
+  <strong>Aggregation must cross strata.</strong> Include enough examples from each latent-rule stratum that exact 0/1 example scores can be averaged first by repeat within task, then across every pinned task and stratum. Improvements should come from solving more complete examples across strata, never from awarding partial credit inside an example.
 </div>
 
 <div class="section-head" id="noncoverage"><h2>What the quick test does not cover</h2></div>
@@ -176,12 +193,16 @@
   <li><span class="key">Multi-node graph routing</span> — the encoder → decoder chain and its input/output wiring.</li>
   <li><span class="key">Sandbox execution</span> — test-suite runs, image digest pinning, timeouts.</li>
   <li><span class="key">dr-code preprocessing</span> — extraction, <code>Absent</code> handling, metric extraction from traces.</li>
-  <li><span class="key">The second metric axis</span> — compression measurement, the variance source, two-objective aggregation, pareto plotting.</li>
-  <li><span class="key">Seed averaging under real variance</span> — determinism (criterion 5) means the 3 seed repeats mostly agree, so the aggregation path runs but its math is never stressed by disagreeing scores.</li>
+  <li><span class="key">Production compression semantics</span> — zstd measurement over the encoder representation and its HumanEval reference denominator.</li>
+  <li><span class="key">Repeat averaging under real variance</span> — determinism (criterion 5) means the 3 repeats mostly agree, so the aggregation path runs but its math is never stressed by disagreeing scores.</li>
 </ul>
 
 <div class="callout good">
-  <strong>Cheap partial mitigation.</strong> Keep a vestigial second metric: output length in characters as the compression analog, with a length-budget knob as the variance source. This validates variance-source expansion, two-objective aggregation, and pareto plotting at essentially no added cost.
+  <strong>Mandatory when claiming GEPA or two-objective coverage.</strong> Add output length in UTF-8 bytes as an explicitly distinct second Objective, with a fixed length-budget materialization axis. Pin the vector direction as exact-match rate ↑ and mean output bytes ↓, exercise Pareto archive/update rules, and report dispersion across repeats. Without this metric and variance check, the quick test validates only single-objective optimizer plumbing and must say so.
+</div>
+
+<div class="callout">
+  <strong>Proposal and authority check.</strong> Every optimizer returns ordered Optimization Proposals. The harness validates diffs and materializes one concrete Graph Spec per Rollout Config. Internal and official contexts remain separately authorized; official reuse requires matching Rollout Execution evidence, attestation and compatible environment, never hashes alone.
 </div>
 
 </main>
