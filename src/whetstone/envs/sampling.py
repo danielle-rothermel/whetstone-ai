@@ -1,0 +1,363 @@
+"""Sampling Configs, Task Sets, and the composite internal/official Eval
+Configs from a TaskPool's splits.
+
+The env's committed pool split (``EnvSpec.default_split_sizes``) carves the
+pool into three ordered, disjoint subsets: ``internal_eval`` (optimizer
+feedback), ``official`` (before/after comparison), and ``held_out``
+(untouched). This module maps the two *used* splits onto dr-code Task Sets +
+Repeat Plans + Sampling Configs, and assembles the two composite Eval Configs
+that share the **exact same** Evaluation Procedure Config identity.
+
+Guarantees, per the validation-plan cell definition:
+
+* The internal and official Task Sets are **ordered** (ordering is
+  identity-bearing) and **disjoint** (their task identities never overlap --
+  the pool split already asserts disjointness by instance id, and this module
+  re-asserts it over task identities).
+* ``held_out`` is never referenced by any Sampling Config built here (proved
+  by a test that no built config's task identities intersect the held-out
+  set).
+* Both Eval Configs fold in **one** Evaluation Procedure Config identity, so
+  ``graph_hash`` is unchanged across the two while ``eval_config_hash``
+  differs (their Sampling Configs differ).
+* The Aggregation Config is ``mean`` with an explicit completeness policy
+  (``missing_data`` propagate/skip, ``zero_denominator`` not_applicable).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+from dr_code.eval import (
+    AggregationConfig,
+    AggregationDefinition,
+    EvalConfig,
+    EvalDefinition,
+    EvaluationProcedureConfig,
+    RepeatPlan,
+    SamplingConfig,
+    SamplingDefinition,
+    TaskSet,
+)
+from whetstone_envs.core import Instance, PoolSplit, TaskPool
+
+from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
+from whetstone.envs.task import EnvTask
+
+_DEFINITION_VERSION = "1"
+
+#: The split roles this adapter samples from. ``held_out`` is deliberately
+#: absent: no Sampling Config references it.
+INTERNAL_EVAL = "internal_eval"
+OFFICIAL = "official"
+
+
+class Completeness(StrEnum):
+    """The Aggregation Config completeness policy over planned rows.
+
+    ``PROPAGATE`` (default): any missing/failed row makes the aggregate
+    incomplete (the mean is not reported over an incomplete matrix).
+    ``SKIP``: excluded rows are dropped from the reduction but their
+    exclusion is still counted in provenance.
+    """
+
+    PROPAGATE = "propagate"
+    SKIP = "skip"
+
+
+def _dataset_revision(env: EnvSpec) -> str:
+    """The env pool's generator version -- the Task Set dataset revision."""
+    return str(env.generate.GENERATOR_VERSION)
+
+
+def task_identities(env: EnvSpec, instances: tuple[Instance, ...]) -> tuple[
+    str, ...
+]:
+    """The ordered task identities for ``instances`` (pool order preserved)."""
+    return tuple(
+        EnvTask.from_instance(env.name, inst).task_identity()
+        for inst in instances
+    )
+
+
+def build_task_set(
+    env: EnvSpec,
+    *,
+    split_role: str,
+    instances: tuple[Instance, ...],
+) -> TaskSet:
+    """A versioned, ordered Task Set manifest for one split's instances.
+
+    The ordering (pool order) and the dataset revision (the env generator
+    version) are identity-bearing, so the internal and official Task Sets are
+    distinct identities even though they draw from one pool.
+    """
+    return TaskSet(
+        manifest_id=f"whetstone.env.{env.name}.{split_role}",
+        version=_DEFINITION_VERSION,
+        dataset_revision=_dataset_revision(env),
+        task_identities=task_identities(env, instances),
+    )
+
+
+def build_repeat_plan(
+    env: EnvSpec,
+    *,
+    split_role: str,
+    task_set: TaskSet,
+    repeats: int = DEFAULT_REPEATS,
+) -> RepeatPlan:
+    """The Repeat Plan: ``repeats`` ordered slots per task in the Task Set.
+
+    Per-slot RNG seeds are slot data (excluded from Repeat Plan identity);
+    the spec-default repeat count is :data:`DEFAULT_REPEATS`.
+    """
+    return RepeatPlan(
+        plan_id=f"whetstone.env.{env.name}.{split_role}",
+        version=_DEFINITION_VERSION,
+        task_identities=task_set.task_identities,
+        repeat_count=repeats,
+    )
+
+
+def build_sampling_config(
+    env: EnvSpec,
+    *,
+    split_role: str,
+    task_set: TaskSet,
+    repeat_plan: RepeatPlan,
+) -> SamplingConfig:
+    """The Sampling Config binding this split's Task Set + Repeat Plan."""
+    definition = SamplingDefinition(
+        definition_id=f"whetstone.env.{env.name}.{split_role}.sampling",
+        version=_DEFINITION_VERSION,
+    )
+    return definition.materialize(
+        {
+            "task_set_hash": task_set.identity_hash(),
+            "repeat_plan_hash": repeat_plan.identity_hash(),
+        }
+    )
+
+
+def build_aggregation_config(
+    env: EnvSpec,
+    *,
+    completeness: Completeness = Completeness.PROPAGATE,
+) -> AggregationConfig:
+    """The ``mean`` Aggregation Config with an explicit completeness policy.
+
+    ``reduction=mean`` with ``missing_data`` set from ``completeness`` and
+    ``zero_denominator=not_applicable`` (an empty reduction is an explicit
+    non-OK status, never a fabricated value).
+    """
+    definition = AggregationDefinition(
+        definition_id=f"whetstone.env.{env.name}.aggregation",
+        version=_DEFINITION_VERSION,
+    )
+    return definition.materialize(
+        {
+            "reduction": "mean",
+            "missing_data": completeness.value,
+            "zero_denominator": "not_applicable",
+        }
+    )
+
+
+def build_eval_config(
+    env: EnvSpec,
+    *,
+    split_role: str,
+    sampling: SamplingConfig,
+    procedure: EvaluationProcedureConfig,
+    aggregation: AggregationConfig,
+) -> EvalConfig:
+    """Compose one split's Eval Config from its three component Configs.
+
+    The Evaluation Procedure Config is shared across the internal and
+    official Eval Configs (same identity); only the Sampling Config differs,
+    so ``graph_hash`` is unchanged while ``eval_config_hash`` differs.
+    """
+    definition = EvalDefinition(
+        definition_id=f"whetstone.env.{env.name}.eval",
+        version=_DEFINITION_VERSION,
+    )
+    return definition.materialize(
+        sampling=sampling,
+        evaluation_procedure=procedure,
+        aggregation=aggregation,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EnvSplitSampling:
+    """The sampling artifacts for one split (internal_eval or official)."""
+
+    split_role: str
+    instances: tuple[Instance, ...]
+    task_set: TaskSet
+    repeat_plan: RepeatPlan
+    sampling_config: SamplingConfig
+    eval_config: EvalConfig
+
+
+@dataclass(frozen=True, slots=True)
+class EnvEvalConfigs:
+    """The internal + official Eval Configs and their shared Procedure.
+
+    ``procedure_config_hash`` is the single Evaluation Procedure Config
+    identity both Eval Configs fold in. ``held_out`` instances are retained
+    for the untouched-held-out proof but never sampled.
+    """
+
+    env_name: str
+    procedure_config_hash: str
+    internal: EnvSplitSampling
+    official: EnvSplitSampling
+    held_out_task_identities: tuple[str, ...]
+
+    def eval_config_for(self, split_role: str) -> EvalConfig:
+        if split_role == INTERNAL_EVAL:
+            return self.internal.eval_config
+        if split_role == OFFICIAL:
+            return self.official.eval_config
+        raise KeyError(f"no eval config for split role {split_role!r}")
+
+
+def _split(
+    env: EnvSpec,
+    pool: TaskPool,
+    split_sizes: tuple[int, int, int] | None,
+) -> PoolSplit:
+    if split_sizes is None:
+        internal_n, official_n, held_out_n = env.default_split_sizes(pool)
+    else:
+        internal_n, official_n, held_out_n = split_sizes
+    return pool.split(internal_n, official_n, held_out_n)
+
+
+def _build_split_sampling(
+    env: EnvSpec,
+    *,
+    split_role: str,
+    instances: tuple[Instance, ...],
+    procedure: EvaluationProcedureConfig,
+    aggregation: AggregationConfig,
+    repeats: int,
+) -> EnvSplitSampling:
+    task_set = build_task_set(
+        env, split_role=split_role, instances=instances
+    )
+    repeat_plan = build_repeat_plan(
+        env, split_role=split_role, task_set=task_set, repeats=repeats
+    )
+    sampling = build_sampling_config(
+        env,
+        split_role=split_role,
+        task_set=task_set,
+        repeat_plan=repeat_plan,
+    )
+    eval_config = build_eval_config(
+        env,
+        split_role=split_role,
+        sampling=sampling,
+        procedure=procedure,
+        aggregation=aggregation,
+    )
+    return EnvSplitSampling(
+        split_role=split_role,
+        instances=instances,
+        task_set=task_set,
+        repeat_plan=repeat_plan,
+        sampling_config=sampling,
+        eval_config=eval_config,
+    )
+
+
+class HeldOutReferencedError(AssertionError):
+    """A Sampling Config referenced a held-out task identity."""
+
+
+class SplitOverlapError(AssertionError):
+    """The internal and official Task Sets share a task identity."""
+
+
+def build_eval_configs(
+    env: EnvSpec,
+    *,
+    pool: TaskPool,
+    procedure: EvaluationProcedureConfig,
+    completeness: Completeness = Completeness.PROPAGATE,
+    repeats: int = DEFAULT_REPEATS,
+    split_sizes: tuple[int, int, int] | None = None,
+) -> EnvEvalConfigs:
+    """Build the internal + official Eval Configs from ``pool``'s splits.
+
+    Both Eval Configs share ``procedure``'s identity; their Sampling Configs
+    differ. Asserts the internal and official Task Sets are disjoint and that
+    neither references a held-out task identity (held-out stays untouched).
+
+    ``split_sizes`` defaults to the env's committed spec-default split
+    (:meth:`EnvSpec.default_split_sizes`); tests pass an explicit tiny
+    ``(internal, official, held_out)`` split for a small pool.
+    """
+    split = _split(env, pool, split_sizes)
+    aggregation = build_aggregation_config(env, completeness=completeness)
+
+    internal = _build_split_sampling(
+        env,
+        split_role=INTERNAL_EVAL,
+        instances=split.internal_eval,
+        procedure=procedure,
+        aggregation=aggregation,
+        repeats=repeats,
+    )
+    official = _build_split_sampling(
+        env,
+        split_role=OFFICIAL,
+        instances=split.official,
+        procedure=procedure,
+        aggregation=aggregation,
+        repeats=repeats,
+    )
+
+    internal_ids = set(internal.task_set.task_identities)
+    official_ids = set(official.task_set.task_identities)
+    if internal_ids & official_ids:
+        raise SplitOverlapError(
+            "internal and official Task Sets share a task identity"
+        )
+
+    held_out_ids = task_identities(env, split.held_out)
+    held_out_set = set(held_out_ids)
+    if (internal_ids | official_ids) & held_out_set:
+        raise HeldOutReferencedError(
+            "a Sampling Config references a held-out task identity"
+        )
+
+    return EnvEvalConfigs(
+        env_name=env.name,
+        procedure_config_hash=procedure.config_identity_hash,
+        internal=internal,
+        official=official,
+        held_out_task_identities=held_out_ids,
+    )
+
+
+__all__ = [
+    "INTERNAL_EVAL",
+    "OFFICIAL",
+    "Completeness",
+    "EnvEvalConfigs",
+    "EnvSplitSampling",
+    "HeldOutReferencedError",
+    "SplitOverlapError",
+    "build_aggregation_config",
+    "build_eval_config",
+    "build_eval_configs",
+    "build_repeat_plan",
+    "build_sampling_config",
+    "build_task_set",
+    "task_identities",
+]

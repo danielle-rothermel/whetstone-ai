@@ -1,0 +1,174 @@
+"""The five whetstone-envs task families bound to a uniform env spec.
+
+Each quick-test candidate in ``whetstone-envs`` exposes the same three
+model-call-free surfaces behind its ``whetstone_envs.<env>`` package: a
+seeded generator (``generate.generate_pool`` -> a
+``whetstone_envs.core.TaskPool``), an independent scoring oracle
+(``oracle.score_gold(prediction, gold) -> int``, which applies the env's
+*shared* normalization first), and a naive/ceiling ``ProbePair``
+(``prompts.PROBES``). This module names those surfaces once per env so the
+rest of the adapter is env-agnostic.
+
+The oracle contract is deliberately uniform: every env's ``score_gold``
+takes the model generation as its first argument and the instance's public
+``gold`` field as its second, and returns ``0`` / ``1`` after the shared
+:func:`whetstone_envs.core.normalize`. For the four re-derive-the-answer
+envs (c11, c19, c18, c23) ``gold`` is the expected answer string; for c22
+``gold`` is the serialized constraint stack the oracle re-runs its checkers
+against. Either way, ``score_gold(generation, task.gold)`` is the single
+call the whetstone metric-extraction operator makes.
+
+Split sizes and the repeat count are the env's committed spec defaults where
+the env commits them (``generate.default_split_sizes`` for c11/c18/c19/c23),
+and whetstone-side spec defaults where the env does not (c22 commits no
+split call; see :data:`_C22_SPLIT`). ``held_out`` is never referenced by any
+Sampling Config this adapter builds.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from importlib import import_module
+from types import ModuleType
+
+from whetstone_envs.core import ProbePair, TaskPool
+
+#: The five task families this adapter binds, in build/validation order
+#: (cheapest/most robust first, matching the validation plan's spend order).
+ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
+
+#: Spec-default deliberate-observation repeats per task. The envs commit no
+#: repeat count (a Repeat Plan is a whetstone execution concern, out of scope
+#: for whetstone-envs per its PLAN "Integration handoff"); the validation
+#: plan's pilots use 3 temp-0 repeats, so 3 is the whetstone-side default.
+DEFAULT_REPEATS = 3
+
+#: Envs whose oracle ``score_gold`` is ``(gold, response)`` rather than the
+#: usual ``(prediction, gold)``. Only c22 (its oracle re-runs the constraint
+#: checkers against the response, reading the constraint stack from the gold).
+_GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22"})
+
+#: c22 commits no ``default_split_sizes`` (unlike the other four). Its spec
+#: (Section 1) proposes N=20/stratum; this adapter uses the same
+#: small-internal / balanced-official-and-held-out per-stratum shape the
+#: other envs commit, kept well inside c22's 20/stratum pool. Recorded as a
+#: judgment call in the build report.
+_C22_SPLIT_PER_STRATUM = (2, 6, 6)  # (internal_eval, official, held_out)
+
+
+@dataclass(frozen=True, slots=True)
+class EnvSpec:
+    """The bound surfaces of one whetstone-envs task family.
+
+    Parameters
+    ----------
+    name:
+        The env identifier (``"c22"`` .. ``"c23"``).
+    generate:
+        The env's ``generate`` module (``generate_pool`` / ``build_manifest``
+        / optional ``default_split_sizes``).
+    oracle:
+        The env's ``oracle`` module. Its ``score_gold`` returns 0/1 after the
+        env's shared normalization; see ``gold_first`` for the argument order.
+    probes:
+        The env's naive/ceiling :class:`~whetstone_envs.core.ProbePair`.
+    oracle_qualname:
+        The dotted path to the oracle entry point, folded into the Metric
+        Extraction Config identity so a change of oracle wiring is visible in
+        ``eval_config_hash`` / ``graph_hash``.
+    gold_first:
+        Whether the env oracle's ``score_gold`` takes ``(gold, response)``
+        (``True`` -- c22) rather than the usual ``(prediction, gold)``
+        (``False`` -- c11/c19/c18/c23). c22's oracle re-runs its constraint
+        checkers against the response and reads the constraint stack from the
+        gold, so its signature is ``score_gold(gold, response)``; this flag
+        makes :meth:`score_gold` call the oracle with the right order while
+        the adapter surface stays uniform ``score_gold(generation, gold)``.
+    """
+
+    name: str
+    generate: ModuleType
+    oracle: ModuleType
+    probes: ProbePair
+    oracle_qualname: str
+    gold_first: bool = False
+
+    def generate_pool(self, *, n_per_stratum: int | None = None) -> TaskPool:
+        """Generate the env pool at its spec-default (or given) size."""
+        if n_per_stratum is None:
+            return self.generate.generate_pool()
+        return self.generate.generate_pool(n_per_stratum=n_per_stratum)
+
+    def default_split_sizes(self, pool: TaskPool) -> tuple[int, int, int]:
+        """Return ``(internal_eval_n, official_n, held_out_n)`` for ``pool``.
+
+        Delegates to the env's committed ``default_split_sizes`` when present
+        (c11/c18/c19/c23). For c22 -- which commits no split call -- the
+        whetstone-side per-stratum default (:data:`_C22_SPLIT_PER_STRATUM`) is
+        scaled by the pool's stratum count, matching the interleaved-layout
+        convention the other envs rely on.
+        """
+        split_fn = getattr(self.generate, "default_split_sizes", None)
+        if split_fn is not None:
+            return split_fn(pool)
+        n_strata = len(pool.strata)
+        internal, official, held_out = _C22_SPLIT_PER_STRATUM
+        return (
+            internal * n_strata,
+            official * n_strata,
+            held_out * n_strata,
+        )
+
+    def score_gold(self, generation: str, gold: str) -> int:
+        """Invoke the env oracle on a generation + the instance gold.
+
+        The single oracle call the whetstone metric-extraction operator
+        makes. The env's shared normalization is applied inside ``score_gold``
+        (never here), so scoring differences come from the model, not from
+        per-adapter string handling.
+
+        The adapter surface is uniform -- ``score_gold(generation, gold)`` --
+        but the underlying env oracle's argument order differs: c22's
+        ``score_gold(gold, response)`` (``gold_first``) versus the usual
+        ``score_gold(prediction, gold)``. This method routes the arguments
+        accordingly so a caller never has to know the per-env order.
+        """
+        if self.gold_first:
+            return int(self.oracle.score_gold(gold, generation))
+        return int(self.oracle.score_gold(generation, gold))
+
+
+def _load_env_spec(name: str) -> EnvSpec:
+    generate = import_module(f"whetstone_envs.{name}.generate")
+    oracle = import_module(f"whetstone_envs.{name}.oracle")
+    prompts = import_module(f"whetstone_envs.{name}.prompts")
+    return EnvSpec(
+        name=name,
+        generate=generate,
+        oracle=oracle,
+        probes=prompts.PROBES,
+        oracle_qualname=f"whetstone_envs.{name}.oracle.score_gold",
+        gold_first=name in _GOLD_FIRST_ENVS,
+    )
+
+
+class UnknownEnvError(KeyError):
+    """A requested env name is not one of the five bound task families."""
+
+
+def env_spec(name: str) -> EnvSpec:
+    """Return the :class:`EnvSpec` for ``name`` (raises on an unknown env)."""
+    if name not in ENV_NAMES:
+        raise UnknownEnvError(
+            f"unknown env {name!r}; expected one of {ENV_NAMES}"
+        )
+    return _load_env_spec(name)
+
+
+__all__ = [
+    "DEFAULT_REPEATS",
+    "ENV_NAMES",
+    "EnvSpec",
+    "UnknownEnvError",
+    "env_spec",
+]
