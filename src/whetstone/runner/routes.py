@@ -46,6 +46,7 @@ __all__ = [
     "CANONICAL_PROPOSER_MODEL",
     "CANONICAL_TASK_MODEL",
     "LANE_NAMES",
+    "OPENROUTER_BASE_URL",
     "OPENROUTER_KEY_ENV",
     "PLAN_LANES",
     "PlanLane",
@@ -65,6 +66,10 @@ CANONICAL_PROPOSER_MODEL = "openai/gpt-5.4-nano"
 
 #: The env var carrying the OpenRouter credential.
 OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
+
+#: The OpenRouter API base URL (chat-completions). Every canonical route pins
+#: this so the transport policy has a non-None base_url and pre-flight passes.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +194,7 @@ def canonical_task_route(
     )
     transport_policy = policy_for(
         api_key_env=OPENROUTER_KEY_ENV,
+        base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
         native_retry_count=0,
     )
@@ -223,6 +229,7 @@ def canonical_proposer_route(
     )
     transport_policy = policy_for(
         api_key_env=OPENROUTER_KEY_ENV,
+        base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
         native_retry_count=0,
     )

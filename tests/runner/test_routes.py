@@ -8,6 +8,7 @@ from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     CANONICAL_TASK_MODEL,
     LANE_NAMES,
+    OPENROUTER_BASE_URL,
     OPENROUTER_KEY_ENV,
     PLAN_LANES,
     canonical_proposer_route,
@@ -85,6 +86,31 @@ def test_identity_summary_carries_no_secret() -> None:
 def test_unknown_lane_rejected() -> None:
     with pytest.raises(ValueError, match="unknown plan lane"):
         lane_route("nope")
+
+
+def test_canonical_routes_pin_openrouter_base_url() -> None:
+    # Regression (live round-1 blocker): the canonical routes MUST carry a
+    # base_url or every OpenRouter call fails pre-flight with missing_base_url.
+    assert OPENROUTER_BASE_URL == "https://openrouter.ai/api/v1"
+    for route in (canonical_task_route(), canonical_proposer_route()):
+        assert route.transport_policy.base_url == OPENROUTER_BASE_URL
+
+
+def test_every_producible_route_has_well_formed_base_url() -> None:
+    # Regression: every route the registry can produce -- canonical task,
+    # canonical proposer, and every plan lane, via route_for for both roles --
+    # has a non-None, well-formed (https://) base_url.
+    routes = [canonical_task_route(), canonical_proposer_route()]
+    for lane in ("openrouter", *LANE_NAMES):
+        for role in ("task", "proposer"):
+            routes.append(route_for(lane, role=role))
+    for route in routes:
+        base_url = route.transport_policy.base_url
+        assert base_url is not None, route.identity_summary()
+        assert base_url.startswith("https://"), base_url
+        # Well-formed: a host after the scheme, no trailing whitespace.
+        assert base_url == base_url.strip()
+        assert len(base_url) > len("https://")
 
 
 def test_temperature_folds_into_config_identity() -> None:
