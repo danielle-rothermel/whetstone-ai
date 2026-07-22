@@ -28,12 +28,12 @@ output, and referenced state/history/evidence — never from process memory.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 from dr_store import BindingConflictError, BindStatus, ObjectStore
 
 from whetstone.optimization.adapters import AdapterOutput, OptimizerAdapter
-from whetstone.optimization.identity import TypedRef, typed_ref_for_record
+from whetstone.optimization.identity import TypedRef
 from whetstone.optimization.schema import (
     STEP_REQUEST_SCHEMA,
     STEP_RESULT_SCHEMA,
@@ -206,6 +206,20 @@ class OptimizationHarness:
         )
         return TypedRef(schema_name=ref.schema, content_hash=ref.content_hash)
 
+    def _snapshot(
+        self, schema: str, delta: dict[str, Any]
+    ) -> TypedRef | None:
+        """Persist a non-empty state/history delta as a content-addressed
+        snapshot object and return its typed reference; ``None`` for an empty
+        delta. The persisted body is what makes the immutable state/history
+        reference resolvable by a later Step (and after a restart)."""
+        if not delta:
+            return None
+        ref, _status = self._store.put(schema, delta)
+        return TypedRef(
+            schema_name=ref.schema, content_hash=ref.content_hash
+        )
+
     def resolve_step_result(
         self, run_id: str, step_index: int
     ) -> TypedRef | None:
@@ -277,21 +291,16 @@ class OptimizationHarness:
         else:  # pragma: no cover - StepMode is closed
             raise ValueError(f"unknown Step mode {request.mode!r}")
 
-        # 4. Finalize exactly once: compute state/history snapshot refs, carry
-        #    budgets forward, assign status, persist ONE Result, then bind.
-        state_ref = (
-            typed_ref_for_record(
-                f"{ADAPTER_CHECKPOINT_SCHEMA}.state", output.state_delta
-            )
-            if output.state_delta
-            else None
+        # 4. Finalize exactly once: persist the state/history delta bodies as
+        #    content-addressed snapshot objects (so a later Step can resolve
+        #    them by Content Hash — the design's immutable state/history refs),
+        #    carry budgets forward, assign status, persist ONE Result, then
+        #    bind.
+        state_ref = self._snapshot(
+            f"{ADAPTER_CHECKPOINT_SCHEMA}.state", output.state_delta
         )
-        history_ref = (
-            typed_ref_for_record(
-                f"{ADAPTER_CHECKPOINT_SCHEMA}.history", output.history_delta
-            )
-            if output.history_delta
-            else None
+        history_ref = self._snapshot(
+            f"{ADAPTER_CHECKPOINT_SCHEMA}.history", output.history_delta
         )
 
         result = OptimizationStepResult(
