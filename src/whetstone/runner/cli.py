@@ -110,6 +110,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="mark this cell non-canonical (a debug/iteration cell)",
     )
+    cell.add_argument(
+        "--dry-run-fake",
+        action="store_true",
+        help=(
+            "run the cell end-to-end against SCRIPTED FAKE transports (no "
+            "live paid call, no --live needed). Proves the CLI plumbing works "
+            "as a program: build_env_experiment -> baseline/ceiling/best "
+            "official evals -> optimizer internal search -> delta + CI -> "
+            "ledger append."
+        ),
+    )
     return parser
 
 
@@ -176,7 +187,36 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     return 0
 
 
+def _run_dry_cell(args: argparse.Namespace) -> int:
+    """Run one cell against scripted fake transports (no live paid call)."""
+    from whetstone.runner.dryrun import run_dry_cell
+
+    decision = (
+        detect_execution_mode(force=ExecutionMode(args.execution_mode))
+        if args.execution_mode
+        else detect_execution_mode()
+    )
+    outcome = run_dry_cell(
+        env=args.env,
+        optimizer=args.optimizer,
+        root=args.root,
+        attempt=args.attempt,
+        lane=args.lane,
+        execution_mode=decision.mode,
+    )
+    r = outcome.record
+    note = "skipped" if outcome.skipped else r.status
+    sys.stdout.write(
+        f"dry-run-fake cell {r.cell_id} mode={r.window_notes} {note} "
+        f"baseline={r.baseline_official} best={r.best_official} "
+        f"delta={r.delta} ci95={r.ci95} spend=${r.spend_usd:.4f}\n"
+    )
+    return 0
+
+
 def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
+    if getattr(args, "dry_run_fake", False):
+        return _run_dry_cell(args)
     _require_live(args)
     task_route = route_for(args.lane, role="task", temperature=0.0)
     decision = (
