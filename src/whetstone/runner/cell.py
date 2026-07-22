@@ -68,8 +68,10 @@ __all__ = [
 
 #: The default whole-cell wall deadline (seconds; ``--max-wall-seconds``). On
 #: breach a cell finishes in-flight, persists partials, and records
-#: ``status=halted`` with a halt reason.
-DEFAULT_CELL_MAX_WALL_SECONDS = 3600.0
+#: ``status=halted`` with a halt reason. Raised 3600 -> 7200s: with the 600s
+#: transport cap accommodating reasoning-model streams, a canonical cell's
+#: full official + optimize matrix legitimately needs more than one hour.
+DEFAULT_CELL_MAX_WALL_SECONDS = 7200.0
 
 
 class CellBaselineFailure(RuntimeError):
@@ -443,7 +445,15 @@ def run_cell(
     # rather than re-driving the naive/ceiling arms -- so a later paired
     # best-naive delta can be computed without re-driving naive. A non-eval
     # cell only drives them itself if no Eval row has cached the env yet.
-    cache = None if is_eval_row else ledger.env_cache_for(config.env)
+    # Cache is keyed by (env, task-model): a cell must never pair against
+    # cached vectors measured under a DIFFERENT task model (different graph
+    # identity). A deepseek cell gets a MISS on a nano-cached env and drives
+    # its own naive/ceiling arms (FIX 7).
+    cache = (
+        None
+        if is_eval_row
+        else ledger.env_cache_for(config.env, task_model=config.task_model)
+    )
     ceiling_official: float | None
     if cache is not None:
         baseline_score = cache.naive_official
@@ -456,33 +466,27 @@ def run_cell(
     else:
         # A baseline with no successful rollout rows (every call failed
         # pre-flight or was rejected) is a plumbing failure, not a valid
-        # null-scores cell. Raise CellBaselineFailure BEFORE recording any
-        # ledger line so the CLI exits non-zero loudly. The empty aggregate
-        # also makes the internal reduction non-computable (a bare ValueError
-        # deep in evaluate_split), caught here and re-surfaced with context.
+        # null-scores cell. Detect it via the aggregate's row counts and raise
+        # CellBaselineFailure BEFORE recording any ledger line so the CLI exits
+        # non-zero loudly. An official eval derives NO Reward, so a merely
+        # INCOMPLETE aggregate (some observations timed out) no longer crashes
+        # here: it is visible incompleteness (score=None, per-task rows record
+        # the failures), distinct from a zero-success plumbing blocker.
         planned = len(official) * official_repeats
-        try:
-            baseline = evaluate_split(
-                experiment,
-                candidate=naive,
-                instances=official,
-                split_role="official",
-                transport=config.rollout_transport,
-                execution_policy=config.execution_policy,
-                repeats=official_repeats,
-                store=backing,
-                execution_mode=config.execution_mode,
-                fanout=_fanout(),
-                partial_log=partial_log,
-            )
-            _observe(baseline)
-        except ValueError as exc:
-            raise CellBaselineFailure(
-                f"cell {cell_id}: baseline official eval produced no "
-                f"computable score over {planned} planned rollouts (every "
-                "rollout failed). This is a plumbing failure; no cell "
-                "line recorded."
-            ) from exc
+        baseline = evaluate_split(
+            experiment,
+            candidate=naive,
+            instances=official,
+            split_role="official",
+            transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            repeats=official_repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+            fanout=_fanout(),
+            partial_log=partial_log,
+        )
+        _observe(baseline)
         if baseline.aggregate.rows_present == 0:
             raise CellBaselineFailure(
                 f"cell {cell_id}: baseline official eval produced "
@@ -685,23 +689,35 @@ def run_cell(
                 at=spend_after.at if spend_after else "",
             )
         )
-    spend_usd = _spend_between(spend_before, spend_after)
+    # FIX 8: the cell's final spend_usd sums the credits deltas across ALL
+    # attempts of this cell_id (crashed attempts included) from the spend.jsonl
+    # before/after pairs -- not merely this attempt's before/after delta. A
+    # crashed prior attempt recorded a `before` with no `after`; its burned
+    # credits are captured by pairing that `before` with the next snapshot.
+    # Falls back to this attempt's own delta when no credits were recorded.
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _spend_gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
 
-    # --- Whole-cell wall deadline overrides the statistical status. ---
-    # A phase that hit the deadline (or a total elapsed over the budget) halts
-    # the cell: in-flight calls have finished and their partials persisted; the
-    # record notes the halt reason.
+    # --- Whole-cell wall deadline halts ONLY when work was cut short. ---
+    # A cell is ``halted`` only when a phase actually STOPPED dispatching work
+    # because the deadline was reached (``halt_reason`` was set by ``_observe``
+    # when a phase reported ``deadline_reached``: planned observations were
+    # never driven). A cell that COMPLETED every planned phase -- even if the
+    # total elapsed happens to exceed ``max_wall_seconds`` because the final
+    # phase finished just past the line -- is NOT halted: all its work landed,
+    # so its statistical status stands (this was the c11 defect: 2000/2000
+    # observations + stats done, then wrongly stamped ``halted``). The elapsed
+    # overrun is recorded in the note for transparency, without forcing halt.
     elapsed = clock() - cell_start
-    if not halt_reason and elapsed >= config.max_wall_seconds:
-        halt_reason = (
-            f"whole-cell wall deadline {config.max_wall_seconds:.0f}s reached "
-            f"(elapsed {elapsed:.0f}s)"
-        )
+    overran = elapsed >= config.max_wall_seconds
 
     # Stop-loss overrides the statistical status.
     if budget.would_halt(spend_usd):
         status = "halted"
     if halt_reason:
+        # Work was actually cut short (dispatch stopped mid-phase).
         status = "halted"
 
     # Fold the halt reason + any rate-limit concurrency halving into the note.
@@ -714,6 +730,14 @@ def run_cell(
         )
     if halt_reason:
         notes.append(f"halted: {halt_reason}")
+    elif overran:
+        # Completed all phases but ran past the wall budget: NOT a halt, just a
+        # transparency note (no work was cut short).
+        notes.append(
+            f"completed all phases; elapsed {elapsed:.0f}s exceeded wall "
+            f"budget {config.max_wall_seconds:.0f}s (not halted -- all "
+            "planned observations landed)"
+        )
     combined_note = "; ".join(notes)
 
     record = CellRecord(
@@ -772,6 +796,7 @@ def run_cell(
                 naive_per_task=naive_per_task,
                 ceiling_per_task=ceiling_per_task,
                 official_repeats_used=official_repeats,
+                task_model=config.task_model,
             )
         )
     return CellOutcome(

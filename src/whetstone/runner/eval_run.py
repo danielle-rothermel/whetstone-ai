@@ -125,7 +125,15 @@ def evaluate_split(
     default 5-way); a ``partial_log`` makes the drive resumable (an
     already-recorded ``(instance, candidate, repeat)`` observation is restored,
     and each new call is appended as it completes).
+
+    Reward is derived ONLY on an internal-role evaluation: an OFFICIAL-role
+    split (``split_role == "official"``) computes the aggregate + per-task
+    vectors and derives NO Reward (the design's "official evaluation MUST
+    derive no Reward"). So a timed-out observation that leaves the official
+    aggregate incomplete is visible incompleteness in the aggregate/per-task
+    rows, never a Reward-policy crash.
     """
+    is_official = split_role == "official"
     result = run_internal_eval(
         experiment,
         candidate=candidate,
@@ -137,6 +145,7 @@ def evaluate_split(
         fanout=fanout,
         partial_log=partial_log,
         partial_phase="cell",
+        apply_reward=not is_official,
     )
     aggregate = result.aggregate
     backing = store or ObjectStore(MemoryBackend())

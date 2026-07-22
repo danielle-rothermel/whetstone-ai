@@ -24,7 +24,7 @@ from dr_providers import (
 
 from tests.envs.support import transport_policy
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.registry import env_spec
+from whetstone.envs.registry import EnvSpec, env_spec
 from whetstone.envs.rollout_definition import (
     ceiling_candidate,
     initial_candidate,
@@ -173,14 +173,14 @@ def _winner_internal_gold(experiment) -> dict[str, str]:
 
 def _config(
     env_name, *, optimizer, rollout, proposer, official_repeats=5,
-    canonical=True,
+    canonical=True, task_model=TASK_MODEL,
 ):
     return CellConfig(
         optimizer=optimizer,
         env=env_name,
         lane="openrouter",
         attempt=0,
-        task_model=TASK_MODEL,
+        task_model=task_model,
         proposer_model=PROPOSER_MODEL,
         canonical=canonical,
         proposer_config=proposer_config(),
@@ -304,6 +304,100 @@ def test_eval_row_headroom_gate_present_when_ceiling_beats_naive(
     assert cache is not None
     assert len(cache.naive_per_task) == len(official)
     assert len(cache.ceiling_per_task) == len(official)
+
+
+def test_env_cache_keyed_by_task_model_deepseek_misses_nano(
+    tmp_path: Path,
+) -> None:
+    # FIX 7: EnvOfficialCache keys by (env, task-model). An Eval row under the
+    # NANO task model caches nano vectors; a later NON-eval cell under the
+    # DEEPSEEK task model must NOT pair against those cached nano vectors -- it
+    # gets a cache MISS and drives its own naive/ceiling arms. The task model
+    # is recorded on both the cell line (models.task) and the cache line.
+    env_name = "c11"
+    exp = _experiment(env_name)
+    env = env_spec(env_name)
+    ceiling = ceiling_candidate(env)
+    official = _official(exp)
+    ceiling_gold = {
+        render_prompt(env, ceiling, inst): inst.gold for inst in official
+    }
+    ledger = Ledger(root=tmp_path)
+
+    # 1. Eval row under NANO: establishes the (c11, nano) cache.
+    nano_rollout = PhasedTransport(
+        winner_gold_first={}, winner_gold_rest={},
+        other_gold=ceiling_gold, first_pass_calls=0,
+    )
+    nano_eval = _config(
+        env_name, optimizer="eval", rollout=nano_rollout,
+        proposer=ScriptedProposer(()), task_model="openai/gpt-5-nano",
+    )
+    run_cell(nano_eval, ledger=ledger)
+    assert ledger.env_cache_for(env_name, task_model="openai/gpt-5-nano")
+    # A deepseek-keyed lookup MISSES the nano cache.
+    assert (
+        ledger.env_cache_for(
+            env_name, task_model="deepseek/deepseek-v4-flash"
+        )
+        is None
+    )
+
+    # 2. A copro cell under DEEPSEEK: the cache is nano-only, so the deepseek
+    # cell must NOT reuse nano vectors -- it drives its own naive baseline arm.
+    # We prove the drive happened by counting naive-candidate official calls on
+    # a fresh transport (a cache HIT would drive ZERO naive calls).
+    counting = _NaiveCallCountingTransport(env=env, other_gold=ceiling_gold)
+    deepseek_cell = _config(
+        env_name, optimizer="copro", rollout=counting,
+        proposer=ScriptedProposer((WIN,)),
+        task_model="deepseek/deepseek-v4-flash",
+    )
+    outcome = run_cell(deepseek_cell, ledger=ledger)
+    assert outcome.record.models.task == "deepseek/deepseek-v4-flash"
+    # The deepseek cell drove the naive baseline itself (cache miss): >0 naive
+    # official calls. A nano-cache reuse would have driven zero.
+    assert counting.naive_official_calls > 0
+
+
+@dataclass
+class _NaiveCallCountingTransport:
+    """Counts official-split calls for the NAIVE candidate's rendered prompts.
+
+    A cache HIT would skip driving the naive baseline entirely (zero naive
+    official calls); a MISS drives it (>0). Replies gold for the ceiling probe
+    so the ceiling arm computes; naive always misses.
+    """
+
+    env: EnvSpec
+    other_gold: dict[str, str]
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+    naive_official_calls: int = 0
+    _naive_prompts: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        naive = initial_candidate(self.env)
+        exp = _experiment(self.env.name)
+        self._naive_prompts = frozenset(
+            render_prompt(self.env, naive, inst)
+            for inst in _official(exp)
+        )
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        prompt = _prompt_of(request)
+        if prompt in self._naive_prompts:
+            self.naive_official_calls += 1
+        text = self.other_gold.get(prompt, MISS)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"content-type": "json"}, body={"model": "test-model"},
+        )
+        return ProviderInvocationEvidence.build(
+            request=request, policy=self.policy, raw_request=raw_request,
+            outcome=_response(text),
+        )
 
 
 def test_eval_row_no_demonstrable_headroom_when_ceiling_ties_naive(

@@ -23,8 +23,12 @@ rollout calls.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import os
 import sys
-from collections.abc import Sequence
+import threading
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
@@ -59,15 +63,82 @@ from whetstone.runner.pilot import (
 )
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
-    CANONICAL_TASK_MODEL,
     LANE_NAMES,
     ProviderRoute,
     route_for,
+    task_model_for_env,
 )
 
 __all__ = ["build_parser", "main"]
 
 _LANE_CHOICES = ("openrouter", *LANE_NAMES)
+
+#: Progress heartbeat interval (seconds): how often the CLI prints a progress
+#: line during a long cell/pilot run so nohup logs stream something regularly.
+HEARTBEAT_SECONDS = 60.0
+
+
+def _force_unbuffered_stdout() -> None:
+    """Make stdout/stderr line-buffered so nohup logs stream promptly.
+
+    A long cell run under ``nohup ... &`` buffers stdout by default, so a log
+    tailer sees nothing until the process exits. The CLI sets
+    ``PYTHONUNBUFFERED=1`` (for any child processes it spawns, e.g. the Codex
+    bridge) and reconfigures its own streams to line buffering so each progress
+    line and result flushes immediately.
+    """
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:  # pragma: no branch - real TextIO
+            with contextlib.suppress(Exception):
+                reconfigure(line_buffering=True)
+
+
+class _Heartbeat:
+    """A background thread printing a progress line every ~60s.
+
+    So a long-running cell (many minutes of provider calls) streams SOMETHING
+    to a nohup log while it works: elapsed, the wall budget, and a spend-so-far
+    estimate. It is best-effort and never affects the result; it stops when the
+    surrounding ``with`` block exits.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        spend_estimate: Callable[[], float | None],
+        interval: float = HEARTBEAT_SECONDS,
+        sink: Callable[[str], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._label = label
+        self._spend_estimate = spend_estimate
+        self._interval = interval
+        self._sink = sink or (lambda m: sys.stdout.write(m))
+        self._clock = clock
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._start = clock()
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            elapsed = self._clock() - self._start
+            spend = self._spend_estimate()
+            spend_str = "n/a" if spend is None else f"${spend:.4f}"
+            self._sink(
+                f"[heartbeat] {self._label} elapsed={elapsed:.0f}s "
+                f"spend~={spend_str}\n"
+            )
+
+    def __enter__(self) -> _Heartbeat:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self._thread.join(timeout=1.0)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -141,6 +212,17 @@ def build_parser() -> argparse.ArgumentParser:
     cell.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     cell.add_argument("--attempt", type=int, default=0)
     cell.add_argument(
+        "--task-model",
+        default=None,
+        help=(
+            "override the per-env default task model (the matrix config). "
+            "c18 + c22 default to 'deepseek/deepseek-v4-flash'; others to "
+            "'openai/gpt-5-nano'. The chosen model folds into the Provider "
+            "Call Config (graph_hash) and is recorded in cells.jsonl "
+            "models.task. Openrouter lane only."
+        ),
+    )
+    cell.add_argument(
         "--max-wall-seconds",
         type=float,
         default=DEFAULT_CELL_MAX_WALL_SECONDS,
@@ -166,6 +248,21 @@ def build_parser() -> argparse.ArgumentParser:
             "ledger append."
         ),
     )
+
+    refinalize = sub.add_parser(
+        "refinalize",
+        help=(
+            "recompute a cell's status from its PERSISTED evidence and append "
+            "a corrected line (original preserved, note 'refinalized'). No "
+            "provider calls; corrects a cell wrongly stamped 'halted' that "
+            "actually completed every phase."
+        ),
+    )
+    refinalize.add_argument(
+        "--optimizer", required=True, choices=list(OPTIMIZERS)
+    )
+    refinalize.add_argument("--env", required=True)
+    refinalize.add_argument("--attempt", type=int, default=0)
     return parser
 
 
@@ -329,7 +426,16 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
     if getattr(args, "dry_run_fake", False):
         return _run_dry_cell(args)
     _require_live(args)
-    task_route = route_for(args.lane, role="task", temperature=0.0)
+    # Resolve the task model: explicit --task-model override, else the per-env
+    # matrix default (c18/c22 -> deepseek, others -> nano). It folds into the
+    # task route's Config identity (graph_hash) and is recorded as models.task.
+    resolved_task_model = task_model_for_env(
+        args.env, override=getattr(args, "task_model", None)
+    )
+    task_route = route_for(
+        args.lane, role="task", temperature=0.0,
+        task_model=resolved_task_model,
+    )
     decision = (
         detect_execution_mode(force=ExecutionMode(args.execution_mode))
         if args.execution_mode
@@ -343,7 +449,7 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         lane=args.lane,
         attempt=args.attempt,
         task_model=(
-            CANONICAL_TASK_MODEL if args.lane == "openrouter"
+            resolved_task_model if args.lane == "openrouter"
             else task_route.model
         ),
         proposer_model=(
@@ -365,13 +471,35 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         if args.lane == "openrouter"
         else None
     )
+    # A best-effort spend-so-far estimate for the heartbeat: the drop in
+    # remaining credits since the run started (a fresh credits read each beat).
+    baseline_remaining: list[float | None] = [None]
+
+    def _spend_estimate() -> float | None:
+        if credits_fetcher is None:
+            return None
+        try:
+            snap = credits_fetcher()
+        except Exception:  # pragma: no cover - heartbeat is best-effort
+            return None
+        if snap is None or snap.remaining_usd is None:
+            return None
+        if baseline_remaining[0] is None:
+            baseline_remaining[0] = snap.remaining_usd
+            return 0.0
+        return max(0.0, baseline_remaining[0] - snap.remaining_usd)
+
+    cell_id = f"{args.optimizer}:{args.env}:a{args.attempt}"
     try:
-        outcome = run_cell(
-            config,
-            ledger=ledger,
-            budget=BudgetGuard(),
-            credits_fetcher=credits_fetcher,
-        )
+        with _Heartbeat(
+            label=f"cell {cell_id}", spend_estimate=_spend_estimate
+        ):
+            outcome = run_cell(
+                config,
+                ledger=ledger,
+                budget=BudgetGuard(),
+                credits_fetcher=credits_fetcher,
+            )
     except ReserveError as exc:
         sys.stderr.write(f"budget reserve guard: {exc}\n")
         return 2
@@ -413,13 +541,42 @@ class _LiveProposerUnavailable:  # pragma: no cover - live-path placeholder
         )
 
 
+def _run_refinalize(args: argparse.Namespace) -> int:
+    """Recompute + append a corrected cell line from persisted evidence."""
+    from whetstone.runner.refinalize import refinalize_cell
+
+    ledger = Ledger(root=args.root)
+    outcome = refinalize_cell(
+        ledger,
+        optimizer=args.optimizer,
+        env=args.env,
+        attempt=args.attempt,
+    )
+    cell_id = outcome.original.cell_id
+    if not outcome.changed:
+        sys.stdout.write(
+            f"refinalize {cell_id}: no change ({outcome.reason})\n"
+        )
+        return 0
+    assert outcome.corrected is not None
+    sys.stdout.write(
+        f"refinalize {cell_id}: {outcome.original.status} -> "
+        f"{outcome.corrected.status} ({outcome.reason})\n"
+        f"  appended corrected line to {ledger.cells_path}\n"
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _force_unbuffered_stdout()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "pilot":
         return _run_pilot(args)
     if args.command == "cell":
         return _run_cell(args)
+    if args.command == "refinalize":
+        return _run_refinalize(args)
     parser.error("unknown command")  # pragma: no cover
     return 1
 

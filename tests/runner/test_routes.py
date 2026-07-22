@@ -24,7 +24,9 @@ def test_canonical_task_route_openrouter_gpt5_nano() -> None:
     assert route.lane == "openrouter"
     assert route.key_env == OPENROUTER_KEY_ENV == "OPENROUTER_API_KEY"
     assert route.transport_policy.native_retry_count == 0
-    assert route.transport_policy.timeout_seconds == 120.0
+    # Absolute cap 600s (accommodate reasoning-model streams), idle ~90s.
+    assert route.transport_policy.timeout_seconds == 600.0
+    assert route.transport_policy.idle_timeout_seconds == 90.0
 
 
 def test_canonical_proposer_route_distinct_identity() -> None:
@@ -49,7 +51,8 @@ def test_plan_lane_routes_use_window_starts_data(lane: str) -> None:
     assert route.key_env == spec.key_env
     # Anthropic-messages protocol lanes: sane transport policy.
     assert route.transport_policy.native_retry_count == 0
-    assert route.transport_policy.timeout_seconds == 120.0
+    assert route.transport_policy.timeout_seconds == 600.0
+    assert route.transport_policy.idle_timeout_seconds == 90.0
 
 
 def test_all_four_plan_lanes_present() -> None:

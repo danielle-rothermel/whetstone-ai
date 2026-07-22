@@ -19,7 +19,33 @@ __all__ = [
     "failure_code_of",
     "guard_deadline_seconds",
     "is_rate_limit_failure",
+    "is_transient_transport_failure",
 ]
+
+#: The transient transport failure classes that a bounded re-drive may retry:
+#: a wire/connection transport error, a rate limit, or a timeout. A clean
+#: provider rejection, blank generation, or malformed response is NOT transient
+#: (re-driving the same request will not change a deterministic "no").
+_TRANSIENT_CLASSES = frozenset(
+    {
+        SemanticFailureClass.TRANSPORT_ERROR,
+        SemanticFailureClass.RATE_LIMIT,
+        SemanticFailureClass.TIMEOUT,
+    }
+)
+
+
+def is_transient_transport_failure(result: ProviderCallResult) -> bool:
+    """Whether a terminal call Result is a transient retryable transport fail.
+
+    True when the call did NOT succeed and its terminal semantic failure class
+    is transient (transport error / rate limit / timeout) -- the classes a
+    bounded observation-level re-drive is allowed to retry once more. A clean
+    provider rejection or a structural response defect is not transient.
+    """
+    if result.succeeded or result.semantic_failure is None:
+        return False
+    return result.semantic_failure.failure_class in _TRANSIENT_CLASSES
 
 
 def failure_code_of(result: ProviderCallResult) -> str:
@@ -58,13 +84,19 @@ def is_rate_limit_failure(result: ProviderCallResult) -> bool:
 
 
 def guard_deadline_seconds(policy: ProviderExecutionPolicy) -> float:
-    """The runner-level call-guard deadline: transport timeout + 10s margin.
+    """The runner-level call-guard deadline: transport CAP + 15s margin.
 
-    The transport now enforces its own wall-clock bound; this deadline is the
-    belt-and-suspenders backstop the fan-out pool applies per call. It sums the
-    referenced transport policy's ``timeout_seconds`` over ALL bounded logical
-    attempts (a retrying call may legitimately run several transport timeouts)
-    plus one fixed margin.
+    The transport enforces its OWN absolute wall-clock cap
+    (``timeout_seconds``) per single wire call, with the idle timeout as the
+    primary stall detector; this runner deadline is the belt-and-suspenders
+    backstop the fan-out pool applies per call, sitting just ABOVE the
+    transport's single-call bound so the transport's own bound fires first.
+
+    Aligned with the new transport semantics (guard = cap + 15s). The old
+    ``cap x max_attempts + 10`` model summed the cap over every logical retry,
+    which let 3 stacked semantic retries (3 x 120 + 10 = 370s) exceed the guard
+    and trip it BEFORE the transport's per-call bound could -- the c23
+    regression. The guard now tracks the transport's single-call cap, not the
+    retry-stacked total.
     """
-    per_attempt = policy.transport_policy.timeout_seconds
-    return per_attempt * policy.max_attempts + GUARD_MARGIN_SECONDS
+    return policy.transport_policy.timeout_seconds + GUARD_MARGIN_SECONDS

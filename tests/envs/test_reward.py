@@ -7,6 +7,7 @@ import pytest
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.reward import (
     ENV_EXACT_MATCH_AGGREGATE_NAME,
+    CandidateEvaluationFailure,
     build_reward_policy,
     reward_from_internal_aggregate,
 )
@@ -55,7 +56,12 @@ def test_reward_refuses_official_role() -> None:
 
 
 def test_missing_internal_aggregate_fails_the_reward() -> None:
+    # A missing required internal term under FAIL surfaces as the TYPED
+    # CandidateEvaluationFailure (the optimizer loop marks the candidate failed
+    # per policy), not a bare ValueError crash.
     policy = build_reward_policy(env_spec("c18"))
     assert policy.missing_data is MissingDataPolicy.FAIL
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(
+        CandidateEvaluationFailure, match="no computable Reward"
+    ):
         reward_from_internal_aggregate(policy, env_exact_match_value=None)

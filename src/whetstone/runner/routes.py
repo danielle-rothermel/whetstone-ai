@@ -18,9 +18,13 @@ Two families are registered:
   iterations; identity changes from a model swap are fine under internal
   contexts.
 
-Transport policy is sane by default: ``timeout ~120s``, native retries ``0``
-(Whetstone owns all semantic retry). Everything here is config-identity only --
-no live call is made by constructing a route.
+Transport policy is progress-aware by default: an absolute wall-clock CAP
+(``timeout_seconds``) plus a PROGRESS/IDLE timeout (``idle_timeout_seconds``,
+default ~90s) so a legitimate long streaming response from a reasoning model
+(steady tokens over many minutes) is bounded by inactivity, not by total
+wall-clock. Native retries ``0`` (Whetstone owns all semantic retry).
+Everything here is config-identity only -- no live call is made by
+constructing a route.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from dr_providers import (
+    DEFAULT_IDLE_TIMEOUT_SECONDS,
     GenerationControls,
     ProviderCallConfig,
     ProviderTransportPolicy,
@@ -45,24 +50,63 @@ from whetstone.provider.policy import (
 __all__ = [
     "CANONICAL_PROPOSER_MODEL",
     "CANONICAL_TASK_MODEL",
+    "DEEPSEEK_TASK_MODEL",
     "LANE_NAMES",
     "OPENROUTER_BASE_URL",
     "OPENROUTER_KEY_ENV",
     "PLAN_LANES",
+    "TASK_MODEL_BY_ENV",
     "PlanLane",
     "ProviderRoute",
     "canonical_proposer_route",
     "canonical_task_route",
     "lane_route",
     "route_for",
+    "task_model_for_env",
 ]
 
-#: The default transport timeout (seconds). The validation plan pins ~120s.
-DEFAULT_TIMEOUT_SECONDS = 120.0
+#: The absolute wall-clock CAP (seconds) for a single wire call. Raised from
+#: the old flat 120s to 600s so a LEGITIMATE long reasoning-model generation
+#: (c23 ran 18k reasoning tokens, >360s) is not capped mid-stream: the flat
+#: 120s deadline killed such streams as false stalls. The CAP is now only the
+#: dribble backstop; the IDLE timeout (below) is the real stall detector.
+DEFAULT_TIMEOUT_SECONDS = 600.0
+
+#: The PROGRESS/IDLE timeout (seconds): a call fails ``stalled_response`` only
+#: when NO bytes arrive for this long. A stream making steady progress (even
+#: for many minutes) never trips it; a genuinely wedged edge fails in ~90s.
+DEFAULT_IDLE_SECONDS = DEFAULT_IDLE_TIMEOUT_SECONDS
 
 #: OpenRouter canonical model slugs (window-starts.json).
 CANONICAL_TASK_MODEL = "openai/gpt-5-nano"
 CANONICAL_PROPOSER_MODEL = "openai/gpt-5.4-nano"
+
+#: An alternate task model for the constraint-heavy envs (per user directive).
+DEEPSEEK_TASK_MODEL = "deepseek/deepseek-v4-flash"
+
+#: Per-env DEFAULT task model (the matrix config). c18 + c22 default to the
+#: deepseek model per user directive; every other env keeps the canonical nano
+#: task model. The chosen model folds into the Provider Call Config (hence the
+#: graph_hash) and is recorded in ``cells.jsonl`` ``models.task``. The
+#: ``--task-model`` CLI flag overrides this default for a given cell.
+TASK_MODEL_BY_ENV: dict[str, str] = {
+    "c18": DEEPSEEK_TASK_MODEL,
+    "c22": DEEPSEEK_TASK_MODEL,
+}
+
+
+def task_model_for_env(env: str, *, override: str | None = None) -> str:
+    """The task model for an env: explicit override, else the matrix default.
+
+    ``override`` (the ``--task-model`` flag) wins when given; otherwise the
+    per-env matrix default (``TASK_MODEL_BY_ENV``) applies, falling back to the
+    canonical nano task model for any env not listed. The returned slug folds
+    into the task route's Provider Call Config identity (graph_hash), so a
+    deepseek cell's route identity differs from a nano cell's.
+    """
+    if override:
+        return override
+    return TASK_MODEL_BY_ENV.get(env, CANONICAL_TASK_MODEL)
 
 #: The env var carrying the OpenRouter credential.
 OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
@@ -181,13 +225,16 @@ def canonical_task_route(
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
 ) -> ProviderRoute:
     """The canonical OpenRouter task (encoder/decoder) route.
 
     ``openai/gpt-5-nano`` over chat-completions, keyed off
     ``OPENROUTER_API_KEY``. Temperature defaults to 0 (the pilots use temp-0
-    for agreement checks); pass ``None`` to leave the control unset.
+    for agreement checks); pass ``None`` to leave the control unset. The
+    absolute cap is 600s to accommodate reasoning-model generations; the
+    ~90s idle timeout is the real stall detector.
     """
     call_config = openrouter_chat_config(
         model=model, controls=_controls(temperature)
@@ -196,6 +243,7 @@ def canonical_task_route(
         api_key_env=OPENROUTER_KEY_ENV,
         base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
+        idle_timeout_seconds=idle_timeout_seconds,
         native_retry_count=0,
     )
     return ProviderRoute(
@@ -215,6 +263,7 @@ def canonical_proposer_route(
     model: str = CANONICAL_PROPOSER_MODEL,
     temperature: float | None = 1.0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
 ) -> ProviderRoute:
     """The canonical OpenRouter proposer route.
@@ -231,6 +280,7 @@ def canonical_proposer_route(
         api_key_env=OPENROUTER_KEY_ENV,
         base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
+        idle_timeout_seconds=idle_timeout_seconds,
         native_retry_count=0,
     )
     return ProviderRoute(
@@ -251,6 +301,7 @@ def lane_route(
     role: str = "task",
     temperature: float | None = 0.0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
 ) -> ProviderRoute:
     """An anthropic-messages plan-lane route (kimi/glm/minimax/stepfun).
@@ -271,6 +322,7 @@ def lane_route(
         api_key_env=spec.key_env,
         base_url=spec.base_url,
         timeout_seconds=timeout_seconds,
+        idle_timeout_seconds=idle_timeout_seconds,
         native_retry_count=0,
     )
     return ProviderRoute(
@@ -291,23 +343,31 @@ def route_for(
     role: str = "task",
     temperature: float | None = 0.0,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
+    task_model: str | None = None,
 ) -> ProviderRoute:
     """Select the route for a lane + role.
 
     ``lane="openrouter"`` returns the canonical task/proposer route by role;
     any plan-lane name returns that lane's anthropic-messages route.
+    ``task_model`` (openrouter task role only) selects a per-env task model
+    (e.g. the deepseek model for c18/c22), folding into the route's Config
+    identity (graph_hash) so a deepseek route differs from a nano route.
     """
     if lane == "openrouter":
         if role == "proposer":
             return canonical_proposer_route(
                 temperature=1.0 if temperature is None else temperature,
                 timeout_seconds=timeout_seconds,
+                idle_timeout_seconds=idle_timeout_seconds,
                 max_attempts=max_attempts,
             )
         return canonical_task_route(
+            model=task_model or CANONICAL_TASK_MODEL,
             temperature=temperature,
             timeout_seconds=timeout_seconds,
+            idle_timeout_seconds=idle_timeout_seconds,
             max_attempts=max_attempts,
         )
     return lane_route(
@@ -315,5 +375,6 @@ def route_for(
         role=role,
         temperature=temperature,
         timeout_seconds=timeout_seconds,
+        idle_timeout_seconds=idle_timeout_seconds,
         max_attempts=max_attempts,
     )

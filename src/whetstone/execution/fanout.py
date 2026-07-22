@@ -64,8 +64,14 @@ __all__ = [
 DEFAULT_CONCURRENCY = 5
 
 #: The extra margin (seconds) the runner-level guard adds on top of the
-#: transport policy timeout before it declares a belt-and-suspenders breach.
-GUARD_MARGIN_SECONDS = 10.0
+#: transport policy's absolute wall-clock CAP before it declares a
+#: belt-and-suspenders breach. Aligned with the new transport semantics: the
+#: transport bounds a SINGLE call at ``timeout_seconds`` (the absolute cap),
+#: its own ~5s deadline margin, so the runner guard = cap + 15s sits just above
+#: the transport's own single-call bound (was ``cap x max_attempts + 10`` under
+#: the old flat-deadline model, which let 3 stacked semantic retries exceed the
+#: guard and fire it before the transport bound could).
+GUARD_MARGIN_SECONDS = 15.0
 
 #: The failure ``code`` recorded for a call the runner-level guard timed out.
 #: A DISTINCT code from the transport's own ``timeout``/``stalled_response`` so

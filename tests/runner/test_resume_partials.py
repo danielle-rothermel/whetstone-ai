@@ -82,6 +82,44 @@ class CountingTransport:
         )
 
 
+@dataclass
+class _UsageTransport:
+    """A transport whose responses carry a token-usage block (like OpenRouter).
+
+    Used to prove FIX 6: the cell-path partial records retain the measured
+    token counts (they were null before) for spend reconciliation.
+    """
+
+    reply: Callable[[str], str]
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        from dr_providers import TokenUsage
+
+        messages = request.transcript.messages
+        prompt = messages[-1].content if messages else ""
+        text = self.reply(prompt)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"Authorization": "Bearer k", "content-type": "json"},
+            body={"model": "test-model"},
+        )
+        return ProviderInvocationEvidence.build(
+            request=request, policy=self.policy, raw_request=raw_request,
+            outcome=ProviderTransportResponse(
+                text=text,
+                raw_body={"choices": [{"message": {"content": text}}]},
+                response_id="resp-1", model="test-model",
+                finish_reason="stop",
+                usage=TokenUsage(
+                    prompt_tokens=11, completion_tokens=7, total_tokens=18
+                ),
+            ),
+        )
+
+
 def _evaluate(exp, transport, partial_log, *, concurrency: int = 1):
     return evaluate_split(
         exp,
@@ -94,6 +132,26 @@ def _evaluate(exp, transport, partial_log, *, concurrency: int = 1):
         partial_log=partial_log,
         fanout=FanoutConfig(concurrency=concurrency),
     )
+
+
+def test_cell_partials_retain_token_counts(tmp_path: Path) -> None:
+    # FIX 6: cell-path partial records carry the measured token counts (were
+    # null before) so spend reconciliation can sum them. The raw_response is
+    # intentionally NOT persisted on the cell path (Rollout Results hold that
+    # evidence), keeping the cell partial small.
+    exp = tiny_experiment("c11")
+    partial_log = PartialLog(path=tmp_path / "cell.partial.jsonl")
+    _evaluate(exp, _UsageTransport(reply=correct_reply(exp)), partial_log)
+    records = partial_log.load()
+    assert records, "the drive should have recorded per-call partials"
+    scored = [r for r in records if not r.failed]
+    assert scored, "expected at least one scored call"
+    for rec in scored:
+        assert rec.prompt_tokens == 11
+        assert rec.completion_tokens == 7
+        assert rec.total_tokens == 18
+        # raw_response is elided on the cell path (kept empty).
+        assert rec.raw_response == ""
 
 
 def test_resume_skips_already_recorded_calls(tmp_path: Path) -> None:

@@ -184,3 +184,53 @@ def test_total_spend_sums_cells(tmp_path: Path) -> None:
         _record(cell_id="miprov2:c11:a0", optimizer="miprov2", spend_usd=0.5)
     )
     assert ledger.total_spend_usd() == pytest.approx(2.0)
+
+
+def _spend(ledger: Ledger, cell_id: str, phase: str, remaining: float) -> None:
+    ledger.append_spend(
+        SpendRecord(
+            cell_id=cell_id, phase=phase, lane="openrouter",
+            total_credits=710.0, total_usage=710.0 - remaining,
+            remaining_usd=remaining,
+        )
+    )
+
+
+def test_spend_for_cell_sums_clean_before_after(tmp_path: Path) -> None:
+    ledger = Ledger(root=tmp_path)
+    _spend(ledger, "eval:c11:a0", "before", 90.0)
+    _spend(ledger, "eval:c11:a0", "after", 88.5)
+    total, gaps = ledger.spend_for_cell("eval:c11:a0")
+    assert total == pytest.approx(1.5)
+    assert gaps == []
+
+
+def test_spend_for_cell_includes_crashed_attempt(tmp_path: Path) -> None:
+    # FIX 8: attempt 0 CRASHED (before at 90.0, no after) burning 1.0 before
+    # dying; the NEXT snapshot (attempt 1 before at 89.0) bounds it. Attempt 1
+    # then completes (before 89.0 -> after 87.0 = 2.0). The cell's total spend
+    # sums BOTH attempts: 1.0 (crashed) + 2.0 (completed) = 3.0.
+    ledger = Ledger(root=tmp_path)
+    _spend(ledger, "eval:c11:a0", "before", 90.0)   # attempt 0 before
+    _spend(ledger, "eval:c11:a1", "before", 89.0)   # attempt 0 crashed here
+    _spend(ledger, "eval:c11:a1", "after", 87.0)    # attempt 1 completed
+    total, gaps = ledger.spend_for_cell("eval:c11:a0")
+    # Only cell_id 'eval:c11:a0' is summed here (attempt 0's crashed 1.0).
+    assert total == pytest.approx(1.0)
+    assert any("crashed" in g for g in gaps)
+    # And the a1 attempt sums its own 2.0.
+    total_a1, gaps_a1 = ledger.spend_for_cell("eval:c11:a1")
+    assert total_a1 == pytest.approx(2.0)
+    assert gaps_a1 == []
+
+
+def test_spend_for_cell_reports_unbounded_trailing_before(
+    tmp_path: Path,
+) -> None:
+    # A before with nothing after it (still running / crashed last-in-file)
+    # cannot be bounded -> reported as a gap, contributes 0.
+    ledger = Ledger(root=tmp_path)
+    _spend(ledger, "eval:c11:a0", "before", 90.0)
+    total, gaps = ledger.spend_for_cell("eval:c11:a0")
+    assert total == pytest.approx(0.0)
+    assert gaps and "no following snapshot" in gaps[0]

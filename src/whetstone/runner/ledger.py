@@ -150,15 +150,24 @@ class CellRecord(BaseModel):
 
 
 class EnvOfficialCache(BaseModel):
-    """The per-env Eval-row official cache: naive/ceiling scores + vectors.
+    """The per-(env, task-model) Eval-row official cache: scores + vectors.
 
     WF5A cached the ceiling scalar so later optimizer cells reuse it instead of
     re-driving the ceiling probe. The statistical-confidence upgrade extends
     that caching to the per-task score VECTORS (aligned in official-instance
     order) for both the naive and ceiling arms, so a later optimizer cell can
     compute the paired ``best - naive`` delta CI (and reuse the marginal naive
-    CI) WITHOUT re-driving the naive baseline. Established once per env by the
-    Eval-row (``optimizer=eval``) cell.
+    CI) WITHOUT re-driving the naive baseline. Established once per (env,
+    task-model) by the Eval-row (``optimizer=eval``) cell.
+
+    The cache is keyed by ``(env, task_model)`` (FIX 7): the task model folds
+    into the Provider Call Config identity (graph_hash), so naive/ceiling
+    vectors measured under one task model (e.g. ``openai/gpt-5-nano``) are NOT
+    comparable to a candidate measured under a different task model (e.g.
+    ``deepseek/deepseek-v4-flash``). A deepseek cell must never pair against
+    cached nano vectors. ``task_model`` defaults to the canonical nano slug so
+    pre-FIX-7 cache lines (which had no task-model field) resolve to the nano
+    key.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -169,6 +178,11 @@ class EnvOfficialCache(BaseModel):
     naive_per_task: tuple[float, ...]
     ceiling_per_task: tuple[float, ...]
     official_repeats_used: int
+    #: The task model the cached vectors were measured under. Part of the cache
+    #: key: a cell with a different task model gets a cache MISS and drives its
+    #: own naive/ceiling arms. Defaults to the canonical nano slug so old cache
+    #: lines (no field) key to nano.
+    task_model: StrictStr = "openai/gpt-5-nano"
 
     def to_line(self) -> str:
         return json.dumps(self.model_dump(mode="json"), sort_keys=True)
@@ -271,12 +285,18 @@ class Ledger:
                 return c.ceiling_official
         return None
 
-    def env_cache_for(self, env: str) -> EnvOfficialCache | None:
-        """The cached Eval-row official scores + per-task vectors for an env.
+    def env_cache_for(
+        self, env: str, *, task_model: str | None = None
+    ) -> EnvOfficialCache | None:
+        """The cached Eval-row official scores + vectors for (env, task_model).
 
-        Returns the most recent cache line for ``env`` (the Eval row writes it
-        once). ``None`` when no Eval row has run for the env yet -- the caller
-        then drives the naive/ceiling arms itself and caches them.
+        Returns the most recent cache line matching ``env`` AND -- when
+        ``task_model`` is given -- the SAME task model (FIX 7). The task model
+        folds into the graph identity, so a deepseek cell must never reuse
+        cached nano vectors: a differing task model is a cache MISS (returns
+        ``None``), and the caller drives + caches its own naive/ceiling arms.
+        ``task_model=None`` matches on env only (back-compat for callers that
+        don't distinguish). ``None`` overall when no matching Eval row has run.
         """
         if not self.env_cache_path.exists():
             return None
@@ -286,8 +306,11 @@ class Ledger:
             if not line:
                 continue
             record = EnvOfficialCache.model_validate_json(line)
-            if record.env == env:
-                latest = record
+            if record.env != env:
+                continue
+            if task_model is not None and record.task_model != task_model:
+                continue
+            latest = record
         return latest
 
     def append_env_cache(self, record: EnvOfficialCache) -> None:
@@ -324,3 +347,63 @@ class Ledger:
         """Sum of recorded per-cell ``spend_usd`` (cumulative)."""
         self._ensure_loaded()
         return sum(c.spend_usd for c in self._cells)
+
+    def spend_for_cell(self, cell_id: str) -> tuple[float, list[str]]:
+        """Total credits consumed across ALL attempts of ``cell_id``.
+
+        Sums the credits deltas over every recorded ``before`` snapshot for
+        ``cell_id`` using the ``spend.jsonl`` before/after pairs, INCLUDING
+        crashed attempts. Credits (``remaining_usd``) are monotonically
+        non-increasing and the log is append-only chronological, so each
+        ``before`` snapshot's consumption is ``before.remaining -
+        next_snapshot.remaining`` where ``next_snapshot`` is the immediately
+        following record in the file. For a cleanly-completed attempt that next
+        record is this cell's own ``after``; for a CRASHED attempt (a
+        ``before`` with no matching ``after``) it is the NEXT snapshot of any
+        cell, which captures the credits the crashed attempt burned before
+        dying. The final trailing ``before`` with nothing after it cannot be
+        bounded and is reported as a gap.
+
+        Returns ``(total_usd, gaps)``: the summed spend and a list of
+        human-readable notes for any unpairable snapshot (e.g. a still-running
+        or last-in-file crashed attempt with no following snapshot).
+        """
+        records = self.spend_records()
+        # Index snapshots that carry a usable remaining_usd, in file order.
+        usable = [
+            (i, r)
+            for i, r in enumerate(records)
+            if r.remaining_usd is not None
+        ]
+        total = 0.0
+        gaps: list[str] = []
+        for pos, (idx, rec) in enumerate(usable):
+            if rec.cell_id != cell_id or rec.phase != "before":
+                continue
+            if pos + 1 >= len(usable):
+                gaps.append(
+                    f"attempt with before snapshot at record {idx} has no "
+                    "following snapshot to bound its spend (crashed/running "
+                    "last-in-file); consumption unaccounted"
+                )
+                continue
+            _, nxt = usable[pos + 1]
+            assert rec.remaining_usd is not None
+            assert nxt.remaining_usd is not None
+            delta = rec.remaining_usd - nxt.remaining_usd
+            if delta < 0:
+                # Credits should not increase; a negative delta means a
+                # top-up or reordering -- record it as a gap, contribute 0.
+                gaps.append(
+                    f"non-monotonic credits between records {idx} and the "
+                    f"next snapshot (delta {delta:.4f}); skipped"
+                )
+                continue
+            if nxt.cell_id != cell_id or nxt.phase != "after":
+                gaps.append(
+                    f"attempt with before snapshot at record {idx} had no "
+                    f"matching after (crashed); bounded by the next snapshot "
+                    f"({nxt.cell_id}:{nxt.phase}) -> ${delta:.4f}"
+                )
+            total += delta
+        return total, gaps
