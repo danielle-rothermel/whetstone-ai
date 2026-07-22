@@ -78,34 +78,34 @@
       <li>Variance source: budget ratios 0.25 / 0.5 / 0.75 / 1.0</li>
       <li>Selection: officially evaluate the top 3 returned candidates</li>
     </ul>
-    <p class="small muted space-top">3 × 4 ratios × 164 × 3 = 5,904 rollouts per run.</p>
+    <p class="small muted space-top"><code>D × 164 × 3</code> official rollouts, where <code>D≤12</code>; 5,904 only in the explicit nonconvergent example.</p>
   </div>
 </div>
 
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
 <div class="plane">
-  <div class="plane-label">Rollout Definition / graph shape <span class="sub">· identical to the eval design</span></div>
+  <div class="plane-label">Graph Definition used as Rollout Definition <span class="sub">· one artifact/identity, identical to the eval design</span></div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">output-affecting components include complete Provider Call Config ref/hash and templates/KVs<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
+    <div class="comp node"><b>Encoder LLM Call Node (Config)</b><span class="note">output-affecting components include complete Provider Call Config ref/hash and templates/KVs<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">complete Provider Call Config and prompt are fixed outside the mutation surface</span></div>
+    <div class="comp node"><b>Decoder LLM Call Node (Config)</b><span class="note">complete Provider Call Config and prompt are fixed outside the mutation surface</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Eval Node</b><span class="note">facts first: Submission Text, Preprocessing Trace, Code Artifact refs, Metric Facts/Records and integer Compressed Description Length<hr>Evaluation Procedure derives per-observation score; Aggregation reduces</span></div>
+    <div class="comp node"><b>Eval Node (Config) · terminal role</b><span class="note">static Evaluation Procedure Config ref/hash is included in Graph Config identity; facts first: Submission Text, Preprocessing Trace, Code Artifact refs, Metric Facts/Records and integer Compressed Description Length<hr>the procedure derives per-observation score; Aggregation reduces. This sole sink's ordinary validated Node Output becomes Graph Output unchanged on success</span></div>
   </div>
 </div>
 
 <div class="flow-arrow"><span>a child candidate differs from its parent in exactly one variable</span> <span class="glyph">▼</span></div>
 
 <div class="plane optim">
-  <div class="plane-label">Rollout Config Example <span class="sub">· child candidate G5 (evolved template) at budget_ratio 0.5</span></div>
+  <div class="plane-label">Graph Config Example <span class="sub">· child candidate G5 (evolved template) at budget_ratio 0.5</span></div>
   <div class="comps">
     <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the reflection LM at iteration 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
-    <div class="comp node"><b>Inherited Configuration Assignments</b><span class="note">the output-affecting Graph Spec components, including encoder + decoder Provider Call Config refs/hashes, temperature and decoder prompt, are byte-identical to the parent outside <code>{user_prompt_template}</code>; the resulting Rollout Config identifies one Rollout Variant<hr>Eval Config and Evaluation Context are independent of Rollout Variant identity</span></div>
+    <div class="comp node"><b>Inherited Configuration Assignments</b><span class="note">the output-affecting Graph Config components, including encoder + decoder Provider Call Config refs/hashes, temperature, decoder prompt, and the Eval Node's Evaluation Procedure Config ref/hash, are byte-identical to the parent outside <code>{user_prompt_template}</code>; the resulting Graph Config is one Rollout Variant<hr>Eval Sampling/Aggregation, Evaluation Context, and materialization lineage are independent of Rollout Variant identity</span></div>
   </div>
 </div>
 
-<div class="callout"><b>Measurement and Reward.</b> The objective Tool Spec fixes one 24-task Internal Eval Config for every parent/child comparison. A separate 3-task diagnostic trace projection never changes that objective population. Eval Config owns Sampling, Evaluation Procedure and Aggregation/objectives only; Tool Spec owns Reward Policy. Official evaluation computes Objective Vectors/Aggregates, never Reward. Provider evidence uses canonical Provider Call Config/Request/Response and requested Model fields.</div>
+<div class="callout"><b>Measurement and Reward.</b> The objective Tool Spec fixes one 24-task Internal Eval Config for every parent/child comparison. A separate 3-task diagnostic trace projection never changes that objective population. Eval Config remains Sampling + Evaluation Procedure + Aggregation/objectives and must reference the identical Evaluation Procedure Config assigned statically to the Graph's Eval Node; Tool Spec owns Reward Policy. Internal and official evaluation here use the same facts-first Procedure Config, so matching Graph Configs retain the same <code>graph_hash</code>; Sampling/Aggregation changes only <code>eval_config_hash</code>, while a Procedure Config change changes both hashes. Authority and realized-environment attestation remain Evaluation Context. Official evaluation computes Objective Vectors/Aggregates, never Reward. Provider evidence retains least-processed request and response or failure bodies alongside normalized usage, cost and diagnostics.</div>
 
 <div class="section-head" id="system"><h2>Run GEPA, Then Official Evaluation on the Returned Candidates</h2></div>
 
@@ -113,11 +113,11 @@
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Starting candidates &amp; materializer</b><span class="note">one graph shape; each fully assigned search or official Rollout Config gets its own concrete Graph Spec; 4 proposals × 4 ratios → 16 official configs</span></div>
+      <div class="comp settled"><b>Starting candidates &amp; materializer</b><span class="note">one graph shape; each complete search or official assignment emits one Graph Config plus one Materialization Record; 4 valid proposals × 4 ratios → 16 materializations before selection</span></div>
       <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder LLM Call Node — declared, diff-checkable</span></div>
       <div class="comp settled optim"><b>Tool Specs &amp; archive policy</b><span class="note">objective evaluation + diagnostic projection Specs and the identity-bearing capacity-32 archive policy ref/hash serialize in the request; the harness constructs Handles and ledgers</span></div>
       <div class="comp settled optim"><b>Budget &amp; selection</b><span class="note">400 optimization Rollouts · at most 8 reflection calls, including invalid/duplicate attempts · return exactly 4 or fail; officially evaluate top 3 only after success</span></div>
-      <div class="comp settled"><b>Official Evaluation Context</b><span class="note">binds the 164-task, 3-repeat Eval Config, authorized write path and environment attestation; matching hashes never confer officialness</span></div>
+      <div class="comp settled"><b>Official Evaluation Context</b><span class="note">binds the 164-task, 3-repeat Eval Config, authorized write path and realized-environment attestation; matching hashes never confer officialness</span></div>
     </div>
   </div>
 
@@ -143,38 +143,38 @@
     <div class="plane-label">Evaluation harness <span class="sub">· serves tools during the run; runs official evaluation after it</span></div>
     <div class="comps">
       <div class="comp settled optim"><b>Tool service</b><span class="note">executes stable call IDs under internal Evaluation Contexts; results remain internal by authority, regardless of hash equality</span></div>
-      <div class="comp settled optim"><b>Diff check &amp; materialization</b><span class="note">every proposal changes only the mutation surface; 4 proposals × 4 fixed ratios → 16 Rollout Configs</span></div>
-      <div class="comp settled optim"><b>Selection</b><span class="note">applies the frozen policy to proposal order: top 3 proposals (12 materialized Rollout Configs) admitted</span></div>
-      <div class="comp settled"><b>Evaluator</b><span class="note">runs 12 × 164 × 3 in the authorized official Evaluation Context; only attested outputs from its write path feed the plot</span></div>
-      <div class="comp settled"><b>Platform mapping &amp; Provider Concurrency Control</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Whetstone projects non-secret provider quota/throttle identities into Work Item labels and configures dr-platform selector capacity. It bounds concurrently ADMITTED rollout-execution Stages across workers within its pipeline-version/stage/selector/shared-DB scope and holds capacity for the full Stage. Admission also requires the mandatory default empty-selector control; see the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract and prerequisite</a>. Attempts may contain DBOS-replayed Invocations; dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>, while the Whetstone Result Store owns uniqueness</span></div>
+      <div class="comp settled optim"><b>Validation &amp; materialization</b><span class="note">the harness validates all 4 proposals, then expands every valid proposal over four fixed ratios → 16 Graph Config/Materialization Record pairs</span></div>
+      <div class="comp settled optim"><b>Selection &amp; deduplication</b><span class="note">the top-3 Selection Policy selects 12 ordered Materialization Record slots, then deduplicates the selected records by full <code>graph_hash</code> to <code>D ≤ 12</code> admitted graphs. The other 4 records persist unselected</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs exactly <code>D × 164 × 3</code> Rollouts; the explicit nonconvergent example has <code>D=12</code> and 5,904</span></div>
+      <div class="comp settled"><b>Platform mapping &amp; Provider Concurrency Control</b><span class="note">one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Whetstone derives collision-free labels from every exact <code>(provider, protocol, model)</code> identity and applies all relevant labels to multi-route work. Mandatory empty-selector and exact-label capacities all apply for the full ADMITTED Stage, including backoff; dr-platform supplies only generic enforcement. See the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract</a></span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>Rollout Key = (rollout config, eval config, task, repeat); Rollout Execution Key adds context ID</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>Rollout Key = (<code>graph_hash</code>, <code>eval_config_hash</code>, task, repeat); Rollout Execution Key adds context ID</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Rollout execution <span class="sub">· graph nodes inside one execute-rollout Platform Stage</span></div>
     <div class="hflow">
-      <div class="comp settled"><b>Task Inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
+      <div class="comp settled"><b>Graph External Inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code; runtime values remain outside Graph Config identity</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references config + Transcript + idempotency; accepted nonblank native text becomes Generation</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references config + Transcript; accepted nonblank native text becomes Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction and retention</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials and native retries=0. dr-providers retains least-processed request and response or failure bodies without authorization or credential material</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Eval Node</b><span class="note">Submission Text → Code Artifacts → Metric Facts/Records; integer Compressed Description Length from zstd-19 UTF-8 encoder bytes</span></div>
+      <div class="comp settled"><b>Eval Node · sole terminal role</b><span class="note">uses its statically assigned Evaluation Procedure Config; Submission Text → Code Artifacts → Metric Facts/Records; integer Compressed Description Length from zstd-19 UTF-8 encoder bytes<hr>its ordinary validated Node Output becomes Graph Output unchanged on success</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Terminality</b><span class="note">Whetstone owns bounded semantic Node retries and durable Node/Provider Attempt fencing inside the Stage; native provider retries are 0. The terminal success/exhausted-failure Result must be immutable in dr-store and atomic binding must resolve its key to that ref: unbound binds; same-ref replay succeeds idempotently. Only then is the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck</span></div>
+      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">this valid graph has exactly one sink Node; terminal is its role, not a Node Type. DBOS checkpoints retry-disabled Provider Call Attempt observations; replay reconstructs Node Outcomes and the Graph Run Result. That logical Result contains Graph Run identity, Graph External Inputs, terminal Outcome, relevant Provider Call Attempt records or references and provenance, and per-Node Outcomes, execution order and evidence. It has no Platform Stage state or separate persistence path: it is nested in the one immutable authoritative Rollout Result whose atomic binding closes the Stage; FAILED+unbound gates operator retry</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>5,904 official rollout results flow to aggregation</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><code>D × 164 × 3</code> official rollout results flow to aggregation; 5,904 only in the explicit nonconvergent example</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Rollout Results &amp; analysis <span class="sub">· immutable facts, then derived views</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Official Rollout Results</b><span class="note">one authoritative binding per Rollout Execution Key. A different-ref identity conflict never overwrites it, marks the conflicting attempt successful, or authorizes retry replacement. Deliberate re-evaluation uses a new context or Repeat</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">12 Rollout Aggregates (3 evolved proposals × 4 ratios); eligible A/B aggregates may be reused only with matching Rollout Keys, official attestation and environment compatibility</span></div>
+      <div class="comp settled"><b>Official Rollout Results</b><span class="note">one authoritative binding per Rollout Execution Key; each contains its Graph Run Result as nested execution evidence. A different-ref identity conflict never overwrites it, marks the conflicting attempt successful, or authorizes retry replacement. Deliberate re-evaluation uses a new context or Repeat</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">exactly <code>D</code> Rollout Aggregates by distinct admitted Graph Hash; eligible A/B aggregates may be reused only with matching Rollout Keys, official attestation and environment compatibility</span></div>
       <div class="comp settled"><b>Analysis</b><span class="note">5 candidate curves per Model Route; pareto front — views derived from official rollout results, never stored as truth</span></div>
     </div>
   </div>
@@ -240,25 +240,25 @@
   </div>
   <div class="tick optim">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Diff-checks 4 proposals, materializes 4 ratios each → 16 Rollout Configs, and preserves optimizer order as selection input. The top 3 proposals contribute 12 configs to official evaluation.</p></div>
+    <div class="what"><p>Validates all 4 proposals, expands every valid proposal over 4 ratios → 16 Graph Config outputs and 16 Materialization Records, and preserves optimizer order as selection input. The Selection Policy selects the top 3 proposal groups as 12 ordered record slots, then deduplicates the selected records by full Graph Hash to <code>D ≤ 12</code> admitted graphs. The fourth proposal's 4 record slots persist unselected; they are not officially evaluated and need no selected official-lineage mapping. Official Evaluation Records and Official Plot Manifests MUST preserve the ordered mapping from every selected Materialization Record reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference, including when multiple selected records share one graph and aggregate.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Submits 5,904 Work Items, one per Rollout Execution Key. After Whetstone's bounded semantic Node retries, durably fenced as Node/Provider Attempts inside the Stage, each terminal Result is immutably persisted to dr-store and atomically bound in the Whetstone Result Store: unbound binds, and same-ref replay is idempotent. Provider-native retry remains disabled. Only then does dr-platform return the bound ref as <code>output_reference</code> and mark the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. A different-ref conflict preserves the existing binding, fails the conflicting attempt, and permits no overwrite or retry replacement.</p>
+    <div class="what"><p>Submits exactly <code>D × 164 × 3</code> Work Items with no duplicate Rollout Execution Keys; the explicit nonconvergent example has <code>D=12</code> and 5,904. Every logical provider attempt runs in one <code>@DBOS.step(retries_allowed=False)</code> with native retries zero; DBOS checkpoints completed typed observations and replay reconstructs Node Outcomes and the Graph Run Result. dr-store persists one immutable Rollout Result containing that nested evidence, not an attempt ledger or a separate Graph Run Result, and atomic binding remains authoritative.</p>
       <div class="ledger"><b>output</b>authoritative bound refs or explicit FAILED Stages; dr-platform does not own uniqueness</div>
     </div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates complete official Results: Average Binary Test Pass Rate and Mean Compression Ratio derived from integer Compressed Description Length. The 3 newly evaluated evolved proposals produce 12 Rollout Aggregates (3 × 4 ratios); 8 eligible A/B baseline aggregates (2 × 4 ratios) are reused only when Rollout Keys, official attestation and environment compatibility match.</p>
-      <div class="ledger"><b>output</b>20 Rollout Aggregates for this Model Route — 12 new + 8 eligible reused = five candidate curves of 4</div>
+    <div class="what"><p>Aggregates complete official Results: Average Binary Test Pass Rate and Mean Compression Ratio derived from integer Compressed Description Length. In the nonconvergent case, the 3 newly evaluated evolved proposals produce 12 Rollout Aggregates (3 × 4 ratios); 8 eligible A/B baseline aggregates (2 × 4 ratios) are reused only when Rollout Keys, official attestation and environment compatibility match.</p>
+      <div class="ledger"><b>output</b>exactly <code>D</code> new aggregates plus eligible distinct-hash baselines; 20 total in the explicit nonconvergent example</div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What lands on the plot: five curves per Model Route, and only official results</h2></div>
 
-<p>Per Model Route: <span class="key">five candidate curves</span> — eligible A/B baselines and three evolved templates — each a distribution of 4 Rollout Aggregates across the ratios, each aggregate averaged over 164 tasks × 3 repeats. The natural readings are whether evolution beat the starting templates and how the official Pareto front moves. Internal Tool Results never appear here; their Evaluation Contexts lack official authority.</p>
+<p>Per Model Route, eligible A/B baselines and three evolved templates retain separately attributable ratio slots, while converged slots share the planned/result-key set and Rollout Aggregate for their Graph Hash. The resulting distinct-hash aggregates are each averaged over 164 tasks × 3 repeats; in the explicit nonconvergent example they form <span class="key">five candidate curves</span> with four aggregates each. The natural readings are whether evolution beat the starting templates and how the official Pareto front moves. Internal Tool Results never appear here; their Evaluation Contexts lack official authority.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -274,7 +274,7 @@
   <div class="card optim">
     <h3>Internal Evaluation vs Official Evaluation</h3>
     <ul>
-      <li>Tool and official measurement policies have independent <code>eval_config_hash</code> identities; neither is inside <code>rollout_config_hash</code></li>
+      <li>Tool and official measurement policies have independent <code>eval_config_hash</code> identities. Their identical Evaluation Procedure Config is included in <code>graph_hash</code>; only Sampling/Aggregation remain outside it</li>
       <li>Officialness comes only from the authorized Evaluation Context and write path; reuse also requires official attestation and a compatible environment</li>
       <li>Whether the 24-task subset may overlap the official 164 is left to experimental designers</li>
     </ul>
@@ -291,7 +291,7 @@
     <h3>Candidate = one plotted line</h3>
     <ul>
       <li>A child inherits everything outside the mutation surface from its parent</li>
-      <li>Each proposal materializes to 4 Rollout Configs — the fixed ratio axis unrolled into its curve</li>
+      <li>Each proposal emits 4 Graph Config/Materialization Record pairs — the fixed ratio axis unrolled into its curve</li>
       <li>Ordered multi-return: 4 candidates back, the frozen selection policy decides how many go on</li>
     </ul>
   </div>

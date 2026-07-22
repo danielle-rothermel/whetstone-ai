@@ -25,7 +25,7 @@
 </div>
 
 <div class="intro">
-  <p>This page turns the shared <a href="vocab_and_defs.html">vocabulary and definitions</a> into four bounded implementation workstreams: the coordinated dr-serialize identity reset, the new dr-store dependency, durable semantic retry, and coarse provider concurrency control. A cross-repository release sequence makes those contracts usable without unreleased Git revisions. The scope deliberately stops before broader Provider Calls planning: it adds no evaluation-algorithm policy, compatibility path, storage-backend choice, exact request-rate or token limiter, or provider-specific logic to dr-platform.</p>
+  <p>This page turns the shared <a href="vocab_and_defs.html">vocabulary and definitions</a> into four bounded implementation workstreams: the coordinated dr-serialize identity reset, immutable terminal storage, durable semantic retry with raw provider evidence, and Provider Concurrency Control. A cross-repository breaking release sequence makes those contracts usable through versioned PyPI dependencies without compatibility shims or Git revision pins.</p>
 </div>
 
 <div class="section-head" id="decisions"><h2>Decisions at a Glance</h2></div>
@@ -44,11 +44,22 @@
 <div class="grid-2 space-top">
   <div class="card">
     <h3>Retry Boundary</h3>
-    <p>Whetstone owns bounded automatic Node/provider semantic retries and their durable attempt evidence inside one platform Stage. DBOS replay remains within a Platform Stage Attempt, while explicit operator <code>retry_stage</code> may create a later Platform Stage Attempt only after operational failure and only while the Rollout Execution Key is unbound.</p>
+    <p>Whetstone owns bounded semantic retry using its failure taxonomy. Each logical provider attempt is one <code>@DBOS.step(retries_allowed=False)</code>; DBOS checkpoints returned typed attempt observations, while Whetstone deterministically sleeps, backs off, and invokes later attempts. No custom attempt ledger or effect fence is added.</p>
   </div>
   <div class="card">
     <h3>Provider Concurrency Boundary</h3>
-    <p>Whetstone labels rollout work by non-secret provider throttle identity and configures both dr-platform's mandatory default empty-selector Stage capacity and every provider-specific exact-label selector capacity. All matching controls apply. Without the empty-selector control, the Stage is unconfigured and its work remains <code>READY</code> and unadmitted. dr-platform supplies generic coarse admission over those controls; dr-providers supplies or improves the identity. This controls full-Stage occupancy, not exact physical calls, requests per minute, tokens per minute, or token reservation.</p>
+    <p>Whetstone derives collision-free labels from every exact <code>(provider, protocol, model)</code> <a class="term-ref" href="vocab_and_defs.html#term-provider-quota-identity">Provider Quota Identity</a>, applies every relevant label to multi-route Work Items, and configures mandatory empty-selector plus exact-label Stage capacities. dr-platform supplies only generic label/selector admission. Capacity covers coarse <code>ADMITTED</code>-Stage occupancy, including backoff.</p>
+  </div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Graph and Node Contract</h3>
+    <p>dr-graph supplies one versioned variable-bearing Graph Definition that materializes Graph Configs. Whetstone uses that same artifact in the Rollout Definition role. Each Graph Config contains concrete Node configs, unique Node IDs, identity-bearing Node Input Sources and Variable assignments, declared Node Output fields, and exactly one terminal/sink Node.</p>
+  </div>
+  <div class="card">
+    <h3>Evaluation Identity Partition</h3>
+    <p>The Eval Node statically assigns an Evaluation Procedure Config reference, so Procedure changes alter both <code>graph_hash</code> and <code>eval_config_hash</code>. Sampling or Aggregation changes alter only <code>eval_config_hash</code>. Evaluation Context owns authority, officialness, and realized-environment attestation.</p>
   </div>
 </div>
 
@@ -157,7 +168,7 @@
       <li>No Rollout Result model or evaluation vocabulary</li>
       <li>No official-evaluation authorization or attestation rules</li>
       <li>No workflow lifecycle, retry, campaign, stage, or attempt state</li>
-      <li>No speculative backend, retention, replication, or query features</li>
+      <li>No speculative backend, replication, or query features</li>
     </ul>
   </div>
 </div>
@@ -186,10 +197,10 @@
   <div class="plane">
     <div class="plane-label">Whetstone executor <span class="sub">· owns semantic retry</span></div>
     <div class="comps">
-      <div class="comp node"><b>Coordinate bounded attempts</b><span class="note">Run automatic Node/provider semantic retries inside one platform Stage under Whetstone policy. Enforce dr-providers native retry at zero for durable execution so one semantic attempt cannot hide provider-native attempts.</span></div>
-      <div class="comp node"><b>Fence before effects</b><span class="note">Durably claim and checkpoint each semantic attempt before issuing its provider effect. A replay resumes from durable state and must not duplicate an already completed semantic attempt.</span></div>
-      <div class="comp node"><b>Persist immutable evidence</b><span class="note">Retain immutable Provider Attempt and Node Attempt evidence, including outcome and causal failure, so retry decisions and terminal construction can be audited after replay.</span></div>
-      <div class="comp node"><b>Commit one terminal Result</b><span class="note">After semantic success or exhaustion, produce and persist the terminal Rollout Result and atomically bind its Rollout Execution Key. Only that binding gate closes the Stage successfully.</span></div>
+      <div class="comp node"><b>Coordinate bounded attempts</b><span class="note">Apply Whetstone's failure taxonomy and retry bound with dr-providers native retries fixed at zero. Keep attempt numbering, step order, branching, and backoff decisions deterministic for replay.</span></div>
+      <div class="comp node"><b>Run one retry-disabled step</b><span class="note">Invoke one <code>@DBOS.step(retries_allowed=False)</code> per logical provider attempt. Expected provider success or classified failure returns a serializable typed observation; unexpected programming or infrastructure errors raise.</span></div>
+      <div class="comp node"><b>Retain raw evidence</b><span class="note">Each completed observation includes the least-processed request body and response or failure body plus normalized usage, cost, and diagnostics. Never persist authorization headers or credential material.</span></div>
+      <div class="comp node"><b>Assemble one terminal Result</b><span class="note">After semantic success or exhaustion, deterministically construct Node Outcomes and the Graph Run Result, nest it with completed Provider Call Attempt observations in one Rollout Result, persist that immutable Result, and atomically bind its Rollout Execution Key.</span></div>
     </div>
   </div>
 
@@ -198,7 +209,7 @@
   <div class="plane">
     <div class="plane-label">dr-platform <span class="sub">· remains domain-neutral</span></div>
     <div class="comps">
-      <div class="comp substrate"><b>Platform Stage Attempt</b><span class="note">Own the generic native attempt row and workflow identity. A replay within that identity is not a new Provider Attempt or Node Attempt.</span></div>
+      <div class="comp substrate"><b>Platform Stage Attempt</b><span class="note">Own the generic native attempt row and workflow identity, without provider policy or provider-attempt storage.</span></div>
       <div class="comp substrate"><b>Explicit <code>retry_stage</code></b><span class="note">The rebuilt platform operation may append a Platform Stage Attempt after a failed Stage. It receives no provider/node classification or retry policy.</span></div>
     </div>
   </div>
@@ -208,7 +219,7 @@
   <div class="plane">
     <div class="plane-label">DBOS <span class="sub">· owns replay</span></div>
     <div class="comps">
-      <div class="comp substrate"><b>Resume durable execution</b><span class="note">Replay the application Stage body under the same Platform Stage Attempt identity. Whetstone's durable semantic-attempt fences prevent replay from duplicating a completed effect.</span></div>
+      <div class="comp substrate"><b>Checkpoint provider observations</b><span class="note">Replay reuses each completed retry-disabled Provider Call Attempt observation, deterministically reconstructs Node Outcomes and the Graph Run Result, durably sleeps for backoff, and invokes the next logical attempt when policy permits. No completed Node Output is injected across workflow identities.</span></div>
     </div>
   </div>
 </div>
@@ -217,8 +228,8 @@
   <div class="card">
     <h3>Three events, three meanings</h3>
     <ul>
-      <li><strong>Provider Attempt or Node Attempt:</strong> one Whetstone semantic try with immutable evidence and a durable fence.</li>
-      <li><strong>DBOS replay:</strong> recovery of the application Stage body under the same Platform Stage Attempt; it resumes fenced state and creates no duplicate completed semantic attempt.</li>
+      <li><strong>Provider Call Attempt:</strong> one checkpointed logical attempt observation, not a guarantee of one physical wire call.</li>
+      <li><strong>DBOS replay:</strong> deterministic recovery that reuses checkpointed Provider Call Attempt observations, reconstructs Node Outcomes and the Graph Run Result, and re-enters only uncheckpointed work.</li>
       <li><strong>Platform Stage Attempt:</strong> the platform-native execution attempt; a later one is created only by explicit operational recovery.</li>
     </ul>
   </div>
@@ -227,6 +238,14 @@
     <p>An exhausted semantic failure is expected domain output. When Whetstone produces its causal evidence, persists the terminal Rollout Result, and binds the exact ObjectReference, the Stage is operationally <code>SUCCEEDED</code>.</p>
     <p>The Stage is <code>FAILED</code> only when execution cannot produce or persist a terminal Result, or cannot bind or confirm its exact reference. Semantic exhaustion alone is not operational failure.</p>
   </div>
+</div>
+
+<div class="callout warn">
+  <strong>Accepted external-effect ambiguity.</strong> A crash or ambiguous timeout after the provider effect but before the DBOS checkpoint may create duplicate physical calls or billing. Only the checkpointed physical outcome is retained. The design does not guarantee exactly-once provider effects or evidence for every billed call.
+</div>
+
+<div class="callout">
+  <strong>Raw evidence is primary.</strong> Retain the least-processed request and response or failure bodies on success and failure. Normalized usage, cost, and diagnostics may coexist with them but never replace them. Do not preemptively cap, truncate, allowlist, generally redact, or assign a retention policy to those bodies; if a backend limit is encountered, surface it rather than silently truncating.
 </div>
 
 <div class="section-head" id="operator-retry-gate"><h2>Operator Retry Gate</h2></div>
@@ -238,16 +257,16 @@
 
 <div class="section-head" id="provider-concurrency-workstream"><h2>Workstream 4 · Provider Concurrency Control</h2></div>
 
-<p>Use the existing generic Stage Control selector-capacity mechanism as a deliberately coarse, conservative cross-worker cap. Whetstone designs the Work Item labels and capacity policy and must configure dr-platform's mandatory default empty-selector capacity for the Stage plus a capacity for every provider-specific exact-label selector. dr-platform enforces every matching control together, and dr-providers exposes or improves the non-secret throttle identity from which those labels are derived.</p>
+<p>Use the existing generic Stage Control selector-capacity mechanism as a deliberately coarse, conservative cross-worker cap. dr-providers supplies the best-effort Provider Quota Identity, exactly <code>(provider, protocol, model)</code>. Whetstone derives collision-free labels, applies every relevant label to multi-route Work Items, and configures dr-platform's mandatory default empty-selector capacity plus every corresponding exact-label capacity. dr-platform enforces all matching controls without provider-specific code.</p>
 
 <div class="grid-2">
   <div class="card">
-    <h3>Throttle identity and labels</h3>
+    <h3>Provider Quota Identity and labels</h3>
     <ul>
-      <li>The default throttle identity normally includes provider or service, endpoint or protocol, model or deployment, and a non-secret credential or account profile.</li>
-      <li>A provider integration may explicitly group configurations by the provider-native quota boundary when its actual quota model differs from that default.</li>
-      <li>Labels and persisted identity material never contain API keys, access tokens, credential values, or other secret material.</li>
-      <li>Work that may route to more than one provider quota carries every relevant label, preventing an alternate route from escaping its configured cap.</li>
+      <li>The identity is exactly <code>(provider, protocol, model)</code>.</li>
+      <li>It has no credential or account component and no arbitrary override.</li>
+      <li>Whetstone derives labels collision-free from the complete tuple.</li>
+      <li>Work that may route through more than one tuple carries every relevant label.</li>
     </ul>
   </div>
   <div class="card">
@@ -255,17 +274,23 @@
     <ul>
       <li>Capacity counts concurrently <code>ADMITTED</code> rollout-execution Stages across workers, not observed physical calls.</li>
       <li>The default empty-selector control is mandatory Stage configuration; without it, work remains <code>READY</code> and unadmitted even if provider-specific controls exist.</li>
-      <li>Admission must satisfy the empty-selector control and every matching provider-specific exact-label control; no matching control replaces or bypasses another.</li>
+      <li>Admission must satisfy the empty-selector control and every matching exact-label control; no matching control replaces or bypasses another.</li>
       <li>A control is scoped to one pipeline key/version, stage key, selector, and shared database/schema.</li>
       <li>Admission occupies capacity for the full Stage, including non-provider work and backoff between semantic attempts.</li>
       <li>Stuck work retains capacity until it becomes terminal or an explicit sweep repairs its platform state.</li>
       <li>The cap is intentionally conservative; it does not promise strict fairness or perfect quota utilization.</li>
+      <li>Independent accounts using the same tuple may be conservatively grouped.</li>
+      <li>A shared quota exposed under different tuples may be under-controlled.</li>
     </ul>
   </div>
 </div>
 
 <div class="callout warn">
-  <strong>Concurrency non-goals.</strong> This workstream does not implement exact physical-call concurrency, requests-per-minute or tokens-per-minute accounting, token reservation, global quotas, cross-stage or cross-version quotas, strict fairness, or adaptive header-driven limiting. Do not add a call-boundary limiter until a real, substantial need demonstrates that coarse Stage admission is insufficient.
+  <strong>Provider Concurrency Control non-goals.</strong> This workstream does not implement exact call-boundary concurrency, requests-per-minute or tokens-per-minute accounting, token reservation, global, cross-stage, or cross-version quotas, strict fairness, adaptive header-driven limiting, or credential-aware quota identity.
+</div>
+
+<div class="callout">
+  <strong>Provider Calls non-goals.</strong> No provider idempotency keys; exactly-once external effects; custom provider-attempt ledger; exact call-boundary limiter; RPM, TPM, or token reservation; global, cross-stage, or cross-version quotas; fairness or adaptive header limiting; credential-aware quota identity; generalized body-size, truncation, redaction, or retention policy; nested native or DBOS automatic retries; or provider-specific dr-platform logic.
 </div>
 
 <div class="section-head" id="integration-boundaries"><h2>Integration and Ownership</h2></div>
@@ -286,7 +311,7 @@
     <div class="plane-label">dr-platform <span class="sub">· workflow owner</span></div>
     <div class="comps">
       <div class="comp substrate"><b>Transport the reference</b><span class="note">Carry the opaque terminal ObjectReference in stage output without interpreting, reconstructing, or owning its stored record.</span></div>
-      <div class="comp substrate"><b>Own workflow state</b><span class="note">dr-platform owns generic Platform Stage Attempt mechanics and exposes explicit <code>retry_stage</code>. Whetstone owns bounded Node/provider semantic retry policy and attempt fencing plus operator-gateway eligibility and race checks. DBOS owns replay.</span></div>
+      <div class="comp substrate"><b>Own workflow state</b><span class="note">dr-platform owns generic Platform Stage Attempt mechanics and exposes explicit <code>retry_stage</code>. Whetstone owns bounded semantic retry and operator eligibility; DBOS owns step checkpoints, replay, and durable sleep.</span></div>
     </div>
   </div>
 </div>
@@ -297,16 +322,38 @@
   <tbody>
     <tr><td>Strict finite JSON, Canonical Identity JSON, Identity Document hashing</td><td>dr-serialize</td></tr>
     <tr><td>Identity-bearing field selection, schema name, schema version</td><td>Each domain repository</td></tr>
+    <tr><td>Graph Definition artifact; Graph Config and Node structure/config role; Node Input Source mechanics; unique IDs; exactly-one-terminal validation; Graph Output and Graph Run Result</td><td>dr-graph</td></tr>
+    <tr><td>Rollout Definition role semantics; closed LLM Call/Eval Node Definitions; Evaluation Procedure Config semantics and Eval Node assignment</td><td>whetstone-ai</td></tr>
+    <tr><td>Eval Config Procedure identity match; authority, officialness, and realized-environment attestation</td><td>whetstone-ai</td></tr>
     <tr><td>Canonical record storage, Content Hash verification, generic atomic binding</td><td>dr-store</td></tr>
     <tr><td>Rollout Execution Key → Rollout Result ObjectReference specialization</td><td>whetstone-ai Result Store</td></tr>
     <tr><td>Official evaluation, result authority, and terminal domain policy</td><td>whetstone-ai</td></tr>
-    <tr><td>Bounded Node/provider semantic retry, durable semantic-attempt fencing and evidence</td><td>whetstone-ai</td></tr>
+    <tr><td>Bounded semantic retry, deterministic DBOS step orchestration, and final-result assembly</td><td>whetstone-ai</td></tr>
     <tr><td>Operator retry prechecks, executor race recheck, and Result Store binding gate</td><td>whetstone-ai</td></tr>
-    <tr><td>Non-secret provider throttle identity and native retry-zero support</td><td>dr-providers</td></tr>
-    <tr><td>Default empty-selector Stage control plus provider-quota Work Item labels, exact-label selectors, and capacity values</td><td>whetstone-ai</td></tr>
+    <tr><td>Typed transport, raw evidence capture, exact route-tuple identity, and native retry-zero support</td><td>dr-providers</td></tr>
+    <tr><td>Collision-free route labels, default empty-selector control, exact-label controls, and capacity values</td><td>whetstone-ai</td></tr>
     <tr><td>Generic Platform Stage Attempt mechanics, selector-capacity enforcement, and explicit <code>retry_stage</code></td><td>dr-platform</td></tr>
-    <tr><td>Replay within a Platform Stage Attempt</td><td>DBOS</td></tr>
+    <tr><td>Retry-disabled step checkpoints, deterministic replay, and durable sleep</td><td>DBOS</td></tr>
     <tr><td>Workflow state and opaque reference transport</td><td>dr-platform</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="graph-contract"><h2>Settled Graph and Evaluation Contract</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Component</th><th>Target fields and invariants</th><th>Identity effect</th></tr></thead>
+  <tbody>
+    <tr><td>Graph Definition</td><td>One versioned variable-bearing dr-graph Definition artifact declaring the DAG shape, Node Definitions, Variables, input/output contracts, and exactly one terminal/sink Node. Rollout Definition is Whetstone's role-qualified use of this artifact, not another type, schema, artifact, or identity.</td><td>Materializes Graph Configs; Whetstone creates no parallel Rollout Definition identity.</td></tr>
+    <tr><td>Graph Config</td><td>Fully set concrete <code>GraphConfig</code>; Nodes in declared order; unique <code>node_id</code>; Node Definition identities; static Variable assignments; <code>input_sources</code>; declared Node Output fields; exactly one terminal/sink Node.</td><td>Sole Rollout Variant config. Its exact versioned Identity Document produces <code>graph_hash</code>.</td></tr>
+    <tr><td>Node (Config)</td><td>Concrete Node lifecycle role with Node Definition reference, declared Variable assignments, one Node Input Source per runtime input, and declared outputs. Addressed exactly as <code>(graph_hash, node_id)</code>. Do not require a native class literally named <code>Node</code>.</td><td>All fields participate in <code>graph_hash</code>; no separate Node Config hash.</td></tr>
+    <tr><td>Node Input Source</td><td>Maps a declared Node input to exactly one Graph External Input or upstream Node Output. Target API: <code>NodeInputSourceRef</code>, <code>NodeInputSourceKind</code>, <code>input_sources</code>, <code>as_node_input_source_ref</code>, and <code>validate_graph_external_inputs</code>; source kinds <code>GRAPH_EXTERNAL</code> and <code>NODE_OUTPUT</code>.</td><td>Runtime wiring included in Graph Config identity. Static references are Variable assignments, not Node Input Sources.</td></tr>
+    <tr><td>Evaluation Procedure Config</td><td>Static Eval Node Variable assignment fixing procedure semantics, including semantic sandbox image/version. Composite Eval Config must reference the exact same Procedure Config identity.</td><td>Procedure change changes both <code>graph_hash</code> and <code>eval_config_hash</code>.</td></tr>
+    <tr><td>Sampling / Aggregation Config</td><td>Other two slices of composite Eval Config; task/repeat selection and aggregate/objective policy respectively.</td><td>Change only <code>eval_config_hash</code>.</td></tr>
+    <tr><td>Evaluation Context</td><td>Authority, officialness, campaign, operational policy, released versions, and realized-environment attestation/provenance.</td><td>Changes context identity, not <code>graph_hash</code> or <code>eval_config_hash</code>.</td></tr>
+    <tr><td>Terminal Node and Graph Output</td><td>Terminal Node is the unique sink's structural role, not a Node Type. Its ordinary validated Node Output becomes Graph Output unchanged; no terminal-only shape or reference.</td><td>The terminal selection and declared output contract participate in <code>graph_hash</code>; runtime output does not.</td></tr>
+    <tr><td>Graph Run Result</td><td>Graph Run identity; Graph External Inputs or immutable references; terminal Outcome; relevant Provider Call Attempt records or references as semantic attempt evidence; provenance; per-Node Outcomes/order/evidence as appropriate to the run. Reference rather than duplicate provider bodies held by the enclosing Rollout Result; include no Platform Stage state; nest within Rollout Result with no separate authoritative persistence path.</td><td>Runtime Result, not Graph Config identity.</td></tr>
   </tbody>
 </table>
 </div>
@@ -317,9 +364,13 @@
 <table>
   <thead><tr><th>Repository</th><th>Required delivery</th><th>Scope boundary</th></tr></thead>
   <tbody>
-    <tr><td>dr-providers</td><td>Expose or improve a stable non-secret throttle identity/default, including credential or account profile where appropriate, and let durable callers enforce native retries at zero.</td><td>Do not solve semantic retry coordination, Stage admission, or the remainder of Provider Calls planning here.</td></tr>
-    <tr><td>dr-platform</td><td>Preserve the rebuilt generic selector-capacity mechanism and explicit operator <code>retry_stage</code> boundary, then publish a released package version.</td><td>Add no provider/node retry policy, throttle-identity interpretation, or domain-specific concurrency logic.</td></tr>
-    <tr><td>whetstone-ai</td><td>Implement the mandatory default empty-selector Stage control, provider-quota labels and exact-label controls, the bounded retry coordinator, durable attempt fencing/evidence, operator retry command/gateway, and the executor race recheck.</td><td>Move off the superseded dr-platform revision and consume the rebuilt released package; keep broader Provider Calls design out of this change.</td></tr>
+    <tr><td>dr-serialize</td><td>Supply strict finite JSON, the exact Identity Document, canonicalization, and full Identity Hash.</td><td>Select no domain identity fields.</td></tr>
+    <tr><td>dr-providers</td><td>Own typed transport and least-processed raw request, response, and failure evidence; remove failure-preview truncation and provider-facing idempotency transport; expose exactly <code>(provider, protocol, model)</code> as the best-effort Provider Quota Identity; and support native retries fixed at zero.</td><td>Own no domain success acceptance or normalization, failure taxonomy or classification, normalized domain telemetry or projections, semantic retry, DBOS, Stage admission, or result storage.</td></tr>
+    <tr><td>dr-platform</td><td>Preserve generic labels, selector-capacity admission, Stage Attempts, and explicit <code>retry_stage</code>.</td><td>Add no provider-specific code, route interpretation, or semantic retry policy.</td></tr>
+    <tr><td>whetstone-ai</td><td>Remove the retired rollout-config model, schema, hash, keys, indexes, exports, builders, validators, consumers, fixtures, tests, and goldens with no alias or dual path. Use dr-graph's Graph Definition artifact in the Rollout Definition role and adopt native <code>GraphConfig</code>, <code>GraphRunResult</code>, the finalized native Node representation, the Node Input Source API, and <code>graph_hash</code> as the sole Rollout Variant config/identity. Implement closed, versioned LLM Call and Eval <a class="term-ref" href="vocab_and_defs.html#term-node-definition">Node Definitions</a>; assign Evaluation Procedure Config statically on Eval Nodes; validate exact Procedure identity against composite Eval Config; and keep authority, officialness, and realized-environment attestation in Evaluation Context. Migrate Rollout Keys, aggregates, Work Requests, Results, official records, tools, and plots to Graph Config/Graph Hash and regenerate affected persisted state. Validate every proposal, expand every valid proposal across all fixed axes, and emit one Graph Config plus one immutable Materialization Record stored by typed Object Reference/Content Hash for each complete slot. Then apply Selection Policy to choose an ordered subset of record slots for evaluation, retaining unselected valid records without selected-lineage mappings. Deduplicate selected/admitted records by full <code>graph_hash</code> before task/repeat planning; for <code>D</code> distinct admitted Graph Hashes produce exactly <code>D × task_count × repeat_count</code> Work Items/Rollouts and <code>D</code> aggregates. Keep record refs out of Rollout Keys, Work Requests, Results, and aggregate identity, while requiring Official Evaluation Records and Plot Manifests to preserve the ordered mapping from every selected record ref through <code>graph_hash</code> to its shared planned/result-key set and aggregate ref.</td><td>Own Whetstone role semantics, operation definitions, Evaluation Procedure semantics, materialization provenance, and provider semantics; own no parallel Rollout Definition artifact or generic Graph Config identity payload/document/schema; add no compatibility path, custom execution ledger, cross-workflow Node Output injection, or effect fence.</td></tr>
+    <tr><td>dr-store</td><td>Provide separate immutable terminal result/artifact persistence and atomic Rollout Execution Key → result reference binding.</td><td>Store no workflow or provider-attempt ledger.</td></tr>
+    <tr><td>dr-graph</td><td>Provide the versioned variable-bearing Graph Definition artifact and own generic Graph Config Identity Payload field selection, exact versioned Identity Document schema, and full <code>graph_hash</code> mechanics through dr-serialize. Coordinate no-alias breaking migrations from current <code>GraphSpec</code> to target <code>GraphConfig</code> and current unversioned/truncated <code>graph_digest</code> payload/output to the target full versioned <code>graph_hash</code> protocol. Keep current <code>GraphRunResult</code> naming while strengthening its target Result semantics and schema. Inventory current <code>NodeSpec</code>, nested <code>NodeConfig</code>, and <code>FieldSpec</code>, which collectively implement the current native Node representation; finalize target exported names and shape aligned with the Node (Config) lifecycle role, Node Definition identity, required Variable assignments, Node Input Sources, and declared output fields without requiring a class literally named <code>Node</code> or a separate Node hash. Enforce unique <code>node_id</code>, exact <code>(graph_hash, node_id)</code> addressing, and exactly one terminal/sink Node. Complete the current <code>BindingRef</code>/<code>BindingSource</code>/<code>input_bindings</code>/<code>bindings</code>/<code>as_binding_ref</code>/<code>validate_external_bindings</code> to target <code>NodeInputSourceRef</code>/<code>NodeInputSourceKind</code>/<code>input_sources</code>/<code>as_node_input_source_ref</code>/<code>validate_graph_external_inputs</code> migration, with enum values <code>GRAPH_EXTERNAL</code> and <code>NODE_OUTPUT</code>. Update exports, builders, executors, validators, consumers, serialized schemas, fixtures, tests, and goldens together, with no aliases or dual reads.</td><td>Provide only generic Graph Definition, Graph Config, Node structure/config role, identity, Node Input Source mechanics, declared outputs, Graph Run Result, and validation hooks; know no Rollout Definition artifact, Provider Call Config, Evaluation Procedure Config, or Whetstone operation semantics.</td></tr>
+    <tr><td>dr-code</td><td>Keep its existing artifact and evaluation primitives unchanged.</td><td>Add no Provider Calls-specific primitive.</td></tr>
   </tbody>
 </table>
 </div>
@@ -333,15 +384,23 @@
 <div class="steps">
   <div class="step">
     <h3>Inventory and freeze domain identity schemas</h3>
-    <p>Classify existing hashes, enumerate identity-bearing dependents, and record the new payload fields, schema names, and versions in each affected repository before changing outputs.</p>
+    <p>Classify existing hashes, enumerate identity-bearing dependents, and record the new payload fields, schema names, and versions in each affected repository before changing outputs. In particular, record Evaluation Procedure Config as a static Eval Node assignment included in Graph Config identity, Sampling/Aggregation only in Eval Config identity, and authority/environment attestation only in Evaluation Context.</p>
   </div>
   <div class="step">
     <h3>Land and release the dr-serialize contract</h3>
     <p>Implement strict validation, exact Identity Document construction, canonicalization, and full SHA-256 output with contract tests and golden vectors.</p>
   </div>
   <div class="step">
-    <h3>Perform one coordinated identity reset</h3>
-    <p>Update affected domain producers and consumers in dependency order; regenerate all golden values and fixtures; update cross-repository references and indexes together, with no legacy path.</p>
+    <h3>Land and release the breaking dr-graph contract</h3>
+    <p>Land together the versioned variable-bearing Graph Definition artifact, current-to-target <code>GraphSpec</code> → <code>GraphConfig</code> breaking rename, and current unversioned/truncated <code>graph_digest</code> payload/output → dr-graph-owned exact versioned Graph Config Identity Document and full <code>graph_hash</code> protocol. Retain current <code>GraphRunResult</code> naming and strengthen its schema/semantics to require Graph Run identity, Graph External Inputs or immutable references, terminal Outcome, relevant Provider Call Attempt records or references as semantic attempt evidence, provenance, and per-Node Outcomes/order/evidence as appropriate to the run. Reference rather than duplicate provider bodies held by the enclosing Rollout Result; include no Platform Stage state; nest within Rollout Result without separate authoritative persistence. Inventory the current three-part native Node representation, settle target exported names and shape against the normative Node (Config) and Node Definition contract without requiring a literal <code>Node</code> class or separate hash, and enforce unique <code>node_id</code>, <code>(graph_hash, node_id)</code> addressing, declared outputs, and exactly one terminal/sink Node. Complete the Node Input Source rename to <code>NodeInputSourceRef</code>, <code>NodeInputSourceKind</code>, <code>input_sources</code>, <code>as_node_input_source_ref</code>, and <code>validate_graph_external_inputs</code>, with <code>GRAPH_EXTERNAL</code>/<code>NODE_OUTPUT</code> enum values. Update exports, builders, executors, validators, consumers, serialized schemas, fixtures, tests, and goldens without aliases or dual reads.</p>
+  </div>
+  <div class="step">
+    <h3>Migrate Whetstone graph contracts</h3>
+    <p>Consume the released dr-graph break across every Whetstone export, builder, validator, executor, consumer, identity schema, fixture, test, golden, key, index, and reference. Use the Graph Definition artifact in the Rollout Definition role without a parallel type or identity. Delete the rollout-config model/schema/hash and all dependent paths; adopt dr-graph's exact versioned Graph Config Identity Document and <code>graph_hash</code> as the sole Rollout Variant config/identity; migrate Rollout Keys to <code>(graph_hash, eval_config_hash, task_identity, repeat_id)</code> and aggregate identities to <code>(graph_hash, eval_config_hash)</code>; and regenerate every affected Graph Hash and persisted artifact. Add the Materialization Record schema, typed storage references, producer/consumer paths, mandatory ordered official lineage mapping, and tests while excluding record references from execution and aggregate identities. Validate every proposal, expand every valid proposal across all fixed axes, materialize one Graph Config and Materialization Record per complete slot, then apply Selection Policy to choose an ordered evaluation subset. Retain unselected valid records without selected-lineage mappings, and deduplicate selected/admitted records by full <code>graph_hash</code> before expanding the task/repeat matrix. Implement the closed, versioned LLM Call and Eval Node Definitions; assign Evaluation Procedure Config as an identity-bearing Eval Node Variable; validate its exact identity match with the composite Eval Config; and keep Sampling/Aggregation and Evaluation Context fields in their settled partitions. Validate every concrete Node's Variables, Node Input Sources, outputs, unique ID, and terminal role.</p>
+  </div>
+  <div class="step">
+    <h3>Complete the coordinated identity reset</h3>
+    <p>Update the remaining affected domain producers and consumers in dependency order; regenerate all golden values and fixtures; update cross-repository references and indexes together, with no legacy path.</p>
   </div>
   <div class="step">
     <h3>Create dr-store on the stable serialization contract</h3>
@@ -353,7 +412,7 @@
   </div>
   <div class="step">
     <h3>Release the bounded dr-providers support</h3>
-    <p>Add and test the non-secret throttle identity/default and the durable caller's ability to enforce native retry zero. Publish the package without adding semantic retry coordination or broader provider-call controls.</p>
+    <p>Add typed least-processed raw request and response or failure capture, remove failure-preview truncation and provider-facing idempotency transport, expose the exact route tuple as the best-effort Provider Quota Identity, and enforce native retry zero. Publish without semantic retry, DBOS, Stage admission, or result storage.</p>
   </div>
   <div class="step">
     <h3>Rebuild and release the generic dr-platform boundaries</h3>
@@ -361,15 +420,15 @@
   </div>
   <div class="step">
     <h3>Implement Whetstone durable retry</h3>
-    <p>Add the bounded semantic-attempt coordinator, retry-zero provider execution, durable fences/checkpoints, immutable attempt evidence, terminal exhausted-failure Results, and Result Store binding gate. Add the operator command/gateway and executor-side race recheck around <code>retry_stage</code>.</p>
+    <p>Add one retry-disabled DBOS step per logical provider attempt, typed returned expected-outcome observations, deterministic classification/branching and durable backoff, and deterministic reconstruction of a Graph Run Result containing its required Graph Run identity, Graph External Inputs or references, terminal Outcome, relevant Provider Call Attempt records or references, provenance, and per-Node Outcomes/order/evidence. Nest that Graph Run Result and the same provider observations in one immutable Rollout Result without duplicating provider bodies, and atomically bind it through the Result Store. Add the operator gateway and executor-side race recheck around <code>retry_stage</code>; add no custom execution ledger, completed-Node-Output injection across workflow identities, or fence.</p>
   </div>
   <div class="step">
     <h3>Configure coarse provider concurrency</h3>
-    <p>Configure dr-platform's mandatory default empty-selector capacity for the Stage. Then derive non-secret throttle labels for every possible route and configure a conservative capacity for every provider-specific exact-label selector. Verify that admission satisfies all matching controls together and that omission of the empty-selector control leaves work <code>READY</code> and unadmitted. Exercise cross-worker full-Stage occupancy and stuck-work behavior in one shared database/schema.</p>
+    <p>Configure dr-platform's mandatory default empty-selector capacity. Derive collision-free labels from every exact <code>(provider, protocol, model)</code> tuple, apply all relevant labels to multi-route work, and configure a capacity for every exact-label selector. Verify all matching controls together, including full-Stage occupancy during backoff and missing-default behavior.</p>
   </div>
   <div class="step">
     <h3>Consume releases and verify end to end</h3>
-    <p>Publish all remaining dependency packages, replace Git revisions with released versions, lock them, and record them in provenance. Then exercise persistence, replay fencing, retry races, binding conflicts, selector capacity, and corruption detection across repository boundaries before real runs.</p>
+    <p>Publish all remaining dependency packages to PyPI, replace Git revisions with released versions, lock them, and record them in provenance. Then exercise graph terminal/output invariants, Graph/Eval identity partitioning, Node Input Source validation, raw evidence, deterministic checkpoint reconstruction, ambiguous-effect behavior, retry races, binding conflicts, selector capacity, and corruption detection across repository boundaries before real runs.</p>
   </div>
 </div>
 
@@ -401,30 +460,58 @@
   </div>
 </div>
 
+<div class="card space-top">
+  <h3>Graph contract migration is complete when</h3>
+  <ul>
+    <li>dr-graph exports the versioned variable-bearing Graph Definition artifact and target <code>GraphConfig</code>, retains <code>GraphRunResult</code>, owns the Graph Config Identity Payload field selection and exact versioned Identity Document schema, and exposes a <code>graph_hash</code> API that computes the full 64-character lowercase SHA-256 Graph Hash through dr-serialize, with golden coverage for payload and schema-version changes.</li>
+    <li>Replacing the current unversioned, truncated <code>graph_digest</code> payload/output with the exact versioned Graph Config identity protocol demonstrably resets Graph Hash values, and every affected fixture, golden, key, and reference is regenerated.</li>
+    <li>A stale-name scan over target source, exports, serialized schemas, builders, validators, executors, consumers, fixtures, tests, goldens, and target-facing documentation proves no migration-source graph-config, run-summary, hash, or graph-wiring spelling, alias, or dual-read branch remains. Explicitly labeled migration-history rows in design documentation are exempt from this absence check; current native Node names are governed by the separately finalized Node migration.</li>
+    <li>Whetstone has no rollout-config model, schema, hash, key, index, alias, dual-read branch, fixture, golden, export, builder, validator, or consumer. Graph Config and <code>graph_hash</code> are the sole Rollout Variant config and identity, distinct only from the stored object's Content Hash.</li>
+    <li>Rollout Keys are exactly <code>(graph_hash, eval_config_hash, task_identity, repeat_id)</code>; Rollout Aggregate identities are exactly <code>(graph_hash, eval_config_hash)</code>; Work Requests, Results, official records, tools, and plots reference Graph Config/Graph Hash rather than any retired config identity.</li>
+    <li>Tests prove the harness validates and Diff Checks every proposal, expands every valid proposal across all fixed axes, and emits one Graph Config plus one immutable Materialization Record for each complete slot before Selection Policy runs. Each record contains definition, source lineage, assignments/axes, materializer, result, validation/diff, and provenance field groups; has no Identity Hash; is stored only by typed Object Reference/Content Hash; and may converge with another record on one <code>graph_hash</code>.</li>
+    <li>Selection Policy selects an ordered subset of the complete Materialization Record slots for evaluation. Execution planning then deduplicates selected/admitted records by full <code>graph_hash</code> before task/repeat planning: for <code>D</code> distinct admitted Graph Hashes it produces exactly <code>D × task_count × repeat_count</code> Work Items/Rollouts and <code>D</code> aggregates. A fixture with two selected Materialization Records sharing one <code>graph_hash</code> proves they produce one work matrix and one aggregate, with no duplicate Rollout Execution Keys.</li>
+    <li>Materialization Record references do not enter Rollout Keys, Work Requests, Results, or aggregate identity. Official Evaluation Records and Official Plot Manifests MUST preserve the ordered mapping from every selected Materialization Record reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference; tests prove converged selected records remain separately attributable as candidate/curve slots while sharing execution and aggregate evidence. Unselected valid slots retain their records, are not officially evaluated, and require no selected-lineage mapping.</li>
+    <li>Whetstone uses the dr-graph Graph Definition artifact in the Rollout Definition role without another type, schema, artifact, or identity; tests prove one Graph Definition can materialize multiple fully set Graph Configs.</li>
+    <li>The exported dr-graph graph-wiring API, serialized field names, builders, validators, executors, consumers, fixtures, tests, goldens, and target-facing documentation use <code>NodeInputSourceRef</code>, <code>NodeInputSourceKind</code>, <code>input_sources</code>, <code>as_node_input_source_ref</code>, and <code>validate_graph_external_inputs</code>, with source-kind values <code>GRAPH_EXTERNAL</code> and <code>NODE_OUTPUT</code>; the migration-source public names have no compatibility aliases.</li>
+    <li>Validation and golden fixtures cover both permitted Node Input Source forms—Graph External Input and upstream Node Output—and reject missing, malformed, multiple, or non-upstream sources. Fixtures prove <code>task.&lt;field&gt;</code> is native transport spelling and does not imply Whetstone Task semantics.</li>
+    <li>dr-graph documents the inventory of its current native Node representation, settles target exported names and shape against Node Definition identity, required Variable assignments, Node Input Sources, and declared output fields, and migrates dependent surfaces only after that target contract is finalized. The normative lifecycle term displays as Node (Config), but no test requires a native class literally named <code>Node</code> or a separate Node Config hash; all Node fields participate in <code>graph_hash</code>.</li>
+    <li>Builder and validator tests prove every concrete Node sets all required declared Variables, supplies each required runtime input through exactly one Node Input Source, declares its output fields, has a <code>node_id</code> unique within the Graph Config, and is addressed exactly as <code>(graph_hash, node_id)</code>.</li>
+    <li>Every valid Graph Definition and Graph Config has exactly one terminal/sink Node. Tests treat Terminal Node as a structural role rather than a Node Type and prove its ordinary validated Node Output becomes Graph Output unchanged, with no terminal-only shape or reference.</li>
+    <li>Eval Node builders assign Evaluation Procedure Config statically as a Variable, never as a context-bound runtime input or Node Input Source. Graph Config Identity Document goldens include that reference; changing it changes <code>graph_hash</code>.</li>
+    <li>Eval Config validation requires its Evaluation Procedure Config identity to match the Eval Node/Graph Config reference exactly. Tests prove Procedure changes alter both <code>graph_hash</code> and <code>eval_config_hash</code>, while Sampling-only or Aggregation-only changes alter only <code>eval_config_hash</code>; semantic sandbox image/version is Procedure Config, while authority, officialness, and realized environment attestation are Evaluation Context.</li>
+    <li><code>GraphRunResult</code> has Result semantics and requires Graph Run identity, Graph External Inputs or immutable references, terminal Outcome, relevant Provider Call Attempt records or references as semantic attempt evidence, provenance, and per-Node Outcomes/order/evidence as appropriate to the run. Tests prove it references rather than duplicates provider bodies held in Rollout Result, contains no Platform Stage state, remains nested within Rollout Result, and has no separate authoritative persistence path.</li>
+    <li>dr-graph remains provider-neutral; Whetstone alone owns the LLM Call and Eval operation definitions and Provider Call Config validation.</li>
+  </ul>
+</div>
+
 <div class="grid-2 space-top">
   <div class="card">
     <h3>Retry implementation is complete when</h3>
     <ul>
-      <li>Whetstone bounds and records Node/provider semantic attempts inside a Stage while durable dr-providers execution demonstrably uses native retries of zero.</li>
-      <li>A forced whole-body DBOS replay cannot repeat a semantic attempt whose durable fence/checkpoint and immutable completion evidence already exist.</li>
-      <li>Provider/Node Attempts, replayed Stage invocations, and Platform Stage Attempts retain distinct identities and evidence.</li>
+      <li>Whetstone bounds provider semantic retries while dr-providers native retries and DBOS automatic step retries are demonstrably zero.</li>
+      <li>Each logical provider attempt runs in one <code>@DBOS.step(retries_allowed=False)</code>; expected success or classified failure returns a serializable typed observation, while unexpected programming or infrastructure errors raise.</li>
+      <li>Completed Provider Call Attempt observations replay from DBOS checkpoints; attempt numbering, step order, branching, durable backoff, Node Outcome reconstruction, and Graph Run Result reconstruction remain deterministic.</li>
+      <li>Each completed observation contains logical call identity, attempt number, execution-policy identity, timing/latency, least-processed raw request and response or failure bodies, normalized usage/cost/diagnostics, and typed outcome.</li>
+      <li>Tests acknowledge that pre-checkpoint ambiguity can duplicate physical calls or billing and prove no claim of exactly-once effects or every-billed-call evidence is made.</li>
+      <li>No Whetstone custom execution ledger or fence and no dr-store provider-attempt ledger exists; Whetstone injects no completed Node Output across DBOS workflow identities, and completed observations plus the reconstructed Graph Run Result flow into one terminal Rollout Result.</li>
       <li>The operator gateway rejects retry unless the Stage is <code>FAILED</code> and the Rollout Execution Key is unbound; the retried executor rechecks that the key remains unbound before a new semantic effect.</li>
       <li>A race that binds after the gateway check is stopped by the executor recheck or authoritative atomic conflict; no different reference overwrites or authorizes replacement.</li>
       <li>A persisted and bound exhausted-failure Result makes the Stage operationally <code>SUCCEEDED</code>; only inability to produce, persist, bind, or confirm the exact Result leaves it <code>FAILED</code>.</li>
-      <li>Ownership remains explicit: dr-platform supplies generic Platform Stage Attempt mechanics and <code>retry_stage</code>; Whetstone supplies bounded semantic retry policy, attempt fencing, and operator eligibility/race checks; DBOS supplies replay.</li>
+      <li>Ownership remains explicit: dr-platform supplies generic Platform Stage Attempt mechanics and <code>retry_stage</code>; Whetstone supplies bounded semantic retry and operator eligibility; DBOS supplies step checkpoints, replay, and durable sleep.</li>
       <li>dr-platform tests contain no provider/node semantic retry classification or policy.</li>
     </ul>
   </div>
   <div class="card">
     <h3>Provider concurrency is complete when</h3>
     <ul>
-      <li>Every provider route produces labels from a documented non-secret throttle identity, including provider/service, endpoint/protocol, model/deployment, and credential/account profile by default or an explicit provider-native quota group.</li>
-      <li>Multi-route work carries all relevant labels, and no label or persisted identity exposes secret material.</li>
-      <li>Whetstone configures the mandatory default empty-selector Stage capacity and a capacity for every provider-specific exact-label selector.</li>
+      <li>Every Provider Quota Identity is exactly <code>(provider, protocol, model)</code>, with no credential, account, or override component.</li>
+      <li>Whetstone derives labels collision-free from the complete tuple, and multi-route work carries every relevant label.</li>
+      <li>Whetstone configures the mandatory default empty-selector Stage capacity and a capacity for every exact-label selector.</li>
       <li>An admission test proves all matching controls apply together; a missing empty-selector control leaves the Stage unconfigured and its work <code>READY</code> and unadmitted.</li>
       <li>A cross-worker test against one shared database/schema proves matching <code>ADMITTED</code> Stages never exceed the configured selector capacity within its pipeline key/version, stage key, and selector scope.</li>
       <li>Tests prove capacity is held for the full Stage and by stuck work until terminal transition or sweep.</li>
-      <li>No call-boundary limiter, exact call/RPM/TPM or token-reservation path, global/cross-stage/cross-version quota, fairness scheduler, or adaptive header policy is introduced.</li>
+      <li>Tests document the accepted inaccuracies: independent accounts may be conservatively grouped, and shared quotas exposed under different tuples may be under-controlled.</li>
+      <li>No exact call-boundary limiter, RPM/TPM or token-reservation path, global/cross-stage/cross-version quota, fairness scheduler, adaptive header policy, or credential-aware quota identity is introduced.</li>
       <li>dr-platform treats labels and selectors generically; Whetstone alone defines their provider-quota meaning and capacity policy.</li>
     </ul>
   </div>
@@ -433,7 +520,7 @@
 <div class="card space-top">
   <h3>Release integration is complete when</h3>
   <ul>
-    <li>dr-serialize, dr-store, dr-providers, the rebuilt dr-platform, and every other runtime dependency repository needed for real runs are public and their required packages are released on PyPI.</li>
+    <li>dr-serialize, dr-graph, dr-store, dr-providers, the rebuilt dr-platform, and every other runtime dependency repository needed for real runs are public and their required packages are released on PyPI.</li>
     <li>Whetstone no longer depends on the superseded dr-platform revision or any other Git revision dependency needed by this scope.</li>
     <li>The locked environment resolves only the intended released package versions, and execution/environment provenance records those exact versions.</li>
     <li>End-to-end checks prove the four workstreams together without importing broader Provider Calls policy into dr-providers or dr-platform.</li>
