@@ -27,21 +27,36 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from whetstone.execution.fanout import DEFAULT_CONCURRENCY
+from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import (
     ProposalDraft,
     ProposalRequest,
     ProposerConfig,
 )
 from whetstone.provider.driver import TransportCall
-from whetstone.runner.budget import BudgetGuard, ReserveError
-from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
+from whetstone.runner.budget import (
+    BudgetGuard,
+    ReserveError,
+    openrouter_credits_fetcher,
+)
+from whetstone.runner.cell import (
+    DEFAULT_CELL_MAX_WALL_SECONDS,
+    CellBaselineFailure,
+    CellConfig,
+    run_cell,
+)
 from whetstone.runner.execution_mode import (
     ExecutionMode,
     detect_execution_mode,
 )
 from whetstone.runner.ledger import Ledger
 from whetstone.runner.optimizers import OPTIMIZERS, scaling_help
-from whetstone.runner.pilot import PilotReport, run_pilot
+from whetstone.runner.pilot import (
+    DEFAULT_PILOT_MAX_WALL_SECONDS,
+    PilotReport,
+    run_pilot,
+)
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     CANONICAL_TASK_MODEL,
@@ -86,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="force an execution mode instead of detecting it",
     )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help=(
+            "max concurrent provider calls per fan-out phase "
+            f"(default {DEFAULT_CONCURRENCY}); halved once on a rate-limit "
+            "failure for the rest of the run"
+        ),
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     pilot = sub.add_parser(
@@ -95,6 +120,16 @@ def build_parser() -> argparse.ArgumentParser:
     pilot.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     pilot.add_argument("--instances", type=int, default=10)
     pilot.add_argument("--spec-estimate-tokens", type=int, default=None)
+    pilot.add_argument(
+        "--max-wall-seconds",
+        type=float,
+        default=DEFAULT_PILOT_MAX_WALL_SECONDS,
+        help=(
+            "whole-run wall deadline for the pilot (default "
+            f"{DEFAULT_PILOT_MAX_WALL_SECONDS:.0f}s); on breach finish "
+            "in-flight, persist partials, exit non-zero with a status note"
+        ),
+    )
 
     cell = sub.add_parser(
         "cell", help="run one full validation cell (optimizer x env)"
@@ -105,6 +140,16 @@ def build_parser() -> argparse.ArgumentParser:
     cell.add_argument("--env", required=True)
     cell.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     cell.add_argument("--attempt", type=int, default=0)
+    cell.add_argument(
+        "--max-wall-seconds",
+        type=float,
+        default=DEFAULT_CELL_MAX_WALL_SECONDS,
+        help=(
+            "whole-cell wall deadline (default "
+            f"{DEFAULT_CELL_MAX_WALL_SECONDS:.0f}s); on breach finish "
+            "in-flight, persist partials, record status=halted"
+        ),
+    )
     cell.add_argument(
         "--non-canonical",
         action="store_true",
@@ -184,6 +229,16 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     _require_live(args)
     route = route_for(args.lane, role="task", temperature=0.0)
     transport = _live_transport(route)
+    # A per-env resumable partial log (round-2 crashes lost every call). A
+    # crashed run leaves this on disk; the report/resume path reads it.
+    partial_log = PartialLog(
+        path=args.root / "pilots" / f"{args.env}.partial.jsonl"
+    )
+    credits_fetcher = (
+        openrouter_credits_fetcher(route.key_env)
+        if args.lane == "openrouter"
+        else None
+    )
     report = run_pilot(
         env=args.env,
         lane=args.lane,
@@ -192,8 +247,23 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         execution_policy=route.execution_policy,
         instance_count=args.instances,
         spec_estimate_tokens=args.spec_estimate_tokens,
+        credits_fetcher=credits_fetcher,
+        concurrency=args.concurrency,
+        max_wall_seconds=args.max_wall_seconds,
+        partial_log=partial_log,
     )
     path = report.write(args.root)
+    # --- Whole-run deadline: a partial run exits non-zero with a summary. ---
+    if report.deadline_reached:
+        sys.stderr.write(
+            f"PILOT HALTED: env={args.env} lane={args.lane} "
+            f"{report.status_note} -> {path}\n"
+            f"  {report.success_count}/{report.call_count} calls done; "
+            "partials persisted; resume to complete.\n"
+        )
+        return PILOT_ALL_FAILED_EXIT
+    # A clean, complete pilot no longer needs its partial log.
+    partial_log.delete()
     # --- Loud failure handling: a 0%-success pilot is a hard failure. ---
     # Without this a fully-failed run (every call rejected pre-flight) would
     # print `naive=None ceiling=None direction_ok=False` and exit 0, silently
@@ -287,10 +357,20 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         execution_policy=task_route.execution_policy,
         execution_mode=decision.mode,
         window_notes=decision.reason,
+        concurrency=args.concurrency,
+        max_wall_seconds=args.max_wall_seconds,
+    )
+    credits_fetcher = (
+        openrouter_credits_fetcher(task_route.key_env)
+        if args.lane == "openrouter"
+        else None
     )
     try:
         outcome = run_cell(
-            config, ledger=ledger, budget=BudgetGuard()
+            config,
+            ledger=ledger,
+            budget=BudgetGuard(),
+            credits_fetcher=credits_fetcher,
         )
     except ReserveError as exc:
         sys.stderr.write(f"budget reserve guard: {exc}\n")

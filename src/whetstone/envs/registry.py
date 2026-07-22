@@ -40,31 +40,68 @@ from whetstone.envs.probes import ProbeSurface, probe_surface
 ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
 
 
+#: The two provenance markers a :class:`TokenEstimate` may carry. A
+#: ``live-measured`` estimate came from an actual smoke/pilot measurement; a
+#: ``scaled-pending-measurement`` estimate is a committed baseline-spec §5
+#: value scaled by the reasoning-model correction, to be overwritten once its
+#: env's pilot records a measured mean.
+ESTIMATE_LIVE_MEASURED = "live-measured"
+ESTIMATE_SCALED_PENDING = "scaled-pending-measurement"
+
+#: The reasoning-model correction applied to the un-measured envs' committed
+#: baseline-spec §5 estimates (reasoning models emit far more tokens than the
+#: original non-reasoning spec assumed). c22 & c11 are already live-measured,
+#: so they are NOT scaled.
+REASONING_SCALE = 4
+
+
 @dataclass(frozen=True, slots=True)
 class TokenEstimate:
-    """The committed per-call token estimate for one env's baseline probes.
+    """The per-call token estimate for one env's baseline probes.
 
-    Sourced verbatim from each env's baseline-spec §5 ("Per-instance token
-    estimate") total-tokens/call row: the naive probe and the ceiling probe
-    are distinguished by every spec, so both are recorded separately. These
-    are the committed defaults the pilot's token-sanity check runs against
-    when ``--spec-estimate-tokens`` is not passed; the flag still overrides.
+    The naive probe and the ceiling probe are distinguished by every spec, so
+    both are recorded separately. These are the defaults the pilot's token-
+    sanity check runs against when ``--spec-estimate-tokens`` is not passed;
+    the flag still overrides.
+
+    ``estimate_source`` marks provenance: ``live-measured`` (c22 & c11,
+    measured from the smoke) versus ``scaled-pending-measurement`` (three envs,
+    baseline-spec §5 scaled ~4x for the reasoning-model correction). A pilot
+    overwrites its env's estimate with its measured means and records those in
+    the pilot JSON so the report can show est-vs-actual.
     """
 
     naive: int
     ceiling: int
+    estimate_source: str = ESTIMATE_SCALED_PENDING
 
 
-#: Committed per-env token estimates from each baseline-spec §5 total row.
-#: c11: naive ~350 / ceiling ~800 (blended totals); c19: naive ~280 /
-#: ceiling ~1,150; c18: naive ~253 / ceiling ~650; c22: naive ~170 /
-#: ceiling ~420; c23: naive ~140 (120 in + 20 out) / ceiling ~420 (400 + 20).
+#: Per-env token estimates. c22 & c11 are LIVE-MEASURED from the smoke
+#: (c22 naive ~950 / ceiling ~1700; c11 naive ~656 / ceiling ~907). The other
+#: three keep their baseline-spec §5 totals scaled ~4x for the reasoning-model
+#: correction (marked scaled-pending-measurement; their pilots will overwrite
+#: with measured means). Pre-scale spec §5 totals were c19 naive ~280 /
+#: ceiling ~1,150; c18 naive ~253 / ceiling ~650; c23 naive ~140 /
+#: ceiling ~420.
 _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
-    "c11": TokenEstimate(naive=350, ceiling=800),
-    "c19": TokenEstimate(naive=280, ceiling=1150),
-    "c18": TokenEstimate(naive=253, ceiling=650),
-    "c22": TokenEstimate(naive=170, ceiling=420),
-    "c23": TokenEstimate(naive=140, ceiling=420),
+    "c22": TokenEstimate(
+        naive=950, ceiling=1700, estimate_source=ESTIMATE_LIVE_MEASURED
+    ),
+    "c11": TokenEstimate(
+        naive=656, ceiling=907, estimate_source=ESTIMATE_LIVE_MEASURED
+    ),
+    "c19": TokenEstimate(
+        naive=280 * REASONING_SCALE, ceiling=1150 * REASONING_SCALE,
+        estimate_source=ESTIMATE_SCALED_PENDING,
+    ),
+    "c18": TokenEstimate(
+        naive=253 * REASONING_SCALE, ceiling=650 * REASONING_SCALE,
+        estimate_source=ESTIMATE_SCALED_PENDING,
+    ),
+    "c23": TokenEstimate(
+        naive=140 * REASONING_SCALE, ceiling=420 * REASONING_SCALE,
+        estimate_source=ESTIMATE_SCALED_PENDING,
+    ),
 }
 
 #: Spec-default deliberate-observation repeats per task. The envs commit no
@@ -235,6 +272,8 @@ def env_spec(name: str) -> EnvSpec:
 __all__ = [
     "DEFAULT_REPEATS",
     "ENV_NAMES",
+    "ESTIMATE_LIVE_MEASURED",
+    "ESTIMATE_SCALED_PENDING",
     "EnvSpec",
     "TokenEstimate",
     "UnknownEnvError",

@@ -22,6 +22,7 @@ from typing import Any
 
 __all__ = [
     "DEFAULT_EXPECTED_CELL_USD",
+    "OPENROUTER_CREDITS_URL",
     "RESERVE_USD",
     "STOP_LOSS_MULTIPLIER",
     "BudgetGuard",
@@ -29,7 +30,12 @@ __all__ = [
     "ReserveError",
     "StopLossError",
     "credits_from_payload",
+    "openrouter_credits_fetcher",
 ]
+
+#: The OpenRouter credits endpoint the live fetcher GETs (budget plumbing, not
+#: a paid LLM call).
+OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
 
 #: The reserve (20% of the $93.03 start); below it only reruns run.
 RESERVE_USD = 18.60
@@ -87,6 +93,41 @@ def credits_from_payload(payload: dict[str, Any]) -> CreditsSnapshot:
 
 
 CreditsFetcher = Callable[[], CreditsSnapshot]
+
+
+def openrouter_credits_fetcher(
+    api_key_env: str = "OPENROUTER_API_KEY",
+    *,
+    url: str = OPENROUTER_CREDITS_URL,
+) -> Callable[[], CreditsSnapshot | None]:  # pragma: no cover - live only
+    """Build a live ``GET /api/v1/credits`` fetcher for the CLI live path.
+
+    Reads the OpenRouter key from ``api_key_env`` and returns a zero-arg
+    callable that GETs the credits endpoint and parses it into a
+    :class:`CreditsSnapshot`. Returns ``None`` when the key is absent (so a
+    lane without credentials degrades to no-spend-recording rather than
+    raising). Reading credits is budget plumbing, not a paid LLM call.
+
+    Both the pilot and cell live paths inject this, so round-3 pilots
+    self-report spend exactly as cells do.
+    """
+    import os
+
+    def fetch() -> CreditsSnapshot | None:
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            return None
+        import httpx
+
+        response = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return credits_from_payload(response.json())
+
+    return fetch
 
 
 @dataclass(frozen=True, slots=True)

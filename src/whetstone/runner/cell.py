@@ -32,6 +32,8 @@ from dataclasses import dataclass
 from dr_store import MemoryBackend, ObjectStore
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
+from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import ProposerConfig, ProposerTransport
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
@@ -57,11 +59,17 @@ from whetstone.runner.statistics import (
 )
 
 __all__ = [
+    "DEFAULT_CELL_MAX_WALL_SECONDS",
     "CellBaselineFailure",
     "CellConfig",
     "CellOutcome",
     "run_cell",
 ]
+
+#: The default whole-cell wall deadline (seconds; ``--max-wall-seconds``). On
+#: breach a cell finishes in-flight, persists partials, and records
+#: ``status=halted`` with a halt reason.
+DEFAULT_CELL_MAX_WALL_SECONDS = 3600.0
 
 
 class CellBaselineFailure(RuntimeError):
@@ -103,6 +111,12 @@ class CellConfig:
     split_sizes: tuple[int, int, int] | None = None
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS
     window_notes: str = ""
+    #: Max concurrent provider calls per fan-out phase (halved once on a
+    #: rate-limit failure; ``--concurrency``).
+    concurrency: int = DEFAULT_CONCURRENCY
+    #: Whole-cell wall deadline (seconds). On breach: finish in-flight, persist
+    #: partials, exit with ``status=halted`` and a recorded halt reason.
+    max_wall_seconds: float = DEFAULT_CELL_MAX_WALL_SECONDS
 
 
 @dataclass(slots=True)
@@ -238,6 +252,75 @@ def _spend_between(
     return max(0.0, b - a)
 
 
+def _halted_before_optimize(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    halt_reason: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+) -> CellOutcome:
+    """Record a cell halted by the wall deadline before it could optimize.
+
+    The baseline (and ceiling) were measured; the optimize/best phases never
+    ran, so ``best_official``/``delta`` are ``None`` and the status is
+    ``halted``. The after-spend snapshot is still taken and the partial log is
+    KEPT (not deleted) so a later resume can pick up from the recorded calls.
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            SpendRecord(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                total_credits=(
+                    spend_after.total_credits if spend_after else None
+                ),
+                total_usage=(
+                    spend_after.total_usage if spend_after else None
+                ),
+                remaining_usd=(
+                    spend_after.remaining_usd if spend_after else None
+                ),
+                at=spend_after.at if spend_after else "",
+            )
+        )
+    notes = [f"halted: {halt_reason}"]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats, escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=0, optimizer_steps=0,
+        spend_usd=_spend_between(spend_before, spend_after), wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes, status="halted",
+        artifacts=CellArtifacts(official_record_before=baseline_before_ref),
+    )
+    ledger.append_cell(record)
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"halted before optimize: {halt_reason}",
+    )
+
+
 def run_cell(
     config: CellConfig,
     *,
@@ -245,16 +328,57 @@ def run_cell(
     budget: BudgetGuard | None = None,
     credits_fetcher: CreditsFetcher | None = None,
     store: ObjectStore | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> CellOutcome:
     """Run one full validation cell, appending its ledger + spend lines.
 
     Honors resumability (skip a completed cell), the budget guards (reserve at
-    start, stop-loss mid-cell), and the ceiling-once-per-env cache.
+    start, stop-loss mid-cell), the ceiling-once-per-env cache, and the
+    whole-cell wall deadline (``config.max_wall_seconds``, measured on the
+    injectable ``clock``).
     """
     budget = budget or BudgetGuard()
     backing = store or ObjectStore(MemoryBackend())
     cell_id = f"{config.optimizer}:{config.env}:a{config.attempt}"
     is_openrouter = config.lane == "openrouter"
+
+    # Per-cell incremental persistence: each provider call is appended to this
+    # partial log as it completes, so a crash/interrupt leaves a resumable
+    # record. A resumed cell restores already-recorded (instance, candidate,
+    # repeat) observations instead of re-driving them.
+    partial_log = PartialLog(
+        path=ledger.root / "partials" / f"{cell_id}.partial.jsonl"
+    )
+
+    # --- Whole-cell wall deadline: shared across every fan-out phase. ---
+    cell_start = clock()
+
+    def _fanout() -> FanoutConfig:
+        """A FanoutConfig carrying the REMAINING whole-cell wall budget.
+
+        Computed fresh per phase so the shared deadline decrements as the cell
+        proceeds; once exhausted, dispatch stops (in-flight calls finish) and
+        the phase reports ``deadline_reached``.
+        """
+        remaining = config.max_wall_seconds - (clock() - cell_start)
+        return FanoutConfig(
+            concurrency=config.concurrency,
+            max_wall_seconds=max(0.0, remaining),
+        )
+
+    halt_reason = ""
+    concurrency_halved = False
+
+    def _observe(evaluation: object) -> None:
+        """Fold a split evaluation's fan-out flags into the cell-level halt."""
+        nonlocal halt_reason, concurrency_halved
+        if getattr(evaluation, "concurrency_halved", False):
+            concurrency_halved = True
+        if getattr(evaluation, "deadline_reached", False) and not halt_reason:
+            halt_reason = (
+                f"whole-cell wall deadline {config.max_wall_seconds:.0f}s "
+                "reached; dispatch stopped, in-flight calls finished"
+            )
 
     # --- Resumability: skip a completed (optimizer, env, attempt) cell. ---
     if ledger.is_completed(config.optimizer, config.env, config.attempt):
@@ -299,7 +423,7 @@ def run_cell(
         is_rerun=config.attempt > 0,
     )
 
-    start = time.monotonic()
+    start = clock()
     experiment: EnvExperiment = build_env_experiment(
         config.env,
         model=config.task_model,
@@ -348,7 +472,10 @@ def run_cell(
                 repeats=official_repeats,
                 store=backing,
                 execution_mode=config.execution_mode,
+                fanout=_fanout(),
+                partial_log=partial_log,
             )
+            _observe(baseline)
         except ValueError as exc:
             raise CellBaselineFailure(
                 f"cell {cell_id}: baseline official eval produced no "
@@ -378,13 +505,42 @@ def run_cell(
             repeats=official_repeats,
             store=backing,
             execution_mode=config.execution_mode,
+            fanout=_fanout(),
+            partial_log=partial_log,
         )
+        _observe(ceiling_eval)
         ceiling_official = (
             ceiling_cached
             if ceiling_cached is not None
             else ceiling_eval.score
         )
         ceiling_per_task = ceiling_eval.per_task_scores
+
+    # --- Whole-cell deadline check BEFORE the optimize/best phases. ---
+    # A deadline reached during (or by the end of) the baseline/ceiling phases
+    # must halt HERE: driving a zero-budget optimize phase would dispatch no
+    # calls and produce an uncomputable aggregate (a bare ValueError). We
+    # instead record a halted cell carrying the baseline scores we DID measure
+    # and keep the partials for a resume. best=None (never optimized).
+    deadline_before_optimize = (
+        halt_reason != ""
+        or (clock() - cell_start) >= config.max_wall_seconds
+    )
+    if deadline_before_optimize:
+        if not halt_reason:
+            halt_reason = (
+                f"whole-cell wall deadline {config.max_wall_seconds:.0f}s "
+                "reached before the optimize phase"
+            )
+        return _halted_before_optimize(
+            config=config, cell_id=cell_id, ledger=ledger,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref, halt_reason=halt_reason,
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+        )
 
     # --- 2. Optimize on the internal split (Reward only). ---
     opt = run_optimize(
@@ -398,6 +554,7 @@ def run_cell(
         repeats=config.repeats,
         store=backing,
         execution_mode=config.execution_mode,
+        fanout=_fanout(),
     )
 
     # --- 3. Best-candidate official eval on the SAME official Eval Config. ---
@@ -411,7 +568,10 @@ def run_cell(
         repeats=official_repeats,
         store=backing,
         execution_mode=config.execution_mode,
+        fanout=_fanout(),
+        partial_log=partial_log,
     )
+    _observe(best)
     best_score = best.score
     best_per_task = best.per_task_scores
     best_counts = best.per_task_counts
@@ -461,20 +621,24 @@ def run_cell(
         if not can_escalate:
             escalation_note = f"escalation skipped: {reason}"
         else:
+            # Escalation ADDS repeats (pooled), so it must NOT restore/skip the
+            # already-recorded observations: pass no partial_log here.
             extra_naive = evaluate_split(
                 experiment, candidate=naive, instances=official,
                 split_role="official", transport=config.rollout_transport,
                 execution_policy=config.execution_policy,
                 repeats=official_repeats, store=backing,
-                execution_mode=config.execution_mode,
+                execution_mode=config.execution_mode, fanout=_fanout(),
             )
+            _observe(extra_naive)
             extra_best = evaluate_split(
                 experiment, candidate=opt.best_candidate, instances=official,
                 split_role="official", transport=config.rollout_transport,
                 execution_policy=config.execution_policy,
                 repeats=official_repeats, store=backing,
-                execution_mode=config.execution_mode,
+                execution_mode=config.execution_mode, fanout=_fanout(),
             )
+            _observe(extra_best)
             naive_per_task, naive_counts = _pool_per_task(
                 naive_per_task, naive_counts,
                 extra_naive.per_task_scores, extra_naive.per_task_counts,
@@ -498,7 +662,7 @@ def run_cell(
             status = _status_from(delta, delta_ci)
             escalation_note = "escalated: doubled official repeats and pooled"
 
-    wall_s = time.monotonic() - start
+    wall_s = clock() - start
 
     # --- Spend snapshot AFTER + per-cell spend. ---
     spend_after: CreditsSnapshot | None = None
@@ -523,9 +687,34 @@ def run_cell(
         )
     spend_usd = _spend_between(spend_before, spend_after)
 
+    # --- Whole-cell wall deadline overrides the statistical status. ---
+    # A phase that hit the deadline (or a total elapsed over the budget) halts
+    # the cell: in-flight calls have finished and their partials persisted; the
+    # record notes the halt reason.
+    elapsed = clock() - cell_start
+    if not halt_reason and elapsed >= config.max_wall_seconds:
+        halt_reason = (
+            f"whole-cell wall deadline {config.max_wall_seconds:.0f}s reached "
+            f"(elapsed {elapsed:.0f}s)"
+        )
+
     # Stop-loss overrides the statistical status.
     if budget.would_halt(spend_usd):
         status = "halted"
+    if halt_reason:
+        status = "halted"
+
+    # Fold the halt reason + any rate-limit concurrency halving into the note.
+    notes: list[str] = []
+    if escalation_note:
+        notes.append(escalation_note)
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    if halt_reason:
+        notes.append(f"halted: {halt_reason}")
+    combined_note = "; ".join(notes)
 
     record = CellRecord(
         cell_id=cell_id,
@@ -551,7 +740,7 @@ def run_cell(
         no_demonstrable_headroom=no_headroom,
         official_repeats_used=official_repeats,
         escalated=escalated,
-        escalation_note=escalation_note,
+        escalation_note=combined_note,
         pooled_observation_counts=pooled_counts,
         internal_evals_count=opt.internal_evals_count,
         optimizer_steps=opt.optimizer_steps,
@@ -567,6 +756,11 @@ def run_cell(
         ),
     )
     ledger.append_cell(record)
+    # A cleanly-completed (non-halted) cell has its authoritative result in the
+    # ledger, so the per-call partial log is no longer needed -- drop it. A
+    # halted cell KEEPS its partial so a resume can pick up the recorded calls.
+    if status != "halted":
+        partial_log.delete()
     # The Eval row establishes the per-env official cache (naive + ceiling
     # scalars AND per-task vectors) so later optimizer cells reuse it.
     if is_eval_row and cache is None:

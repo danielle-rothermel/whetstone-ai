@@ -22,6 +22,7 @@ planned internal matrix (no row dropped).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from dr_code.eval import (
@@ -55,8 +56,20 @@ from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec, env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
 from whetstone.envs.rollout_definition import render_prompt
 from whetstone.envs.task import EnvTask
+from whetstone.execution.call_support import (
+    guard_deadline_seconds,
+    is_rate_limit_failure,
+)
+from whetstone.execution.fanout import (
+    RUNNER_TIMEOUT_CODE,
+    CallSpec,
+    FanoutConfig,
+    run_call_pool,
+)
+from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import Candidate
+from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import TransportCall, run_provider_call
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -75,12 +88,20 @@ class InternalEvalResult:
     the mean so every task yields a comparable number. It exists so a paired
     bootstrap CI can consume these scores with zero additional provider calls;
     no second drive of the split is ever needed.
+
+    ``concurrency_halved`` records whether a rate-limit failure halved the
+    shared effective concurrency during this pass; ``deadline_reached`` records
+    whether the whole-phase wall deadline stopped dispatch (leaving some units
+    un-driven, counted as missing rows).
     """
 
     aggregate: RolloutAggregate
     reward: Reward
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
+    concurrency_halved: bool = False
+    deadline_reached: bool = False
+    guard_timeouts: int = 0
 
 
 def _per_task_score(task: TaskRows) -> float:
@@ -130,6 +151,23 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _RowOutcome:
+    """One repeat's result plus its terminal Provider Call Result.
+
+    ``row`` is the aggregate contribution; ``result`` is the terminal call
+    Result (``None`` when this observation was RESTORED from a partial log, not
+    re-driven -- a resumed cell never re-calls a recorded observation).
+    ``score`` is the reconstructed 0/1 (``None`` on a failed row), used to
+    append the partial record.
+    """
+
+    row: RowValue
+    result: ProviderCallResult | None
+    score: float | None
+    failure_code: str = ""
+
+
 def _generation_row(
     env: EnvSpec,
     *,
@@ -140,8 +178,10 @@ def _generation_row(
     transport: TransportCall,
     procedure_config_hash: str,
     logical_call_id: str,
-) -> RowValue:
+) -> _RowOutcome:
     """Run one repeat: render, call the transport, score via the env oracle."""
+    from whetstone.execution.call_support import failure_code_of
+
     prompt = render_prompt(env, candidate, instance)
     result = run_provider_call(
         request=_request(provider_call_config, prompt),
@@ -150,14 +190,23 @@ def _generation_row(
         logical_call_id=logical_call_id,
     )
     if not result.succeeded or result.generation is None:
-        return RowValue(failed=True)
+        return _RowOutcome(
+            row=RowValue(failed=True),
+            result=result,
+            score=None,
+            failure_code=failure_code_of(result),
+        )
     score = env_exact_match_score(
         env=env,
         generation=result.generation.text,
         gold=instance.gold,
         evaluation_procedure_config_hash=procedure_config_hash,
     )
-    return RowValue(value=float(score.value))
+    return _RowOutcome(
+        row=RowValue(value=float(score.value)),
+        result=result,
+        score=float(score.value),
+    )
 
 
 def _env_exact_match_aggregate(
@@ -223,6 +272,9 @@ def run_internal_eval(
     transport: TransportCall,
     repeats: int = DEFAULT_REPEATS,
     policy: RowPolicy = RowPolicy.PROPAGATE,
+    fanout: FanoutConfig | None = None,
+    partial_log: PartialLog | None = None,
+    partial_phase: str = "cell",
 ) -> InternalEvalResult:
     """Evaluate ``candidate`` over ``instances`` (the internal split).
 
@@ -230,8 +282,16 @@ def run_internal_eval(
     injected transport; each accepted Generation is scored 0/1 by the env
     oracle. The per-task means reduce to a single internal ``env_exact_match``
     Rollout Aggregate, and the Reward Policy maps that aggregate's value to an
-    internal-role Reward. No live paid call is made: the transport is
-    injected.
+    internal-role Reward. No live paid call is made: the transport is injected.
+
+    The observations fan out through a bounded worker pool (``fanout``): at
+    most ``concurrency`` calls run at once, each under a runner-level
+    wall-clock guard, and the RECORDED per-task rows are assembled by their
+    ``(candidate, instance, repeat)`` key in instance/repeat order -- so the
+    aggregate is byte-identical regardless of completion order. When a
+    ``partial_log`` is given, each completed call is appended as it finishes
+    and any already-recorded ``(instance, candidate, repeat)`` observation is
+    RESTORED from disk instead of re-driven (cell resume).
     """
     env = env_spec(experiment.env_name)
     rd = experiment.rollout_definition
@@ -242,28 +302,102 @@ def run_internal_eval(
     # helper stamps a stable internal id derived from the internal Eval Config
     # identity onto the aggregate provenance.
     evaluation_context_id = eval_config_hash
+    fanout = fanout or FanoutConfig()
+    unit = candidate.candidate_id
 
-    task_rows: list[TaskRows] = []
-    for instance in instances:
-        task = EnvTask.from_instance(env.name, instance)
-        rows = tuple(
-            _generation_row(
-                env,
-                candidate=candidate,
-                instance=instance,
-                provider_call_config=rd.provider_call_config,
-                execution_policy=execution_policy,
-                transport=transport,
-                procedure_config_hash=procedure_hash,
-                logical_call_id=f"{task.task_identity()}#{index}",
+    recorded = _restore_recorded(
+        partial_log, partial_phase, unit, env, procedure_hash
+    )
+
+    # Build one keyed CallSpec per (instance, repeat) NOT already on disk.
+    tasks = [
+        (instance, EnvTask.from_instance(env.name, instance))
+        for instance in instances
+    ]
+    specs: list[CallSpec[tuple[str, str, int], _RowOutcome]] = []
+    for instance, task in tasks:
+        for index in range(repeats):
+            key = (unit, str(instance.id), index)
+            if key in recorded:
+                continue
+            specs.append(
+                CallSpec(
+                    key=key,
+                    run=_row_thunk(
+                        env,
+                        candidate=candidate,
+                        instance=instance,
+                        provider_call_config=rd.provider_call_config,
+                        execution_policy=execution_policy,
+                        transport=transport,
+                        procedure_config_hash=procedure_hash,
+                        logical_call_id=f"{task.task_identity()}#{index}",
+                        # The thunk persists its OWN partial record the instant
+                        # the call completes, so a crash mid-drive keeps every
+                        # already-finished call durably on disk (incremental
+                        # persistence, not a post-hoc batch).
+                        partial_log=partial_log,
+                        partial_phase=partial_phase,
+                        partial_instance_id=str(instance.id),
+                        partial_unit=unit,
+                        repeat_id=index,
+                    ),
+                    deadline_seconds=guard_deadline_seconds(execution_policy),
+                )
             )
-            for index in range(repeats)
-        )
+
+    outcome = run_call_pool(
+        specs,
+        concurrency=fanout.concurrency,
+        is_rate_limited=_row_is_rate_limited,
+        max_wall_seconds=fanout.max_wall_seconds,
+    )
+
+    driven: dict[tuple[str, str, int], _RowOutcome] = {}
+    for res in outcome.results:
+        if res.timed_out:
+            driven[res.key] = _RowOutcome(
+                row=RowValue(failed=True),
+                result=None,
+                score=None,
+                failure_code=RUNNER_TIMEOUT_CODE,
+            )
+            # A guard timeout is a real (failed) observation: record it so a
+            # resume does not re-drive the call that already blew the deadline.
+            if partial_log is not None:
+                _u, instance_id, index = res.key
+                partial_log.append(
+                    PartialCallRecord(
+                        phase=partial_phase, instance_id=instance_id,
+                        unit=unit, repeat_id=index, score=None,
+                        failed=True, failure_code=RUNNER_TIMEOUT_CODE,
+                    )
+                )
+        elif res.not_dispatched:
+            # The whole-phase deadline stopped dispatch before this call: the
+            # planned row is absent (missing), never a fabricated failure, and
+            # nothing is recorded (a resume re-drives it).
+            driven[res.key] = _RowOutcome(
+                row=RowValue(missing=True), result=None, score=None
+            )
+        elif res.value is not None:
+            driven[res.key] = res.value
+
+    # Assemble per-task rows in instance/repeat order (restored + driven).
+    task_rows: list[TaskRows] = []
+    for instance, task in tasks:
+        rows: list[RowValue] = []
+        for index in range(repeats):
+            key = (unit, str(instance.id), index)
+            if key in recorded:
+                rows.append(recorded[key])
+            else:
+                rows.append(driven[key].row)
         task_rows.append(
             TaskRows(
                 task_identity=task.task_identity(),
                 expected_repeats=repeats,
-                rows=rows,
+                rows=tuple(rows),
             )
         )
 
@@ -286,7 +420,96 @@ def run_internal_eval(
         reward=reward,
         per_task_scores=per_task_scores,
         per_task_counts=per_task_counts,
+        concurrency_halved=outcome.concurrency_halved,
+        deadline_reached=outcome.deadline_reached,
+        guard_timeouts=outcome.guard_timeouts,
     )
+
+
+def _row_thunk(
+    env: EnvSpec,
+    *,
+    candidate: Candidate,
+    instance: Instance,
+    provider_call_config: ProviderCallConfig,
+    execution_policy: ProviderExecutionPolicy,
+    transport: TransportCall,
+    procedure_config_hash: str,
+    logical_call_id: str,
+    partial_log: PartialLog | None,
+    partial_phase: str,
+    partial_instance_id: str,
+    partial_unit: str,
+    repeat_id: int,
+) -> Callable[[], _RowOutcome]:
+    """A zero-arg thunk running one repeat (the fan-out unit of work).
+
+    On completion it appends its own :class:`PartialCallRecord` to the partial
+    log (when one is given) BEFORE returning, so the observation is durable the
+    instant the call finishes -- a crash between here and the phase's assembly
+    keeps it.
+    """
+
+    def _run() -> _RowOutcome:
+        outcome = _generation_row(
+            env,
+            candidate=candidate,
+            instance=instance,
+            provider_call_config=provider_call_config,
+            execution_policy=execution_policy,
+            transport=transport,
+            procedure_config_hash=procedure_config_hash,
+            logical_call_id=logical_call_id,
+        )
+        if partial_log is not None:
+            partial_log.append(
+                PartialCallRecord(
+                    phase=partial_phase,
+                    instance_id=partial_instance_id,
+                    unit=partial_unit,
+                    repeat_id=repeat_id,
+                    score=outcome.score,
+                    failed=outcome.row.failed,
+                    failure_code=outcome.failure_code,
+                )
+            )
+        return outcome
+
+    return _run
+
+
+def _row_is_rate_limited(outcome: _RowOutcome) -> bool:
+    """Whether a driven row's terminal Result is a rate-limit failure."""
+    return outcome.result is not None and is_rate_limit_failure(
+        outcome.result
+    )
+
+
+def _restore_recorded(
+    partial_log: PartialLog | None,
+    phase: str,
+    unit: str,
+    env: EnvSpec,
+    procedure_hash: str,
+) -> dict[tuple[str, str, int], RowValue]:
+    """Rebuild RowValues for observations already on disk (resume skip).
+
+    A recorded failed observation restores a failed row; a recorded score
+    restores a value row. Only records for THIS phase+unit are restored, keyed
+    ``(unit, instance_id, repeat)`` to match the driven-call keys.
+    """
+    if partial_log is None:
+        return {}
+    restored: dict[tuple[str, str, int], RowValue] = {}
+    for record in partial_log.load():
+        if record.phase != phase or record.unit != unit:
+            continue
+        key = (unit, record.instance_id, record.repeat_id)
+        if record.failed or record.score is None:
+            restored[key] = RowValue(failed=True)
+        else:
+            restored[key] = RowValue(value=float(record.score))
+    return restored
 
 
 __all__ = [

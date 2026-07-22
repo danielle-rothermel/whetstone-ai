@@ -164,8 +164,9 @@ def test_pilot_all_calls_failed_zero_success_rate() -> None:
 
 def test_pilot_uses_committed_per_env_token_estimates() -> None:
     # --spec-estimate-tokens defaults to None; the pilot falls back to the
-    # env's committed per-probe estimates (c11: naive 350 / ceiling 800) so the
-    # token-sanity check runs without a flag, recorded separately per probe.
+    # env's per-probe estimates so the token-sanity check runs without a flag,
+    # recorded separately per probe. c11 is LIVE-MEASURED (naive 656 /
+    # ceiling 907) after the round-2 robustness upgrade.
     env = "c11"
     exp = tiny_experiment(env)
     report = run_pilot(
@@ -179,10 +180,77 @@ def test_pilot_uses_committed_per_env_token_estimates() -> None:
         split_sizes=SPLIT,
         spec_estimate_tokens=None,
     )
-    expected = TokenEstimate(naive=350, ceiling=800)
+    expected = TokenEstimate(
+        naive=656, ceiling=907, estimate_source="live-measured"
+    )
     assert env_spec(env).token_estimate == expected
-    assert report.naive.spec_estimate_tokens == 350
-    assert report.ceiling.spec_estimate_tokens == 800
+    assert report.naive.spec_estimate_tokens == 656
+    assert report.ceiling.spec_estimate_tokens == 907
+    assert report.naive.estimate_source == "live-measured"
+
+
+def test_pilot_resume_skips_recorded_calls(tmp_path: Path) -> None:
+    # A pilot with a partial log that already records some calls must NOT
+    # re-drive them: a counting transport proves the recorded (instance, probe,
+    # repeat) observations are restored from disk, not re-called.
+    from whetstone.execution.partials import PartialCallRecord, PartialLog
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    partial_log = PartialLog(path=tmp_path / "c11.partial.jsonl")
+
+    # Pre-seed the partial log with the naive probe's first instance/repeat.
+    first_instance = exp.eval_configs.internal.instances[0]
+    partial_log.append(
+        PartialCallRecord(
+            phase="pilot", instance_id=str(first_instance.id), unit="naive",
+            repeat_id=0, score=1.0, total_tokens=100,
+        )
+    )
+
+    class _Counter(FakeTransport):
+        physical: int = 0
+
+        def __call__(self, request):  # type: ignore[override]
+            _Counter.physical += 1
+            return super().__call__(request)
+
+    _Counter.physical = 0
+    transport = _Counter(reply=correct_reply(exp))
+    report = run_pilot(
+        env=env, lane="openrouter", model=TASK_MODEL, transport=transport,
+        execution_policy=runner_execution_policy(), instance_count=2,
+        pool_n_per_stratum=_pool_n(env), split_sizes=SPLIT,
+        partial_log=partial_log,
+    )
+    # 2 instances x 2 probes x 3 repeats = 12 planned; 1 was pre-recorded, so
+    # exactly 11 physical calls are made on this run.
+    assert _Counter.physical == 11
+    # The report still covers all 12 spot-records (restored + driven).
+    assert len(report.calls) == 12
+
+
+def test_pilot_records_spend_via_credits_fetcher() -> None:
+    # Round-3 fix: the pilot self-reports spend when a credits fetcher is
+    # injected (the gap the cell path already closed). before/after snapshots.
+    env = "c11"
+    exp = tiny_experiment(env)
+    snapshots = [
+        CreditsSnapshot(total_credits=710.0, total_usage=616.0),
+        CreditsSnapshot(total_credits=710.0, total_usage=616.4),
+    ]
+
+    def _fetch() -> CreditsSnapshot:
+        return snapshots.pop(0)
+
+    report = run_pilot(
+        env=env, lane="openrouter", model=TASK_MODEL,
+        transport=FakeTransport(reply=correct_reply(exp)),
+        execution_policy=runner_execution_policy(), instance_count=2,
+        pool_n_per_stratum=_pool_n(env), split_sizes=SPLIT,
+        credits_fetcher=_fetch,
+    )
+    assert report.spend_usd == pytest.approx(0.4)
 
 
 def test_pilot_cli_flag_overrides_committed_estimate() -> None:

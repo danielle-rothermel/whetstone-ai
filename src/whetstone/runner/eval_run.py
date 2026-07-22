@@ -28,6 +28,8 @@ from whetstone_envs.core import Instance
 from whetstone.code_eval.aggregate import RolloutAggregate, RowPolicy
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import run_internal_eval
+from whetstone.execution.fanout import FanoutConfig
+from whetstone.execution.partials import PartialLog
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
 from whetstone.optimization.schema import Candidate
 from whetstone.provider.driver import TransportCall
@@ -73,6 +75,13 @@ class SplitEvaluation:
     repeat_count: int
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
+    #: Whether a rate-limit failure halved the shared effective concurrency.
+    concurrency_halved: bool = False
+    #: Whether the whole-phase wall deadline stopped dispatch (some units
+    #: un-driven -> counted as missing rows).
+    deadline_reached: bool = False
+    #: Count of runner-level guard timeouts (belt-and-suspenders breaches).
+    guard_timeouts: int = 0
 
     @property
     def is_complete(self) -> bool:
@@ -101,6 +110,8 @@ def evaluate_split(
     store: ObjectStore | None = None,
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
     policy: RowPolicy = RowPolicy.PROPAGATE,
+    fanout: FanoutConfig | None = None,
+    partial_log: PartialLog | None = None,
 ) -> SplitEvaluation:
     """Evaluate ``candidate`` over ``instances`` and persist the aggregate.
 
@@ -109,6 +120,11 @@ def evaluate_split(
     one ``env_exact_match`` Rollout Aggregate, then ``put``\\s that aggregate's
     content into the Result Store so the artifact is identical whether the
     caller ran in-process or under the DBOS orchestration path.
+
+    The observations fan out through the bounded worker pool (``fanout``,
+    default 5-way); a ``partial_log`` makes the drive resumable (an
+    already-recorded ``(instance, candidate, repeat)`` observation is restored,
+    and each new call is appended as it completes).
     """
     result = run_internal_eval(
         experiment,
@@ -118,6 +134,9 @@ def evaluate_split(
         transport=transport,
         repeats=repeats,
         policy=policy,
+        fanout=fanout,
+        partial_log=partial_log,
+        partial_phase="cell",
     )
     aggregate = result.aggregate
     backing = store or ObjectStore(MemoryBackend())
@@ -150,4 +169,7 @@ def evaluate_split(
         repeat_count=aggregate.repeat_count,
         per_task_scores=result.per_task_scores,
         per_task_counts=result.per_task_counts,
+        concurrency_halved=result.concurrency_halved,
+        deadline_reached=result.deadline_reached,
+        guard_timeouts=result.guard_timeouts,
     )

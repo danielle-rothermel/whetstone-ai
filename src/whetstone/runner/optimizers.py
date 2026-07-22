@@ -36,6 +36,7 @@ from dr_store import MemoryBackend, ObjectStore
 from whetstone_envs.core import Instance
 
 from whetstone.envs.factory import EnvExperiment
+from whetstone.execution.fanout import FanoutConfig
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
     ProposalRequest,
@@ -245,6 +246,7 @@ def run_optimize(
     repeats: int,
     store: ObjectStore | None = None,
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
+    fanout: FanoutConfig | None = None,
 ) -> OptimizeResult:
     """Run the optimizer on the internal split; return the best candidate.
 
@@ -277,6 +279,7 @@ def run_optimize(
         repeats=repeats,
         store=backing,
         execution_mode=execution_mode,
+        fanout=fanout,
     )
     best_candidate = naive
     best_score = baseline_eval.score
@@ -318,6 +321,7 @@ def run_optimize(
                 repeats=repeats,
                 store=backing,
                 execution_mode=execution_mode,
+                fanout=fanout,
             )
             steps.append(
                 ProposalStep(
