@@ -80,6 +80,7 @@ class InternalEvalResult:
     aggregate: RolloutAggregate
     reward: Reward
     per_task_scores: tuple[float, ...]
+    per_task_counts: tuple[int, ...]
 
 
 def _per_task_score(task: TaskRows) -> float:
@@ -89,6 +90,16 @@ def _per_task_score(task: TaskRows) -> float:
         return 0.0
     total = sum(row.value if row.is_present else 0.0 for row in completed)
     return total / len(completed)
+
+
+def _per_task_count(task: TaskRows) -> int:
+    """Count of completed (scored) repeats behind this task's mean.
+
+    This is the observation weight the paired/pooled bootstrap needs to combine
+    a task's mean with additional-repeat means exactly (a weighted mean by
+    counts), so escalation pools new observations rather than discarding them.
+    """
+    return len(task.completed_rows())
 
 
 def _mean_aggregation_config(policy: RowPolicy) -> AggregationConfig:
@@ -269,10 +280,12 @@ def run_internal_eval(
         env_exact_match_value=rollout_aggregate.aggregation_output.value,
     )
     per_task_scores = tuple(_per_task_score(task) for task in task_rows)
+    per_task_counts = tuple(_per_task_count(task) for task in task_rows)
     return InternalEvalResult(
         aggregate=rollout_aggregate,
         reward=reward,
         per_task_scores=per_task_scores,
+        per_task_counts=per_task_counts,
     )
 
 

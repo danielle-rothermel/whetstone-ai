@@ -72,6 +72,7 @@ class SplitEvaluation:
     task_count: int
     repeat_count: int
     per_task_scores: tuple[float, ...]
+    per_task_counts: tuple[int, ...]
 
     @property
     def is_complete(self) -> bool:
@@ -148,4 +149,5 @@ def evaluate_split(
         task_count=aggregate.task_count,
         repeat_count=aggregate.repeat_count,
         per_task_scores=result.per_task_scores,
+        per_task_counts=result.per_task_counts,
     )

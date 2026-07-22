@@ -39,6 +39,13 @@ def test_dry_cell_eval_exact_match_env_baseline_equals_best(
     assert r.spend_usd == pytest.approx(0.0)
     # The ledger line landed on disk.
     assert len(Ledger(root=tmp_path).load()) == 1
+    # Eval row establishes the headroom gate: naive == ceiling == 1.0 in the
+    # exact-match dry script -> no demonstrable headroom (CI includes 0).
+    assert r.headroom_delta == pytest.approx(0.0)
+    assert r.no_demonstrable_headroom is True
+    assert r.official_repeats_used == 5
+    # The per-env official cache was written for reuse by later cells.
+    assert Ledger(root=tmp_path).env_cache_for("c11") is not None
 
 
 def test_dry_cell_copro_exact_match_env_improves(tmp_path: Path) -> None:
@@ -56,6 +63,18 @@ def test_dry_cell_copro_exact_match_env_improves(tmp_path: Path) -> None:
     assert r.ci95 is not None
     assert r.internal_evals_count >= 1
     assert r.optimizer_steps >= 1
+    # The statistical-confidence fields land end-to-end via the dry-run seam.
+    assert r.delta_ci95 == r.ci95
+    assert r.naive_ci95 is not None
+    assert r.ceiling_ci95 is not None
+    assert r.headroom_delta is not None
+    assert r.headroom_ci95 is not None
+    # copro is not the Eval row, so the headroom gate flag stays unset.
+    assert r.no_demonstrable_headroom is None
+    assert r.official_repeats_used == 5
+    assert r.escalated is False
+    assert r.pooled_observation_counts["naive"] > 0
+    assert r.pooled_observation_counts["best"] > 0
 
 
 def test_dry_cell_runs_every_env_without_crashing(tmp_path: Path) -> None:

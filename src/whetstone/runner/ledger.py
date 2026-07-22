@@ -27,14 +27,23 @@ __all__ = [
     "CellArtifacts",
     "CellModels",
     "CellRecord",
+    "EnvOfficialCache",
     "Ledger",
     "SpendRecord",
     "cell_key",
 ]
 
 #: The closed set of cell statuses from the validation-plan schema.
+#: ``inconclusive`` was added by the statistical-confidence upgrade: a positive
+#: delta whose paired CI still spans 0 is inconclusive (not ``improved``).
 CELL_STATUSES: frozenset[str] = frozenset(
-    {"improved", "no-improvement", "plumbing-retry", "halted"}
+    {
+        "improved",
+        "inconclusive",
+        "no-improvement",
+        "plumbing-retry",
+        "halted",
+    }
 )
 
 
@@ -58,13 +67,24 @@ class CellArtifacts(BaseModel):
 
 
 class CellRecord(BaseModel):
-    """One ``cells.jsonl`` line -- the EXACT validation-plan schema.
+    """One ``cells.jsonl`` line -- the validation-plan schema + stats upgrade.
 
-    Fields mirror ``reports/validation-plan.md`` "cells.jsonl schema" verbatim:
+    Base fields mirror ``reports/validation-plan.md`` "cells.jsonl schema":
     ``{cell_id, optimizer, env, attempt, canonical, models, baseline_official,
     ceiling_official, best_official, delta, ci95, internal_evals_count,
     optimizer_steps, spend_usd, wall_s, lane, window_notes, status,
     artifacts}``.
+
+    The "Statistical confidence" directive adds the bootstrap outputs:
+    ``naive_ci95`` / ``ceiling_ci95`` (marginal task-bootstrap CIs),
+    ``delta_ci95`` (paired best-naive, the interval behind the sharpened
+    status), ``headroom_delta`` / ``headroom_ci95`` (paired ceiling-naive; the
+    Eval-row headroom gate), ``official_repeats_used`` (repeats behind the
+    official evals, raised on escalation), ``escalated`` (whether an
+    inconclusive cell auto-doubled its repeats), and
+    ``pooled_observation_counts`` (per-arm total 0/1 observations behind the
+    reported per-task means, pre + post escalation pooled). ``ci95`` is kept as
+    a back-compatible mirror of ``delta_ci95``.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -80,6 +100,16 @@ class CellRecord(BaseModel):
     best_official: float | None
     delta: float | None
     ci95: tuple[float, float] | None
+    naive_ci95: tuple[float, float] | None = None
+    ceiling_ci95: tuple[float, float] | None = None
+    delta_ci95: tuple[float, float] | None = None
+    headroom_delta: float | None = None
+    headroom_ci95: tuple[float, float] | None = None
+    no_demonstrable_headroom: bool | None = None
+    official_repeats_used: int = 0
+    escalated: bool = False
+    escalation_note: StrictStr = ""
+    pooled_observation_counts: dict[str, int] = Field(default_factory=dict)
     internal_evals_count: int
     optimizer_steps: int
     spend_usd: float
@@ -96,8 +126,11 @@ class CellRecord(BaseModel):
                 f"status must be one of {sorted(CELL_STATUSES)}; "
                 f"got {self.status!r}"
             )
-        if self.ci95 is not None and len(self.ci95) != 2:
-            raise ValueError("ci95 must be a (low, high) pair or null")
+        for name in ("ci95", "naive_ci95", "ceiling_ci95", "delta_ci95",
+                     "headroom_ci95"):
+            value = getattr(self, name)
+            if value is not None and len(value) != 2:
+                raise ValueError(f"{name} must be a (low, high) pair or null")
         return self
 
     def key(self) -> tuple[str, str, int]:
@@ -105,7 +138,37 @@ class CellRecord(BaseModel):
 
     def is_completed(self) -> bool:
         """A completed cell is any non-retry terminal status."""
-        return self.status in {"improved", "no-improvement", "halted"}
+        return self.status in {
+            "improved",
+            "inconclusive",
+            "no-improvement",
+            "halted",
+        }
+
+    def to_line(self) -> str:
+        return json.dumps(self.model_dump(mode="json"), sort_keys=True)
+
+
+class EnvOfficialCache(BaseModel):
+    """The per-env Eval-row official cache: naive/ceiling scores + vectors.
+
+    WF5A cached the ceiling scalar so later optimizer cells reuse it instead of
+    re-driving the ceiling probe. The statistical-confidence upgrade extends
+    that caching to the per-task score VECTORS (aligned in official-instance
+    order) for both the naive and ceiling arms, so a later optimizer cell can
+    compute the paired ``best - naive`` delta CI (and reuse the marginal naive
+    CI) WITHOUT re-driving the naive baseline. Established once per env by the
+    Eval-row (``optimizer=eval``) cell.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    env: StrictStr
+    naive_official: float | None
+    ceiling_official: float | None
+    naive_per_task: tuple[float, ...]
+    ceiling_per_task: tuple[float, ...]
+    official_repeats_used: int
 
     def to_line(self) -> str:
         return json.dumps(self.model_dump(mode="json"), sort_keys=True)
@@ -153,6 +216,10 @@ class Ledger:
     @property
     def spend_path(self) -> Path:
         return self.root / "spend.jsonl"
+
+    @property
+    def env_cache_path(self) -> Path:
+        return self.root / "env_official_cache.jsonl"
 
     def load(self) -> list[CellRecord]:
         """Parse the existing ``cells.jsonl`` (validating every line)."""
@@ -203,6 +270,31 @@ class Ledger:
             if c.env == env and c.ceiling_official is not None:
                 return c.ceiling_official
         return None
+
+    def env_cache_for(self, env: str) -> EnvOfficialCache | None:
+        """The cached Eval-row official scores + per-task vectors for an env.
+
+        Returns the most recent cache line for ``env`` (the Eval row writes it
+        once). ``None`` when no Eval row has run for the env yet -- the caller
+        then drives the naive/ceiling arms itself and caches them.
+        """
+        if not self.env_cache_path.exists():
+            return None
+        latest: EnvOfficialCache | None = None
+        for raw in self.env_cache_path.read_text().splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            record = EnvOfficialCache.model_validate_json(line)
+            if record.env == env:
+                latest = record
+        return latest
+
+    def append_env_cache(self, record: EnvOfficialCache) -> None:
+        """Append one per-env official cache line (Eval row establishes it)."""
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.env_cache_path.open("a") as handle:
+            handle.write(record.to_line() + "\n")
 
     def append_cell(self, record: CellRecord) -> None:
         """Append one validated cell line (creating the ledger if needed)."""

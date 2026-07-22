@@ -79,7 +79,9 @@ def test_official_split_driven_once_per_candidate(tmp_path: Path) -> None:
     )
 
     official = official_instances(exp)
-    repeats = cfg.repeats
+    # Official evals use the official-repeats knob (raised 3 -> 5 default by
+    # the statistical-confidence upgrade), not the internal ``repeats``.
+    repeats = cfg.official_repeats
     naive = initial_candidate(env)
     winner = _winner_candidate(env, WIN)
 

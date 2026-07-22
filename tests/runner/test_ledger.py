@@ -56,6 +56,10 @@ def test_cell_record_exact_schema_fields() -> None:
         "baseline_official", "ceiling_official", "best_official", "delta",
         "ci95", "internal_evals_count", "optimizer_steps", "spend_usd",
         "wall_s", "lane", "window_notes", "status", "artifacts",
+        # Statistical-confidence upgrade fields.
+        "naive_ci95", "ceiling_ci95", "delta_ci95", "headroom_delta",
+        "headroom_ci95", "no_demonstrable_headroom", "official_repeats_used",
+        "escalated", "escalation_note", "pooled_observation_counts",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
@@ -71,8 +75,18 @@ def test_invalid_status_rejected() -> None:
 
 
 def test_all_plan_statuses_accepted() -> None:
-    for status in ("improved", "no-improvement", "plumbing-retry", "halted"):
+    for status in (
+        "improved", "inconclusive", "no-improvement", "plumbing-retry",
+        "halted",
+    ):
         assert _record(status=status).status == status
+
+
+def test_inconclusive_counts_as_completed(tmp_path: Path) -> None:
+    ledger = Ledger(root=tmp_path)
+    ledger.append_cell(_record(status="inconclusive"))
+    # An inconclusive cell is terminal (resolved), so it skips on resume.
+    assert ledger.is_completed("copro", "c11", 0)
 
 
 def test_null_delta_and_ci_allowed() -> None:
@@ -87,6 +101,29 @@ def test_round_trip_through_jsonl_line() -> None:
     line = record.to_line()
     restored = CellRecord.model_validate_json(line)
     assert restored == record
+
+
+def test_round_trip_preserves_stats_upgrade_fields() -> None:
+    record = _record(
+        status="inconclusive",
+        naive_ci95=(0.1, 0.4),
+        ceiling_ci95=(0.7, 1.0),
+        delta_ci95=(-0.05, 0.35),
+        headroom_delta=0.6,
+        headroom_ci95=(0.3, 0.9),
+        no_demonstrable_headroom=False,
+        official_repeats_used=10,
+        escalated=True,
+        escalation_note="escalated: doubled official repeats and pooled",
+        pooled_observation_counts={"naive": 60, "best": 60},
+    )
+    restored = CellRecord.model_validate_json(record.to_line())
+    assert restored == record
+    assert restored.delta_ci95 == (-0.05, 0.35)
+    assert restored.headroom_ci95 == (0.3, 0.9)
+    assert restored.escalated is True
+    assert restored.official_repeats_used == 10
+    assert restored.pooled_observation_counts == {"naive": 60, "best": 60}
 
 
 def test_ledger_append_and_completed_keys(tmp_path: Path) -> None:

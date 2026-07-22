@@ -244,7 +244,13 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
     sys.stdout.write(
         f"dry-run-fake cell {r.cell_id} mode={r.window_notes} {note} "
         f"baseline={r.baseline_official} best={r.best_official} "
-        f"delta={r.delta} ci95={r.ci95} spend=${r.spend_usd:.4f}\n"
+        f"delta={r.delta} delta_ci95={r.delta_ci95} "
+        f"naive_ci95={r.naive_ci95} ceiling_ci95={r.ceiling_ci95} "
+        f"headroom_delta={r.headroom_delta} headroom_ci95={r.headroom_ci95} "
+        f"no_headroom={r.no_demonstrable_headroom} "
+        f"official_repeats_used={r.official_repeats_used} "
+        f"escalated={r.escalated} "
+        f"pooled={r.pooled_observation_counts} spend=${r.spend_usd:.4f}\n"
     )
     return 0
 
@@ -299,7 +305,10 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
     note = "skipped" if outcome.skipped else r.status
     sys.stdout.write(
         f"cell {r.cell_id} mode={config.execution_mode.value} {note} "
-        f"delta={r.delta} ci95={r.ci95} spend=${r.spend_usd:.4f}\n"
+        f"delta={r.delta} delta_ci95={r.delta_ci95} "
+        f"headroom_delta={r.headroom_delta} headroom_ci95={r.headroom_ci95} "
+        f"official_repeats_used={r.official_repeats_used} "
+        f"escalated={r.escalated} spend=${r.spend_usd:.4f}\n"
     )
     return 0
 

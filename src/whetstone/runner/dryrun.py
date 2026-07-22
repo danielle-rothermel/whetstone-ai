@@ -258,6 +258,7 @@ def run_dry_cell(
             max_attempts=1,
         ),
         repeats=3,
+        official_repeats=5,
         pool_n_per_stratum=pool_n,
         split_sizes=(2, 2, 2),
         execution_mode=execution_mode,
