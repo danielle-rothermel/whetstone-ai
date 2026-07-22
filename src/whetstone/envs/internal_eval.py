@@ -68,10 +68,27 @@ class InternalEvalResult:
     Carries the provenance-bearing internal ``env_exact_match`` Rollout
     Aggregate and the Reward the Reward Policy maps it to. Both are internal
     role by construction (the Reward refuses any official evidence).
+
+    ``per_task_scores`` is the aligned per-task mean 0/1 oracle score (one
+    entry per instance, in instance order) computed from the SAME driven rows
+    that produced ``aggregate`` -- a failed or missing row contributes 0 to
+    the mean so every task yields a comparable number. It exists so a paired
+    bootstrap CI can consume these scores with zero additional provider calls;
+    no second drive of the split is ever needed.
     """
 
     aggregate: RolloutAggregate
     reward: Reward
+    per_task_scores: tuple[float, ...]
+
+
+def _per_task_score(task: TaskRows) -> float:
+    """Mean 0/1 score over a task's planned repeats (absent rows count 0)."""
+    completed = task.completed_rows()
+    if not completed:
+        return 0.0
+    total = sum(row.value if row.is_present else 0.0 for row in completed)
+    return total / len(completed)
 
 
 def _mean_aggregation_config(policy: RowPolicy) -> AggregationConfig:
@@ -251,7 +268,12 @@ def run_internal_eval(
         experiment.reward_policy,
         env_exact_match_value=rollout_aggregate.aggregation_output.value,
     )
-    return InternalEvalResult(aggregate=rollout_aggregate, reward=reward)
+    per_task_scores = tuple(_per_task_score(task) for task in task_rows)
+    return InternalEvalResult(
+        aggregate=rollout_aggregate,
+        reward=reward,
+        per_task_scores=per_task_scores,
+    )
 
 
 __all__ = [

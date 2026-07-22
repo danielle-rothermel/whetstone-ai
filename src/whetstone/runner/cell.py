@@ -38,7 +38,6 @@ from whetstone.runner.budget import BudgetGuard, CreditsSnapshot
 from whetstone.runner.eval_run import (
     evaluate_split,
     official_instances,
-    per_task_official_scores,
 )
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import (
@@ -237,26 +236,16 @@ def run_cell(
     )
 
     # --- Delta + paired bootstrap CI over official tasks. ---
+    # The CI consumes the per-task scores RETAINED from the same official
+    # evaluation passes that produced ``baseline`` and ``best`` -- no second
+    # drive of the official split, so zero additional provider calls and the
+    # interval reflects the exact calls behind the reported delta.
     delta: float | None = None
     ci95: tuple[float, float] | None = None
     if baseline.score is not None and best.score is not None:
-        naive_per_task = per_task_official_scores(
-            experiment,
-            candidate=naive,
-            instances=official,
-            transport=config.rollout_transport,
-            execution_policy=config.execution_policy,
-            repeats=config.repeats,
+        ci = bootstrap_delta_ci(
+            baseline.per_task_scores, best.per_task_scores, seed=0
         )
-        best_per_task = per_task_official_scores(
-            experiment,
-            candidate=opt.best_candidate,
-            instances=official,
-            transport=config.rollout_transport,
-            execution_policy=config.execution_policy,
-            repeats=config.repeats,
-        )
-        ci = bootstrap_delta_ci(naive_per_task, best_per_task, seed=0)
         delta = best.score - baseline.score
         ci95 = ci.as_tuple()
 

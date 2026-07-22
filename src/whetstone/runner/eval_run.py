@@ -22,25 +22,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from dr_providers import (
-    MessageRole,
-    PromptMessage,
-    ProviderCallRequest,
-    Transcript,
-)
 from dr_store import MemoryBackend, ObjectStore
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import RolloutAggregate, RowPolicy
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import run_internal_eval
-from whetstone.envs.oracle_operator import env_exact_match_score
-from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import render_prompt
-from whetstone.envs.task import EnvTask
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
 from whetstone.optimization.schema import Candidate
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.execution_mode import ExecutionMode
 
@@ -50,7 +40,6 @@ __all__ = [
     "evaluate_split",
     "internal_instances",
     "official_instances",
-    "per_task_official_scores",
 ]
 
 #: The Result Store schema for a persisted split-evaluation aggregate artifact.
@@ -66,6 +55,12 @@ class SplitEvaluation:
     ``aggregate`` is the provenance-bearing Rollout Aggregate; ``artifact_ref``
     is its persisted Result Store reference (identical content across execution
     modes). ``execution_mode`` records which path produced it.
+
+    ``per_task_scores`` is the aligned per-task mean 0/1 oracle score captured
+    from the SAME evaluation pass that produced ``score`` (one entry per
+    instance, in instance order). A paired bootstrap CI consumes these retained
+    scores directly, so the CI reflects the exact calls behind the reported
+    aggregate and no second drive of the split is ever made.
     """
 
     split_role: str
@@ -76,6 +71,7 @@ class SplitEvaluation:
     execution_mode: ExecutionMode
     task_count: int
     repeat_count: int
+    per_task_scores: tuple[float, ...]
 
     @property
     def is_complete(self) -> bool:
@@ -151,62 +147,5 @@ def evaluate_split(
         execution_mode=execution_mode,
         task_count=aggregate.task_count,
         repeat_count=aggregate.repeat_count,
+        per_task_scores=result.per_task_scores,
     )
-
-
-def per_task_official_scores(
-    experiment: EnvExperiment,
-    *,
-    candidate: Candidate,
-    instances: tuple[Instance, ...],
-    transport: TransportCall,
-    execution_policy: ProviderExecutionPolicy,
-    repeats: int,
-) -> tuple[float, ...]:
-    """Per-task official mean scores for the paired bootstrap CI.
-
-    Returns one score per instance -- the mean 0/1 oracle score over the task's
-    ``repeats`` repeats (a failed provider call contributes 0 to the mean so a
-    task always yields a comparable number). These aligned per-task vectors
-    feed :func:`whetstone.runner.statistics.bootstrap_delta_ci`. Uses the same
-    render + stage-03 driver + oracle path as :func:`evaluate_split`; the
-    transport is injected (no live paid call by itself).
-    """
-    env = env_spec(experiment.env_name)
-    rd = experiment.rollout_definition
-    procedure_hash = experiment.eval_configs.procedure_config_hash
-    scores: list[float] = []
-    for instance in instances:
-        task = EnvTask.from_instance(env.name, instance)
-        prompt = render_prompt(env, candidate, instance)
-        repeat_scores: list[float] = []
-        for index in range(repeats):
-            result = run_provider_call(
-                request=ProviderCallRequest(
-                    config=rd.provider_call_config,
-                    transcript=Transcript(
-                        messages=(
-                            PromptMessage(
-                                role=MessageRole.USER, content=prompt
-                            ),
-                        )
-                    ),
-                ),
-                policy=execution_policy,
-                transport=transport,
-                logical_call_id=f"official::{task.task_identity()}::{index}",
-            )
-            if not result.succeeded or result.generation is None:
-                repeat_scores.append(0.0)
-                continue
-            score = env_exact_match_score(
-                env=env,
-                generation=result.generation.text,
-                gold=instance.gold,
-                evaluation_procedure_config_hash=procedure_hash,
-            )
-            repeat_scores.append(float(score.value))
-        scores.append(
-            sum(repeat_scores) / len(repeat_scores) if repeat_scores else 0.0
-        )
-    return tuple(scores)
