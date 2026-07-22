@@ -165,8 +165,8 @@ def test_pilot_all_calls_failed_zero_success_rate() -> None:
 def test_pilot_uses_committed_per_env_token_estimates() -> None:
     # --spec-estimate-tokens defaults to None; the pilot falls back to the
     # env's per-probe estimates so the token-sanity check runs without a flag,
-    # recorded separately per probe. c11 is LIVE-MEASURED (naive 656 /
-    # ceiling 907) after the round-2 robustness upgrade.
+    # recorded separately per probe. c11 is LIVE-MEASURED (naive 1735 /
+    # ceiling 1831) after the round-3 measured-mean update.
     env = "c11"
     exp = tiny_experiment(env)
     report = run_pilot(
@@ -181,11 +181,11 @@ def test_pilot_uses_committed_per_env_token_estimates() -> None:
         spec_estimate_tokens=None,
     )
     expected = TokenEstimate(
-        naive=656, ceiling=907, estimate_source="live-measured"
+        naive=1735, ceiling=1831, estimate_source="live-measured"
     )
     assert env_spec(env).token_estimate == expected
-    assert report.naive.spec_estimate_tokens == 656
-    assert report.ceiling.spec_estimate_tokens == 907
+    assert report.naive.spec_estimate_tokens == 1735
+    assert report.ceiling.spec_estimate_tokens == 1831
     assert report.naive.estimate_source == "live-measured"
 
 

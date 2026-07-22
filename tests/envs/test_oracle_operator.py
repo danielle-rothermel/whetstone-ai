@@ -130,6 +130,34 @@ def test_shared_normalization_is_applied_by_the_oracle() -> None:
     assert fact.value == 1
 
 
+def test_c18_verdict_extraction_flows_through_adapter() -> None:
+    # The env-side verdict extraction (final True/False token) reaches the
+    # adapter path: a chain-of-thought ceiling reply ending on the verdict
+    # scores 1, not 0. Verbatim shape of the live D5 CoT reply.
+    env = env_spec("c18")
+    cot = "...the query property is not entailed.\n\nFalse"
+    fact = env_exact_match_fact(
+        env=env,
+        generation=cot,
+        gold="False",
+        evaluation_procedure_config_hash=_PROC_HASH,
+    )
+    assert fact.value == 1
+
+
+def test_c23_output_extraction_flows_through_adapter() -> None:
+    # The env-side Output:-line extraction reaches the adapter path: an
+    # Output:-prefixed ceiling reply scores 1 against the bare-string gold.
+    env = env_spec("c23")
+    fact = env_exact_match_fact(
+        env=env,
+        generation="Output: abcd",
+        gold="abcd",
+        evaluation_procedure_config_hash=_PROC_HASH,
+    )
+    assert fact.value == 1
+
+
 @pytest.mark.parametrize("env_name", ENV_NAMES)
 def test_procedure_identity_is_env_distinct(env_name: str) -> None:
     proc = env_procedure_config(env_spec(env_name))

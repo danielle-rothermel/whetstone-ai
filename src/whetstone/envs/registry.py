@@ -44,15 +44,11 @@ ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
 #: ``live-measured`` estimate came from an actual smoke/pilot measurement; a
 #: ``scaled-pending-measurement`` estimate is a committed baseline-spec §5
 #: value scaled by the reasoning-model correction, to be overwritten once its
-#: env's pilot records a measured mean.
+#: env's pilot records a measured mean. As of the round-3 update ALL five envs
+#: are ``live-measured``; ``scaled-pending-measurement`` is retained as the
+#: default provenance for any newly added, not-yet-measured env.
 ESTIMATE_LIVE_MEASURED = "live-measured"
 ESTIMATE_SCALED_PENDING = "scaled-pending-measurement"
-
-#: The reasoning-model correction applied to the un-measured envs' committed
-#: baseline-spec §5 estimates (reasoning models emit far more tokens than the
-#: original non-reasoning spec assumed). c22 & c11 are already live-measured,
-#: so they are NOT scaled.
-REASONING_SCALE = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,11 +60,12 @@ class TokenEstimate:
     sanity check runs against when ``--spec-estimate-tokens`` is not passed;
     the flag still overrides.
 
-    ``estimate_source`` marks provenance: ``live-measured`` (c22 & c11,
-    measured from the smoke) versus ``scaled-pending-measurement`` (three envs,
-    baseline-spec §5 scaled ~4x for the reasoning-model correction). A pilot
-    overwrites its env's estimate with its measured means and records those in
-    the pilot JSON so the report can show est-vs-actual.
+    ``estimate_source`` marks provenance: ``live-measured`` (all five envs, as
+    of the round-3 update, from their pilots' measured per-call means) versus
+    ``scaled-pending-measurement`` (a committed baseline-spec §5 value scaled
+    for the reasoning-model correction, the default for any not-yet-measured
+    env). A pilot overwrites its env's estimate with its measured means and
+    records those in the pilot JSON so the report can show est-vs-actual.
     """
 
     naive: int
@@ -76,31 +73,29 @@ class TokenEstimate:
     estimate_source: str = ESTIMATE_SCALED_PENDING
 
 
-#: Per-env token estimates. c22 & c11 are LIVE-MEASURED from the smoke
-#: (c22 naive ~950 / ceiling ~1700; c11 naive ~656 / ceiling ~907). The other
-#: three keep their baseline-spec §5 totals scaled ~4x for the reasoning-model
-#: correction (marked scaled-pending-measurement; their pilots will overwrite
-#: with measured means). Pre-scale spec §5 totals were c19 naive ~280 /
-#: ceiling ~1,150; c18 naive ~253 / ceiling ~650; c23 naive ~140 /
-#: ceiling ~420.
+#: Per-env token estimates. ALL FIVE are now LIVE-MEASURED from their pilots'
+#: measured per-call means: c22 naive 2526 / ceiling 3046; c11 1735 / 1831;
+#: c19 4377 / 5009; c23 5468 / 4953; c18 naive 1306. c18's ceiling keeps its
+#: measured 2448 with the caveat that that measurement PREDATES the verdict-
+#: extraction scoring fix (the extraction changes only how the reply is
+#: scored, not how many tokens the model emits, so the token mean is expected
+#: to hold; flagged for re-confirmation by the post-fix c18 pilot).
 _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
     "c22": TokenEstimate(
-        naive=950, ceiling=1700, estimate_source=ESTIMATE_LIVE_MEASURED
+        naive=2526, ceiling=3046, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c11": TokenEstimate(
-        naive=656, ceiling=907, estimate_source=ESTIMATE_LIVE_MEASURED
+        naive=1735, ceiling=1831, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c19": TokenEstimate(
-        naive=280 * REASONING_SCALE, ceiling=1150 * REASONING_SCALE,
-        estimate_source=ESTIMATE_SCALED_PENDING,
+        naive=4377, ceiling=5009, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c18": TokenEstimate(
-        naive=253 * REASONING_SCALE, ceiling=650 * REASONING_SCALE,
-        estimate_source=ESTIMATE_SCALED_PENDING,
+        # naive live-measured; ceiling 2448 measured PRE extraction fix.
+        naive=1306, ceiling=2448, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c23": TokenEstimate(
-        naive=140 * REASONING_SCALE, ceiling=420 * REASONING_SCALE,
-        estimate_source=ESTIMATE_SCALED_PENDING,
+        naive=5468, ceiling=4953, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
 }
 
