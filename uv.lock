@@ -333,6 +333,7 @@ version = "0.1.0"
 source = { editable = "../dr-code" }
 dependencies = [
     { name = "datasets" },
+    { name = "dr-serialize" },
     { name = "pydantic" },
     { name = "typer" },
     { name = "zstandard" },
@@ -341,6 +342,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "datasets", specifier = ">=3.0,<4" },
+    { name = "dr-serialize", editable = "../dr-serialize" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "typer", specifier = ">=0.26.7" },
     { name = "zstandard", specifier = ">=0.25.0" },
@@ -412,12 +414,14 @@ name = "dr-providers"
 version = "0.2.0"
 source = { editable = "../dr-providers" }
 dependencies = [
+    { name = "dr-serialize" },
     { name = "httpx" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "dr-serialize", editable = "../dr-serialize" },
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.121" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.13.4" },
@@ -447,6 +451,25 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
+]
+
+[[package]]
+name = "dr-store"
+version = "0.1.0"
+source = { editable = "../dr-store" }
+dependencies = [
+    { name = "dr-serialize" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "dr-serialize", editable = "../dr-serialize" }]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1721,6 +1744,7 @@ dependencies = [
     { name = "dr-platform" },
     { name = "dr-providers" },
     { name = "dr-serialize" },
+    { name = "dr-store" },
 ]
 
 [package.dev-dependencies]
@@ -1740,6 +1764,7 @@ requires-dist = [
     { name = "dr-platform", editable = "../dr-platform" },
     { name = "dr-providers", editable = "../dr-providers" },
     { name = "dr-serialize", editable = "../dr-serialize" },
+    { name = "dr-store", editable = "../dr-store" },
 ]
 
 [package.metadata.requires-dev]
