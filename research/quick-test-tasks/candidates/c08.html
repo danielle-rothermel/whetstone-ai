@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c08 Rosetta-to-Match-Up MC Linguistic Puzzles</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c08</span>Rosetta-to-Match-Up MC Linguistic Puzzles</h1>
+  <span class="badge ranked">RANKED #15</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">linguistic-puzzle rule induction (multiple choice)</span> — a seeded conlang grammar rendered as glossed example pairs plus a 4-way multiple-choice query, where every distractor differs from the truth by exactly one latent rule.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain tone = ranked -->
+  <p><strong>Officially ranked #15 of 20, a slight upward drift from its round-1 26-tier standing.</strong>
+  c08 carries the cleanest scoring story in the whole rule-induction cluster: converting Rosetta-style
+  translation into Match-Up multiple choice collapses noisy free-text morphology into a
+  <span class="key">single-letter exact match</span>, and the distractor construction gives a
+  <span class="key">built-in incremental ladder</span> where each captured rule eliminates one wrong answer.
+  The design is admired but not adopted because the implementation floor is high — the only reusable codebase,
+  LINGOLY, is a <span class="key">frozen scoring harness</span> over hand-authored UKLO puzzles with no generator,
+  no sampling, no seed, and no distractor logic, so the load-bearing engineering (a re-seedable conlang generator
+  with latent-rule strata and a rule-based oracle) must be written essentially from scratch. That
+  <span class="key">reuse penalty</span>, priced through a run-verification-capped I1, is why a design this
+  rubric-clean settles in the mid-lower pack; it edges just below sibling c09, which salvages more code.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">26/2</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">9/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Match-Up MC that turns translation difficulty into single-letter exact match</h3>
+    <p>A generator seeds a fresh <span class="key">conlang grammar</span> per run — nonce roots plus affixes
+    marking word order, agreement, affix meaning, and a diacritic/tone layer with a
+    <span class="key">marker-precedence hierarchy</span> (tone resolves a homograph, a context particle
+    overrides tone). Each instance presents N glossed example pairs plus one held-out query as a
+    <span class="key">4-way multiple choice</span> asking which pairing or meaning is correct. The
+    <span class="key">distractors</span> are constructed so each differs from the truth by exactly one latent
+    rule, so every rule the model actually induces eliminates one distractor — a built-in incremental ladder
+    with diagnostic wrong answers. Output is a single letter, scored by exact match, and the whole pool is
+    contamination-proof because the grammar is regenerated each run.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — constructed from the merged summary; a two-rule instance where the SOV word-order rule and the case-suffix agreement rule each isolate one distractor.</p>
+<pre><code>Glossed pairs (conlang → English):
+  tam-uk  belu-na   →  the child sees the dog
+  belu-uk tam-na    →  the dog sees the child
+  mira-uk tam-na    →  the bird sees the child
+
+Query: which English meaning matches "tam-uk mira-na"?
+  A. the child sees the bird      &lt;- gold
+  B. the bird sees the child      (violates: -uk marks subject, not position)
+  C. sees the child the bird      (violates: English SVO output order)
+  D. the child sees a bird        (violates: article/definiteness rule)
+
+Gold: A
+Naive-prompt miss: a model anchoring on surface word order picks B,
+reading the first noun as subject and ignoring the -uk/-na case suffixes.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2406.06196">LINGOLY: A Benchmark of Olympiad-Level Linguistic Reasoning Puzzles in Low-Resource and Extinct Languages</a> (Bean et al., NeurIPS 2024 Datasets &amp; Benchmarks)</span> — defines the Rosetta and Match-Up puzzle formats and documents the low ~21.7% exact-match SOTA headroom this candidate exploits.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2605.13408">From Rosetta to Match-Up: A Paired Corpus of Linguistic Puzzles with Human and LLM Benchmarks</a> (Majmudar et al., arXiv 2026)</span> — the namesake; pairs Rosetta-style translation puzzles with Match-Up MC versions, and the Rosetta-to-Match-Up scoring trick is this candidate's load-bearing idea.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Invented Tonal/Diacritic Orthography Disambiguation</a> — seeded the diacritic/tone homograph-disambiguation variant with its marker-precedence hierarchy (tone resolves homograph, context particle overrides tone).</li>
+      <li><a href="../candidates-merged.html#c08">Candidates-merged c08 entry</a> — origin "both"; merges the tonal/diacritic brainstorm idea with the LINGOLY / Rosetta-to-Match-Up literature line into one MC rule-induction generator.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D1 — Inverted Multiple-Choice convention — <span class="why">both sources flag HIGH one-shot risk: a single sentence ("answer the alphabetically-first incorrect option") closes the gap, failing the anti-one-shot criterion. c08 keeps the MC format but earns difficulty from latent-rule distractors rather than a label-inversion trick</span>.</li>
+    <li>D9 / D3 — char-level string-task cluster (StringLLM, CUTE, letter-counting) — <span class="why">dropped as "not a task"; kept only as the red-flag caveat that char-count and free-text-morphology scoring is noisy at temp 0. This caveat is exactly why c08 routes to single-letter MC rather than free-text translation</span>.</li>
+    <li>c07 Case-Marked Micro-Conlang Translation (refuted cousin, now GATED) — <span class="why">the free-text conlang translation sibling was refuted on the optimization path: its gloss table hands the latent morphology to the model in-context and its "hard rule" (case beats word order) is the highest-prior rule in linguistics. c08's MC framing and one-rule-per-distractor construction are the response to that refutation</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2509.21820">Can LLMs Generate and Solve Linguistic Olympiad Puzzles?</a> (Majmudar &amp; Filatova, EMNLP 2025)</span> — same author line as Rosetta-to-Match-Up; establishes LLM generation and solving of Olympiad puzzles, directly supporting the synthetic-generator adaptation c08 requires.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2501.17785">Reasoning Over the Glyphs: Evaluation of LLM's Decipherment of Rare Scripts</a> (Shih et al., arXiv 2025)</span> — the "rare-script decipherment (2025)" source; motivates the diacritic/tone homograph-disambiguation variant on unfamiliar writing systems.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2507.16809">LingBench++: A Linguistically-Informed Benchmark and Reasoning Framework</a> (Lian et al., arXiv 2025)</span> — a 2025 follow-up in the LingOly line; a multi-step linguistic reasoning benchmark cited as research-heat evidence that the family is still active.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Distractors each differ by exactly one latent rule, giving a built-in incremental ladder with diagnostic wrong answers; MC framing tames scoring into clean 0/1 exact match. Rated a strong research-current dark horse in the round-1 landscape.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The exact-match arithmetic/simulation tier simply outscored it at 26/2; a clean design was not enough to reach the 28-tier finalist band.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Because each distractor isolates one rule, an optimizer that surfaces one more rule (word order, agreement, affix meaning, diacritic override) measurably eliminates one distractor — an unusually legible gradient for prompt optimization.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No dedicated optimization-path skeptic pass was run below the 28-tier finalists, so this lens was never adversarially examined for c08; the inference here is from the design, not a skeptic verdict.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The Rosetta-to-Match-Up conversion is a deliberate answer to the char-level / free-text noise caveat — single-letter output sidesteps the temp-0 morphology-scoring noise that sinks free-text translation.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No measurement skeptic pass was run for c08 below the finalist tier; distractor quality (that each really isolates exactly one rule, with no unintended second cue) is asserted by design and flagged for pilot validation, not yet verified.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Oracle independence is strong — a rule-based solver over a seeded grammar is trivially hand-verifiable; redesign debt is low since no structural skeptic refutation is outstanding.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The reuse floor is the binding weakness: LINGOLY offers no generator, no seed, no distractor logic, and its dataset is CC-BY-NC-ND (no-derivatives), so I1 caps at 1 and hundreds of lines must be written from scratch borrowing under thirty.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The LingOly line is unusually active into 2026 — LingBench++, LingOly-TOO, Rosetta-to-Match-Up, ConlangCrafter — so a synthetic generator here has a natural path to becoming its own research artifact.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Every live artifact in the line is either a frozen human-authored set or a translation/generation study; none ships the re-seedable Match-Up generator this candidate needs, so currency does not lower the build cost.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Build the seeded conlang engine</h3><p>Sample a fresh grammar per run — nonce lexicon plus strata for word order, agreement, affix meaning, and the diacritic/tone precedence hierarchy — with seed plumbing throughout, which is absent entirely in LINGOLY.</p></div>
+  <div class="step"><h3>Render Rosetta pairs and the Match-Up MC builder</h3><p>Produce N glossed example pairs plus a held-out query, then construct three distractors where each perturbs exactly one latent rule and one option is the gold pairing.</p></div>
+  <div class="step"><h3>Write the rule-based oracle and single-letter scorer</h3><p>Derive the gold answer from the latent grammar (not a pre-stored string), reusing only LINGOLY's <code>clean_answer</code> normalization (~20 LOC) and the <code>safe_exact</code> idea (~5 LOC).</p></div>
+  <div class="step"><h3>Pilot-validate distractor quality</h3><p>On a batch, confirm each distractor isolates exactly one rule and no option carries an unintended second cue — the load-bearing engineering per the merged adaptation note.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Rebuild-from-scratch cost: the load-bearing generator, distractor logic, oracle, and seed plumbing do not exist in the repo; estimated hundreds of lines written outside it, borrowing under thirty — the fact that caps I1 at 1.</li>
+      <li>Distractor leakage: if a distractor accidentally violates two rules (or none cleanly), the "one rule eliminates one distractor" ladder degrades and the diagnostic signal is lost — hence the mandated pilot gate.</li>
+      <li>License constraint: LINGOLY's puzzle dataset is CC-BY-NC-ND-4.0 (no-derivatives), so even seeding strata from the human puzzles is legally constrained; the generator must be fully synthetic.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/am-bean/lingOly">am-bean/lingOly</a> (dataset CC-BY-NC-ND-4.0; code CC-BY-SA-4.0) — deep-read notes at <a href="../repos/lingoly-am-bean-lingoly.md">repos/lingoly-am-bean-lingoly.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified — the I1=1 provisional was kept as read (not run-tested); there is no generator active path to verify, since the repo is a frozen-dataset scoring harness with no randomness, no seed, and a tautological pre-stored oracle.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../candidates-table.html">Back to table</a>
+    <a href="../recommendations-round2.html#table">Full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c09.html">&larr; #14 c09</a>
+    <a href="c20.html">#16 c20 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c09.html">c09 Composable Cipher-Chain Decode</a>
+    <a href="c07.html">c07 Case-Marked Micro-Conlang</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c08">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

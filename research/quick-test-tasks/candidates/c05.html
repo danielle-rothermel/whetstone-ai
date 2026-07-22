@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c05 Deterministic Execution &amp; State Tracking</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c05</span>Deterministic Execution &amp; State Tracking (FSM / protocol / pointer)</h1>
+  <span class="badge gated">GATED</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">state-machine simulation</span> — run a small deterministic FSM, message protocol, tag-system, or pointer chain and report one derived final token.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict bad"><!-- .good = adopt/backup · .bad = gated/below-cut · plain = ranked -->
+  <p><strong>Gated: removed from contention regardless of a decent implementation score.</strong>
+  c05 topped the mechanical round-1 sort on rubric total, and its implementation story is genuinely
+  middling-to-workable — a run-verifiable permutation-composition generator plus a running-sum
+  generator both exist as small, permissive, single-file libraries. But standing here is decided by a
+  gate, not a score: both round-1 skeptic lenses refuted the design at major severity and neither
+  refutation had a concrete rescue that kept the task the same task. The named latent rules —
+  AUTH-before-DATA ordering, undefined-transition fallback, monotone sequence numbers — are textbook
+  protocol and interpreter conventions that a competent prompt engineer states in one shot, which
+  collapses the incremental gap the rubric depends on. The difficulty knob makes it worse: the
+  candidate's own cited literature shows a trace-length dilemma where long traces put the ceiling out
+  of reach of a single no-scratchpad call, while short traces plus chain-of-thought leave only a
+  two-or-three-rung ladder that a single demo bootstrap flattens. The proposed fixes exist, but they
+  converge on arbitrary counter-intuitive conventions — which is to say they redesign c05 into c21 or
+  c03. The gate removes it from the recommended set even though its implementation total would
+  otherwise place it mid-pack.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">28/2</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">8/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: run one small deterministic machine, report one derived token</h3>
+    <p>A seeded generator emits one small deterministic machine and asks a <span class="key">single
+    bounded question</span>. The machine is one of a family: an <span class="key">FSM</span> given as a
+    transition table plus an event trace (answer = final state label); a <span class="key">message
+    protocol</span> with exactly one injected rule violation (answer = index of the first violating
+    message); a <span class="key">device-command or tag-system</span> sequence (answer = final
+    device-state letter); or a <span class="key">key-to-value store with pointer chains</span> (answer =
+    the fully dereferenced value or a final running sum). Output is a single token, scored by exact match
+    against the reference machine. The latent rules decompose cleanly — per-transition entries,
+    undefined-transition fallback, ordering constraints such as AUTH-before-DATA, monotone sequence
+    fields, cycle-to-sentinel, undefined-to-default, a max-depth cap, append-versus-delete ordering — and
+    each injected violation maps a failure back to a known rule, which is what made this the most
+    diagnostic cluster in the round-1 pool. Randomized tables and traces make it contamination-proof by
+    construction.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Constructed from the merged summary (illustrative): a four-state FSM with one
+    undefined-transition fallback rule and a self-loop, queried for the final state after a short event
+    trace.</p>
+<pre><code>Transition table (state, event -&gt; next state):
+  S0, a -&gt; S1     S1, a -&gt; S2     S2, a -&gt; S2 (self-loop)
+  S0, b -&gt; S0     S1, b -&gt; S0     S2, b -&gt; S3
+  (any state, undefined event) -&gt; ERR   [undefined-transition fallback]
+
+Start: S0
+Event trace: a a a b
+
+Query: final state label?
+Gold: S3
+Naive-prompt miss: a model that ignores the S2 self-loop on 'a' (treating the
+third 'a' as advancing S2-&gt;S3 directly, then 'b' as ERR) reports ERR instead
+of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2504.20771">Computational Reasoning of Large Language Models (TMBench)</a> (Wu et al., arXiv 2025)</span> — the core Turing-machine / m-tag step-simulation source; exact-match scoring, documented floor and ceiling, difficulty tuned by step count. The round-1 corpus mis-cited its title as "Turing Machine Evaluation for Large Language Model"; the actual title is above, and the benchmark inside is TMBench.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2509.09677">The Illusion of Diminishing Returns: Measuring Long Horizon Execution in LLMs</a> (Sinha et al., ICLR 2026)</span> — the retrieve-and-sum execution source; isolates execution from planning, introduces H0.5 and the self-conditioning effect, and is the long-trace-ceiling evidence cited against c05's own difficulty knob.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2503.02854">(How) Do Language Models Track State?</a> (Li et al., arXiv 2025)</span> — FSM-family mechanistic support via permutation-composition state tracking; cited in the recommendations for the no-CoT ceiling dilemma.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2502.20129">Finite State Automata Inside Transformers with Chain-of-Thought</a> (Zhang et al., arXiv 2025)</span> — mechanistic study showing transformers implement finite-state automata for state tracking and that CoT helps; grounds the scheduler/protocol-validator FSM family.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2511.10457">Exploring State Tracking Capabilities of LLMs</a> (Rezaee et al., arXiv 2025)</span> — empirical LLM state-tracking evaluation documenting degradation over steps and the benefit of CoT.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li>Glyph Automaton · Protocol Handshake Validator · Opaque Device State · Priority-Rule Scheduler Resolver · Turing-Tape Rewrite (bounded tag-system) · Reference-Chained Value Deref (brainstorm) — six execution/state seeds that all reduce to "run a small deterministic machine, report one derived token."</li>
+      <li><a href="../candidates-merged.html#c05">Candidates-merged c05 entry</a> — origin "both"; the merge fused those six brainstorm seeds with the TMBench / long-horizon / FSM-mechanistic literature into one final-state single-token task.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>Scheduler / protocol-validator FSM family — <span class="why">not a published dataset; the round-1 lit list names it as a family, but it is a to-be-authored synthetic generator backed by three mechanistic papers, not a laundered benchmark name — build-it-yourself, not borrow-it</span>.</li>
+    <li>D4 · CRUXEval-style code-output prediction — <span class="why">dropped: the published set is heavily contaminated and regeneration needs a code DSL whose unconstrained return types fight exact-match bounding; its execution flavor was folded into c05 (rule-induction flavor into c23)</span>.</li>
+    <li>Long-Horizon Execution as a standalone cluster — <span class="why">folded into c05's source list rather than counted as its own dropped cluster; survives only as the retrieve-and-sum literature parent</span>.</li>
+    <li>bAbI entity-tracking regeneration (adjacent cousin) — <span class="why">the round-1 scan cited a 2026 entity-tracking follow-up whose arXiv id does not resolve; the bAbI state-tracking flavor was routed to grid-world c19 (which was adopted), not c05</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2504.20771">Computational Reasoning of Large Language Models (TMBench)</a> (Wu et al., arXiv 2025)</span> — active m-tag / Turing-machine step-simulation benchmark; the closest live analogue to c05's execution core and evidence the family is current.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2509.09677">The Illusion of Diminishing Returns: Measuring Long Horizon Execution in LLMs</a> (Sinha et al., ICLR 2026)</span> — a 2026 execution floor/ceiling study; its self-conditioning and H0.5 results are exactly the long-trace ceiling evidence that gates c05.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2511.10457">Exploring State Tracking Capabilities of LLMs</a> (Rezaee et al., arXiv 2025)</span> — recent empirical state-tracking evaluation; step-count degradation and CoT benefit keep the state-tracking cluster hot into 2025-2026.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/1502.05698">bAbI: Towards AI-Complete Question Answering</a> (Weston et al., arXiv 2015)</span> — the foundational synthetic world-state-tracking QA suite; the recognition-worthy ancestor of the state-tracking lens (adjacent, not in the core lit list).</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Topped the mechanical sort on rubric total — bounded single-token output, exact deterministic scoring, and the most diagnostic per-rule violation injection in the pool, since each injected violation names the rule it breaks.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The 28-tier scorecard did not price in the skeptic findings; the raw total overstated the task because it never tested whether the gap survives a competent prompt.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>In principle each transition entry and ordering constraint is an independent, discoverable latent rule, so an optimizer that surfaces one more rule should lift its stratum.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Refuted at major severity — AUTH-before-DATA, undefined-transition fallback, and monotone sequence numbers are textbook conventions a competent prompt states one-shot, so the incremental gap collapses and the only fix redesigns the task into c21/c03.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Ground truth is read by running the reference machine, and the injected-violation design makes failures maximally diagnostic; the oracle is independent and hand-checkable.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Refuted at major severity via the trace-length dilemma — the candidate's own citations (arXiv:2503.02854, arXiv:2509.09677) show long traces put the ceiling out of a single no-scratchpad call while short traces plus CoT leave only a two-or-three-rung ladder one demo flattens, so no trace length holds both a reachable ceiling and a real floor.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Two small, permissive, run-verifiable generators exist — belindal/state-tracking (permutation composition, MIT) and long-horizon-execution/measuring-execution (running sum) — each a single-file library reusable as config plus scoring glue, giving a workable I1=2.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Eligibility is moot: the gate binds regardless of implementation, so I4=0 (dilemma-bound ceiling calibration) and I6=0 (a structural-redesign repair flag, not a bounded one) sink the total to 8/16 and the task cannot be recommended.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>State tracking and long-horizon execution are a hot 2025-2026 cluster — TMBench, the ICLR 2026 long-horizon paper, and the FSM-in-transformers line all appeared in this window, so a test built here could grow into its own direction.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>That same currency supplies the refutation: the long-horizon and no-CoT ceiling results are precisely the evidence that the difficulty knob cannot hold a reachable ceiling and a real floor at once.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Lift a seeded generator core</h3><p>Reuse belindal/state-tracking's <code>permutation_task.py</code> (~180 LOC, MIT) as a library, or lift long-horizon-execution's <code>dict_sum_util.py</code> generator core (~130 LOC); in both cases inject seeding on the active path before use, since neither plumbs a seed by default.</p></div>
+  <div class="step"><h3>Write the exact-match scoring glue outside the repo</h3><p>~60-90 LOC: roll out K actions, capture the final state (or running sum / parity) as the 0/1 oracle recomputed independently, render the prompt, single LLM call, exact string match. No oracle edits.</p></div>
+  <div class="step"><h3>Attempt the gate-clearing redesign (the load-bearing, unresolved step)</h3><p>Replace textbook protocol conventions with arbitrary counter-intuitive nonce conventions and pick a trace length that holds a reachable ceiling and a non-trivial floor simultaneously — the step round 1 judged converges on c21/c03, i.e. a different task.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>The gate has no bounded fix (I6=0): making conventions non-one-shot means inventing arbitrary rules, and escaping the trace-length dilemma means changing the difficulty mechanism; either way c05 stops being c05, so the "fix" is a redesign into an already-adopted candidate.</li>
+      <li>The trace-length dilemma is a hard constraint, not a tuning nuisance (I4=0): no single trace length simultaneously keeps the ceiling reachable in one no-scratchpad call and the floor below it; the candidate's own citations establish this, so ceiling calibration is structurally blocked.</li>
+      <li>Seed plumbing is absent in both repos — belindal/state-tracking has no <code>random.seed</code>/<code>--seed</code> on the active path, and long-horizon-execution reseeds the module-global <code>random</code> at a call site and shares one un-reset stream across instances, so per-instance reproducibility needs our own seeding fix.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/belindal/state-tracking">belindal/state-tracking</a> (MIT) — deep-read notes at <a href="../repos/belindal-state-tracking.md">repos/belindal-state-tracking.md</a>.</li>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/long-horizon-execution/measuring-execution">long-horizon-execution/measuring-execution</a> (no LICENSE, paper-attached to arXiv:2509.09677 / ICLR 2026) — deep-read notes at <a href="../repos/long-horizon-execution-measuring-execution.md">repos/long-horizon-execution-measuring-execution.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified as a finalist. Both provisional I1=2 scores were kept as read; each generator's determinism was confirmed by hand/importlib in the deep read (seeded permutation rollouts byte-identical; <code>accumulate(values) == output</code>), but no fresh same-seed / different-seed / oracle-spot-check run was performed because the gate removed c05 from finalist run verification.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Standing</span>
+    <a href="../recommendations-round2.html#table">GATED — unranked, see rescore row</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Atlas order</span>
+    <a href="c01.html">&larr; c01</a>
+    <a href="c07.html">c07 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c19.html">c19 Grid-World State Prediction</a>
+    <a href="c20.html">c20 Invented Micro-Game Turn Resolution</a>
+    <a href="c21.html">c21 Relational Micro-World</a>
+    <a href="c03.html">c03 Keyed Custom-Operator Expression Evaluation</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c05">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

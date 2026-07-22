@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Related-work additions — only what doc.css/flow.css lack. */
+
+/* Unverified flag — matches the candidate-page convention: text label, not color alone. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.fix {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--green); background: var(--green-soft);
+  color: var(--green); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* Dossier cards */
+.paper-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 18px; }
+.paper-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.paper-head h3 { margin: 0; font-size: 17px; }
+.paper-id { color: var(--muted); font: 600 12px/1.4 var(--font-mono); }
+.paper-meta { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.paper-card h4 { margin: 16px 0 6px; font: 700 11px/1.3 var(--font-system); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.paper-card h4:first-of-type { margin-top: 4px; }
+.paper-card p { font-size: 14.5px; }
+.paper-card ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+.paper-card li { margin-bottom: 5px; }
+.paper-card li::marker { color: var(--accent); font-weight: 800; }
+.corr-box {
+  margin-top: 6px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); border-radius: 0 8px 8px 0; font-size: 13.5px;
+}
+.cite-box {
+  margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--muted);
+}
+.cite-box .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Positioning axis tables */
+.axis-table { width: 100%; border-collapse: collapse; margin: 10px 0 18px; font-size: 13.5px; }
+.axis-table th, .axis-table td { border: 1px solid var(--line); padding: 8px 12px; text-align: left; vertical-align: top; }
+.axis-table th { background: var(--accent-soft); color: var(--accent); font: 700 11.5px/1.3 var(--font-system); letter-spacing: .04em; text-transform: uppercase; }
+.axis-table td.pole { font-weight: 700; color: var(--ink); background: var(--bg); white-space: nowrap; }
+.axis-table td.c23-cell { background: var(--accent-soft); }
+.axis-table tr:last-child td { border-bottom: 1px solid var(--line); }
+
+/* Floor/ceiling meter */
+.range-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13.5px; }
+.range-row .rlabel { flex: 0 0 150px; color: var(--muted); font-weight: 600; }
+.range-track { position: relative; flex: 1 1 auto; height: 10px; border-radius: 999px; background: var(--line); }
+.range-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); opacity: .35; }
+.range-fill.ceiling { background: var(--green); }
+.range-fill.floor { background: var(--amber); }
+.range-vals { flex: 0 0 100px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .axis-table { font-size: 12.5px; }
+}
+</style>
+<title>whetstone-ai · c23 Related Work</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c23.html">&larr; Back to c23 candidate page</a></nav>
+
+<h1>c23 Related Work: Hidden-Rule String-Transform Induction Ladder</h1>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<p>Six papers bound c23's design space. Only <span class="key">InductionBench</span> directly tests c23's exact
+substrate (subregular ISL/OSL string-transform induction) and doubles as its vendored codebase &mdash; and its
+own headline finding is a reachability warning: frontier models score <span class="key">0.00&ndash;5.69%
+compatibility</span> at moderate difficulty. <span class="key">MIR-Bench</span> is the closest single-call
+neighbor on protocol but has no decomposable partial-credit structure; <span class="key">PCFG SET</span> donates
+the operator taxonomy but uses named, not latent, rules; <span class="key">WILT</span> and
+<span class="key">FalsifyBench</span> are multi-turn relatives whose interactive confounds (doom-looping,
+confirmation bias) c23's single-call design structurally avoids; <span class="key">Re-ARC</span> is a tooling
+analogue with no model results at all. The convergent warning: c23 sits in a genuinely
+<span class="key">empty cell</span> (single-call &times; apply-to-held-out-query &times; composed latent rules),
+but that cell is empty partly because keeping its ceiling reachable is hard.</p>
+
+<!-- PAPER DOSSIERS -->
+<div class="section-head"><h2>Paper dossiers</h2></div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>InductionBench: frontier models fail the simplest complexity class, and more evidence can make it worse</h3>
+    <span class="paper-id">2502.15823</span>
+  </div>
+  <div class="paper-meta">Hua, Wong, Fei, Pan, Jardine, Wang &middot; ACL 2025 main conference (long paper), ACL Anthology 2025.acl-long.1287; arXiv v1 2025-02-20, v4 2025-05-13</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Tests whether LLMs can induce a string-to-string transformation from a sample of I/O pairs, grounded in the
+  subregular hierarchy (<span class="key">ISL, L-OSL, R-OSL</span> classes, provably learnable in polynomial time
+  from polynomially-sized samples). Central finding: even the strongest model (o3-mini) struggles to master these
+  <em>simplest</em> complexity classes, and performance sometimes <span class="key">degrades</span> rather than
+  improves as more theoretically-helpful data is provided. Novelty: a formally grounded "characteristic sample"
+  guaranteed sufficient for learnability, precision/recall/compatibility scoring against the unique minimal rule
+  set (not just correctness), and dynamic/refreshable generation for anti-memorization. This is c23's central
+  design driver and vendored codebase source.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot, zero-shot CoT: one prompt gives the function class, context window <code>k</code>, alphabet
+  <code>&Sigma;</code>, and a sample I/O dataset (the "characteristic sample," scaled 1x&ndash;5x); the model must
+  emit a <span class="key">full rule-set hypothesis</span> in the paper's own notation ("condition &#8728; target
+  &rarr; output"), not apply a rule to one held-out query. A separate few-shot sweep (0/1/2/3-shot demos) stays
+  within this same single-call format. Compatibility is checked against the <span class="key">training sample
+  itself</span>, not a genuinely held-out item.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>At <span class="key">k=4, |&Sigma;|=4, rules=3</span>: compatibility collapses to 0.00 for all 6 models
+    except <span class="key">o3-mini</span> (10.00/10.00/30.00 for ISL/L-OSL/R-OSL).</li>
+    <li>Standard leaderboard (linear weight): best model o3-mini scores only <span class="key">5.69%</span>
+    weighted compatibility &mdash; log-weighted improves to 33.93%, since k=4 dominates and disproportionately
+    penalizes every model.</li>
+    <li><span class="key">Context window k is the single largest difficulty driver</span> &mdash; more so than
+    vocabulary size &mdash; moving k from 2 to 4 "markedly reduces recall, precision, and compatibility across all
+    models."</li>
+    <li>At easy ISL (k=2, vocab=2, rules=1): GPT-4o reaches compatibility 40; Llama-3.3-70B reaches 60 (0-shot)
+    rising to 80 (3-shot) &mdash; the partial-traction regime c23's single-rule restriction targets.</li>
+    <li><span class="key">More sample data can hurt</span>: compatibility "decreases steeply" as I/O examples grow
+    beyond the minimal characteristic sample, plummeting near zero at 4x&ndash;5x &mdash; driven by genuinely new
+    information, not context length (repeating the same sample causes only a small decline).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Missing rules are most often <span class="key">completely missed</span> or too general; wrong rules are
+    most often completely wrong or too general &mdash; "too specific" errors are rare, suggesting that once a
+    model identifies the right condition it usually gets the transformation right.</li>
+    <li>Adding a second or third rule can cause compatibility to <span class="key">plummet to near 0</span>,
+    especially at large k/vocab.</li>
+    <li>Robustness failure interpreted by the authors as the model becoming "confused or overwhelmed" by more
+    data rather than reasoning "robustly inductive[ly]."</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The paper is precisely subregular string-function induction with exactly the
+  reachability caveat claimed (title: "LLMs Fail in the Simplest Complexity Class"), and the codebase
+  (github.com/Wenyueh/inductive_reasoning_benchmark) is confirmed reachable. One nuance carried into the
+  positioning analysis below: InductionBench's "I/O demos" mean the <span class="key">entire sample the model must
+  explain</span>, not a few-shot-demo-plus-held-out-query format &mdash; the whole sample IS the input, and the
+  model must state the general rule, not apply it to a new item. This is the load-bearing protocol gap c23's
+  design closes.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. ACL 2025 main-conference paper &mdash; <span class="key">zero reflects indexing lag, not neglect</span>. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>MIR-Bench: no model saturates many-shot pattern recognition, and no-CoT unanimously beats forced CoT</h3>
+    <span class="paper-id">2502.09933</span>
+  </div>
+  <div class="paper-meta">Yan, Ling, Liu, Yang, Fan, Shen, Du, Chen &middot; NeurIPS 2025 Datasets &amp; Benchmarks Track; arXiv v1 2025-02-14 &ndash; v5 2025-10-23 (camera-ready)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>The first large-scale <span class="key">many-shot</span> (4&ndash;2048 examples) in-context pattern-recognition
+  benchmark: predict <code>y_new = f(x_new)</code> from n I/O pairs generated by an unknown Python function, across
+  diverse data types. Central claim: all 21 tested LLMs fail to fully exploit many-shot context &mdash; performance
+  generally <span class="key">saturates by ~256 shots</span>, well before the 128K context limit, attributed to
+  attention dispersion rather than retrieval failure. Novelty: functions mined from HumanEval+/MBPP+/APPS with
+  fresh GPT-4o-written data generators (no data-leakage reuse of existing I/O pairs), plus six research questions
+  (scaling, inductive vs. transductive, error robustness, code-based induction, RAG, meta-shot transfer) not
+  jointly examined by prior work.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one call sees <span class="key">all n demonstrations plus one query</span> and must output
+  <code>y_new</code> in one forward response, ending with <code>"Output: your answer"</code> in strict Python
+  format, extracted via rule-based parsing and scored by exact match. Demo count (4&rarr;2048) is the manipulated
+  variable, not a conversation. Structurally the same output shape as c23: one derived value, exact-match scored.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Best model (<span class="key">o1-mini</span>) reaches <span class="key">&lt;0.7 accuracy</span> on
+    MIR-Extended; most models (e.g. GPT-4o) stay below 0.4 &mdash; no model saturates.</li>
+    <li>Across all 21 models, <span class="key">no-CoT beats forced-CoT unanimously and significantly</span>: o1-mini
+    0.696 (no-CoT) vs 0.334 (CoT); DeepSeek-R1 0.757 vs 0.298; Claude-3.5-Sonnet 0.775 vs 0.585.</li>
+    <li><span class="key">Claude-3.5-Haiku</span> "achieves surprisingly low accuracy" &mdash; it frequently
+    misreads the I/O block as "incomplete data" and refuses to answer, a format/comprehension failure independent
+    of task difficulty.</li>
+    <li>RAG-selected shots show <span class="key">no significant difference</span> vs. random selection; models are
+    "quite robust" to erroneous shots even at a 3/4 error rate.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Performance saturation/decline beyond ~256&ndash;512 shots traced to <span class="key">attention dispersion</span>,
+    confirmed because duplicating one informative shot to reach high nominal counts does not recover lost
+    performance.</li>
+    <li>Models systematically <span class="key">underestimate difficulty</span> when shown ground-truth code: a
+    one-line function rated ~5&ndash;7/10 difficulty produced 0% accuracy across all factor-analysis models at all
+    shot counts.</li>
+    <li>SolverLearner (write-code-then-execute) induces rising Do-Not-Finish/Runtime-Error rates with shot count
+    and does not reliably beat standard prompting.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported, with a title correction already folded in.</strong> The corpus previously mis-titled this
+  paper; the verified title is <span class="fix">correction</span> "MIR-Bench: Can Your LLM Recognize Complicated
+  Patterns via Many-Shot In-Context Reasoning?" The "demo-count / many-shot lever" framing is directly supported
+  &mdash; shot count (4&ndash;2048) is the paper's central independent variable.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. NeurIPS 2025 D&amp;B accepted paper &mdash; <span class="key">zero reflects indexing lag, not neglect</span>. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>PCFG SET / Compositionality Decomposed: high task accuracy hides five separate generalization failures</h3>
+    <span class="paper-id">1908.08351</span>
+  </div>
+  <div class="paper-meta">Hupkes, Dankers, Mul, Bruni &middot; JAIR vol. 67, 2020; arXiv v1 2019-08-22, v2 2020-02-23</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Argues that disagreement over whether neural networks "generalise compositionally" stems from no agreed
+  definition, so the authors collect <span class="key">five theoretically grounded tests</span> &mdash;
+  systematicity, productivity, substitutivity, localism, overgeneralisation &mdash; and apply them to a string-edit
+  translation task (PCFG SET) across three seq2seq architectures. Central finding: high overall task accuracy does
+  <span class="key">not imply</span> a model satisfies any/all of the five finer-grained criteria. Not an
+  LLM-prompting paper: three architectures (LSTMS2S, ConvS2S, Transformer) are trained from scratch on ~85k
+  labeled pairs, then evaluated on held-out tests.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Each model sees <span class="key">one full input sequence</span> (e.g. <code>repeat A B C</code>) and must
+  output the transformed sequence in one forward decode &mdash; no in-context few-shot demonstration channel at
+  all; "few-shot" here means supervised-training-data scarcity, not a prompt-time exemplar set. The operator
+  names (<code>reverse</code>, <code>swap</code>, <code>repeat</code>...) are <span class="key">literal tokens in
+  the input</span>, so no rule induction from demos is required &mdash; the model only learns a known symbol's
+  meaning.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Task accuracy: LSTMS2S 0.79, ConvS2S 0.85, <span class="key">Transformer 0.92</span> (best).</li>
+    <li>Systematicity on held-out function-pair recombinations: 0.53/0.56/0.72 &mdash; a
+    <span class="key">33%, 34%, 22% relative drop</span> vs. task accuracy respectively, despite the task being
+    constructed so high accuracy requires systematic recombination.</li>
+    <li>Productivity (&ge;9-function sequences after training only on &le;8): 0.30/0.31/<span class="key">0.50</span>
+    &mdash; the best architecture still only reaches half.</li>
+    <li><code>reverse</code> is hard for LSTMS2S/ConvS2S but on par with easy functions for Transformer, because
+    non-sequential attention isn't bound to positional ordering &mdash; the one architecture-specific exception
+    the paper flags explicitly.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>All three architectures fail to generalize to <span class="key">never-co-occurring function pairs</span>,
+    attributed to learning "chunked" representations of frequent pairs rather than separable per-function
+    representations.</li>
+    <li>Localism: unrolling computation constituent-by-constituent changes the model's answer in the majority of
+    cases (consistency only 0.46&ndash;0.59) &mdash; traced mainly to functions misapplied to strings longer than
+    the training-time max of 5 characters.</li>
+    <li>At very low exception rates (0.01%), LSTMS2S and Transformer <span class="key">never learn the
+    exception</span>, continuing to overgeneralize even after convergence.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The five named generalization axes and the string-edit transduction task
+  are both fully verified. But calling this "the direct template for c23's per-operator independent latent rules"
+  <span class="fix">correction</span> overstates the mechanistic similarity: PCFG SET's rules are
+  <span class="key">not latent</span> &mdash; the operator name is an explicit input token learned via supervised
+  training, not a hidden rule induced from I/O demos by a frozen model at inference time. The corrected framing:
+  this paper templates the <span class="key">operator taxonomy and independent-axis decomposition style</span>,
+  not the induction-from-demos mechanic that is c23's actual core.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">16</span> citations (<span class="v">0</span> since 2025; 2019:2, 2020:6, 2021:8). OpenAlex's <code>by_year</code> trail stops at 2021 for a well-cited 2020 JAIR paper &mdash; a partial trail. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>Re-ARC: a procedural generator with no model in the loop, useful only as contamination-proofing precedent</h3>
+    <span class="paper-id">2404.07353</span>
+  </div>
+  <div class="paper-meta">Hodel &middot; arXiv preprint, v1 only, 2024-04-10 &middot; no LLM-evaluation venue (tooling paper)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Presents 400 task-specific Python generator+verifier pairs that procedurally produce new, verified
+  input/output examples for each ARC training task by reverse-engineering its assumed example distribution &mdash;
+  guaranteeing at least <span class="key">10,000 unique verified examples per task</span> plus an explicit
+  difficulty-control parameter, versus ARC's native handful of demonstrations. Novelty is positioned against naive
+  data augmentation, which "can't work in general... as the augmentations may break examples"; each new example is
+  instead constructed "from the ground up."</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p><span class="unverified">Not applicable</span> &mdash; this is a data-generation/verification paper, not an
+  LLM-evaluation paper. It defines no prompting protocol, no model-facing observation format, and reports
+  <span class="key">zero model results</span>. It describes what a generator+verifier pair produces, not what a
+  model observes.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">No models evaluated</span> &mdash; purely a data/tooling contribution.</li>
+    <li>Median generator: 40 lines of code, 22 DSL primitive calls; median verifier: 18 DSL calls;
+    <span class="key">~1,000 verified unique examples/sec</span> generated for the median task.</li>
+    <li>Difficulty dial: a single interval in [0,1] controlling sampled cardinalities (grid size, object
+    count/size, symbol count); two candidate difficulty metrics (RNG-Difficulty, flagged "heavily flawed"; and
+    PSO-Difficulty) proposed.</li>
+    <li>Verifiers diverge from 11 of 400 original ARC tasks (5 from original bugs/logic changes, 6 with exactly
+    one non-verifying original example).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Generator-level only: some generators have low sample-efficiency (many generated examples are invalid);
+  generation can be slow from small sample spaces or slow verification; the difficulty-interval mechanism is
+  "brittle to some degree" because degrees of freedom are often non-independent (e.g. smaller grids cap feasible
+  object counts), so finely graded difficulty levels can produce empty ranges.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The "procedural ARC generator with a difficulty dial" half is fully
+  verified. But the extracted text contains <span class="fix">correction</span> <span class="key">no mention of
+  1D-ARC anywhere</span> &mdash; pairing Re-ARC with 1D-ARC to supply c23's "linearized short-array stratum" is an
+  external design decision made by c23's authors, not something this paper claims or is aware of. Overlap with
+  c23 is family resemblance only: a tunable difficulty dial and an oracle verifier, nothing about prompting
+  protocol or model results.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. 2024 tooling preprint, no model results to attract citations from LLM-eval work. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>WILT: strong single-turn reasoners still lose at multi-turn rule discovery, via doom-looping and confirmation bias</h3>
+    <span class="paper-id">2410.10998</span>
+  </div>
+  <div class="paper-meta">Banatt, Cheng, Vaidyanath, Hwu (Riot Games) &middot; arXiv preprint, v1 only, 2024-10-14 &middot; cited elsewhere as submitted to ICLR 2025 (unverified from arXiv metadata alone)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Multi-turn inductive reasoning (Wason 2-4-6-inspired): a model must propose test cases over multiple turns,
+  then deduce a hidden boolean rule over three numbers. Best model (<span class="key">Claude 3.5 Sonnet</span>)
+  reaches only <span class="key">14/50 (28%)</span> on the full split. Models show non-overlapping strengths
+  &mdash; hypothesis-space reduction (proposing good tests) vs. function inversion (deducing the rule from
+  evidence). Novelty: memorization-robust by construction (every instance starts from an identical clean-slate
+  prompt with no pre-given examples), plus a decomposition of multi-turn performance into these two measurable
+  sub-skills that prior multi-turn benchmarks don't separately isolate.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p><span class="key">Interactive, not single-shot</span>: up to 30 turns of the model proposing a test triple
+  (getting True/False + remaining-attempts feedback), then exactly one final guess as a Python lambda. The model
+  <span class="key">never sees pre-given I/O demonstrations</span> &mdash; it must generate its own evidence
+  entirely. A separate single-turn ablation (Sec 4.3) hands the model another model's stripped test cases directly,
+  isolating function-inversion from hypothesis-space-reduction skill.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Claude 3.5 Sonnet</span>: 14/50 best on the full split; o1-mini 13/50, o1-preview 12/50
+    close behind despite far fewer guesses used (avg. 12.1/8.12 vs. Sonnet's 16.38) and near-zero repeats.</li>
+    <li>Lite split (10 easy rules): Claude-3.5-Sonnet 8/10, GPT-4-Turbo 7/10 &mdash; "the bulk of the separation...
+    lies in the easier tests."</li>
+    <li><span class="key">Test-case-swap ablation</span>: o1-mini scores 19/50 when given chatgpt-4o-latest's
+    stripped test cases &mdash; higher than any single model's full-task score &mdash; showing a composed
+    test-generator+inverter pair beats any single model doing both.</li>
+    <li>Floor: Gemini 1.5 Flash 8b and Gemma 2 9B both <span class="key">0/50</span>.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li><span class="key">Doom loop</span>: models (especially smaller ones) repeatedly propose already-tested
+    cases, sometimes dozens of times, with near-identical stated reasoning.</li>
+    <li><span class="key">Confirmation bias</span>: models fixate on a plausible partial hypothesis and keep
+    proposing confirming rather than falsifying tests, echoing the original Wason 2-4-6 result.</li>
+    <li>o1-mini/o1-preview "underperform due to gathering less evidence... a multi-turn capabilities failure
+    despite not being a failure on any turn in particular."</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The paper is explicitly Wason-2-4-6-framed, genuinely multi-turn, and explicitly
+  designed to be memorization-robust exactly as claimed. On dating: the corpus's correction of "2025" to Oct 2024
+  is directly verified (submission 2024-10-14); the "ICLR 2025" venue detail is
+  <span class="unverified">unverified</span> from the arXiv metadata alone (only v1 exists, no journal-ref).</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Late-2024 preprint. <em>OpenAlex undercounts relative to Google Scholar; zero here signals indexing lag, not neglect.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>FalsifyBench: falsification-seeking, not raw capability, predicts success &mdash; and no model gets close to optimal</h3>
+    <span class="paper-id">2606.04751</span>
+  </div>
+  <div class="paper-meta">Bertolazzi, Tentori, Bernardi &middot; arXiv preprint, v1 2026-06-03 &middot; no conference/journal venue listed</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Generalizes Wason 2-4-6 to semantic taxonomies (WordNet): a "player" LLM must discover a hidden general
+  category by iteratively proposing test triples and a hypothesis, receiving Conform/Do-not-conform feedback from
+  a separate "oracle" LLM, until it guesses. Across 12 models, reasoning models are stronger scientific reasoners
+  than instruction-tuned models, but <span class="key">no model approaches optimal performance</span>, and success
+  is driven primarily by <span class="key">falsification-seeking</span> rather than confirmation-seeking behavior.
+  Novelty: a taxonomic sampling design that engineers the hypothesis-too-narrow configuration where negative
+  testing is uniquely optimal, plus turn-level tracking of how each hypothesis relates to the target rule &mdash;
+  which the authors say prior Wason-inspired work (including WILT) neglects.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p><span class="key">Interactive, not single-shot</span>: up to 20 player-oracle rounds; the player is stateful
+  (its history accumulates), the oracle is stateless (freshly initialized each call). The player sees only 3
+  initial example items plus the system prompt &mdash; it is <span class="key">never shown the target rule or
+  sampling category directly</span>. Output per turn is a structured JSON action (test triple + hypothesis +
+  reasoning, or a guess), not a single short string. The verifier is itself an <span class="key">LLM oracle</span>,
+  validated against human annotation only for a 1,200-instance sample.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Best instruction-tuned model <span class="key">DeepSeek-V3.1: 41%</span> success vs. top reasoning models
+    <span class="key">GPT-5.2-Chat 75%</span> and GPT-OSS-120B 68%; remaining instruction-tuned models cluster
+    33&ndash;35%.</li>
+    <li>Small reasoning models underperform: GPT-5-Nano 12%, Qwen3.5-9B 21% &mdash; worse than all instruction-tuned
+    models.</li>
+    <li><span class="key">Confirmation bias vs. success rate</span>: Spearman &rho; = &minus;0.779 (p=0.003);
+    vs. conclusive falsification rate: &rho; = &minus;0.937 (p&lt;0.001).</li>
+    <li>Oracle quality only weakly predicts player failure: oracle-error regression coefficient is near-zero and
+    not credible, while confirmation-bias coefficient is robustly negative (OR 0.016).</li>
+    <li>"Artifact" is uniformly the hardest target category (0&ndash;30% success for most models); "animal" is
+    easiest (GPT-5.2-Chat reaches 100%).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li><span class="key">Confirmation bias / positive-testing dominance</span>: instruction-tuned models cluster
+    at 66&ndash;82% confirmation bias vs. 24&ndash;39% for reasoning models.</li>
+    <li><span class="key">Surface-level linguistic hypotheses</span> (e.g. "all items start with letter a"):
+    systematically associated with failure for stronger models (GLM-5 97.6%, GPT-5.2-Chat 92.0% of failed games),
+    but weak models show no such pattern &mdash; suggesting they fail for more basic reasons.</li>
+    <li>Llama-4-Maverick relies on "repeated guessing rather than active falsification" (avg. 6.92 guesses/game,
+    81.8% confirmation bias).</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The paper is explicitly Wason-2-4-6-inspired, unambiguously multi-turn, and its
+  own Related Work section places itself alongside WILT as a closely related benchmark &mdash; directly
+  substantiating the "overlapping the WILT... cluster" framing. The paper does not itself mention HERO'S JOURNEY;
+  that grouping is a corpus-side clustering judgment, not something FalsifyBench asserts about itself &mdash; a
+  minor scope note, not a miscitation.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. 2026 preprint &mdash; <span class="key">zero-by-construction</span> (indexing lag; a paper this new has had almost no time to accrue or have citations indexed). <em>Not evidence of low impact.</em></div>
+</div>
+
+<!-- POSITIONING MAP -->
+<div class="section-head"><h2>Positioning map</h2></div>
+<p>Three axes organize this family, each grounded directly in the dossiers: interaction structure, output shape
+&amp; verifier type, and rule provenance &amp; difficulty dial.</p>
+
+<h3>Axis A &mdash; Interaction structure</h3>
+<table class="axis-table">
+<tr><th>Pole</th><th>Papers</th><th>Evidence</th></tr>
+<tr><td class="pole">Single forward pass, evidence provided</td><td>MIR, IB, <strong>c23</strong></td>
+<td>MIR and IB are both single-shot with no environment loop; c23 is explicitly single-call by design.</td></tr>
+<tr><td class="pole">Trained-from-scratch, no ICL channel</td><td>PCFG</td>
+<td>Supervised seq2seq over ~85k pairs; no prompt-time exemplars at all.</td></tr>
+<tr><td class="pole">Multi-turn, model generates its own evidence</td><td>WILT, Falsify</td>
+<td>WILT: up to 30 self-proposed test triples + 1 guess. Falsify: up to 20 player-oracle rounds.</td></tr>
+<tr><td class="pole">No model in the loop</td><td>Re-ARC</td>
+<td>A generator+verifier toolkit; reports zero LLM results.</td></tr>
+</table>
+
+<h3>Axis B &mdash; Output shape &amp; verifier type</h3>
+<table class="axis-table">
+<tr><th>Pole</th><th>Papers</th><th>Evidence</th></tr>
+<tr><td class="pole">Apply rule &rarr; single value, exact-match</td><td>MIR, <strong>c23</strong></td>
+<td>MIR: emit y_new, string/ast exact match. c23: transformed short string (or 4-way MC) vs. a deterministic transducer.</td></tr>
+<tr><td class="pole">State the rule &rarr; symbolic rule-set, set-overlap metrics</td><td>IB</td>
+<td>Precision/recall vs. the minimal rule set + compatibility (against the training sample, not a held-out query).</td></tr>
+<tr><td class="pole">State the rule &rarr; free-form function, behavioral-equivalence check</td><td>WILT, Falsify</td>
+<td>WILT: Python lambda checked over a 64k-grid + floats. Falsify: property judged by an LLM oracle (kappa 0.34&ndash;0.98).</td></tr>
+<tr><td class="pole">Full-sequence exact match / output-vs-output consistency</td><td>PCFG</td>
+<td>"Sequence accuracy" (exact full-string match) plus a "consistency" metric (output vs. own earlier output).</td></tr>
+</table>
+
+<h3>Axis C &mdash; Rule provenance &amp; difficulty dial</h3>
+<table class="axis-table">
+<tr><th>Pole</th><th>Papers</th><th>Evidence</th></tr>
+<tr><td class="pole">Latent, composed K-independent sub-rules; dial = # rules stated/induced</td><td class="c23-cell"><strong>c23</strong> (as designed)</td>
+<td>K independent latent rules; smooth incremental ladder, floor (naive prompt) &rarr; ceiling (state all rules).</td></tr>
+<tr><td class="pole">Latent single rule; dial = formal complexity (k, |&Sigma;|, #rules)</td><td>IB</td>
+<td>Dials context window k, alphabet size, and number of minimal rules; k is the largest driver.</td></tr>
+<tr><td class="pole">Latent single monolithic function; dial = shot count</td><td>MIR</td>
+<td>Arbitrary Python functions; dial = 4&rarr;2048 shots; no partial-rule-credit structure.</td></tr>
+<tr><td class="pole">Latent single boolean/category; dial = catalog tier / taxonomic distance</td><td>WILT, Falsify</td>
+<td>WILT: Easy/Medium/Very-Hard catalog of 50. Falsify: WordNet taxonomic distance (close &le;4 edges / deep &gt;4).</td></tr>
+<tr><td class="pole">Named (not latent) operators; dial = length/depth/#functions</td><td>PCFG</td>
+<td>Operator names are literal input tokens; no induction required; dial = sequence length, parse depth, #functions.</td></tr>
+<tr><td class="pole">Fixed transformation; dial = cardinalities</td><td>Re-ARC</td>
+<td>RNG-/PSO-Difficulty over grid size, object/symbol counts; one fixed transform per task.</td></tr>
+</table>
+
+<div class="card full">
+  <h3>c23's target cell is genuinely empty, and empty partly because it is hard to keep reachable</h3>
+  <p>The crowded regions are <span class="key">"state the latent rule as a symbolic artifact"</span> (IB, WILT,
+  Falsify &mdash; the well-populated evaluation mode, paid for with expensive or noisy verifiers) and
+  <span class="key">multi-turn Wason-style rule discovery</span> (WILT and Falsify are near-duplicates on two of
+  three axes). c23's target cell &mdash; single-call &times; apply-rule-to-held-out-query-with-exact-match &times;
+  latent <em>composed</em> K-independent rules with a partial-credit ladder &mdash; is near-empty: MIR is the
+  closest neighbor (single-call, apply-and-exact-match) but its functions are monolithic with no partial-rule-credit
+  structure; IB shares the subregular substrate but grades rule-set reconstruction against the training sample, not
+  a held-out query. No dossier paper occupies c23's exact cell. The load-bearing caveat spanning the whole map:
+  <span class="key">IB's 0.00&ndash;5.69% compatibility finding is a documented reachability warning</span> for
+  anything built on the subregular substrate c23 reuses &mdash; the empty cell is empty partly because it is hard
+  to keep the ceiling reachable there.</p>
+</div>
+
+<!-- CAPABILITY SYNTHESIS -->
+<div class="section-head"><h2>Capability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One-shot succeeds only at the easy end; multistep collapses via evidence overload and confirmation bias, not budget exhaustion</h3>
+    <p>Single forward-pass induction is tractable only in the <span class="key">easy, single-rule, small-k
+    regime</span> InductionBench (IB) tests: ISL at k=2/vocab=2/rules=1 yields 40&ndash;60% compatibility for
+    GPT-4o/Llama-3.3-70B, but at k=4/rules=3 all but o3-mini collapse to <span class="key">0.00</span>. c23's
+    reseed-only, single-rule slice deliberately restricts k, so it lives in IB's partial-success regime, not the
+    zero-collapse regime &mdash; but the reachable ceiling is genuinely narrow, not near-100%. Context window
+    <code>k</code> is the dominant difficulty driver, and IB shows something structurally important:
+    <span class="key">adding new demonstration data can make performance worse</span>, not better ("more evidence
+    can hurt"), while MIR shows many-shot performance simply saturates by ~256 shots without declining as sharply.
+    In multi-turn settings (WILT, FalsifyBench) the dominant failure is structurally different &mdash;
+    <span class="key">doom-looping and confirmation bias</span>, not running out of turns &mdash; and WILT's own
+    ablation shows composing a separate evidence-gatherer with a separate inverter (o1-mini given another model's
+    tests: 19/50) beats any single model doing both (best full-task score: 14/50). Both failure modes are
+    <span class="key">structurally impossible in c23's single-shot design</span>: there is no adaptive
+    evidence-gathering to doom-loop on, and demos are fixed rather than self-generated.</p>
+  </div>
+  <div class="card">
+    <h3>Cheap-tier models carry an extra format-refusal risk layered on top of the difficulty curve</h3>
+    <p>No dossier tests c23's exact cheap tier (Gemini-2.5-Flash / GPT-5-mini / Claude Haiku 4.5 / DeepSeek-Chat),
+    but same-family proxies converge on two distinct risk sources. First, the <span class="key">difficulty
+    curve itself</span>: GPT-4o and DeepSeek-V3-class models hit 0.00 compatibility at IB's moderate setting but
+    40&ndash;60% at the easy end, so difficulty curation matters enormously. Second, a <span class="key">separate
+    comprehension/format failure</span> layered on top: MIR reports Claude-3.5-Haiku "often does not understand
+    our prompt and sees the target input as part of an incomplete data, thus refusing to answer," and WILT
+    independently shows Claude 3 Haiku at 1/50 and Gemini-1.5-Flash-8b at 0/50, both flagged for failing to use
+    available turns/effort rather than reasoning incorrectly. This is a <span class="key">parsing/refusal
+    risk, not a reasoning-difficulty risk</span> &mdash; it can drag cheap-tier scores to near-zero independent of
+    how easy the underlying rule is, and it is fixable by prompt-format work rather than task curation. MIR
+    additionally shows <span class="key">no-CoT beats forced-CoT unanimously</span> across 21 models (e.g. +0.36
+    for o1-mini), predicting that direct-answer prompting, not CoT, is the right default for c23's non-thinking
+    cheap tier.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>The InductionBench-shaped baseline is easier to score than to solve: held-out exact-match should modestly outperform rule-reconstruction</h3>
+  <p>c23's format &mdash; <span class="key">demos plus one held-out query, exact-match on the transformed
+  string</span> &mdash; is easier to succeed at than InductionBench's own protocol, which grades a full rule-set
+  reconstruction via precision/recall/compatibility against the <em>training</em> sample. A model can sometimes
+  transform one held-out string correctly without articulating the complete minimal rule set, so IB's compatibility
+  numbers are a <span class="key">conservative-to-pessimistic proxy</span> for c23's easier task &mdash; the
+  single largest source of upward uncertainty in the floor/ceiling estimate below. Countervailing this: IB's
+  "more demos can hurt" and "few-shot negligible past a complexity threshold" findings mean prompt-side levers
+  have limited headroom to push past that ceiling once difficulty is fixed.</p>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the c23 baseline</h2></div>
+<p>c23 config: InductionBench-style subregular ISL/OSL, <span class="key">fresh seeds</span>, single-rule instances
+only (no composition ladder), existing I/O-demos-plus-query format, short-string exact match, cheap tier, temp 0.
+This is the intersection of IB's <span class="key">partial-success regime</span> (single rule, small k) and a
+<span class="key">held-out-query protocol that should modestly outrank</span> IB's own rule-reconstruction metric
+&mdash; but no paper tests this exact cell, so both ranges carry real uncertainty, skewed toward the low end by
+format-refusal risk on the cheapest models.</p>
+
+<div class="card full">
+  <div class="range-row">
+    <span class="rlabel">Naive floor</span>
+    <div class="range-track"><div class="range-fill floor" style="left:5%; width:20%;"></div></div>
+    <span class="range-vals">~5&ndash;25%</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling (best feasible prompt)</span>
+    <div class="range-track"><div class="range-fill ceiling" style="left:35%; width:30%;"></div></div>
+    <span class="range-vals">~35&ndash;65%</span>
+  </div>
+  <p class="small muted" style="margin-top:14px;">Uncertainty is <strong>high and skewed low</strong> for the
+  floor: MIR's Claude-Haiku refusal behavior and WILT's Haiku/Flash-8b near-zero scores show cheap models can
+  score near zero purely from misreading the I/O block, but single-rule small-k ISL is genuinely partially
+  solvable, and held-out-query exact-match is easier than full-rule reconstruction, pulling above zero. If c23
+  inherits IB's k=4 default or the cheap models hit the refusal mode, the floor sits at ~0&ndash;10%; if k is
+  small and format is legible, ~15&ndash;25%. Ceiling uncertainty is <strong>moderate-high</strong>: the on-target
+  easy-ISL anchor is 40&ndash;80 compatibility for GPT-4o/Llama-3.3-70B, and held-out-query exact-match should
+  meet-or-exceed compatibility, but no cheap model saturates even MIR's retained-instance pool, so the ceiling will
+  <strong>not</strong> approach 100% &mdash; a realistic best is high-30s to low-60s. <span class="key">Go/no-go
+  gate</span>: the predicted <strong>~20&ndash;40 point</strong> floor-to-ceiling gap is usable IF difficulty is
+  curated (small k/vocab, small demo count, direct-answer prompting) and format-refusal is fixed first; if
+  reseed-only inherits IB's default hardness, the band collapses toward zero and the task needs
+  <em>added easing</em>, not added complexity, before proceeding &mdash; calibrate on a pilot before freezing, as
+  both IB and MIR did (MIR excluded all-zero instances from its retained pool; IB explicitly dialed k/|&Sigma;|/rules).</p>
+</div>
+
+<!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
+<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Highest overlap is InductionBench; the phase-1 baseline is close to a re-scored IB instance</h3>
+    <p>c23 literally vendors IB's generator+oracle. What differs: IB asks the model to <span class="key">state</span>
+    a full symbolic rule set graded against the training sample; c23 asks the model to <span class="key">apply</span>
+    the rule to a held-out query, scored by cheap string exact-match. c23 adds a multi-family ladder (casing, swaps,
+    command&rarr;action, 1D-ARC) and reachability curation &mdash; directly answering IB's own 0&ndash;5.69%
+    ceiling warning. <strong>Honest overlap:</strong> the un-optimized baseline as planned is very close to an IB
+    instance re-scored under exact-match-on-a-query instead of compatibility; the novelty of the baseline phase is
+    the scoring/format change and fresh seeds, not a new task substrate. The genuinely new part &mdash; the
+    composition ladder &mdash; is explicitly deferred out of phase 1.</p>
+  </div>
+  <div class="card">
+    <h3>Most threatening overlap is MIR-Bench &mdash; it already owns the "single-call, apply, exact-match" mode</h3>
+    <p>c23 risks being seen as <span class="key">"MIR-Bench with a smaller string domain and a rule-count
+    ladder."</span> The differentiator that must hold: MIR's functions are monolithic with "no equivalent
+    partial-rule-credit structure," while c23's decomposable K-independent-rule structure resolves <em>which</em>
+    rule strata a model misses, not just pass/fail. MIR's own findings are direct confounds c23 must control for:
+    no-CoT beats forced-CoT unanimously; RAG-selected shots don't beat random; performance saturates by ~256 shots
+    (not relevant at c23's small demo counts, but a reminder that "more demos" is not a free lever in this family
+    generally).</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>WILT and FalsifyBench are the cleanest complementarity story: c23 isolates the sub-capability their own interaction loops confound</h3>
+  <p>c23 sits in the <span class="key">opposite protocol quadrant</span> from WILT and FalsifyBench (single-call
+  vs. interactive). Both interactive papers show that success is dominated by <span class="key">strategy</span>
+  (evidence-gathering, falsification-seeking) rather than by raw per-turn reasoning correctness &mdash; WILT's
+  o1-mini/o1-preview "underperform due to gathering less evidence... a multi-turn capabilities failure despite not
+  being a failure on any turn in particular," and FalsifyBench's confirmation-bias-vs-success correlation
+  (&rho;=&minus;0.779) dwarfs any raw-capability signal. c23's single-call design directly tests whether the same
+  underlying induction capability holds up when the interaction loop and its confounds (doom-looping, confirmation
+  bias, turn-budget management) are removed entirely &mdash; a question neither paper's own design can answer about
+  itself.</p>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>If optimization yields large, verified gains, the precise claim is an optimizer-driven delta, not a capability claim</h3>
+    <p>The defensible workshop claim: automated prompt optimization (COPRO/MIPROv2/GEPA) raises a fresh-seed,
+    single-rule, contamination-proof induction baseline by a measured &Delta;, verified (i) held-out-seed
+    generalizing, (ii) not attributable to demo-selection alone (MIR shows RAG selection doesn't beat random), and
+    (iii) not a CoT-toggling artifact (MIR shows no-CoT unanimously beats forced-CoT). What it must
+    <strong>not</strong> say: that LLMs "can/cannot do inductive reasoning" &mdash; IB already owns the negative
+    capability claim at this substrate, and one task cannot support a positive general claim; nor that the
+    composition ladder was tested &mdash; it is deferred to phase 2's task design, not the baseline.</p>
+  </div>
+  <div class="card">
+    <h3>Lead with prompt-optimizer benchmarking, not induction-reasoning evaluation &mdash; and know the early-kill gate</h3>
+    <p>Induction-family evaluation is a <span class="key">thin line</span> here: IB already owns the "even the
+    simplest complexity class fails" finding, and a single-rule, single-task result is thin without the
+    composition ladder. The stronger line is <span class="key">prompt-optimizer benchmarking</span> (GEPA is an
+    ICLR 2026 oral, beating MIPROv2 by ~13% aggregate at ~35&times; fewer rollouts; MAS-PromptBench, 2026, is a
+    benchmark specifically for comparing optimizers) &mdash; a clean, cheap, deterministically-verified task with
+    decomposable-in-principle structure is exactly what that line wants. <span class="key">Not publishable:</span>
+    no gain / within-noise gains, gains that vanish on fresh seeds or reduce to demo-selection/CoT-toggling, an
+    unreachable-ceiling task (IB's 0&ndash;5% regime), or a bare IB re-run with no optimizer story and no ladder.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Research-currency verdict: high on venue/recency grounds, not on OpenAlex citation counts</h3>
+  <p>OpenAlex citation counts, fetched <span class="key">2026-07-22</span>: PCFG SET 16 (0 since 2025; trail stops
+  at 2021); InductionBench 0; MIR-Bench 0; Re-ARC 0; WILT 0; FalsifyBench 0
+  (<span class="key">zero-by-construction</span> for the 2025&ndash;2026 papers &mdash; indexing lag, not
+  neglect). Read naively this looks weak; with the caveat applied it is the expected signature of a
+  <span class="key">fast-moving, recently-published area</span>, not one that has gone quiet &mdash; InductionBench
+  is ACL 2025 main, MIR-Bench is NeurIPS 2025 Datasets &amp; Benchmarks, and FalsifyBench is a live June-2026
+  preprint still probing exactly this construct. The adjacent prompt-optimization line c23's phase-2 targets is
+  independently highly current (GEPA ICLR 2026 oral; MAS-PromptBench 2026). <span class="unverified">Two honest
+  caveats</span>: the citation counts are too lag-biased to use as a standalone currency signal for this family and
+  should be treated as a floor, not a measurement; and OpenAlex zeros cannot distinguish "ignored" from "too new"
+  without a Google Scholar cross-check. <em>All OpenAlex counts undercount relative to Google Scholar.</em></p>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c23.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c23 candidate page</a>
+  <a href="../candidates-table.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Candidates table</a>
+  <a href="../recommendations-round2.html#table" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Round 2 rescore</a>
+</nav>
+
+</main>
+</body>
+</html>

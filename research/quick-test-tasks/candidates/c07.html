@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c07 Case-Marked Micro-Conlang Translation</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c07</span>Case-Marked Micro-Conlang Translation</h1>
+  <span class="badge gated">GATED</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">MTOB's paradigm shrunk to quick-test scale</span> — learn an agglutinative micro-grammar from an in-context gloss table, then translate one short phrase (constructed-language morphology).</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict bad">
+  <p><strong>GATED.</strong> This candidate scores well on structure but was refuted on the
+  optimization path outright, and the round-2 gate is categorical: a candidate whose measurement
+  story was refuted in round 1 without a concrete rescue cannot be recommended no matter how easy
+  it is to build. The refutation is specific and hard to dodge. The per-instance
+  <span class="key">gloss table hands the latent morphology</span> directly to the model in context,
+  so there is no hidden knowledge left for a better prompt to discover; and the one rule meant to
+  carry the difficulty — that a case suffix determines subject versus object regardless of linear
+  position — is the <span class="key">highest-prior rule in all of linguistics</span>, so a single
+  competent paragraph one-shots most of the gap. The only fix on offer, an MTOB-style redesign that
+  withholds affix semantics from the gloss, changes what the task is, which makes it a
+  <span class="key">different candidate, not a rescue</span> of this one. The implementation total is
+  low and academic here: even a perfect build cannot lift a gated candidate off the floor, and the
+  one repo that touched this cluster offers essentially nothing reusable for morphology.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">7 / 16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Learn a per-run agglutinative micro-grammar in context, then translate one phrase to a rigid template</h3>
+    <p>A generator builds a fresh agglutinative micro-language on every run: random
+    <span class="key">roots</span> plus <span class="key">affixes</span> that mark case, number, and
+    tense, together with a <span class="key">topic-fronting particle</span>. One instance is a single
+    conlang sentence accompanied by a tiny gloss table; the model must return an English paraphrase in
+    a rigid three-to-six-word template with fixed articles and fixed slot order, scored by
+    <span class="key">exact match</span> after trivial normalization. The latent rules are meant to
+    layer: a case suffix fixes subject/object independent of position (the load-bearing rule naive SVO
+    prompts miss), number and tense affixes, article insertion, a fronting reorder, and an inflection
+    stratum with allomorphy. Ground truth is a deterministic template filler; randomized morphology
+    per run is contamination-proof, and MTOB/LingOly document large headroom for grammar-from-context
+    learning.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — reconstructed faithfully from the merged summary; the corpus gives no canonical instance for this gated candidate.</p>
+<pre><code>Gloss table:
+  roots:   tavu = dog,  miron = cat,  kela = chase
+  affixes: -ok = subject (nominative),  -ip = object (accusative)
+           -sa = plural,  za = (topic-fronting particle, sentence-initial)
+
+Conlang sentence:   za mironip tavuok kela
+Rigid EN template:  [art] [subj] [verb] [art] [obj]
+Gold answer:        the dog chases the cat
+
+Naive-SVO miss:     "the cat chases the dog"
+  — a word-order prompt reads the fronted "mironip" (topic particle za +
+    object suffix -ip) as the subject; the case suffix, given right in the
+    gloss, is what the model was supposed to apply.</code></pre>
+    <p class="small muted">The miss shows the whole problem: the rule that produces the error is spelled out in the gloss table the model is handed, so recovering it is comprehension, not induction.</p>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2309.16575">MTOB: A Benchmark for Learning to Translate a New Language from One Grammar Book</a> (Tanzer et al., arXiv 2023 / ICLR 2024)</span> — the paradigm this candidate shrinks: learn grammar from an in-context book, then translate; documents large headroom for grammar-from-context learning. Corpus writes "2024"/"2023-2024" and names no author; first-submitted Sept 2023, first author Tanzer.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2510.07591">Creating ConLangs to Probe the Metalinguistic Grammatical Knowledge of LLMs</a> (Taguchi &amp; Sproat, arXiv 2025)</span> — cited generation methodology for building the synthetic case-marked micro-language. Corpus tags "2025"; arXiv now lists ACL 2026 acceptance.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2508.06094">ConlangCrafter: Constructing Languages with a Multi-Hop LLM Pipeline</a> (Alper et al., arXiv 2025)</span> — recent generator machinery for the synthetic conlang; a per-run morphology-generation approach. Corpus tags "2025"; arXiv now lists ACL 2026 acceptance.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/1910.11493">The SIGMORPHON 2019 Shared Task: Morphological Analysis in Context and Cross-Lingual Transfer for Inflection</a> (McCarthy et al., 2019)</span> — reinflection paradigm informing the affix/allomorphy stratum design.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/1810.07125">The CoNLL-SIGMORPHON 2018 Shared Task: Universal Morphological Reinflection</a> (Cotterell et al., CoNLL 2018)</span> — 103-language reinflection task; secondary donor for the inflection-stratum affix paradigm.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Case-Marked Micro-Language Translation</a> (Theme B) — the origin item; the case-suffix-overrides-word-order idea and the fixed-template output surface come straight from here.</li>
+      <li><a href="../candidates-merged.html#c07">c07 in candidates-merged</a> — origin "both"; merges the brainstorm item with the synthetic case-marked micro-language family, the MTOB paradigm, the ConLangs metalinguistic probing generator, and SIGMORPHON-style synthetic inflection.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>Direct-use MTOB / LingOly / SIGMORPHON data — <span class="why">folded into this candidate's source list as reference-only literature, never their own clusters; used as-shipped they are fixed, published sets (contamination) and soft-scored (chrF / METEOR / free text), which the synthetic regeneration was meant to escape</span>.</li>
+    <li>This candidate's own optimization-path story — <span class="why">refuted outright in round 1: the gloss hands over the morphology and case-beats-word-order is the highest-prior rule in linguistics, so the incremental gap collapses one-shot</span>.</li>
+    <li>The MTOB-style withheld-gloss rescue — <span class="why">the only proposed fix withholds affix semantics from the gloss, but that converts the task into a different candidate rather than repairing this one, so the gate stands</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2509.21820">Can LLMs Generate and Solve Linguistic Olympiad Puzzles?</a> (Majmudar et al., EMNLP 2025)</span> — 2025 work on LLM generation and solving of Rosetta-style linguistic puzzles; informs a contamination-proof synthetic-generator design for this cluster.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2507.16809">LingBench++: A Linguistically-Informed Benchmark and Reasoning Framework</a> (Lian et al., arXiv 2025)</span> — 2025 multi-step linguistic-reasoning benchmark and framework extending the LingOly line, relevant to rule-induction scoring.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>On paper the best all-round fit in Theme B — cheap, exact-scored, generatable in the hundreds, contamination-proof, latent-rule-decomposed, few-shot-friendly; scores 27 on structure with a full tie-breaker</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The 27 is structural only; the load-bearing rules are handed to the model in the gloss or predicted by universal linguistic priors, so the incremental clause of criterion 4 fails and a single paragraph one-shots much of the gap</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The few-shot glossed pairs are a natural, honest MIPROv2 demo axis — if any hidden knowledge existed to teach</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>This is the lens that refuted it: with the morphology printed in the gloss there is no latent knowledge left to surface, and the hard rule is the most predictable rule in linguistics — refuted at major severity, no concrete rescue</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Exact match on a rigid canonicalized template is a clean, unambiguous scoring surface with legible "expected X, got Y" diagnostics</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>A clean scorer cannot save a task whose gap does not survive a competent one-shot prompt; the measurement is precise but measures something the prompt can already do</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The oracle is a straightforward deterministic template filler and the morphology generator is conceptually simple to write from scratch</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No reusable repo exists — the one repo that touched the cluster (InductionBench, serving c23) has no case system or glossing and would be a from-scratch build; I6 is zero, and ease is moot because the gate makes the candidate ineligible</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Rides live 2024-2026 lines — MTOB, LingOly and its follow-ups, ConLang generation, SIGMORPHON — earning a full tie-breaker</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The candidate inherits that currency rather than adding to it; standalone novelty for a case-marked micro-language is low, and currency does not offset the measurement refutation</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Build the morphology generator from scratch</h3><p>No reusable code exists; write a seeded generator that samples roots plus a rotating inventory of case/number/tense affixes, a topic-fronting particle, and an allomorphy stratum, emitting a conlang sentence plus a tiny gloss table per instance.</p></div>
+  <div class="step"><h3>Write the deterministic template filler</h3><p>Implement the oracle that maps a parsed sentence to the rigid three-to-six-word English template (fixed articles, fixed slot order) and canonicalize for exact match.</p></div>
+  <div class="step"><h3>Attempt the gate rescue before anything ships</h3><p>The task is ineligible as designed; the only path to eligibility is the MTOB-style redesign that withholds affix semantics from the gloss so morphology must be induced — but that is a different candidate and must be scoped and re-scored as one, not slipped in as a patch.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>One-shot collapse (the fatal one): the gloss table hands over the morphology and case-beats-word-order is the highest-prior linguistic rule, so a single competent paragraph closes most of the gap and the incremental ladder disappears.</li>
+      <li>Rescue changes the task: withholding affix semantics to restore headroom converts this into an induction task (a different candidate), so "fixing" it forfeits its identity rather than salvaging its score.</li>
+      <li>From-scratch build cost with no payoff: the morphology, glossing, and allomorphy stratum must all be written new, and even a flawless build cannot lift a gated candidate off the floor.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/Wenyueh/inductive_reasoning_benchmark">Wenyueh/inductive_reasoning_benchmark (InductionBench)</a> (Apache-2.0) — deep-read notes at <a href="../repos/inductionbench-wenyueh-inductive-reasoning-benchma.md">repos/inductionbench-wenyueh-inductive-reasoning-benchma.md</a>. Serves c23 as primary fit; for c07 the review verdict is "essentially nothing reusable — no morphology/case system, no glossing; would be a from-scratch build."</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified for c07. The shared repo has three verified import-time crashes and PYTHONHASHSEED nondeterminism, which capped I1 at 1; even that run was for c23's string-transform path, not any morphology code, of which this candidate has none.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Atlas order</span>
+    <a href="c05.html">&larr; c05</a>
+    <a href="c15.html">c15 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c08.html">c08 Rosetta&rarr;Match-Up MC</a>
+    <a href="c23.html">c23 Hidden-Rule String-Transform</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c07">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

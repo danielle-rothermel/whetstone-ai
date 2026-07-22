@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Classification Under Nonstandard / Remapped Label Semantics</title>
+</head>
+<body>
+<main>
+<h1>Classification Under Nonstandard / Remapped Label Semantics</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Remapped labels</span>
+</div>
+
+<div class="intro">
+  <p>Breadth-focused literature scan for the whetstone-ai quick-test task: existing tasks, benchmarks, and dataset-generation methods that could be <strong>used or adapted</strong> as the single cheap task that validates the prompt-optimizers (Eval, COPRO, MIPROv2, GEPA, Codex agent) end to end. Up to 12 candidates, <span class="key">not ranked or narrowed</span>. This is the seed domain ("classification under nonstandard label semantics") and maps directly onto the brainstorm's <a href="brainstorm.html">Theme F</a> — contrarian sentiment codebooks, cipher-category tagging, inverted MC, priority/override policies. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+  <p class="small muted">Rubric essentials: single LLM call + exact deterministic scoring (no sandbox); output bounded to MC or a few words; default prompts score well below a KNOWN ceiling; the gap closes INCREMENTALLY through prompt improvements (not one-shot guessable); difficulty decomposes into independent latent rules; synthetic/generatable pool with exact ground truth, hundreds of instances, contamination-resistant; diagnostic failures; few-shot demos measurably help; prompt-quality differences resolvable on 10-20 evals at temperature 0.</p>
+</div>
+
+<div class="verdict">
+  <p><strong>The realistic deliverable is a generator, not an off-the-shelf benchmark.</strong> The strongest fit is almost never a published benchmark — those are contaminated, use natural labels, or lack decomposable latent rules. The winning recipe: take a generation method or task template from this literature and regenerate it synthetically with (a) an <span class="key">opaque per-instance codebook</span> that defeats the prior, (b) <span class="key">3-5 independent latent rules with precedence/override</span> so the score ladder is incremental, and (c) a bounded MC or short-token output for exact scoring. The foundational ICL papers are mostly <em>evidence the mechanism works</em>; the rule / cipher / tabular generators are the drop-in adaptation targets. <span class="key">LLMTabBench (C6)</span> and the <span class="key">decision-list literature (C7)</span> are the most directly reusable methods; <span class="key">Contrarian Sentiment Codebook (C12)</span> is the brainstorm-native synthesis that hits all core criteria at once.</p>
+</div>
+
+<div class="callout warn space-top">
+  <strong>Domain-wide risk to watch on every candidate: floor immovability on cheap models.</strong> Candidates 3 and 4 (2025-2026) show that ≤~12B models may produce a <em>zero</em> override rate or pathological collapse under label inversion. If the quick-test model is small, a nonstandard-label task can sit at the floor for <em>every</em> prompt, killing the incremental gap (criterion 4). Mitigate by conveying rules via instruction (not demo-only inversion), keeping per-rule difficulty low, and piloting floor/ceiling on the actual quick-test model before committing.
+</div>
+
+<div class="section-head" id="how-to-read"><h2>How to read the rubric-fit notes</h2></div>
+
+<p>The foundational ICL papers below are mostly <em>evidence that the mechanism works</em> rather than drop-in tasks; the rule / cipher / tabular generators are the drop-in adaptation targets. Two reusable ingredients dominate the whole scan: an <span class="key">opaque / flipped label space</span> (C1-C5, C11) makes the default prompt score low with a known 100% ceiling, and an <span class="key">ordered rule list / precedence</span> (C6-C8) gives the incremental, decomposable, diagnostic ladder. The best quick-test task combines both.</p>
+
+<div class="section-head" id="pillars"><h2>Two research pillars</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Pillar 1 · Stated mapping vs pretrained prior</h3>
+    <p class="small muted">A mature ICL literature quantifying how much models follow <em>stated label mappings</em> versus their <em>pretrained priors</em>. This is the mechanism that makes default prompts score near chance against a known 100% ceiling. (Candidates 1-5, 11.)</p>
+  </div>
+  <div class="card">
+    <h3>Pillar 2 · Rule / codebook generators</h3>
+    <p class="small muted">Rule-based / decision-list classification and cipher / codebook generation methods that supply the incremental, decomposable ladder and the synthetic generator with exact ground truth. (Candidates 6-10, 12.)</p>
+  </div>
+</div>
+
+<div class="section-head" id="candidates"><h2>The 12 candidates</h2></div>
+
+<p class="small muted">Grouped by role: label-mechanism evidence (C1-C5, C11), rule / codebook generators (C6-C10), and the brainstorm-native synthesis (C12). Not ranked. Each card carries what it is, citations, the adaptation for the rubric, and rubric-fit notes including weaknesses.</p>
+
+<div class="card space-top">
+  <h3>C1 · Flipped-Label ICL (Wei et al., "Larger language models do ICL differently")</h3>
+  <p><strong>What it is.</strong> The canonical flipped-label / semantically-unrelated-label (SUL-ICL) setup. Take a standard classification task, systematically flip labels in the in-context demonstrations (positive → negative), or replace labels with semantically-unrelated symbols (foo/bar). Measures whether the model follows the <em>in-context mapping</em> or its <em>pretrained prior</em>. Key result: overriding semantic priors is emergent with scale; large models drop to well-below-chance (e.g. code-davinci-002 <span class="key">90% → 22.5%</span>) when labels are flipped, small models stay flat.</p>
+  <p><strong>Citations.</strong> Wei et al., "Larger language models do in-context learning differently," 2023. arXiv:2303.03846 — <a href="https://arxiv.org/abs/2303.03846">arxiv.org/abs/2303.03846</a></p>
+  <p><strong>Adaptation for the rubric.</strong> A <em>methodology</em>, not a fixed dataset — good. Regenerate over synthetic instances (not SST/TREC) to dodge contamination. Convert to a single-call task: give the codebook + rules in the <em>instruction</em> rather than only via demos, so the default (no-mapping) prompt scores at the prior (near chance under a flipped map) and the ceiling prompt that states the full mapping scores ~100%. Bound output to a single label token. Add independent latent rules (base map + inversion trigger + carve-out + precedence) to get the incremental ladder — a bare flip is one-shot guessable.</p>
+  <p><strong>Rubric-fit notes.</strong> Excellent evidence base for "default prompt scores below a known ceiling" and "few-shot demos measurably help." <em>Weakness:</em> a pure label flip is a <em>single</em> rule, so on its own it fails "decompose into independent latent rules / not one-shot guessable" — must be layered. The emergence-with-scale finding also means results depend on the quick-test model being large enough to <em>be able</em> to override priors; verify the chosen small/cheap model can climb the ladder at all (see C3 and C12 for the small-model caution).</p>
+</div>
+
+<div class="card">
+  <h3>C2 · Symbol Tuning / SUL-ICL benchmark suite (Wei et al., 2023)</h3>
+  <p><strong>What it is.</strong> Symbol tuning replaces natural-language labels with arbitrary symbols (foo/bar) so the model must learn input→label mappings rather than lean on label semantics. Ships an evaluation suite of SUL-ICL tasks (arbitrary-symbol classification) and flipped-label robustness evals across NLU tasks. Directly operationalizes "the label carries no usable prior."</p>
+  <p><strong>Citations.</strong> Wei et al., "Symbol tuning improves in-context learning in language models," EMNLP 2023. arXiv:2305.08298 — <a href="https://arxiv.org/abs/2305.08298">arxiv.org/abs/2305.08298</a> · ACL: <a href="https://aclanthology.org/2023.emnlp-main.61/">aclanthology.org/2023.emnlp-main.61</a></p>
+  <p><strong>Adaptation for the rubric.</strong> Borrow the arbitrary-symbol label convention (ALPHA/BETA/GAMMA or foo/bar) as the label space for the quick-test — exactly the brainstorm's "opaque codebook." Generate synthetic inputs with a programmatic ground-truth rule set. Bound output to one symbol. Add precedence/override rules for the ladder.</p>
+  <p><strong>Rubric-fit notes.</strong> Strong conceptual fit for the label-space design (opaque symbols defeat the prior). <em>Weakness:</em> the suite itself uses real NLU datasets (contaminated) and is oriented toward <em>fine-tuning</em>, not prompt optimization, so use it as a design pattern rather than a dataset. Symbol labels alone are trivially learnable from a few demos, so on their own they satisfy "few-shot helps" but risk being one-shot guessable — again, needs layered rules.</p>
+</div>
+
+<div class="card">
+  <h3>C3 · Semantic Anchors: "Why Small LLMs Cannot Flip Their Labels" (2025)</h3>
+  <p><strong>What it is.</strong> Treats LLMs as prompt-induced classifiers; compares natural vs inverted demonstrations across 8 classification tasks and 8 open models (1-12B). Finding: with inverted demonstrations, small models produce <span class="key">zero</span> coherent anti-semantic classifiers — "semantic override rate remains exactly zero" in the 1-12B few-shot regime; ICL mostly re-projects inputs onto stable pretrained semantic directions rather than remapping labels.</p>
+  <p><strong>Citations.</strong> A. P. Krishna Kumar, "Semantic Anchors in In-Context Learning: Why Small LLMs Cannot Flip Their Labels," 2025. arXiv:2511.21038 — <a href="https://arxiv.org/abs/2511.21038">arxiv.org/abs/2511.21038</a></p>
+  <p><strong>Adaptation for the rubric.</strong> Primarily a <span class="key">cautionary calibration source</span> rather than a task. Use it to set floor/ceiling expectations and to choose the quick-test model: if the cheap model is ≤~12B, a <em>pure</em> label inversion may be uniformly unlearnable (floor stays at floor regardless of prompt) — which would break criterion 4's incremental-gap requirement. Mitigate by making the rules <em>compositional and instruction-stated</em> (not inversion-via-demos-only), which the study suggests is more tractable than demo-only remapping.</p>
+  <p><strong>Rubric-fit notes.</strong> Very relevant, very recent, directly quantifies the risk that a nonstandard-label task is <em>too hard</em> for a cheap model. <em>Weakness:</em> it argues the naive version of this whole domain may not produce an incremental ladder on small models — take it seriously when picking model size and deciding how much to lean on instruction vs demonstration to convey the mapping.</p>
+</div>
+
+<div class="card">
+  <h3>C4 · In-Context Fixation (Liu, 2026)</h3>
+  <p><strong>What it is.</strong> Shows that the <em>label slot content</em> in demonstrations acts as an exhaustive answer vocabulary. Homogeneous labels collapse accuracy to ≤12% across 6 models (0.8-8B) and 4 tasks; with nonsense tokens {foo,bar,vex,nit,orb} the model puts 42-67% mass on the demonstrated set and <0.2% on the true class. Generalizes to 4-way classification and multitoken verbalizers ("very positive"), decomposing into format-level and content-level components. Includes mechanistic patching localizing the effect.</p>
+  <p><strong>Citations.</strong> M. Liu (Amazon), "In-Context Fixation: When Demonstrated Labels Override Semantics in Few-Shot Classification," 2026. arXiv:2605.08295 — <a href="https://arxiv.org/abs/2605.08295">arxiv.org/abs/2605.08295</a></p>
+  <p><strong>Adaptation for the rubric.</strong> Use the nonsense-token label vocabulary design and the 4-way variant as the label space and difficulty knob. The "format-level vs content-level" decomposition maps neatly onto independent latent rules (one rule about the label <em>format</em>, another about the <em>content mapping</em>) — useful for the decomposability + diagnostic-failure criteria. Regenerate synthetically.</p>
+  <p><strong>Rubric-fit notes.</strong> Recent, directly on-domain, and its decomposition into independent components is a gift for criteria 10-11. <em>Weakness:</em> it studies small models (≤8B) and documents <em>pathological collapse</em>, so like C3 it warns the ladder may be non-monotonic on cheap models. It's also about demo-induced behavior; the quick-test wants prompt-instruction-driven behavior, so adapt the framing.</p>
+</div>
+
+<div class="card">
+  <h3>C5 · Rectifying Demonstration Shortcut / label bias (Kang et al., 2024)</h3>
+  <p><strong>What it is.</strong> Characterizes the "demonstration shortcut": models rely on superficial label-bias patterns in demonstrations instead of the underlying input→label logic, hurting generalization when labels/formats change. Provides an evaluation across demonstration formats, example sets, and alternative label assignments.</p>
+  <p><strong>Citations.</strong> Kang et al., "Rectifying Demonstration Shortcut in In-Context Learning," NAACL 2024. arXiv:2403.09488 — <a href="https://arxiv.org/abs/2403.09488">arxiv.org/abs/2403.09488</a></p>
+  <p><strong>Adaptation for the rubric.</strong> The alternative-label-assignment evaluation harness is a template for generating instances where the "obvious" (prior-driven) answer is wrong and only the stated mapping gives the right label. Regenerate synthetically with an opaque codebook; bound output; add rules.</p>
+  <p><strong>Rubric-fit notes.</strong> Good on "default prompt scores low because it takes the shortcut" and diagnostic failures (you can see the shortcut answer vs the correct one). <em>Weakness:</em> built on standard NLU datasets (contamination), and the "shortcut" is a single failure mode — needs layered rules for the ladder. Metadata was partly obscured in the PDF; confirm exact author list/venue before citing.</p>
+</div>
+
+<div class="card">
+  <h3>C6 · LLMTabBench: synthetic tabular classification with LLM-distilled decision rules (2026)</h3>
+  <p><strong>What it is.</strong> Binary tabular classification, zero-to-few-shot. The LLM-synthetic suite contains 24 datasets, each generated to mirror a real-world counterpart, <span class="key">together with the threshold-based decision rules the generator produced</span>. The generator is asked for three measurable, threshold-based rules mapping features → a binary label; a row is positive if ≥1 rule fires. Evaluates combinations of few-shot examples, task descriptions, and LLM-distilled decision rules.</p>
+  <p><strong>Citations.</strong> "LLMTabBench: Evaluating LLMs on Binary Tabular Classification From Zero to Few Shots," 2026. arXiv:2605.24417 — <a href="https://arxiv.org/abs/2605.24417">arxiv.org/abs/2605.24417</a></p>
+  <p><strong>Adaptation for the rubric.</strong> The closest <span class="key">drop-in generator</span>: a program emits both the rows and the ground-truth rule set, giving exact labels and hundreds of instances for free. Adapt by (a) making the rules <em>latent</em> (not given in the default prompt) so the default scores at base rate and the ceiling prompt that states all rules scores ~100%; (b) expanding from OR-of-3-thresholds to a <span class="key">decision list with precedence/override</span> so partial rule knowledge earns partial score (criterion 10); (c) relabeling classes with opaque symbols to defeat the prior; (d) bounding output to the class token / a 4-way MC.</p>
+  <p><strong>Rubric-fit notes.</strong> Strong on synthetic generation, exact ground truth, hundreds of instances, decomposable rules, few-shot help, and diagnostic failures ("which rule did the model miss"). Arguably the best-fit <em>method</em> in the scan for the incremental-ladder + decomposability criteria. <em>Weaknesses:</em> tabular inputs are longer than MC stems (watch token cost, criterion 3), and the base OR structure is order-independent — you must add precedence to get true rule interaction rather than a bag of independent thresholds. Very recent; verify the released artifact/license.</p>
+</div>
+
+<div class="card">
+  <h3>C7 · Decision lists / optimal rule lists as a synthetic label oracle</h3>
+  <p><strong>What it is.</strong> Classical ordered rule lists (decision lists): a sequence of if-then rules; an instance is labeled by the <em>first</em> rule that fires. Rich literature on constructing sparse/optimal rule lists (MaxSAT / MIP formulations). Not an LLM benchmark — a <span class="key">generator of latent, ordered, precedence-bearing labeling functions</span> with exact ground truth.</p>
+  <p><strong>Citations.</strong> Angelino et al., "Learning Certifiably Optimal Rule Lists," KDD 2017 / JMLR 2018 — <a href="https://arxiv.org/abs/1704.01701">arxiv.org/abs/1704.01701</a>. Yu et al., "Optimal Rule Sets and Lists for Binary Classification (MaxSAT)," 2020 — <a href="https://arxiv.org/abs/2104.10751">arxiv.org/abs/2104.10751</a> (representative of the line).</p>
+  <p><strong>Adaptation for the rubric.</strong> Programmatically sample a short ordered rule list over synthetic categorical features; the first-match semantics <em>is</em> the precedence/override structure the rubric wants. Each rule the prompt captures adds score; the "first-match" ordering makes rule interactions non-trivial and not one-shot guessable. Present features as a short structured stem; output = the label token or a 4-way MC. Contamination-proof by construction (nothing published).</p>
+  <p><strong>Rubric-fit notes.</strong> Excellent on criteria 7-11 (synthetic, known ceiling, decomposable independent rules, first-match precedence, diagnostic "which rule fired"). This is the archetypal "independent-rules with override" task the brainstorm's Theme F "Priority Override Router" already sketches. <em>Weakness:</em> it's a build-it-yourself generator, not a ready benchmark, so more engineering. Also, over-simple feature encodings can be one-shot solved by a competent engineer — control difficulty via rule count, feature arity, and depth of the override chain.</p>
+</div>
+
+<div class="card">
+  <h3>C8 · Instruction Hierarchy / priority-override policy classification (Wallace et al., 2024; Control Illusion 2025)</h3>
+  <p><strong>What it is.</strong> Instruction-hierarchy work trains/evaluates models to resolve <em>conflicting</em> instructions by source priority (System > Developer > User > Tool), using synthetic conflict data. "Control Illusion" (2025) shows current models often fail to honor stated precedence when instructions conflict — i.e., precedence resolution is a genuine, unsolved, incremental skill.</p>
+  <p><strong>Citations.</strong> Wallace et al., "The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions," 2024. arXiv:2404.13208 — <a href="https://arxiv.org/abs/2404.13208">arxiv.org/abs/2404.13208</a>. Geng et al., "Control Illusion: The Failure of Instruction Hierarchies in Large Language Models," 2025. arXiv:2502.15851 — <a href="https://arxiv.org/abs/2502.15851">arxiv.org/abs/2502.15851</a></p>
+  <p><strong>Adaptation for the rubric.</strong> Recast as a <em>classification</em> task: an instance carries several flags, and a set of override rules with a stated precedence order determines the final label (e.g. incident → P0/P1/P2/P3/SUPPRESS, where "security forces P0," "region downgrades," "paying customer never suppress," with precedence). Exactly the brainstorm's "Priority Override Router." Output = 5-way label. Generate synthetically; make precedence latent so the default prompt mishandles conflicts.</p>
+  <p><strong>Rubric-fit notes.</strong> Very strong on the override/precedence ladder (criterion 4 + 10) and on 2025 research interest (tie-breaker). Diagnostic failures are clean ("model applied region-downgrade before security-override"). <em>Weakness:</em> the source literature is about <em>safety/prompt-injection</em>, not classification accuracy, so you're adapting the mechanism, not reusing a dataset. Ensure the 5-way label space + flag encoding stays short (criterion 3) and that precedence conflicts are frequent enough that a no-precedence prompt visibly loses points.</p>
+</div>
+
+<div class="card">
+  <h3>C9 · CipherBank / CipherBench / dynamic Caesar-cipher benchmarks (2024-2025)</h3>
+  <p><strong>What it is.</strong> Benchmarks for decoding ciphers — CipherBank (ACL Findings 2025) and CipherBench (3 tiers: common like Base64/ROT13, uncommon, novel user-designed) — plus the "Towards Contamination Resistant Benchmarks" argument that Caesar ciphers are <em>dynamically generatable</em> (infinite instances, different shifts = different tasks), which makes them contamination-resistant. Directly the brainstorm's Theme F "cipher-category tagger" and Theme C "cipher chains."</p>
+  <p><strong>Citations.</strong> "CipherBank: Exploring the Boundary of LLM Reasoning Capabilities through Cryptography," ACL Findings 2025. arXiv:2504.19093 — <a href="https://arxiv.org/abs/2504.19093">arxiv.org/abs/2504.19093</a>. "When 'Competency' in Reasoning Opens the Door to Vulnerability: Jailbreaking LLMs via Novel Ciphers," ICLR 2025. arXiv:2402.10601 — <a href="https://arxiv.org/abs/2402.10601">arxiv.org/abs/2402.10601</a>. "Towards Contamination Resistant Benchmarks," 2025. arXiv:2505.08389 — <a href="https://arxiv.org/abs/2505.08389">arxiv.org/abs/2505.08389</a></p>
+  <p><strong>Adaptation for the rubric.</strong> Use the <em>dynamic per-instance cipher key</em> as the mechanism that defeats memorization and the prior. But for the quick-test, invert the emphasis: instead of full decode (unbounded output, char-arithmetic noise), make it a <span class="key">cipher-category classifier</span> — decode just enough to emit a single MC/short-token label under a per-instance symbol→category map. Layer rules (base polarity map + co-occurrence → mixed-tag + suffix rule + cancellation) for the ladder.</p>
+  <p><strong>Rubric-fit notes.</strong> Strong on contamination-resistance and active 2025 research (tie-breaker). <em>Weakness the brainstorm already flags:</em> char-arithmetic ciphers add per-token noise that threatens <span class="key">temp-0 resolvability on 10-20 evals (criterion 5)</span> — keep the transform to table lookups + a classification output rather than long free-form decode. A full-decode cipher task also risks unbounded output (criterion 3) and one-shot vulnerability for simple shifts.</p>
+</div>
+
+<div class="card">
+  <h3>C10 · Synthetic few-shot rule-induction benchmarks: MIR-Bench, WILT, HERO'S JOURNEY (2025-2026)</h3>
+  <p><strong>What it is.</strong> A cluster of synthetic inductive-reasoning benchmarks where the model must infer a <em>hidden rule</em> from examples: MIR-Bench (many-shot input→output function induction), WILT (Wason 2-4-6-style multi-turn rule discovery), HERO'S JOURNEY (complex rule induction in text games), and ARISE (iterative rule induction + synthetic data generation for text classification).</p>
+  <p><strong>Citations.</strong> "MIR-Bench: Many-shot In-context Reasoning benchmark," 2025 — <a href="https://arxiv.org/abs/2502.09933">arxiv.org/abs/2502.09933</a>. "WILT: A Multi-turn, Memorization-Robust Inductive Logic Benchmark," 2025 — <a href="https://arxiv.org/abs/2410.10998">arxiv.org/abs/2410.10998</a>. "HERO'S JOURNEY: Testing Complex Rule Induction with Text Games," 2026. arXiv:2606.02556 — <a href="https://arxiv.org/abs/2606.02556">arxiv.org/abs/2606.02556</a>. "ARISE: Iterative Rule Induction and Synthetic Data Generation for Text Classification," 2025. arXiv:2502.05923 — <a href="https://arxiv.org/abs/2502.05923">arxiv.org/abs/2502.05923</a></p>
+  <p><strong>Adaptation for the rubric.</strong> These supply <em>hidden-rule + synthetic-generation</em> templates. For the quick-test, the optimizer's job is to <em>write a prompt that states the rules</em> (rules given to the designer, latent to the model), so take the generators but flip the framing from "model induces rule" to "prompt supplies rule, model applies it." Constrain to a classification output. WILT's memorization-robust design and MIR-Bench's function library are the reusable pieces.</p>
+  <p><strong>Rubric-fit notes.</strong> Good on synthetic generation, decomposable rules, few-shot help, and diagnostic failures. Recent, active research interest. <em>Weaknesses:</em> WILT/HERO'S JOURNEY are <em>multi-turn</em> (violates single-call criterion 1 unless simplified); several emit longer outputs than MC (criterion 3); and pure rule-<em>induction</em> difficulty can be high-variance across instances, threatening temp-0 resolvability on 10-20 tasks. Use the generators, not the interaction protocols.</p>
+</div>
+
+<div class="card">
+  <h3>C11 · Option-label / format-remapping sensitivity in MC (label-format bias line, 2024)</h3>
+  <p><strong>What it is.</strong> Work showing MC accuracy shifts drastically when the <em>label symbols</em> change (alphabetic vs numeric vs Roman) even with explicit instructions — e.g. reported ~30-point MMLU drop for Roman vs numeric labels. Demonstrates models carry priors over label <em>tokens</em>, not just semantics, and that instructions to use a nonstandard label convention are imperfectly followed.</p>
+  <p><strong>Citations.</strong> Representative: "Deconstructing Instruction-Following" and related MC-format-bias analyses, 2024 — <a href="https://arxiv.org/abs/2601.18554">arxiv.org/abs/2601.18554</a> (and the broader "LLMs are not robust to option ID" line, e.g. Zheng et al. 2024, arXiv:2309.03882 — <a href="https://arxiv.org/abs/2309.03882">arxiv.org/abs/2309.03882</a>).</p>
+  <p><strong>Adaptation for the rubric.</strong> Use a <span class="key">nonstandard option-label convention</span> as one latent rule: e.g. "answer with the Greek letter two positions after the correct option," or "map A/B/C/D → a per-instance permuted symbol set." This is the brainstorm's "Inverted Multiple-Choice." Compose it with content rules so it's more than a relabeling. Output = single MC token.</p>
+  <p><strong>Rubric-fit notes.</strong> Cleanly bounded output, exact scoring, and it directly defeats the label prior (criterion 4/8). <em>Weakness the brainstorm flags:</em> a <em>bare</em> inverted-MC convention is <span class="key">HIGH one-shot risk</span> — a competent engineer states "shift the answer by +2" in one line and hits the ceiling. The author's own note: use it as a <span class="key">floor/plumbing check</span>, not the main incremental task, unless layered with several interacting conventions. The cited effect sizes also depend on model; verify on the cheap model.</p>
+</div>
+
+<div class="card">
+  <h3>C12 · Contrarian sentiment codebook (synthetic-family, brainstorm-native)</h3>
+  <p><strong>What it is.</strong> Not from a single paper — a <span class="key">synthetic family</span> synthesizing the ICL-flipped-label findings (C1-C5) with the decision-list/precedence structure (C7-C8). Inputs are short texts; labels are opaque codes (ALPHA..DELTA) under: a base sentiment→code map, a sarcasm-inversion trigger, a grudging-praise trigger, a neutral-fact carve-out, and a precedence order among triggers. Output = single code token. This is the brainstorm's "Contrarian Sentiment Codebook."</p>
+  <p><strong>Citations (grounding).</strong> Flipped/SUL-ICL basis: Wei et al. 2023 (arXiv:2303.03846, 2305.08298) — as above. Sentiment flip / steering evidence (2025): "Belief Dynamics Reveal the Dual Nature of In-Context Learning and Activation Steering," 2025. arXiv:2511.00617 — <a href="https://arxiv.org/abs/2511.00617">arxiv.org/abs/2511.00617</a> (shows models can be driven between standard and flipped sentiment label spaces predictably).</p>
+  <p><strong>Adaptation for the rubric.</strong> Build the generator: sample base sentiment with a template, inject sarcasm / grudging / neutral-fact features probabilistically, apply the precedence rules deterministically for the ground-truth code. Default prompt ("classify sentiment") scores near the prior/base-rate because it ignores the codebook and the inversion triggers; each rule the prompt captures adds score; full-rule prompt ≈100%. Opaque codes defeat the prior (criterion 8); output is one token (criterion 3); demos of the triggers measurably help (criterion 12).</p>
+  <p><strong>Rubric-fit notes.</strong> Best alignment with <em>all</em> core criteria simultaneously — this is why the brainstorm nominates it. It inherits the flipped-label evidence base (default scores low, ceiling known) and adds genuine independent-rule decomposition + precedence for the incremental ladder and diagnostic failures. <em>Brainstorm-flagged risk: one-shot risk MEDIUM-HIGH</em> — a small fixed codebook can be enumerated in one paragraph by a diligent engineer; mitigate with 4+ interacting rules, a per-instance key, and/or compositional labels so no single paragraph captures the full mapping. Also inherits C3/C4's caution: confirm the cheap quick-test model is large enough to climb the ladder rather than sitting at the floor regardless of prompt.</p>
+</div>
+
+<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Two reusable ingredients dominate</h3>
+    <p class="small muted">(1) An <span class="key">opaque/flipped label space</span> (C1-C5, C11) makes the default prompt score low with a known 100% ceiling. (2) An <span class="key">ordered rule list / precedence</span> (C6-C8) gives the incremental, decomposable, diagnostic ladder. The best quick-test task combines both — exactly what C12 (and the brainstorm's Theme F) does.</p>
+  </div>
+  <div class="card">
+    <h3>The realistic deliverable is a generator, not a benchmark</h3>
+    <p class="small muted">Every published benchmark here is either contaminated (real NLU datasets), unbounded-output (full cipher decode), multi-turn (WILT/HERO'S JOURNEY), or single-rule (bare flip / inverted-MC). LLMTabBench (C6) and the decision-list literature (C7) are the most directly reusable <em>methods</em> for building the synthetic pool with exact ground truth.</p>
+  </div>
+  <div class="card">
+    <h3>Biggest domain-wide risk: floor immovability on cheap models</h3>
+    <p class="small muted">C3 and C4 (2025-2026) show ≤~12B models may produce a <em>zero</em> override rate / pathological collapse under label inversion. A nonstandard-label task can then sit at the floor for <em>every</em> prompt, killing the incremental gap (criterion 4). Mitigations: convey rules via instruction (not demo-only inversion), keep per-rule difficulty low, pilot floor/ceiling on the actual quick-test model before committing.</p>
+  </div>
+  <div class="card">
+    <h3>Second risk: one-shot guessability</h3>
+    <p class="small muted">Bare relabeling / bare flip / bare inverted-MC are all one-paragraph-solvable (criterion 4 fail). Every candidate needs 3-5 interacting rules with precedence and ideally a per-instance key to stay off the ceiling for a competent prompt engineer.</p>
+  </div>
+  <div class="card full">
+    <h3>Tie-breaker: research interest</h3>
+    <p class="small muted">The flipped-label / semantic-prior-override question is very active in 2025-2026 (C3, C4, and the belief-dynamics/steering work), as is instruction-hierarchy precedence (C8) and contamination-resistant dynamic generation (C9). A quick-test built on a synthetic opaque-codebook-with-precedence generator sits on live research ground and could grow into its own "do models follow stated mappings or priors, and can prompt optimization recover the mapping" study.</p>
+  </div>
+</div>
+
+<div class="section-head" id="sources"><h2>Sources</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Ref</th><th>Work</th><th>Link</th></tr></thead>
+  <tbody>
+    <tr><td>C1</td><td>Larger LMs do ICL differently (Wei et al., 2023)</td><td><a href="https://arxiv.org/abs/2303.03846">arxiv.org/abs/2303.03846</a></td></tr>
+    <tr><td>C2</td><td>Symbol tuning (Wei et al., 2023)</td><td><a href="https://arxiv.org/abs/2305.08298">arxiv.org/abs/2305.08298</a> · <a href="https://aclanthology.org/2023.emnlp-main.61/">aclanthology.org/2023.emnlp-main.61</a></td></tr>
+    <tr><td>C3</td><td>Semantic Anchors: why small LLMs cannot flip labels (2025)</td><td><a href="https://arxiv.org/abs/2511.21038">arxiv.org/abs/2511.21038</a></td></tr>
+    <tr><td>C4</td><td>In-Context Fixation (Liu, 2026)</td><td><a href="https://arxiv.org/abs/2605.08295">arxiv.org/abs/2605.08295</a></td></tr>
+    <tr><td>C5</td><td>Rectifying Demonstration Shortcut (2024)</td><td><a href="https://arxiv.org/abs/2403.09488">arxiv.org/abs/2403.09488</a></td></tr>
+    <tr><td>C6</td><td>LLMTabBench (2026)</td><td><a href="https://arxiv.org/abs/2605.24417">arxiv.org/abs/2605.24417</a></td></tr>
+    <tr><td>C7</td><td>Decision / rule lists (Angelino 2017; Yu 2020)</td><td><a href="https://arxiv.org/abs/1704.01701">arxiv.org/abs/1704.01701</a> · <a href="https://arxiv.org/abs/2104.10751">arxiv.org/abs/2104.10751</a></td></tr>
+    <tr><td>C8</td><td>Instruction hierarchy / Control Illusion (2024-2025)</td><td><a href="https://arxiv.org/abs/2404.13208">arxiv.org/abs/2404.13208</a> · <a href="https://arxiv.org/abs/2502.15851">arxiv.org/abs/2502.15851</a></td></tr>
+    <tr><td>C9</td><td>Cipher benchmarks / contamination-resistant generation</td><td><a href="https://arxiv.org/abs/2504.19093">arxiv.org/abs/2504.19093</a> · <a href="https://arxiv.org/abs/2402.10601">arxiv.org/abs/2402.10601</a> · <a href="https://arxiv.org/abs/2505.08389">arxiv.org/abs/2505.08389</a></td></tr>
+    <tr><td>C10</td><td>Rule-induction benchmarks (MIR-Bench, WILT, HERO'S JOURNEY, ARISE)</td><td><a href="https://arxiv.org/abs/2502.09933">arxiv.org/abs/2502.09933</a> · <a href="https://arxiv.org/abs/2410.10998">arxiv.org/abs/2410.10998</a> · <a href="https://arxiv.org/abs/2606.02556">arxiv.org/abs/2606.02556</a> · <a href="https://arxiv.org/abs/2502.05923">arxiv.org/abs/2502.05923</a></td></tr>
+    <tr><td>C11</td><td>MC option-label format bias (2024)</td><td><a href="https://arxiv.org/abs/2601.18554">arxiv.org/abs/2601.18554</a> · <a href="https://arxiv.org/abs/2309.03882">arxiv.org/abs/2309.03882</a></td></tr>
+    <tr><td>C12</td><td>Belief dynamics / sentiment-flip steering (2025)</td><td><a href="https://arxiv.org/abs/2511.00617">arxiv.org/abs/2511.00617</a></td></tr>
+  </tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Related-work additions — only what doc.css/flow.css lack. */
+
+/* Unverified flag — matches the candidate-page convention: text label, not color alone. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.fix {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--green); background: var(--green-soft);
+  color: var(--green); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* Dossier cards */
+.paper-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 18px; }
+.paper-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.paper-head h3 { margin: 0; font-size: 17px; }
+.paper-id { color: var(--muted); font: 600 12px/1.4 var(--font-mono); }
+.paper-meta { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.paper-card h4 { margin: 16px 0 6px; font: 700 11px/1.3 var(--font-system); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.paper-card h4:first-of-type { margin-top: 4px; }
+.paper-card p { font-size: 14.5px; }
+.paper-card ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+.paper-card li { margin-bottom: 5px; }
+.paper-card li::marker { color: var(--accent); font-weight: 800; }
+.corr-box {
+  margin-top: 6px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); border-radius: 0 8px 8px 0; font-size: 13.5px;
+}
+.cite-box {
+  margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--muted);
+}
+.cite-box .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Positioning grid (3 axes x papers) */
+.pos-table-wrap { overflow-x: auto; margin: 18px 0; }
+.pos-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.pos-table th, .pos-table td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+.pos-table th { background: var(--accent-soft); color: var(--accent); font: 700 11px/1.3 var(--font-system); letter-spacing: .04em; text-transform: uppercase; }
+.pos-table tr.c11-row td { background: var(--accent-soft); font-weight: 600; }
+.pos-table tr.c11-row td:first-child { color: var(--accent); }
+
+/* Floor/ceiling meter */
+.range-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13.5px; }
+.range-row .rlabel { flex: 0 0 150px; color: var(--muted); font-weight: 600; }
+.range-track { position: relative; flex: 1 1 auto; height: 10px; border-radius: 999px; background: var(--line); }
+.range-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); opacity: .35; }
+.range-fill.ceiling { background: var(--green); }
+.range-fill.floor { background: var(--amber); }
+.range-vals { flex: 0 0 100px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .pos-table { font-size: 12px; }
+}
+</style>
+<title>whetstone-ai · c11 Related Work</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c11.html">&larr; Back to c11 candidate page</a></nav>
+
+<h1>c11 Related Work: House-Convention Canonicalizer</h1>
+<div class="byline">whetstone-ai · 2026-07-22</div>
+
+<p><strong>No paper in this 7-paper corpus runs c11's exact task</strong> — canonical-JSON
+serialization scored by whole-string exact match against a deterministic oracle, under
+invented, standard-deviating rules. Every dossier says so explicitly. The closest structural
+cousins score with <span class="key">partial-credit verifiers</span> (F1, WER, BLEU,
+keyword-match, schema-validity), so every number below is an <span class="key">adjacent-task
+proxy</span>, not a direct measurement. <span class="key">IFBench</span> is the most dangerous
+neighbor (same verifiable-stratified-contamination-proof paradigm, even overlapping CSV/date
+constraints); the field otherwise clusters in a graded-verifier, public-or-real-convention,
+full-object-or-free-text region that c11's design deliberately sits outside of.</p>
+
+<!-- PAPER DOSSIERS -->
+<div class="section-head"><h2>Paper dossiers</h2></div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>EDC: canonicalization framing overlaps, but it targets semantic equivalence classes, not syntactic house rules</h3>
+    <span class="paper-id">2404.03868</span>
+  </div>
+  <div class="paper-meta">Zhang &amp; Soh (National University of Singapore) &middot; EMNLP 2024</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Extract-Define-Canonicalize (EDC) is a three-phase pipeline for knowledge-graph
+  construction: open information extraction, then LLM-generated schema definitions, then
+  post-hoc canonicalization of relation phrases into one canonical label — without needing
+  the full target schema in-prompt. An optional Refinement phase (EDC+R) adds a trained
+  Schema Retriever (fine-tuned E5-mistral-7b-instruct). Headline: EDC beats specialized
+  trained baselines (REGEN, GenIE) and a clustering canonicalizer (CESI) across three
+  datasets, without any parameter tuning of the base LLM.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p><span class="key">Multi-call pipeline, not single-shot</span>: each of the three phases
+  is a separate few-shot prompt; Refinement re-runs the pipeline, feeding back the model's own
+  prior extractions plus retriever-suggested schema components as a "hint." No externally
+  supplied oracle feedback between iterations — refinement is self-bootstrapped. Canonicalization
+  targets <em>semantic-equivalence classes</em> (e.g. "profession"/"job"/"occupation" &rarr; one
+  meaning-label), verified by LLM judgment and embedding retrieval, not a fixed syntactic rule set.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4</span> (best OIE model): WebNLG Partial F1 0.783 (EDC) &rarr; 0.820 (EDC+R), beating REGEN's 0.767; REBEL Partial F1 0.546 &rarr; 0.601 vs GenIE's 0.385; Wiki-NRE 0.683 &rarr; 0.713 vs GenIE's 0.484.</li>
+    <li>Schema Retriever ablation (GPT-3.5-turbo): removing it drops WebNLG Partial F1 0.794&rarr;0.752, REBEL 0.559&rarr;0.517 — "a notable decline."</li>
+    <li>A second refinement pass (EDC+2xR) yields near-zero additional gain (WebNLG 0.794&rarr;0.797) — <span class="key">diminishing returns</span>.</li>
+    <li><span class="key">Mistral-7b</span> benefits less from the refinement hint than GPT-3.5/GPT-4 — "not as able to leverage the provided hints," directly relevant to the cheap tier.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>The paper's main reported "failure" is scorer/dataset noise, not model error: EDC is
+  penalized for producing semantically-correct triplets absent from non-exhaustive REBEL/Wiki-NRE
+  reference sets. CESI (the clustering baseline) over-generalizes, conflating "place of death,"
+  "place of birth," "date of death," "date of birth" into one category.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> EDC does center a canonicalize step and anchors the
+  shared vocabulary/framing. But the corpus description of EDC as "primarily c12's parent" is
+  the load-bearing qualifier: EDC's target is <span class="key">semantic equivalence</span>
+  (many phrasings &rarr; one meaning), not <span class="key">syntactic/formatting convention</span>
+  (key order, quoting, number format) the way c11's house rules are, and the paper never
+  mentions JSON canonicalization, RFC 8785/JCS, or slugification at all. The connection is real
+  but only at the level of shared high-level framing.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">10</span> citations (<span class="v">8</span> since 2025; 2024:3, 2025:3, 2026:4 — an accelerating stream). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>JSONSchemaBench: c11's schema-pool donor grades structural complexity, not canonicalization difficulty — and its "contamination-proofed" framing is unsupported</h3>
+    <span class="paper-id">2501.10868</span>
+  </div>
+  <div class="paper-meta">Geng, Cooper, Moskal, Jenkins, Berman, Ranchin, West, Horvitz, Nori (EPFL / Microsoft / JSON Schema) &middot; arXiv preprint, v3 2025-02-27, not noted as peer-reviewed</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Introduces a ~9,558-schema real-world benchmark (after filtering) and a three-axis
+  evaluation (efficiency, coverage, quality) across six constrained-decoding frameworks
+  (Guidance, Outlines, Llamacpp, XGrammar, OpenAI, Gemini). Headline: constrained decoding
+  speeds generation up to 50%, the best framework covers ~2x as many real-world schemas as the
+  worst, and constrained decoding improves downstream accuracy by up to ~4% even on
+  minimally-structured tasks like GSM8K.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot, greedy/zero-temperature, one generation per instance. Coverage: "a simple
+  instruction with two-shot examples," validated against the schema by the <code>jsonschema</code>
+  library. Quality: a CoT-eliciting prompt requiring output <code>{"reasoning": ..., "answer": ...}</code>
+  in one generation. Schemas are graded into five complexity tiers by field count
+  (trivial/small/medium/large/ultra), drawn from GitHub, JSON Schema Store, GlaiveAI,
+  Kubernetes, Snowplow, and Washington Post ANS.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Guidance</span> wins empirical coverage on 6 of 8 datasets; achieves full JSON Schema Test Suite coverage on 13 of 43 categories vs. 1 each for Llamacpp/XGrammar and 0 for Outlines.</li>
+    <li><span class="key">Llama-3.1-8B-Instruct</span> (GSM8K quality task): LM-only 80.1% &rarr; Guidance 83.8%, "~3% improvement over the LM-only approach in every task."</li>
+    <li>Closed-source engines (OpenAI/Gemini) have the <span class="key">lowest empirical coverage but highest compliance rates</span> — "a more conservative strategy."</li>
+    <li>LM-only (no constrained decoding) has the lowest compliance rate overall — "unreliability as a standalone solution."</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Over-constrained (rejects valid instances) vs. under-constrained (allows invalid ones);
+  Outlines times out (40s&ndash;10min) on <code>minItems</code>/<code>maxItems</code>/<code>enum</code>/array
+  features. A hypothesized quality-degrading mechanism: constrained decoding can push a model
+  off-distribution (blocking the comma in "89,000" could force "890000" instead of "89000") —
+  directly relevant to c11's number-canonicalization sub-rule.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported, with a correction.</strong> The "graded real-world schema
+  corpus" half holds — five complexity tiers by field count, from real sources. But
+  <span class="fix">correction</span>: "contamination-proofed by regeneration" is unsupported.
+  The paper describes a <em>static, one-time</em> collection (Sec. 3.1/Appendix A.1); the words
+  "contamination" and "regenerat*" never appear. The released static schema set is, if anything,
+  a contamination <em>risk</em> for future training, not a proofing mechanism — c11 must supply
+  its own regeneration step (e.g. via json-schema-faker) to get that property.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">3</span> citations (<span class="v">3</span> since 2025; 2025:1, 2026:2). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>StructEval: JSON generation is saturated for strong models, but rare formats (TOML) collapse to single digits — a floor prior for c11's harder strata</h3>
+    <span class="paper-id">2505.20139</span>
+  </div>
+  <div class="paper-meta">Yang, Jiang, He, Siu, et al. (20 authors, U. Waterloo) &middot; arXiv preprint, v3 2026-04-02, no peer-reviewed venue listed</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>LLMs are systematically worse at structured-output generation than fluent free text, and
+  the gap is uneven: worse for generation-from-scratch than format-to-format conversion, worse
+  for rendered/visual formats than text-only ones, and worse for rare formats (TOML, Mermaid,
+  TikZ) than common ones (JSON, HTML). Even the best model (GPT-4o) averages only 76.02%
+  across 44 tasks and 18 formats; best open model (Qwen3-4B) trails by ~10 points.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Zero-shot, single-shot, one uniform prompt template, no interactive feedback loop. The
+  model sees a natural-language task description plus itemized feature requirements (or a
+  structured input to convert), wrapped in a fixed instruction template requiring
+  <code>&lt;|BEGIN_CODE|&gt;</code>/<code>&lt;|END_CODE|&gt;</code> delimiters and no other text.
+  No few-shot demos, no CoT instruction, no per-turn feedback.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4o</span>: highest overall average 76.02% (T-gen 91.52, T-conv 73.95, V-gen 65.39, V-conv 73.20).</li>
+    <li><span class="key">o1-mini</span> (reasoning): 75.58 average — no decisive edge over GPT-4o despite reasoning.</li>
+    <li><span class="key">Qwen3-4B</span> (best open-source): 67.04 average, trailing GPT-4o by ~10 points.</li>
+    <li>Commercial models average <span class="key">75.78%</span> on T-gen under temp=1, vs. open models averaging just <span class="key">8.58%</span> specifically on TOML generation in that same set; Phi-3-mini scores <span class="key">0.00</span> on T&rarr;TOML.</li>
+    <li>JSON/CSV/YAML generation is "saturated" &gt;90&ndash;100% for strong models (GPT-4o T&rarr;JSON 99.36, T&rarr;CSV 100).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Worst model (Phi-3-mini-128k-instruct) emits a malformed closing delimiter
+  (<code>|&lt;|END_CODE|&gt;</code>) on TOML&rarr;YAML, and loses hierarchical parent-child
+  structure on CSV&rarr;JSON. Rare/visual formats (Mermaid, TikZ, Vega) collapse below 0.5 for
+  essentially all models, attributed to advanced visual reasoning being concentrated in
+  multimodal commercial LLMs.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported, with a count correction.</strong> The non-renderable
+  (JSON/YAML/CSV/TOML) slice and below-ceiling floor evidence both hold. <span class="fix">correction</span>:
+  the corpus flagged an internal count discrepancy (abstract says 18 formats, introduction says
+  21) — four separate body-text passages converge on <span class="key">18</span> as the paper's
+  intended figure; "21" in the introduction is the authors' own uncorrected inconsistency, not
+  an extraction error.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>IFBench: c11's closest and most dangerous neighbor — novel standard-deviating constraints crater frontier models below 50%</h3>
+    <span class="paper-id">2507.02833</span>
+  </div>
+  <div class="paper-meta">Pyatkin, Malik, Graf, Ivison, Huang, Dasigi, Lambert, Hajishirzi (AI2 / U. Washington) &middot; NeurIPS 2025 Datasets &amp; Benchmarks Track</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Most SOTA models strongly overfit to IFEval's fixed 25 verifiable constraints and fail to
+  generalize to unseen ones. IFBench: 300 prompts, 58 new out-of-domain verifiable constraints
+  (7 categories), on which GPT-4.1, Claude 3.7/4 Sonnet, and Qwen3-32B all score
+  <span class="key">below 50%</span>. RLVR training (IF-RLVR, via GRPO) substantially closes
+  the gap in-domain and improves — but does not saturate — out-of-domain generalization.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Both single-turn and multi-turn, but both are single forward-pass-per-turn generations
+  scored by an automatic Python verifier per constraint — no interactive correction loop.
+  Single-turn: one user prompt concatenates the task with 1&ndash;2 constraints (e.g. "Use at
+  least N different coordinating conjunctions"). Multi-turn: task &rarr; a prior assistant
+  response r1 &rarr; a third turn asking to rewrite r1 to satisfy constraint c, scored only on
+  the final output; <span class="key">no scored intermediate feedback</span>.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4.1, Claude 3.7/4 Sonnet, Qwen3-32B</span>: all score below 50% on IFBench despite 80+% on IFEval.</li>
+    <li>IF-RLVR raises <span class="key">Tulu-3-8B</span>: IFEval 82.4&rarr;92.2, IFBench 28.9&rarr;44.6/45.9 (minor cross-table discrepancy in the paper itself).</li>
+    <li>IF-RLVR raises a <span class="key">Qwen2.5-7B base model</span> to IFEval 87.8 / IFBench 53.7&ndash;54.7.</li>
+    <li><span class="key">o3</span> remains the only out-of-the-box model IF-RLVR-trained models can't beat.</li>
+    <li>GRPO strictly dominates DPO at matched data/prompts (IFEval 89.65 vs 79.67, IFBench 30.6 vs 29.3).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Overfitting to a fixed constraint template set; reward hacking (IF-RLVR models
+  "prioritize the constraint" over the underlying task); range-generalization failure when
+  train/test variable ranges are disjoint; failure is <span class="key">correlated across
+  models</span> on the same hard instances, not idiosyncratic.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The "58 new verifiable constraints... programmatic exact
+  checks" and "out-of-domain" framing are both verbatim-confirmed. IFBench's "custom" category
+  even contains CSV-quoting/delimiter and date-reformat constraints that structurally overlap
+  c11's instance families — the sharpest overlap in the corpus. The decisive difference: IFBench
+  verifies a property of an otherwise open-ended free-text response (many strings pass), while
+  c11's ceiling <em>is</em> one specific reference string with whole-match 0/1.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). Mid/late-2025 D&amp;B paper. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>StructText: facts survive table-to-text narrativization near-ceiling, but re-extracting them back to structure collapses — a design lesson, not a task overlap</h3>
+    <span class="paper-id">2507.21340</span>
+  </div>
+  <div class="paper-meta">Kashyap, Shirai, Mihindukulasooriya, Samulowitz (IBM Research) &middot; VLDB 2025 Workshop (TaDA), v1 only</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>An automated "plan-then-execute" pipeline turns tabular data into synthetic
+  natural-language text, then uses the (text, ground-truth-table) pair as a contamination-resistant
+  benchmark source for text-to-table extraction. Central dichotomy: LLMs generating the
+  synthetic text achieve near-ceiling factuality/hallucination-avoidance and numeric/temporal
+  fidelity, but the resulting prose has low coherence and is hard for an LLM-based extractor to
+  parse back into structured key-value pairs.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot for both directions, no iterative repair loop. Generation: model receives
+  ~10 sample rows plus a planning prompt, groups columns into 1&ndash;5 report types, then in a
+  second single-shot call receives a semicolon-delimited key-value string (e.g.
+  <code>revenue: 2.65595E+11; revenue_period: 9/29/18</code>) and must produce one coherent
+  paragraph. Extraction: model predicts a column schema, then returns one JSON dict of
+  key-value extractions per row.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Qwen2.5-72B-Instruct</span> (generation): factuality 4.58/4.56, hallucination 4.90/4.55, but coherence only 3.28/3.53 (SEC/WikiDB, 1&ndash;5 scale) — coherence is the clear weak dimension.</li>
+    <li>Numeric/temporal fidelity: all four P/R/F1 triples exceed 0.9 F1 (SEC numeric F1 0.927, WikiDB temporal F1 0.915).</li>
+    <li><span class="key">Llama-3.3-70B-Instruct</span> (baseline extraction): Column Identification F1 only 0.455 (SEC) / 0.413 (WikiDB); Value Extraction precision as low as 0.11&ndash;0.26.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>A structured-to-prose-to-structured <span class="key">information-accessibility gap</span>:
+  facts are preserved with high fidelity in prose, but that same prose resists automated
+  re-structuring. A secondary parsing-ambiguity case: the model correctly extracts "fiscal year
+  2024" as a valid temporal value absent from ground truth, deflating precision for reasons that
+  are not a real model error.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The synthetic table-to-text generator description is
+  accurate (71,539 examples / 49 datasets from SEC filings and WikiDB). <span class="fix">correction</span>:
+  the paper never proposes or evaluates a canonicalization task — its entire apparatus is fuzzy,
+  tolerant scoring (LLM-judge rubrics, Levenshtein/BERTScore, 0.1% numeric tolerance), and the
+  word "canonical" appears only incidentally. "Reversible into a canonicalization instance
+  source" is the dossier's own plausible extrapolation, not a claim the paper makes.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Mid-2025 workshop paper, v1 only. <em>OpenAlex undercounts relative to Google Scholar; zero signals "too new/narrow venue to index," not "ignored."</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>PolyNorm: real-locale normalization is a live few-shot win over rule-based systems, but its conventions are recallable and its verifier is soft</h3>
+    <span class="paper-id">2511.03080</span>
+  </div>
+  <div class="paper-meta">Wong, Alshehri, Kao, He (Apple) &middot; arXiv preprint v1, 2025-11-05; comments field cites EMNLP 2025 Industry Track</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Few-shot LLM text normalization (PolyNorm) can replace rule-based (WFST) TN systems,
+  achieving consistent WER reductions across 8 typologically diverse languages against Apple
+  Siri's production rule-based baseline, with far less engineering effort. Also contributes
+  PolyNorm-Benchmark, a language-agnostic automatic data-curation/evaluation pipeline.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot per instance: a structured 3-part prompt (Instruction Prompt + 80&ndash;100
+  curated ICL examples per language + target input), model outputs one normalized string per
+  call. <span class="key">No per-instance interactive loop</span> — but the researchers
+  themselves ran an offline "Error Analysis and Hillclimbing Iteration" across development to
+  refine the ICL example set between benchmark runs (author-side curation, not model-side
+  interaction).</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4o</span>: WER 4.17%&ndash;7.88% across all 8 languages, vs. baseline WER 9.72%&ndash;17.49%.</li>
+    <li><span class="key">GPT-4o-mini</span>: WER 6.60%&ndash;11.19% — worse than baseline only for Lithuanian (10.54 vs 10.04).</li>
+    <li>Iterative ICL-curation effect: Japanese WER dropped from <span class="key">12.32% to 7.88%</span>, Lithuanian from 12.22% to 6.99%, purely from refining which examples are shown.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Incorrect numeral expansions and inconsistent date/currency-format handling. Baseline
+  (rule-based) failures include a German compound-number segmentation error and a French
+  sports-score dash-convention error. Limitations note performance is "highly dependent on the
+  quality and representativeness" of the ICL examples.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported, with a clarification already present in the c11 framing.</strong> The
+  paper does show few-shot LLMs beat a rule-based baseline on date/phone/currency/cardinal/ordinal
+  normalization. The needed clarification: PolyNorm's targets are <span class="key">real,
+  recallable locale conventions</span>, not invented standard-deviating rules, and its verifier
+  is <span class="key">soft</span> (WER/BLEU/CER) rather than exact-match — so it is evidence
+  for general feasibility, not for c11's specific stress point.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Late-2025 preprint. <em>OpenAlex undercounts relative to Google Scholar; zero signals recency, not neglect.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>LLMStructBench: schema compliance saturates with scale, but wrong-value errors never go away — and this paper is not actually cited on c11's page</h3>
+    <span class="paper-id">2602.14743</span>
+  </div>
+  <div class="paper-meta">Tenckhoff, Koddenbrock, Rodner (HTW Berlin) &middot; arXiv preprint, v1 only, submitted 2026-02-16, no venue on record</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>A 995-instance, five-use-case benchmark of NL-message-to-JSON extraction, scored by
+  F1_micro (fuzzy, coercion-aware value/token accuracy) plus DOC_micro (document-level full
+  validity). Across 22 open-weight models (0.6B&ndash;70B) plus GPT-4o and five prompting
+  strategies, the paper's conclusion is that <span class="key">prompting strategy matters more
+  than model scale</span> for schema-compliant, semantically correct JSON generation.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one forward call per model per strategy. Model receives the NL message, one
+  example (text, reference-JSON) pair, and the target JSON schema; returns a single JSON object
+  in one shot. The five strategies (J/P/PJ/J+/PJ+) vary only <em>how</em> schema/format guidance
+  is delivered (API format param vs. in-prompt schema+example) — none are multi-turn.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>F1_micro is <span class="key">flat and high, 0.89&ndash;0.96</span> across all 22 models 0.6B&ndash;70B; DOC_micro is <span class="key">volatile, 0.01&ndash;0.52</span>.</li>
+    <li><span class="key">GPT-4o and Gemma3-27B tie at the top</span>: F1_micro 0.96, DOC_micro 0.52, composite 0.74 — GPT-4o "did not exhibit a clear advantage over the best open-source models."</li>
+    <li>Worst: <span class="key">Phi3-3.8B</span> at F1_micro 0.95 but DOC_micro just 0.01 under strategy P.</li>
+    <li>Strategy win-count across 22 models: P wins 11, PJ+ wins 8, PJ wins 3, J and J+ win 0.</li>
+    <li>Wrong-Value (WV) errors dominate 96&ndash;100% of remaining errors even for the best models.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Missing-Key/schema-violation failures concentrate in small models under weak prompting
+  (Deepseek-R1-1.5B: 36.8% MK under P) and vanish by ~7&ndash;8B or under stronger
+  schema-enforcing prompts. Once structural failures are eliminated, Wrong-Value becomes the
+  <span class="key">persistent bottleneck at every scale</span>. Switching prompting strategy
+  can trade one failure mode for another rather than eliminating it — eliminating MK errors
+  "redirects almost every remaining uncertainty into field content."</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Miscited — flag this prominently.</strong> <span class="unverified">The corpus
+  framing implies this paper is cited on c11's page</span>; it is not. c11.md's only mention of
+  it is a closing provenance-flag footnote stating it is a "provenance-unverified, future-dated
+  corpus item attributed to c12, not c11" — <span class="fix">correction</span>: this paper is
+  substantively more relevant to c12 (schema-conformant extraction) than to c11 (canonicalization
+  under invented house rules). Its identity itself is genuinely verified (real paper, real
+  authors, real arXiv id) — only its attribution to c11 is the error.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. 2026 preprint — <span class="key">zero-by-construction</span> (almost no time to accrue indexed citations). <em>Not evidence of low impact; OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<!-- POSITIONING MAP -->
+<div class="section-head"><h2>Positioning: three axes discriminate this family</h2></div>
+<p>Single-shot-vs-multi-turn turns out to be <span class="key">nearly degenerate</span> for
+this family — EDC's "multi-turn" is self-bootstrapped refinement and IFBench's is
+constraint-isolation across a fixed 3-turn context, neither is an oracle-in-the-loop correction
+protocol, and every other paper is single-shot at evaluation time. The three axes that actually
+separate the set: <span class="key">verifier granularity</span> (exact whole-string 0/1 &rarr;
+per-field/constraint boolean &rarr; graded partial credit &rarr; soft edit-distance/LLM-judge),
+<span class="key">convention provenance</span> (invented adversarially-deviating rules &rarr;
+public-standard conformance &rarr; real/recallable convention &rarr; emergent/model-chosen), and
+<span class="key">output shape</span> (single canonical string vs. full structured object vs.
+free NL text).</p>
+
+<div class="pos-table-wrap">
+<table class="pos-table">
+  <tr>
+    <th>Paper / task</th>
+    <th>Verifier granularity</th>
+    <th>Convention provenance</th>
+    <th>Output shape</th>
+  </tr>
+  <tr class="c11-row">
+    <td>c11 (as designed)</td>
+    <td>Exact whole-string 0/1, no partial credit</td>
+    <td>Invented, adversarially deviating from RFC 8785 JCS / ISO / slugify</td>
+    <td>Single canonical string</td>
+  </tr>
+  <tr>
+    <td>PolyNorm</td>
+    <td>Soft: WER / BLEU / CER, partial credit</td>
+    <td>Real locale conventions (recallable)</td>
+    <td>Single normalized string</td>
+  </tr>
+  <tr>
+    <td>IFBench</td>
+    <td>Per-constraint programmatic boolean (strict/loose)</td>
+    <td>Invented-but-instructed, restated per instance</td>
+    <td>Free NL text satisfying constraints</td>
+  </tr>
+  <tr>
+    <td>JSONSchemaBench</td>
+    <td>Schema validator; broad valid-class</td>
+    <td>Public JSON-Schema standard</td>
+    <td>Full JSON instance (any valid one)</td>
+  </tr>
+  <tr>
+    <td>StructEval (T-slice)</td>
+    <td>Graded: 0.2&middot;syntax + 0.8&middot;keyword/dot-path (+VQA for V)</td>
+    <td>Public formats (JSON/YAML/CSV/TOML)</td>
+    <td>Full structured document</td>
+  </tr>
+  <tr>
+    <td>LLMStructBench</td>
+    <td>Graded fuzzy: Levenshtein/coercion F1_micro + DOC_micro</td>
+    <td>Public JSON schema (no house rules)</td>
+    <td>Full nested JSON object (extraction)</td>
+  </tr>
+  <tr>
+    <td>StructText</td>
+    <td>Fuzzy: LLM-judge rubric + BERTScore/Levenshtein, 0.1% numeric tol.</td>
+    <td>Emergent, model-chosen groupings</td>
+    <td>Free NL prose (gen) / JSON dict (extract)</td>
+  </tr>
+  <tr>
+    <td>EDC</td>
+    <td>Mixed: token-triplet Partial/Strict/Exact F1 + human eval</td>
+    <td>Semantic-equivalence classes, discovered/retrieved schema</td>
+    <td>Set of (subj, rel, obj) triplets</td>
+  </tr>
+</table>
+</div>
+
+<div class="card full">
+  <h3>c11 occupies an empty cell: no paper combines exact whole-string match with invented adversarial conventions on a single-string output</h3>
+  <p>Six of seven papers cluster in the <span class="key">graded/fuzzy/soft</span> verifier
+  band; IFBench is the only other hard per-item boolean, and even it offers strict-vs-loose
+  leniency. On convention provenance, the field splits between <span class="key">public-standard
+  conformance</span> (JSONSchemaBench, StructEval, LLMStructBench) and <span class="key">real/recallable
+  convention</span> (PolyNorm, StructText, EDC); no paper occupies c11's cell of invented
+  conventions that adversarially deviate from a named public standard and stay stable across
+  instances rather than being restated per prompt. That emptiness is c11's differentiation and
+  its publishability risk at once: the cell can be empty because it is unclaimed, or because it
+  is a narrow instrument the field does not need as a benchmark in its own right.</p>
+</div>
+
+<!-- CAPABILITY SYNTHESIS -->
+<div class="section-head"><h2>Capability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One-shot: JSON structure is nearly solved, full-document exact correctness tops out near 0.52 even for GPT-4o; no paper tests an oracle-in-the-loop repair protocol</h3>
+    <p>Structural JSON validity in one pass is <span class="key">nearly saturated</span> for
+    familiar formats (LLMStructBench's F1_micro 0.89&ndash;0.96 flat across 0.6B&ndash;70B;
+    StructEval's JSON/CSV/YAML generation &gt;90&ndash;100% for strong models). But
+    <span class="key">full-document exact correctness tops out at DOC_micro ~0.52</span> even
+    for GPT-4o/Gemma3-27B (LLMStructBench), and <span class="key">novel, standard-deviating
+    constraints crater one-shot accuracy below 50%</span> even for frontier models (IFBench) —
+    the single most c11-relevant SHOWN result, since c11's house rules function like that same
+    unfamiliar-convention axis. <span class="key">No paper tests a per-instance interactive
+    repair loop with oracle feedback</span> — EDC's "multi-turn" is self-bootstrapped refinement
+    that helps once then saturates fast (near-zero gain on a second pass), and weaker models
+    (Mistral-7b) exploit added context less than GPT-3.5/GPT-4, directly relevant to c11's
+    cheap tier.</p>
+  </div>
+  <div class="card">
+    <h3>Cheap-tier: high per-field accuracy but low full-document validity; prompting strategy dominates model scale, and few-shot curation is a large, double-edged lever</h3>
+    <p>The cheap-tier proxies (0.6&ndash;14B open models, "-mini" closed models) show
+    <span class="key">high per-field accuracy but low whole-document validity</span>: even
+    0.6&ndash;1.7B models reach F1_micro 0.92&ndash;0.94 but DOC_micro only 0.10&ndash;0.40.
+    <span class="key">Prompting strategy beats model scale</span> at this tier (LLMStructBench:
+    DOC_micro swings 0.01&rarr;0.52 from strategy choice alone). GPT-4o-mini/GPT-4.1-mini trail
+    their flagship siblings by only ~3 points on StructEval but are meaningfully worse on
+    PolyNorm's WER. Format collapse is worst at the cheap/open tier (StructEval: open models
+    score 0.00&ndash;16 on TOML vs. commercial 75.78% average). <span class="key">Curated
+    few-shot examples are a large lever</span> (PolyNorm: 4&ndash;5 point WER swings from ICL
+    curation alone) but table/demo <span class="key">coverage is a leakage risk</span> c11's own
+    design already flags.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Serialization-convention ablation — c11's exact axis — has zero measured effect size anywhere in this corpus</h3>
+  <p>No paper does a controlled ablation of key order, quoting, whitespace, or number format —
+  the exact axis c11 varies. Every dossier's representation-format field states this explicitly.
+  The nearest lever with a measured effect is <span class="key">in-prompt schema + one
+  example</span> (LLMStructBench: DOC_micro 0.01&rarr;0.52 from strategy alone) and
+  <span class="key">curated few-shot ICL sets</span> (PolyNorm: 4&ndash;5 point WER swings).
+  Constrained decoding helps compliance (JSONSchemaBench: +3% on every quality task) but is a
+  decoding-engine intervention unavailable to c11's plain prompt-only baseline, and the evidence
+  <span class="key">conflicts on whether tighter output constraints help or hurt</span> — JSON
+  Schema's canonical-output framing helped, but StructEval/LLMStructBench show forced structure
+  can introduce new errors.</p>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for c11's plain-JCS baseline</h2></div>
+<p>c11's actual first run is <span class="key">plain RFC 8785 (JCS)</span> canonical-JSON — no
+invented house-rule deviations yet — inputs from pinned json-schema-faker schemas, oracle =
+trailofbits rfc8785-py, exact match, cheap tier, temp 0. No paper measures exact-match canonical
+JSON directly, so both ranges below are <span class="key">inference built on adjacent
+proxies</span>, with real uncertainty in both directions.</p>
+
+<div class="card full">
+  <div class="range-row">
+    <span class="rlabel">Naive floor (best guess ~15%)</span>
+    <div class="range-track"><div class="range-fill floor" style="left:5%; width:25%;"></div></div>
+    <span class="range-vals">~5&ndash;30%</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling, best prompt (best guess ~55%)</span>
+    <div class="range-track"><div class="range-fill ceiling" style="left:40%; width:35%;"></div></div>
+    <span class="range-vals">~40&ndash;75%</span>
+  </div>
+  <p class="small muted" style="margin-top:14px;">Reasoning: the model will reliably emit
+  <em>valid</em> JSON (a saturated, familiar structural capability), but plain JCS requires
+  simultaneously getting <span class="key">UTF-16 key sort order</span>,
+  <span class="key">ECMA-shortest-round-trip number formatting</span>, exact escaping, and zero
+  insignificant whitespace all correct in one string for a 0/1 score — the number-canonicalization
+  sub-rule in particular is unlikely to reach 100% even with worked examples; it is the c11 analog
+  of the Wrong-Value bottleneck that "does not go away with scale or prompting"
+  (LLMStructBench). <span class="unverified">Uncertainty is high</span>: no paper tests this
+  exact cell.</p>
+  <div class="corr-box"><strong>Conflict to surface, not resolve:</strong> IFBench's
+  novel-constraint evidence argues for a <span class="key">low floor</span> (JCS rules are
+  convention-following the cheap tier is bad at). But plain JCS is a <span class="key">published,
+  real standard</span> — JSONSchemaBench/StructEval both show JSON structure is the saturated,
+  familiar format everywhere in this corpus. If cheap models have absorbed JCS behavior from
+  training data (plausible — the spec and rfc8785 libraries are public), the plain-JCS floor
+  could be <span class="key">substantially higher than 15%</span>, possibly 40%+. This is exactly
+  why the candidate design flags that the plain-JCS variant has no invented deviations yet:
+  <span class="key">the go/no-go hinges on whether plain JCS is already too easy (memorizable) to
+  be discriminative.</span> Recommendation: run the plain-JCS baseline first and check the naive
+  floor specifically on number-heavy / unicode-heavy schemas, since the corpus consistently
+  identifies number formatting as the break point.</div>
+</div>
+
+<!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
+<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>IFBench already owns "verifiable, decomposable, contamination-proof constraint-following" — c11's differentiation must be argued precisely, not assumed</h3>
+    <p>Overlap with IFBench is deep and mechanical: both are programmatically-verifiable,
+    reference-function-as-ceiling, stratified-by-rule tasks with per-rule failure attribution,
+    and IFBench's own "custom" category contains CSV-quoting and date-reformat constraints that
+    structurally overlap c11's instances. The decisive differences rest narrowly on two axes:
+    (1) IFBench verifies a <span class="key">property</span> of an open-ended response (many
+    surface strings pass); c11's ceiling <em>is</em> one specific reference string, whole-match
+    0/1; (2) IFBench's rules are <span class="key">stated in natural language per instance</span>;
+    c11's are a fixed latent convention held across held-out instances. Because IFBench already
+    owns the family paradigm, c11 cannot claim the paradigm as new — only the axis-level
+    refinement.</p>
+  </div>
+  <div class="card">
+    <h3>The plain-JCS baseline sits in the crowded, recallable-standard cell — a large gain there is a materially weaker result than a gain on the invented-rule task</h3>
+    <p>Plain JCS canonicalization is public, documented, and recallable — it sits in the crowded
+    "public-standard-conformance" region alongside JSONSchemaBench/StructEval/LLMStructBench,
+    <em>not</em> in c11's differentiating "invented-adversarial" cell. A large verified optimizer
+    gain on the plain-JCS-only baseline is a result about <span class="key">prompt-optimizing a
+    model to emit a known public canonical form</span> — contestable and non-novel. The stronger,
+    more novel claim requires the full invented-house-rule task (post-diet, table-width &gt;
+    minibatch/demo width) with a per-rule breakdown showing the gain concentrates in learnable
+    rule types while computation-heavy strata sit at a known ceiling.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>A large verified gain belongs in prompt-optimizer benchmarking (Area 9), not the family's own saturated evaluation line</h3>
+  <p>The family's own evaluation line (verifiable instruction-following / structured-output
+  compliance) is dense: IFBench and JSONSchemaBench already cover it. The novel object c11 can
+  contribute is not "a new capability benchmark" but "a clean, exact-match, contamination-proof,
+  per-rule-decomposable task on which optimizer O beats optimizer O′ by &Delta;" — riding
+  GEPA's ICLR 2026 oral and MAS-PromptBench's 2026 optimizer-comparison momentum. Reviewers will
+  demand a full COPRO/MIPROv2/GEPA sweep at <span class="key">matched rollout budget</span>,
+  &ge;2 models, the table-width-vs-leakage ablation (the "infer all rules from demos" control
+  must not exceed ~50%), per-rule breakdowns, and ceiling certification (agreeing temp-0
+  repeats) — without these, reviewers will assume the optimizer just transcribed the rule table
+  from a batch.</p>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Realistic venue is a workshop, not a main track</h3>
+    <p>A single-task optimizer-delta result is workshop-scale: an LLM-evaluation / prompt-optimization
+    workshop, or a DSPy/prompt-optimization-adjacent workshop. A Datasets &amp; Benchmarks track
+    (IFBench's home) is plausible only with a full model&times;optimizer matrix, contamination-proofing
+    story, and released generator — substantially more than a single verified gain. A main
+    conference track is out of reach: the empty cell c11 fills is narrow, and the differentiation
+    from IFBench is an axis-level refinement, not a new paradigm.</p>
+  </div>
+  <div class="card">
+    <h3>Not publishable: leakage-driven gains, noise-band gains, or the degenerate second objective</h3>
+    <p>Recognize early and do not pursue: a gain on the plain-JCS baseline alone with no
+    invented-rule task ever run; a gain that survives only when demo/table-width leakage is
+    permitted; a gain indistinguishable from temp-0 provider nondeterminism; a "two-objective
+    optimization win" claim, since <span class="key">output-bytes is provably degenerate</span>
+    here (correct canonical strings have fixed length) — this validates single-objective
+    optimization plus two-objective plumbing only, not a real multi-objective result; or a
+    single-model, single-optimizer &Delta; with no rollout-budget normalization.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Research-currency verdict: the family is active and accelerating; c11's specific cell cannot be assessed from citation data because no paper occupies it</h3>
+  <p>OpenAlex citation counts, fetched <span class="key">2026-07-22</span>: EDC 10 (8 since
+  2025, accelerating — 3/2024, 3/2025, 4/2026); JSONSchemaBench 3 (3 since 2025); StructEval 1;
+  IFBench 1; StructText 0; PolyNorm 0; LLMStructBench 0. Read naively the near-zero counts look
+  weak; with the caveat applied, four of seven papers are 2025&ndash;2026 preprints that have had
+  <span class="key">almost no time to accrue indexed citations</span> — this is the expected
+  signature of a live, fast-moving area outpacing citation indexing, not one that has gone quiet.
+  <span class="unverified">Honest limitation</span>: currency here is inferable at the family
+  level (well-supported by EDC's accelerating stream) but not at c11's specific differentiating
+  cell, since no paper sits there to have counts. <em>All OpenAlex counts undercount relative to
+  Google Scholar; near-zero counts for 2026-dated papers are near-zero-by-construction, not
+  evidence of low impact.</em></p>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c11.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c11 candidate page</a>
+  <a href="../candidates-table.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Candidates table</a>
+  <a href="../recommendations-round2.html#table" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Round 2 rescore</a>
+</nav>
+
+</main>
+</body>
+</html>

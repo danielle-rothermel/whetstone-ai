@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c09 Composable Cipher-Chain Decode to Closed Vocab</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c09</span>Composable Cipher-Chain Decode to Closed Vocab</h1>
+  <span class="badge ranked">RANKED #14</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">a stacked-cipher decode benchmark (CipherBank lineage) reframed to a fixed closed vocabulary</span> — decode ciphertext produced by two to three named structural reversible ops back to known words.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain tone: ranked, neither adopt/backup nor gated/below-cut -->
+  <p><strong>Ranked #14 of 20 after the implementation-aware rescore — a slight upward nudge from its 26-tier round-1 standing.</strong> c09 sits mid-pack because the design is clean but the code leverage is thin. Its round-1 rubric fit was solid on the properties that matter here — a <span class="key">closed-vocabulary / multiple-choice answer surface</span> that dodges temp-0 character noise, a <span class="key">per-instance key</span> that defeats memorization, and a <span class="key">layer count</span> that gives a natural difficulty dial — but the round-2 lens found no reusable <em>generator</em>: the CipherBank repository is a frozen dataset with clean single-layer encoders and an independent exact-match oracle, yet with no chaining, no seeding, and no closed-vocab framing, so the composition, re-seeding, nonce vocabulary, and MC answer set are all work we would author ourselves. That caps the double-weighted codebase criterion at the "major surgery / frozen-dataset with partial generator code" anchor. The remaining implementation cells are healthy — the oracle is independently checkable, the machinery is modest, and the redesign debt is only verification-level — which is why it edges the linguistically similar c08 on salvageable-code substance despite an identical round-1 score.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">26/2</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">9/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Decode a stacked structural cipher back to a fixed closed vocabulary</h3>
+    <p>A pinned generator draws plaintext from a fixed closed word list (e.g. "north gate open"), then encodes it with an <span class="key">ordered stack of two to three named STRUCTURAL reversible operations</span> — keyed block reversal, invented digraph swap, positional skip — deliberately excluding shift arithmetic, which the char-level literature shows is token-noise-prone. Each instance ships the <span class="key">ciphertext, the op stack, and a per-instance key</span>; the model must emit the plaintext words, scored by exact match against the <span class="key">closed vocabulary</span> (or a multiple-choice letter). The latent rules to recover are each op's inverse, the apply-inverses-in-<span class="key">reverse-order</span> meta-rule, and the key-derived block sizes. The <span class="key">layer count is the difficulty dial</span>; seeded keys and ops make instances contamination-proof, and because every layer is separable, a failure is diagnostic per layer.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — constructed from the merged summary, not a corpus fixture. Seeded so the op stack, key, and closed vocabulary are fixed per generator seed; the ciphertext is schematic, not a byte-exact encoder output.</p>
+<pre><code>Closed vocabulary: {north, south, gate, wall, open, shut, hold}
+Op stack (apply in order): [ block-reverse(k), digraph-swap(TH&lt;-&gt;Xz), positional-skip(2) ]
+Key: k = 3
+Ciphertext:  Xz r o n  ...  (structurally permuted tokens)
+Meta-rule to recover: invert each op, applied in REVERSE order
+Gold answer: "north gate open"
+Naive-prompt miss: a model that inverts the ops in the stated (forward)
+order, or that treats digraph-swap as a Caesar shift, decodes to a
+non-vocabulary string and scores 0 under exact match.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2504.19093">CipherBank</a> (Li et al., ACL Findings 2025)</span> — the core anchor: a 2,358-problem cipher-decryption benchmark with exact-match scoring, showing char-level ciphers are noisy and hard even for reasoning models; the source of the salvageable single-layer encoders.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2402.10601">Jailbreaking LLMs via Novel Complex Ciphers / ACE+LACE</a> (Handa et al., arXiv 2024)</span> — the layered custom-encryption (LACE) methodology; the true referent of the corpus's ambiguous "CipherBench novel-cipher methodology" tag (see dead branches).</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2504.19395">ICL CIPHERS</a> (Fang et al., arXiv 2025)</span> — substitution-cipher reformulation to quantify genuine in-context learning, contamination-proof by construction.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2410.01208">StringLLM</a> (Wang et al., ICLR 2025)</span> — design-constraint caveat: LLMs are poor at string processing, motivating the closed-vocab / MC framing over raw character decode.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2409.15452">CUTE</a> (Edman et al., EMNLP 2024)</span> — design-constraint caveat: LLMs mishandle their own tokens and spelling, justifying the avoidance of char-arithmetic to protect temp-0 resolvability.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Composable Cipher Chain Resolution</a> (<code>claude-opus-4-8[1m]</code>) — proposed the ordered stack of named reversible layers; the structural backbone of c09.</li>
+      <li><a href="../brainstorm.html">Cipher-With-Invented-Rules Decoder</a> (first-principles) — a near-duplicate per-position-shift decoder, merged in as the invented-rules framing.</li>
+      <li><a href="../candidates-merged.html#c09">c09 · Composable Cipher-Chain Decode (merged entry)</a> — combined the two brainstorm items with the CipherBank literature into the closed-vocab design.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D9 · Char-level string-task cluster (StringLLM, CUTE, letter-counting, Divide-and-Conquer) — <span class="why">not a task; kept only as the red-flag design caveat that <em>justifies</em> c09's closed-vocab / MC framing. Char-level shift decode was pulled out of scope precisely because it is token-noise-prone at temp 0</span>.</li>
+    <li>D3 · TokenCounter (distinct vowel/consonant counting) — <span class="why">letter counting is tokenization-bound; the StringLLM/CUTE literature shows char-count tasks are noisy at temp 0, threatening temp-0 resolvability — the same reason c09 dropped shift arithmetic</span>.</li>
+    <li>"CipherBench v2" (cipherbench.github.io) — <span class="why">a provenance-ambiguous, pseudonymous github-pages benchmark with no paper and a different scope; treated as a laundered citation. The methodology the corpus meant is Handa et al. 2024, listed above</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2603.22497">Rashid</a> (Bafna et al., arXiv 2026)</span> — a cipher-based framework generating unseen languages for in-context language learning; the corpus paired it with ICL Ciphers under the label "Rashid" (which is the paper title, not an author surname).</li>
+    <li class="unverified"><span class="cite">HERO'S JOURNEY: Testing Complex Rule Induction with Text Games (arXiv 2026)</span> — a complex multi-rule induction benchmark directly adjacent to the composed-op cipher-chain difficulty dial; named elsewhere in the corpus but not on c09's own source list, and the URL was not fetched.</li>
+    <li class="unverified"><span class="cite">MIR-Bench (Yan et al., 2025)</span> — many-shot in-context function/string-transformation induction, relevant to the demo axis and layered-rule inference; URL inferred, not fetched.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Scored a solid 26 with the full tie-breaker for research currency; the closed-vocab / MC answer surface, per-instance key, and layer-count dial map cleanly onto contamination-resistance and bounded output.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>It sat in the 26 tier, below the 27/28 finalists, and never earned a dedicated adversarial write-up in round 1 — its rubric note is a single design line, not a defended scorecard.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The apply-inverses-in-reverse-order meta-rule and key-derived block sizes are arbitrary seeded information no zero-shot prompt can contain, so the incremental ladder is structural, not tuned.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No skeptic lens actually examined c09 in round 1 — the adversarial optimization-path passes were run only on the 28-tier finalists plus c03, so this lens is inferred, not verified for this candidate.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The oracle is the human-authored source plaintext carried through untouched, independent of both the encode and decode paths, and the exact-match scorer maps directly onto a clean 0/1 signal.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Likewise never subjected to a round-1 measurement refutation pass; the temp-0 resolvability concern that forced the structural-op redesign is a design assumption not empirically gated on this candidate.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Two independent repo reads confirm reusable, well-written deterministic encoders with a genuinely independent exact-match oracle, ~320 LOC of salvageable primitives, and only verification-level redesign debt.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Both CipherBank and CryptoX are frozen datasets with a hardcoded seed, no cipher composition, and no closed-vocab / MC / nonce support — the seeding, chaining, vocabulary, and MC layers are all net-new, capping the double-weighted codebase cell at 1 and the total at 9/16.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Cipher-decode and in-context substitution-cipher work is actively published through 2025–2026 (CipherBank ACL 2025, ICL Ciphers, Rashid 2026), a contamination-proof line with genuine standalone-benchmark potential.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>There is no flagship live leaderboard to anchor to, and the "CipherBench" methodology tag the corpus leaned on turned out to be an unverifiable pseudonymous site, weakening one provenance claim.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Author a seeded chain generator</h3><p>Import the five structural (non-shift) cipher classes from CipherBank's <code>cipher/encryption.py</code> unchanged (Atbash, Reverse, SwapPairs, Polybius, DualAvgCode), add a per-instance <code>random.Random(seed)</code>, sample a chain of K transforms, and fold them over the plaintext — the composition and re-seeding the repo lacks (~120–180 new LOC outside the repo).</p></div>
+  <div class="step"><h3>Build the closed-vocabulary / nonce source</h3><p>Replace the frozen 261-sentence <code>data/plaintext.jsonl</code> with a seeded emitter that draws from a fixed closed word list, so the gold answer is one of a known set and an MC option bank can be generated (~40–60 LOC).</p></div>
+  <div class="step"><h3>Wire the oracle and runner</h3><p>Reuse <code>compare_strings</code> (<code>utils/tools.py:261</code>) verbatim for the 0/1 exact match, drop Levenshtein, add MC-option matching, and supply our own single-LLM-call prompt — discarding the broken <code>test.py</code>, <code>run.sh</code>, model clients, and the import-time global in <code>prompt.py</code>.</p></div>
+  <div class="step"><h3>Calibrate the difficulty dial</h3><p>Pin the layer-count strata so the full-rule reference prompt reaches near-ceiling, balance the closed-vocab / MC answer distribution against a constant-guess baseline, and confirm the reverse-order meta-rule is per-layer diagnostic.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Codebase gives primitives, not a generator: CipherBank is a frozen 261-item dataset with no chaining and no seeding; CryptoX hardcodes <code>random.seed(42)</code> inside its sampler and implements only single-layer per-character substitution — so re-seedability and composition are surgery we own, not config.</li>
+      <li>Temp-0 resolvability still rides on the op choice: the whole design exists to dodge char-arithmetic noise; if any structural op degrades to character shuffling under BPE, the temp-0 stability the closed-vocab framing was meant to protect can slip, and this has never been empirically gated for c09.</li>
+      <li>Provenance gaps: CipherBank ships no LICENSE file despite an MIT badge (paper-assumable but unconfirmed); CryptoX has no license and Chinese-only docstrings; one corpus methodology citation ("CipherBench v2") is a laundered, unverifiable source.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/Leey21/CipherBank">Leey21/CipherBank</a> (no LICENSE file; MIT badge, paper-assumable) — deep-read notes at <a href="../repos/cipherbank.md">repos/cipherbank.md</a>.</li>
+      <li><span class="key">Second codebase:</span> <a href="https://github.com/multimodal-art-projection/CryptoX">multimodal-art-projection/CryptoX</a> (no license, arXiv 2502.07813 attached) — deep-read notes at <a href="../repos/cryptox-cryptobench.md">repos/cryptox-cryptobench.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status partial">partial</span>
+        the c09 <em>generator</em> was never run-verified (no reusable generator exists to verify). CryptoX's encoder was confirmed runnable end-to-end (<code>Find</code> → <code>..-.|..|-.|-..</code>), but its hardcoded seed produces identical draws every call, and CipherBank's only self-check is a manual stdout round-trip, not an assertion suite. I1 was held at its deep-read provisional.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c06.html">&larr; #13 c06</a>
+    <a href="c08.html">#15 c08 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c23.html">c23 Hidden-Rule String-Transform Induction Ladder</a>
+    <a href="c01.html">c01 Invented-Glyph Positional Base Arithmetic</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c09">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

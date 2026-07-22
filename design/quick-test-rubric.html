@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Rubric</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Rubric</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <a href="gepa-run.html">GEPA</a>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+  <span class="here">Quick Test</span>
+</div>
+
+<div class="intro">
+  <p>Criteria for choosing a small, cheap task family and pinned dataset that validates the optimizer implementations and shared <a href="vocab_and_defs.html">execution contract</a> before the full HumanEval compression experiment. This is a distinct lightweight Eval Definition, not a weakened mode of the code-generation Eval Definition.</p>
+</div>
+
+<div class="section-head" id="goal"><h2>Goal</h2></div>
+
+<div class="verdict">
+  <p>Pick one task that every run design — Eval (identity), COPRO, MIPROv2, GEPA, and the Codex CLI agent — can execute end to end for <span class="key">cents per run, in minutes</span>, and that produces an <span class="key">unambiguous signal</span> about whether each optimizer works and which hyperparameters are reasonable.</p>
+  <ul>
+    <li>Validate the full contract path: Optimization Request with Tool Specs → runtime Handles/Tool Call Ledgers → ordered Optimization Proposals → materialization → authorized evaluation.</li>
+    <li>Support <span class="key">hyperparameter selection</span>: breadth/depth, minibatch size, promotion cadence, iteration count.</li>
+    <li>Serve as the debugging target before any full-scale run spends real money.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <strong>Minimum concrete definition.</strong> Pin a generated task-family schema, generator version, dataset manifest and split identities. Declare one LLM Call Node and one Eval Node in the Rollout Definition; each complete output-affecting assignment and axis selection emits one concrete Graph Config plus one Materialization Record. The Graph Config is one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a>, identified solely by <code>graph_hash</code>. Internal and official Eval Configs measure the same variant without changing its identity. Provider Call Config is output-affecting and contributes to that identity; Provider Call Request references it plus Transcript and materializes native LlmRequest without duplicate controls. Only Whetstone-accepted nonblank response text becomes Generation. An Evaluation Context binds authority.
+</div>
+
+<div class="section-head" id="rationale"><h2>Rationale</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li>The full experiment is ≈15,744 rollouts and ≈31,500 LLM calls per pass, plus sandboxed test execution per rollout — <span class="key">too expensive and slow to debug against</span>.</li>
+  <li>Its two-model graph and noisy scores make it hard to tell a <span class="key">working optimizer from a lucky one</span>, and impossible to compare hyperparameters cheaply.</li>
+  <li>A cheap task makes optimization runs <span class="key">iterable</span>: many runs per day, so implementation bugs and bad hyperparameters surface early.</li>
+</ul>
+
+<div class="section-head" id="core"><h2>Core criteria</h2></div>
+
+<p class="small muted">The first three make the test cheap. The fourth makes it informative — it is what separates a working optimizer from a broken one, and good hyperparameters from bad ones.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>1 · The graph is one LLM call node plus one eval node</h3>
+    <ul>
+      <li>No encoder → decoder chain; one LLM Call Node's accepted nonblank native response becomes a Generation/Submission Text, and one Eval Node records Metric Facts/Records before reduction.</li>
+      <li>Halves the LLM calls per rollout and removes one model's noise from the signal.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> The contract machinery — mutation surface, tools, diff check, selection — does not depend on graph depth. The smallest graph that exercises it is enough.</p>
+  </div>
+  <div class="card">
+    <h3>2 · Scoring is an exact check by a simple function</h3>
+    <ul>
+      <li>Correctness is a <span class="key">deterministic comparison</span> — e.g. two numbers match, or the answer equals the labeled choice.</li>
+      <li>No sandbox, code-test suite, or candidate-extraction preprocessing. Each example's exact rule returns 1 or 0; there is no per-example partial credit.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Removes the most expensive and failure-prone parts of evaluation, and makes every score trustworthy — a wrong aggregate can only come from the machinery under test.</p>
+  </div>
+  <div class="card">
+    <h3>3 · Token cost per rollout is small and bounded</h3>
+    <ul>
+      <li>Short inputs; outputs constrained to <span class="key">multiple choice or a few words</span>.</li>
+      <li>Per-rollout cost is predictable, so run budgets can be set tightly.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Bounded output length caps the worst-case spend. Cheap rollouts are what allow many optimization runs, larger task pools, and repeat runs for comparing hyperparameters.</p>
+  </div>
+  <div class="card">
+    <h3>4 · Default prompts score low, and better prompts close the gap in steps</h3>
+    <ul>
+      <li>Models' default behavior sits <span class="key">well below the ceiling</span>, so there is room to improve.</li>
+      <li>Prompt changes improve the score <span class="key">incrementally</span> — the best prompt is not one-shot guessable.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> If any reasonable prompt hits the ceiling, every optimizer looks identical and the run validates nothing. A gradual path is what lets runs rank optimizers and hyperparameters.</p>
+  </div>
+</div>
+
+<div class="section-head" id="additional"><h2>Additional criteria</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>5 · Runs are deterministic, so prompt differences resolve at small sample sizes</h3>
+    <ul>
+      <li>Decode at <span class="key">temperature 0</span> (or the provider's closest equivalent); pin sampled task identities and record any sampler RNG seed as metadata.</li>
+      <li>Per-task behavior is then as close to <span class="key">deterministic given a prompt</span> as the provider allows.</li>
+      <li>The <span class="key">effect size</span> of a meaningful prompt change (≥10 points) exceeds the residual noise on a 10–20 task internal eval.</li>
+      <li>Distinct <code>repeat_id</code> values still run (e.g. 3) to validate the plumbing; with determinism they should largely agree. Retry attempt numbers never substitute for repeats.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Optimizers rank proposals with tiny internal evaluations (3–20 tasks, 1 repeat). If noise swamps the effect, internal rankings are garbage and hyperparameter comparisons are meaningless. Determinism is a deliberate choice: score differences should come from prompts, not sampling.</p>
+  </div>
+  <div class="card">
+    <h3>6 · Internal rewards predict official objectives</h3>
+    <ul>
+      <li>Check the <span class="key">rank correlation</span> between Reward values from internal Evaluation Contexts and official Objective aggregates for the same materialized Graph Hashes.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Optimizers may steer by a Reward Policy while official selection reads Objectives. The quick test is the first cheap chance to measure whether that proxy is predictive.</p>
+  </div>
+  <div class="card">
+    <h3>7 · The task pool is large and generated with known ground truth</h3>
+    <ul>
+      <li><span class="key">Synthetic, parameterized</span> tasks generated by a pinned program, each with an exact label and stable task identity.</li>
+      <li>Hundreds of tasks: disjoint minibatch / subset / official <span class="key">splits</span>, per-iteration minibatch sampling (GEPA), demo bootstrapping (MIPROv2).</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> A big pool exercises the task-set and holdout machinery for real, and generation puts the difficulty under the designer's control.</p>
+  </div>
+  <div class="card">
+    <h3>8 · Models cannot already know the answers</h3>
+    <ul>
+      <li>Randomized synthetic instances rather than a published benchmark — resistant to <span class="key">data contamination</span>.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Memorized answers erase the headroom criterion 4 depends on, and do so unevenly across models — the test would measure recall, not optimization.</p>
+  </div>
+  <div class="card">
+    <h3>9 · The ceiling, floor, and a reference prompt are known in advance</h3>
+    <ul>
+      <li>The designer can write a prompt that scores ≈100%, and knows what naive prompts score.</li>
+      <li>Runs get a <span class="key">falsifiable success criterion</span>: e.g. "recover ≥90% of the known gap within 8 iterations."</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Without a known ceiling, "the score went up" is the only conclusion available. With one, a run can pass or fail.</p>
+  </div>
+  <div class="card">
+    <h3>10 · Difficulty decomposes into independent rules</h3>
+    <ul>
+      <li>The task is governed by several <span class="key">latent rules</span>; each rule a prompt captures adds score.</li>
+      <li>Which rules a returned prompt discovered is <span class="key">inspectable</span> after the run.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> This is the mechanism behind criterion 4's incremental path: partial knowledge earns partial score. It also shows <em>what</em> each optimizer found, not just how much.</p>
+  </div>
+  <div class="card">
+    <h3>11 · Failures are diagnostic enough to guide reflection</h3>
+    <ul>
+      <li>Exact-match evaluation yields "expected X, got Y"; the error pattern should <span class="key">reveal which rule was violated</span>.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> GEPA's mechanism is a reflection LM reading rollout traces. Interpretable failures test that mechanism; opaque failures test only its plumbing.</p>
+  </div>
+  <div class="card">
+    <h3>12 · Few-shot examples measurably help</h3>
+    <ul>
+      <li>Input → output pairs are compact enough to include cheaply, and some latent rules are <span class="key">learnable from examples</span>.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Demo sets are one axis of MIPROv2's grid. If examples cannot help, that axis is dead and MIPROv2 degenerates to instruction search.</p>
+  </div>
+  <div class="card">
+    <h3>13 · Failure paths get exercised on purpose</h3>
+    <ul>
+      <li>The output format is occasionally violated in practice, or failures are <span class="key">injected deliberately</span>.</li>
+      <li>Evaluation Procedure derives each exact 0/1 observation; Aggregation only reduces. Exhausted infrastructure-failure Results make official aggregation incomplete, never silently zero.</li>
+      <li>Optimization Request serializes Tool Specs, not Tool Definitions or Handles. Each Spec references a versioned Tool Definition and configures endpoint, internal Eval Config, Reward Policy, capacity/timeout/policies, ledger namespace, idempotency and refusal.</li>
+      <li>A non-serializable runtime Handle binds the Spec. The durable Whetstone Tool Call Ledger keyed by <code>tool_spec_hash + call_id</code> owns acceptance/refusal/completion and capacity across retry/restart.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> The failure taxonomy and retry paths are part of what needs validation. A task that is too clean never touches them before the expensive run does.</p>
+  </div>
+  <div class="card">
+    <h3>14 · Runs finish in minutes, not just cheaply</h3>
+    <ul>
+      <li>Small model, short outputs, no sandbox — and no <span class="key">rate-limit bottleneck</span> at the intended concurrency.</li>
+      <li>One Platform Campaign per Evaluation Campaign/context uses top-up Submission Batches. Rollout Execution Key adds <code>evaluation_context_id</code> to Rollout Key and uniquely owns its Work Item, <code>execute-rollout</code> Stage and terminal Result.</li>
+      <li>Invoke one <code>@DBOS.step(retries_allowed=False)</code> per logical provider attempt with native dr-providers retries zero. Expected provider success/failure returns a serializable typed observation; unexpected programming or infrastructure errors raise.</li>
+      <li>Assert each completed observation carries logical call identity, attempt number, execution-policy identity, timing/latency, raw request and response or failure evidence, normalized usage/cost/diagnostics, and typed outcome.</li>
+      <li>Force replay after a checkpoint and verify DBOS reuses the completed observation. Verify attempt numbering, step order, branching, durable sleep and backoff remain deterministic, with no custom Whetstone attempt ledger or fence.</li>
+      <li>Force a crash after provider effect but before checkpoint and accept that a later execution may duplicate the physical call or billing. Assert only the checkpointed physical outcome is retained and no exactly-once or every-billed-call evidence guarantee is claimed.</li>
+      <li>Assert the atomic bind contract: unbound + ref binds; the same ref replays idempotently; a different ref raises identity conflict and never overwrites the authoritative binding.</li>
+      <li>A Stage becomes SUCCEEDED only after binding resolves to that persisted Object Reference. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED. A distinct Platform Stage Attempt/operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. A different-ref conflict fails the conflicting attempt and never authorizes overwrite or retry replacement. Deliberate re-evaluation uses a new context or Repeat.</li>
+      <li>dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>; it does not own result uniqueness.</li>
+      <li>A Graph Run Summary is runner-local Node Outcomes, execution order, Graph Run status, and terminal value or failure evidence; it contains no Platform Stage or attempt state and is evidence inside—not the source of truth for—the Rollout Result.</li>
+      <li>On success and failure, retain the least-processed request and response or failure bodies plus normalized usage/cost/diagnostics. Never persist authorization headers or credential material; never silently truncate, and surface any backend limit encountered.</li>
+      <li>Provider Concurrency Control uses dr-platform selector capacity to bound Stage occupancy; the canonical tuple, accepted inaccuracies and non-goals are below. Provider Execution Policy owns timeout, credentials and native retry zero.</li>
+    </ul>
+    <p class="small muted space-top"><strong>Why.</strong> Wall-clock is what makes hyperparameter sweeps iterable. A cheap run that takes hours still blocks the debug loop.</p>
+  </div>
+</div>
+
+<div class="callout" id="provider-concurrency-control">
+  <strong><a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a>.</strong> <a class="term-ref" href="vocab_and_defs.html#term-provider-quota-identity">Provider Quota Identity</a> is best-effort and exactly <code>(provider, protocol, model)</code>, with no credential, account, or override. Whetstone derives collision-free labels, applies every relevant label to multi-route work, and configures mandatory empty-selector plus exact-label capacities. Every matching generic dr-platform control holds capacity for the full ADMITTED Stage, including backoff. Verify independent accounts may be conservatively grouped and shared quotas exposed under different tuples may be under-controlled. This is not exact call-boundary concurrency, RPM/TPM or token reservation, global/cross-stage/cross-version quota, strict fairness, adaptive limiting, or credential-aware identity.
+</div>
+
+<div class="callout">
+  <strong>Aggregation must cross strata.</strong> Include enough examples from each latent-rule stratum that exact 0/1 example scores can be averaged first by repeat within task, then across every pinned task and stratum. Improvements should come from solving more complete examples across strata, never from awarding partial credit inside an example.
+</div>
+
+<div class="section-head" id="noncoverage"><h2>What the quick test does not cover</h2></div>
+
+<p>Criteria 1–3 deliberately cut scope. Each cut item needs its own targeted check before the full experiment:</p>
+
+<ul class="card" style="margin:0 0 14px; padding:18px 22px 18px 40px;">
+  <li><span class="key">Multi-node graph routing</span> — the encoder → decoder chain and its input/output wiring.</li>
+  <li><span class="key">Sandbox execution</span> — test-suite runs, immutable image identity pinning, timeouts.</li>
+  <li><span class="key">dr-code preprocessing</span> — extraction, <code>Absent</code> handling, metric extraction from traces.</li>
+  <li><span class="key">Production compression semantics</span> — zstd measurement over the encoder representation and its HumanEval reference denominator.</li>
+  <li><span class="key">Repeat averaging under real variance</span> — determinism (criterion 5) means the 3 repeats mostly agree, so the aggregation path runs but its math is never stressed by disagreeing scores.</li>
+</ul>
+
+<div class="callout good">
+  <strong>Mandatory when claiming GEPA or two-objective coverage.</strong> Add output length in UTF-8 bytes as an explicitly distinct second Objective, with a fixed length-budget materialization axis. Pin the vector direction as exact-match rate ↑ and mean output bytes ↓, exercise Pareto archive/update rules, and report dispersion across repeats. Without this metric and variance check, the quick test validates only single-objective optimizer plumbing and must say so.
+</div>
+
+<div class="callout">
+  <strong>Proposal and authority check.</strong> Every optimizer returns ordered Optimization Proposals. For each complete assignment and axis selection, the harness validates diffs and emits one concrete Graph Config plus one Materialization Record. Execution planning deduplicates the admitted records by full <code>graph_hash</code>: for <code>D</code> distinct admitted Graph Hashes it creates exactly <code>D × tasks × repeats</code> Work Items and Rollouts, <code>D</code> aggregates, and no duplicate Rollout Execution Keys. The acceptance fixture admits two Materialization Records with the same Graph Hash and requires one shared work matrix and one shared aggregate. Official Evaluation Records and Official Plot Manifests MUST preserve the ordered mapping from every selected Materialization Record reference through <code>graph_hash</code> to that shared planned/result-key set and aggregate reference, preserving separately attributable slots when multiple records share one graph and aggregate. Record refs remain outside Rollout Keys, Work Requests, Results, and aggregate identity. Internal and official contexts remain separately authorized; official reuse requires matching Rollout Execution evidence, attestation and compatible environment, never hashes alone.
+</div>
+
+</main>
+</body>
+</html>

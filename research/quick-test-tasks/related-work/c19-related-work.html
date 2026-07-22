@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Related-work additions — only what doc.css/flow.css lack. */
+
+/* Unverified flag — matches the candidate-page convention: text label, not color alone. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.fix {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--green); background: var(--green-soft);
+  color: var(--green); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* Dossier cards */
+.paper-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 18px; }
+.paper-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.paper-head h3 { margin: 0; font-size: 17px; }
+.paper-id { color: var(--muted); font: 600 12px/1.4 var(--font-mono); }
+.paper-meta { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.paper-card h4 { margin: 16px 0 6px; font: 700 11px/1.3 var(--font-system); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.paper-card h4:first-of-type { margin-top: 4px; }
+.paper-card p { font-size: 14.5px; }
+.paper-card ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+.paper-card li { margin-bottom: 5px; }
+.paper-card li::marker { color: var(--accent); font-weight: 800; }
+.corr-box {
+  margin-top: 6px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); border-radius: 0 8px 8px 0; font-size: 13.5px;
+}
+.cite-box {
+  margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--muted);
+}
+.cite-box .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* 2x2 positioning grid */
+.grid2x2-wrap { display: grid; grid-template-columns: 130px 1fr 1fr; gap: 10px; margin: 18px 0; }
+.axis-label {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  font: 700 11px/1.3 var(--font-system); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+.col-head {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 8px; font: 700 12px/1.3 var(--font-system); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--accent); background: var(--accent-soft); border-radius: 8px;
+}
+.quad {
+  min-height: 150px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); font-size: 13.5px;
+}
+.quad.empty { display: flex; align-items: center; justify-content: center; color: var(--muted); font-style: italic; background: var(--bg); }
+.quad ul { margin: 4px 0 0; padding-left: 16px; }
+.quad li { margin-bottom: 6px; }
+.quad li::marker { color: var(--accent); font-weight: 800; }
+.quad .c19-row { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); border: 1.5px solid var(--accent); font-weight: 600; color: var(--accent); }
+.row-label {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 8px; font: 700 12px/1.3 var(--font-system); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); writing-mode: vertical-rl; transform: rotate(180deg);
+}
+
+/* Floor/ceiling meter */
+.range-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13.5px; }
+.range-row .rlabel { flex: 0 0 130px; color: var(--muted); font-weight: 600; }
+.range-track { position: relative; flex: 1 1 auto; height: 10px; border-radius: 999px; background: var(--line); }
+.range-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); opacity: .35; }
+.range-fill.ceiling { background: var(--green); }
+.range-fill.floor { background: var(--amber); }
+.range-vals { flex: 0 0 90px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .grid2x2-wrap { grid-template-columns: 1fr; }
+  .row-label, .axis-label { writing-mode: horizontal-tb; transform: none; }
+}
+</style>
+<title>whetstone-ai · c19 Related Work</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c19.html">&larr; Back to c19 candidate page</a></nav>
+
+<h1>c19 Related Work: Grid-World State Prediction in 2024-2026</h1>
+<div class="byline">whetstone-ai · 2026-07-22</div>
+
+<p>Five 2024-2026 papers on grid/maze reasoning bound c19's design space. Only two —
+<span class="key">LLM-BabyBench's Predict split</span> and <span class="key">the 2026 spatial-world-models
+study</span> — actually share c19's exact shape (full observation, single call, one derived fact); the
+other three score full plans or paths, or run an interactive loop, and count as difficulty
+upper-bounds rather than direct predictors. The convergent warning across all five: c19's biggest risk
+is a <span class="key">naive-prompt floor that is already too high</span>, not a task that collapses.</p>
+
+<!-- PAPER DOSSIERS -->
+<div class="section-head"><h2>Paper dossiers</h2></div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>GRASP: full-plan foraging where every LLM loses to greedy search</h3>
+    <span class="paper-id">2407.01892</span>
+  </div>
+  <div class="paper-meta">Tang &amp; Kejriwal &middot; arXiv preprint (cs.AI/cs.CL), v1 2024-07, v2 2025-01 &middot; no accepted venue on record</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>16,000 grid instances (11&times;11, ASCII-rendered) in which a model must emit, in one zero-shot call, a
+  complete up-to-20-action <span class="key">plan</span> to collect energy and return it to start. The paper's
+  headline is that commercial LLMs <span class="key">underperform a greedy-search baseline</span>, and
+  GPT-3.5-Turbo even loses to random walk &mdash; evidence that spatial <em>planning</em>, not just spatial
+  description, remains weak. Novelty rests on giving the full grid directly (no NL description step) and
+  scoring autonomous foraging rather than following external instructions.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: <span class="key">full grid plus full constraint text in one prompt</span>, model returns the
+  complete action list with "no further interaction with the environment." The rendered observation is an
+  11&times;11 ASCII matrix with coordinate axes 0-10, dashed cell borders, and single characters
+  <code>E</code>/<code>O</code>/<code>A</code> for energy/obstacle/agent.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Greedy search</span> beats all 3 LLMs on average energy (+0.35, p&lt;0.001 vs each).</li>
+    <li><span class="key">GPT-3.5-Turbo</span> underperforms random walk overall (avg energy &minus;2.02 vs random walk's &minus;1.14).</li>
+    <li><span class="key">GPT-4o</span> is statistically indistinguishable from random walk (t=&minus;0.48, p=0.632).</li>
+    <li><span class="key">GPT-o1-mini</span> is the only LLM to beat random walk (p&lt;0.001) but still loses to greedy search.</li>
+    <li>The per-step energy-cost constraint causes the single largest score drop for every model tested.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>GPT-3.5-Turbo: touches energy cells without collecting them, walks through obstacles, never returns to drop energy.</li>
+    <li>GPT-4o: avoids obstacles and moves toward energy but takes unnecessary steps and misses nearby energy.</li>
+    <li>Six documented negative-result categories including <span class="key">looping/oscillation</span> between the same cell pairs and out-of-bounds moves &mdash; the same failure family relevant to grid navigation generally.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The "16,000 grid-based environments" figure is exact and verified.
+  But calling GRASP the "direct grid-world antecedent of c19" <span class="fix">correction</span> overstates it:
+  GRASP is a multi-step <span class="key">plan-generation and foraging-optimization</span> benchmark, not
+  single-derived-fact state prediction, and has no invented-command or wrap/clamp layer. The corrected framing:
+  GRASP is a relative in the same family, motivational rather than a direct template &mdash; that role belongs to
+  LLM-BabyBench's Predict split.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">3</span> citations (<span class="v">2</span> since 2025; 2024:1, 2025:2). Low but nonzero and trending up. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>LLM-BabyBench: the Predict split is c19's closest template, and standard semantics don't floor frontier models</h3>
+    <span class="paper-id">2505.12135</span>
+  </div>
+  <div class="paper-meta">Choukrani, Malek, Orel, Xie, Iklassov, Tak&aacute;&#269;, Lahlou &middot; arXiv preprint, v1 2025-05-17 &middot; no published venue on record</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>A textual BabyAI benchmark suite with three tasks &mdash; <span class="key">Predict</span> (final state after
+  an action sequence), <span class="key">Plan</span> (generate actions to reach a subgoal), and
+  <span class="key">Decompose</span> (break a mission into subgoals). Novelty: a purely textual, omniscient
+  interface isolating reasoning from 3D-vision confounds, plus a custom "BabyAI OmniBot" oracle (100% solve
+  rate) as ground truth.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Predict is single-shot, full observation: one prompt with the complete environment (all objects revealed
+  regardless of agent position), initial pose, and an ordered action sequence; the model predicts the final
+  state in one forward pass with <span class="key">"no interaction with the environment... allowed at inference
+  time."</span> Three formats compared &mdash; Narrative, Structured bullets, JSON &mdash; but
+  <span class="key">none renders a literal ASCII grid</span>; state is always a coordinate-labeled object list.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Claude 3.7 Sonnet</span>: Predict success 97.5% (Easy) down to 82.5% (Very Hard) &mdash; strongest model, only one holding up on command-sequences (80%).</li>
+    <li><span class="key">GPT-4o</span>: 97.5% (Easy) &rarr; 61.2% (Very Hard).</li>
+    <li><span class="key">Llama-3.1-70B</span> is a non-monotonic outlier at only 63.8% Easy &mdash; below the larger 405B model (85.0%).</li>
+    <li><span class="key">Llama-3.1-8B</span>: near-floor across the board (12.9% Easy, 2.8% Very Hard).</li>
+    <li>Prompting-format swing: Structured bullets 61.08% &gt; JSON 59.28% &gt; Narrative 56.78% (avg. across models).</li>
+    <li>ToT (62.62%) edges out CoT (61.07%) and zero-shot (59.29%); few-shot gives essentially no lift (59.05%).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li><span class="key">Maze/multi-room navigation is disproportionately hard</span> vs single-room: DeepSeek-R1-Distill drops from 89% (room) to 44% (maze).</li>
+    <li><span class="key">Sequences-of-commands</span> break every non-Claude model (Llama-3.1-8B = 0%).</li>
+    <li>Reasoning traces show DeepSeek-R1-Distill "questioning the exactitude" of the grid description rather than just simulating it, unlike Claude.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> Core claim holds: this is exactly the c19 template, and ground truth
+  does trace to expert (OmniBot) trajectories. Precision gap <span class="fix">correction</span>: the
+  <code>target_state</code> is a deterministic environment-execution result following the given action sequence,
+  not itself something the OmniBot must "solve" from scratch &mdash; the OmniBot machinery centrally serves Plan/Decompose
+  ground truth, and only the input action sequences (not the Predict answer) originate from OmniBot demonstrations.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Mid-2025 preprint, not yet indexed-cited. <em>OpenAlex undercounts relative to Google Scholar; zero here signals "too new to index," not "ignored."</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>GridRoute: algorithm-in-prompt scaffolding helps path planning, but worked traces are a trade-off, not a win</h3>
+    <span class="paper-id">2505.24306</span>
+  </div>
+  <div class="paper-meta">Li, Tao, Wen, Sun, Gong, Zhang, Xu, Zhang, Ji &middot; arXiv v2 (submitted 2025-05-30, revised 2025-08-13) &middot; not (yet) published at a peer-reviewed venue</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Benchmarks whether embedding classical pathfinding algorithms (A*, Dijkstra, DFS) directly into the prompt
+  ("Algorithm of Planning," AoP) beats Vanilla/CoT/Few-shot route planning on cardinal-movement grids. Central
+  claim: AoP significantly outperforms Vanilla and rivals CoT, especially as grid size grows. Novel contribution
+  is AoP itself &mdash; embedding algorithm <em>mechanics</em>, not just naming the algorithm, distinguishing it
+  from prior PPNL (CoT/ReAct only) and LLM-A* (LLM used only for one sub-step) approaches.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one prompt gives the full obstacle set as <span class="key">rectangle-corner coordinate
+  pairs</span> plus start/end coordinates &mdash; the grid is <span class="key">never rendered as an ASCII/visual
+  grid</span> anywhere in the prompt templates. The model returns a complete coordinate-list path in one
+  response; CoT/AoP variants add step-by-step algorithmic instructions or worked examples in that same single prompt.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">DeepSeek-V3 (671B)</span>: one of the most stable performers across all prompt types and sizes (e.g. AoP-A* FR/OR 80/80 at 10&times;10).</li>
+    <li><span class="key">ChatGPT-4 (GPT-4 Turbo)</span>: Vanilla FR 76 at 10&times;10, but AoP-DFS collapses it to FR/OR 1-3 at 20&times;20/30&times;30.</li>
+    <li><span class="key">Qwen2.5-7B</span>: Algo-Reasoning (worked-trace) produces CR/FR/OR = 0/0/0 at every map size.</li>
+    <li>Map size (10&rarr;20&rarr;30) is the dominant driver of decline, independent of model size (Qwen2.5-32B &asymp; 72B at 30&times;30).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Five-way taxonomy: <span class="key">invalid step distance</span>, <span class="key">path through
+  obstacle</span>, <span class="key">out of bounds</span>, empty path, start/end mismatch. As map size grows the
+  dominant error shifts from obstacle-collision to "more intricate" errors; AoP-DFS shows the most severe
+  single collapse recorded (GPT-4 Turbo to FR/OR 1-3 at 20-30&times;30).</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> Cardinal-movement grid benchmark and AoP algorithm-in-prompt framing
+  are both accurate. But "few-shot worked traces measurably help" <span class="fix">correction</span> overstates
+  the finding: Algo-Reasoning is a genuine <span class="key">trade-off</span> &mdash; it improves GM/MSE but
+  <em>hurts</em> FR/OR versus the simpler Algo-Direct variant, and produces 0/0/0 outright on the smallest model
+  (Qwen2.5-7B). The corrected claim: worked-trace few-shot trades route-similarity for reduced feasibility/optimality,
+  and can fail entirely on small models.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). Mid-2025 paper. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>MazeEval: single-author benchmark where every failure is looping, not running out of moves</h3>
+    <span class="paper-id">2507.20395</span>
+  </div>
+  <div class="paper-meta">Hafsteinn Einarsson &middot; arXiv preprint (cs.AI), v1 2025-07-27 &middot; no separate venue/proceedings identified</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Interactive maze navigation (5&times;5 to 15&times;15) using only coordinate feedback and distance-to-wall
+  readings via a function-calling <code>move()</code> interface, no visual input. Across 8 models, O3 navigates
+  perfectly up to 30&times;30 while every other model fails catastrophically beyond roughly 9&times;9, and
+  <span class="key">100% of failures are excessive looping</span> (revisiting a cell 10+ times). A large
+  English-vs-Icelandic performance gap (3-4 size-levels smaller in Icelandic) suggests spatial reasoning is
+  linguistically, not purely mechanistically, grounded.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p><span class="key">Interactive, not single-shot</span>: the model calls <code>move(direction)</code>
+  repeatedly; each call returns updated state and the model decides the next move from accumulating history.
+  Per-step observation is local only &mdash; distance-to-wall in 4 cardinal directions, current position, goal
+  position, and a full line-by-line travel history &mdash; <span class="key">never a global grid rendering</span>.
+  Termination: goal reached, any cell revisited 10+ times, or a 3n&sup2; move budget exceeded.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">O3</span>: perfect success 5&times;5 through 15&times;15 (plus an ad hoc 30&times;30) in both languages; fails at 40&times;40. Clean ceiling case.</li>
+    <li>"Strong performers" (Claude Opus 4, Claude Sonnet 4, Gemini 2.5 Pro) hold to 8&times;8/9&times;9 before degrading.</li>
+    <li>"Weaker performers" (GPT-4o, GPT-4o-mini, GPT-4.1-mini, Gemini 2.5 Flash) fail beyond 7&times;7.</li>
+    <li>Backtracking scales sharply with size: Claude Opus 4 rises from 6.8 avg. backtracks at 5&times;5 to 68.6 at 12&times;12.</li>
+    <li>Wall-collision rate stays low even in failed runs (~0.8 avg.) &mdash; local per-step reasoning is intact; the failure is integrating history.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Universally: <span class="key">excessive looping</span> from failing to integrate cumulative travel
+  history into a persistent spatial memory, despite the full history being re-supplied every turn &mdash; models
+  "treat each navigation decision as relatively independent." Never budget exhaustion. Systematic, not stochastic,
+  across repeated runs.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported, with an author-count correction.</strong> The corpus description cited
+  <span class="unverified">"Einarsson et al."</span> <span class="fix">correction</span> &mdash; the paper's
+  header lists a <span class="key">single author</span>, Hafsteinn Einarsson, confirmed by direct extraction.
+  The coordinate-based navigation and 9&times;9 failure-threshold description are accurate as a summary, but
+  the "fail beyond 9&times;9" framing is a modal/most-common threshold, not universal: it applies mainly to
+  "weaker performers" (fail beyond 7&times;7-9&times;9), applies partially to "strong performers" (hold to
+  8&times;8/9&times;9), and does not apply to O3 (clean exception to 30&times;30).</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Mid-2025 preprint, single-author. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>Do LLMs Build Spatial World Models? Representation format swings accuracy 2-5x, and c19's chosen format is the losing one</h3>
+    <span class="paper-id">2604.10690</span>
+  </div>
+  <div class="paper-meta">Li, Zhu, Das, Dube &middot; arXiv preprint (cs.AI), v1 2026-04-12 &middot; not otherwise published as of fetch date</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Argues LLMs do not build format-invariant spatial world models: <span class="key">adjacency-list text
+  vastly outperforms visual-grid text</span> for the identical maze, base prompting fails for most models while
+  explicit CoT recovers it, and models treat repeated/compositionally related spatial queries as independent
+  events rather than reusing prior computation &mdash; despite 96-99% semantic-coverage similarity in their
+  reasoning traces. Novel probes: Task 2 (exact-repeat query reuse) and Task 3 (compositional distance
+  comparison), designed to test information <em>persistence</em> rather than one-shot accuracy.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot, full observation, across all three tasks. Two formats compared in the same single prompt
+  design: <span class="key">adjacency-list</span> with special tokens (e.g. <code>&lt;ADJLIST_START&gt; (0,0)
+  &lt;--&gt; (0,1)...</code>) versus <span class="key">visual grid</span> (e.g. <code>Row 0: [".", "S", ".", "#"]</code>
+  plus a legend). No image/pixel input tested &mdash; both are text.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">Gemini-2.5-Flash</span> (CoT): 5&times;5 &mdash; 86% adjacency-list vs 34% visual grid; 7&times;7 &mdash; 80% adjacency vs 16% visual. The corpus-cited "16-86%" headline.</li>
+    <li><span class="key">Claude-Haiku-4.5</span>: near-0% with base prompting at 5&times;5, recovering to 78% with CoT.</li>
+    <li><span class="key">GPT-5-mini</span> is the documented exception: no adjacency advantage (30% adj. vs 32% visual at 5&times;5 CoT); compositional accuracy craters 100%&rarr;4% from 5&times;5 to 9&times;9.</li>
+    <li>Reasoning traces show 96-99% semantic coverage but ROUGE-L as low as 0.08 (DeepSeek-Chat) &mdash; high conceptual similarity without literal reuse.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Without CoT, models get "lost in the maze after finding the shortest Euclidean distance," ignoring wall structure &mdash; the most common failure mode.</li>
+    <li><span class="key">Representation brittleness</span>: identical maze, 2-5x accuracy swing from format alone.</li>
+    <li>On an exact-repeat query, Gemini and GPT-5-mini fully re-derive the answer from scratch rather than reusing it.</li>
+    <li>k-shot examples can hurt on larger mazes rather than help.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The 16%/86% swing, the 5&times;5/7&times;7 headline figures, and the
+  four model names are all accurate. Two corrections: (1) title <span class="fix">correction</span> &mdash;
+  the corpus description drops "Evidence from" from the real title ("...Grid-World Maze Tasks" should read
+  "...Evidence from Grid-World Maze Tasks"); (2) grid-size range <span class="fix">correction</span> &mdash;
+  "5&times;5 to 7&times;7" understates scope; the full study spans <span class="key">5&times;5 through
+  9&times;9</span>, with 5&times;5-7&times;7 being only the range highlighted for the specific headline
+  comparison.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. 2026 paper &mdash; <span class="key">zero-by-construction</span> (indexing lag; a paper this new has had almost no time to accrue or have citations indexed). <em>Not evidence of low impact.</em></div>
+</div>
+
+<!-- 2x2 POSITIONING MAP -->
+<div class="section-head"><h2>Positioning: observation &times; protocol</h2></div>
+<p>Classification is at the <span class="key">API-call level</span>: "single-shot" means one LLM call with no
+environment feedback loop, regardless of whether the output is a single fact or a full plan. Under that
+convention, four of five papers plus c19 crowd into one cell.</p>
+
+<div class="grid2x2-wrap">
+  <div></div>
+  <div class="col-head">Single-shot (one call, no env loop)</div>
+  <div class="col-head">Interactive (closed loop, per-step feedback)</div>
+
+  <div class="row-label">Full observation</div>
+  <div class="quad">
+    <ul>
+      <li><strong>P1 GRASP</strong> &mdash; output: full 20-step plan</li>
+      <li><strong>P2 LLM-BabyBench</strong> (Predict split) &mdash; output: final state</li>
+      <li><strong>P3 GridRoute</strong> &mdash; output: full path</li>
+      <li><strong>P5 Spatial World Models</strong> &mdash; output: path / True-False</li>
+    </ul>
+    <div class="c19-row">c19 &mdash; output: ONE derived fact, strict exact match</div>
+  </div>
+  <div class="quad empty">(empty)</div>
+
+  <div class="row-label">Partial observation</div>
+  <div class="quad empty">(empty)</div>
+  <div class="quad">
+    <ul><li><strong>P4 MazeEval</strong> &mdash; <code>move()</code> loop, local wall-distance + history only, never a global map</li></ul>
+  </div>
+</div>
+
+<div class="card full">
+  <h3>c19's differentiator is output granularity, not the cell</h3>
+  <p>Four of five papers occupy the crowded full-observation &times; single-shot cell alongside c19; MazeEval alone
+  sits in partial &times; interactive, and the other two cells are empty. c19 is the <span class="key">only design
+  scoring a single derived fact under strict 0/1 exact match</span>. LLM-BabyBench/Predict is nearest (final
+  position+direction) but grades with Manhattan-distance partial credit and standard BabyAI actions; GRASP and
+  GridRoute score full multi-step plans/paths (many-valid-answer ambiguity); P5's Task 1 scores full-path exact
+  match, conflating planning with state-tracking. The genuinely open territory is combining
+  <span class="key">single-fact exact-match scoring</span> with a <span class="key">non-memorizable invented-command
+  / wrap-vs-clamp convention layer</span> &mdash; no paper in this set tests both together.</p>
+</div>
+
+<!-- CAPABILITY SYNTHESIS -->
+<div class="section-head"><h2>Capability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One-shot state prediction is tractable and near-ceiling for strong models at small size; multistep collapses via looping and non-reuse, not budget exhaustion</h3>
+    <p>Single forward-pass state prediction is the <span class="key">easiest cell</span> in this literature:
+    Claude 3.7 Sonnet holds 82.5% even at Very Hard difficulty on LLM-BabyBench's Predict split, and room-level
+    navigation runs 93-98% for strong models. But it is not universal &mdash; Llama-3.1-70B is a non-monotonic
+    outlier at 63.8% Easy, and maze/multi-room navigation plus long command sequences degrade every non-Claude
+    model sharply. In multistep/interactive settings the dominant failure is structurally different:
+    <span class="key">100% of MazeEval's failures are looping</span> (never running out of the move budget), and
+    the 2026 spatial-world-models paper shows models <span class="key">re-derive rather than reuse</span> answers
+    to repeated or compositional queries even within one prompt. Both failure modes are
+    <span class="key">structurally impossible in c19's single-shot single-fact design</span> &mdash; there are no
+    repeated turns to lose track of and no cross-query state to fail to reuse. This makes c19 easier than the
+    interactive/batched settings it is compared against, reinforcing rather than easing the too-high-floor risk.</p>
+  </div>
+  <div class="card">
+    <h3>Cheap-tier models are extremely prompt- and format-sensitive: the naive-to-ceiling gap can span 0% to 86%</h3>
+    <p>The cheap tier (Gemini-2.5-Flash, GPT-5-mini, Claude-Haiku-4.5, DeepSeek-Chat &mdash; the exact roster of
+    the 2026 spatial-world-models paper) shows <span class="key">near-total failure under base/no-CoT
+    prompting</span> even at 5&times;5 (Claude-Haiku and DeepSeek near 0%, Gemini base 8%), but
+    <span class="key">CoT rescues them dramatically</span> (Claude-Haiku 78%, DeepSeek 74%, Gemini 86% at
+    5&times;5). GPT-5-mini is a persistent non-conforming outlier, showing no representation advantage and
+    craterring on compositional tasks as size grows. Few-shot is <span class="key">not a reliable lever</span>
+    and can actively hurt (GridRoute's worked-trace prompt produces 0/0/0 on a 7B model; k-shot hurts larger
+    mazes in the 2026 paper) &mdash; consensus across three papers is CoT helps, few-shot doesn't.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>c19's rendered ASCII grid is the documented weak format</h3>
+  <p>The strongest cross-paper convergence: both papers closest to c19's shape favor
+  <span class="key">structured/symbolic text over rendered/prose grids</span>. The 2026 spatial-world-models
+  paper's central result &mdash; adjacency-list beats visual-grid ASCII by <span class="key">86% vs 34% at
+  5&times;5, 80% vs 16% at 7&times;7</span> (Gemini-2.5-Flash, CoT) &mdash; holds for 3 of 4 models (GPT-5-mini is
+  exempt). LLM-BabyBench separately finds structured bullets (61.08%) beat JSON (59.28%) and narrative prose
+  (56.78%). c19's planned observation &mdash; a literal rendered ASCII grid &mdash; sits on the
+  <span class="key">losing side</span> of this swing, meaning format choice alone could move c19's ceiling by
+  30-50 points independent of task difficulty.</p>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the c19 baseline</h2></div>
+<p>c19 config: vanilla Minigrid dynamics (no invented commands in the baseline), full-observation ASCII grid,
+single derived fact, exact-match, temp 0, cheap-tier models. This is the intersection of the
+<span class="key">easiest task shape</span> in the literature (single fact, ~6&times;6, no planning/memory-across-turns)
+and the <span class="key">weakest representation</span> (rendered ASCII) at the <span class="key">most
+prompt-sensitive tier</span> &mdash; no paper tests this exact cell, so both ranges below carry real uncertainty.</p>
+
+<div class="card full">
+  <div class="range-row">
+    <span class="rlabel">Naive floor</span>
+    <div class="range-track"><div class="range-fill floor" style="left:15%; width:40%;"></div></div>
+    <span class="range-vals">~15&ndash;55%</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling (ASCII-locked)</span>
+    <div class="range-track"><div class="range-fill" style="left:55%; width:20%;"></div></div>
+    <span class="range-vals">~55&ndash;75%</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling (structured fmt.)</span>
+    <div class="range-track"><div class="range-fill ceiling" style="left:80%; width:10%;"></div></div>
+    <span class="range-vals">~80&ndash;90%</span>
+  </div>
+  <p class="small muted" style="margin-top:14px;">Uncertainty is <strong>high</strong> for the floor and
+  <strong>medium-high</strong> for the ceiling &mdash; both anchored to <em>SHOWS</em> data from adjacent tasks
+  (base-prompting/format results on full-path mazes) rather than a direct measurement of single-fact + ASCII +
+  base-prompt + cheap-tier, which no paper tests. Central estimate if the baseline lands mid-range (naive
+  ~30-45%, ceiling ~65-80% on ASCII): usable headroom, no added complexity needed. <span class="key">Go/no-go
+  gate</span>: if measured naive floor exceeds ~60%, add difficulty via c19's own invented-command / wrap-vs-clamp
+  strata, longer command sequences, or 8&times;8-9&times;9 sizing before proceeding.</p>
+</div>
+
+<!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
+<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Highest overlap is LLM-BabyBench/Predict; strip the invented-command layer and c19 is a cheaper re-run</h3>
+    <p>c19's novelty is <span class="key">conditional on its strata mattering</span>: LLM-BabyBench's own data
+    shows five of seven models score 85-97.5% on Easy standard-semantics Predict &mdash; direct evidence that
+    standard movement semantics alone do not floor frontier models, which is exactly why c19 needs its
+    invented-command and wrap-vs-clamp strata, and exactly the warning that without them the floor is too high.
+    c19's real differentiators against this paper are narrow but concrete: non-memorizable commands, an explicit
+    wrap/clamp boundary stratum, literal ASCII rendering (LLM-BabyBench never renders one), and strict exact
+    match versus Manhattan-distance partial credit.</p>
+  </div>
+  <div class="card">
+    <h3>Most threatening overlap is the 2026 paper &mdash; it already owns the format-sensitivity finding</h3>
+    <p>c19 <span class="key">cannot claim "grids are format-sensitive" as a contribution</span> &mdash; the 2026
+    spatial-world-models paper already delivers that headline empirical result. c19's remaining differentiators
+    are narrow but real: single-fact exact-match isolation of state-tracking (vs. that paper's full-path scoring),
+    and the non-memorizable convention layer it does not test. If c19 wants a contribution distinct from this
+    paper, it must lean on <span class="key">convention-manipulation</span>, not format-sensitivity.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>MazeEval is the cleanest complementarity story: c19 isolates the sub-capability MazeEval's own discussion flags as untested</h3>
+  <p>c19 sits in the <span class="key">opposite quadrant</span> from MazeEval on both axes (full x single-shot vs.
+  partial x interactive). MazeEval shows local per-step reasoning stays intact (low wall-collision rate even in
+  failed runs) but cross-turn integration fails via looping; its own Discussion section admits this is untested
+  for the full-observation/single-shot case. c19 directly tests whether that same integration must succeed
+  <span class="key">inside one forward pass</span>, and whether removing the interaction loop (while holding
+  information content equivalent) raises or lowers the failure rate MazeEval attributes to lost spatial memory.</p>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>If optimization yields large, verified gains, the precise claim is convention-recovery, not format-sensitivity</h3>
+    <p>The defensible workshop claim: automated prompt optimization (COPRO / MIPROv2 / GEPA) recovers a large
+    fraction of the naive-to-ceiling gap on a contamination-resistant, single-fact task with non-memorizable
+    conventions, <span class="key">with no change to model weights or data</span>, and the gain is attributable
+    to surfacing latent convention rules rather than to memorized grid heuristics or format artifacts. This
+    requires: held-out seed splits, replication across &ge;2 optimizers and &ge;2 models, and a per-stratum
+    ablation showing gains concentrate on the invented-command/wrap-clamp strata rather than the standard-semantics
+    stratum.</p>
+  </div>
+  <div class="card">
+    <h3>Lead with prompt-optimizer benchmarking, not spatial-reasoning evaluation &mdash; and know the early-kill gate</h3>
+    <p>Spatial-reasoning evaluation is a <span class="key">thin line</span>: the 2026 paper already published the
+    format/headroom finding, and the other four papers cover the evaluation angle. The stronger line is
+    <span class="key">prompt-optimizer benchmarking</span> (GEPA is an ICLR 2026 oral; MAS-PromptBench, 2026,
+    is a benchmark specifically for "when does prompt optimization help") &mdash; a clean, cheap, auditable task
+    where gains are decomposable per-rule is exactly what that line wants. <span class="key">Not publishable:</span>
+    small or within-variance gains, gains traceable to format artifacts or the standard-semantics stratum rather
+    than convention-learning, or a naive floor already near ceiling (LLM-BabyBench's 85-97% Easy result is a live
+    risk here) &mdash; stop before Phase 2 if the naive floor exceeds ~80% on frontier models.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Research-currency verdict: active and current, not yet demonstrably high-impact</h3>
+  <p>OpenAlex citation counts, fetched <span class="key">2026-07-22</span>: GRASP 3 (2 since 2025); GridRoute 1
+  (1 since 2025); LLM-BabyBench 0; MazeEval 0; the 2026 spatial-world-models paper 0
+  (<span class="key">zero-by-construction</span> &mdash; a 2026 paper has had almost no time to accrue or have
+  citations indexed). Read naively this looks weak; with the caveat applied it is the expected signature of a
+  <span class="key">live, fast-moving area</span> where papers outpace citation indexing, not one that has gone
+  quiet &mdash; the clinching signal is that a fresh 2026 entry is still probing exactly c19's construct. Deep
+  lineage (bAbI: 727 citations; EntNet: 157) confirms the underlying problem family is well-established.
+  <span class="unverified">Two honest caveats</span>: the same recency that proves currency also means c19's
+  evaluation-angle contribution is largely pre-empted, especially by the 2026 paper; and OpenAlex zeros cannot
+  distinguish "ignored" from "too new" without a Google Scholar cross-check. <em>All OpenAlex counts undercount
+  relative to Google Scholar.</em></p>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c19.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c19 candidate page</a>
+  <a href="../candidates-table.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Candidates table</a>
+  <a href="../recommendations-round2.html#table" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Round 2 rescore</a>
+</nav>
+
+</main>
+</body>
+</html>

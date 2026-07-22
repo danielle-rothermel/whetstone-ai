@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Recommendations</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Recommendations</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <span class="here">Recommendations</span>
+  <a href="landscape.html">Landscape</a>
+</div>
+
+<div class="intro">
+  <p>Top candidates for the single cheap task family that validates the optimizer implementations (COPRO, MIPROv2, GEPA, Codex CLI agent) end to end before the HumanEval+ compression experiment. Inputs: the merged candidate list (<a href="candidates-merged.html">candidates-merged.html</a>), rubric scorecards, and two adversarial skeptic passes per finalist (an optimization-path lens and a measurement lens).</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>Adopt c21 — Relational Micro-World with Invented Vocabulary.</strong> It is the only finalist that survived both adversarial lenses with only <span class="key">minor-severity caveats</span>, and every caveat is a pinning/verification obligation inside artifacts the adaptation plan already builds. <strong>Backup: c03 — Keyed Custom-Operator Expression Evaluation</strong>, the only other candidate both skeptics left unrefuted. Three more (c14, c11, c12) are viable with real but bounded redesign work.</p>
+</div>
+
+<div class="section-head" id="ordering"><h2>Skeptic verdicts override the raw scores</h2></div>
+
+<p>The mechanical sort is by rubric total (28 or 27 of 28), which puts c05 (FSM/state tracking) in the top tier. This doc demotes c05 out of the recommended set and promotes c03 (total 27) to #2:</p>
+
+<ul class="card" style="margin:0 0 14px; padding:18px 22px 18px 40px;">
+  <li><strong>c05 — refuted by both lenses (major).</strong> Its latent rules (AUTH-before-DATA, undefined-transition fallback, monotone sequence numbers) are <span class="key">textbook protocol conventions</span> a competent prompt engineer states one-shot. Its difficulty knob (trace length) is caught in a dilemma: long traces make the ceiling unreachable in a single no-scratchpad call (its own citations — <a href="https://arxiv.org/abs/2503.02854">arXiv:2503.02854</a>, <a href="https://arxiv.org/abs/2509.09677">arXiv:2509.09677</a> — document this), while short traces plus CoT leave a 2-3 rung ladder that one demo bootstrap collapses. The fixes amount to redesigning it into c21/c03. The 28/28 scorecard did not price this in.</li>
+  <li><strong>c15 and c01 — refuted by both lenses (major).</strong> c15's rule family is famous flipped-label literature, so a "here are the rule types, induce the bindings from demos" meta-prompt one-shots it. c01 is trapped between explicit specs (one-shot) and implicit quirks (no writable ~100% reference prompt), and its encode direction has non-unique ground truth. Both excluded.</li>
+  <li><strong>c03 — promoted.</strong> Scored 27 (criterion 4 = 1) but is the only candidate besides c21 where <span class="key">neither skeptic refuted the design</span> — both lenses concluded the incremental ladder survives, contingent on concrete, cheap fixes. A candidate whose weakest criterion survived adversarial attack outranks 28-scorers whose measurement story did not.</li>
+</ul>
+
+<p class="small muted">Remaining order weighs verdict health first, then tie-breaker strength, then adaptation cost.</p>
+
+<div class="section-head" id="c21"><h2>1 · c21 — Relational Micro-World with Invented Vocabulary</h2></div>
+
+<p><span class="status pass">adopt</span> Relational/kinship QA over nonce graphs · rubric <strong>28/28</strong> · both lenses <span class="key">not refuted, minor severity only</span> — the only finalist with no major finding.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: nonce relations with seeded nonstandard properties</h3>
+    <p class="small">A pinned generator builds a small graph of nonce entities connected by nonce relation symbols. Each relation symbol carries <span class="key">seeded, nonstandard properties</span> fixed per generator seed: symmetry, transitivity, an inverse mapping, a two-relation composition table, explicit-negation precedence, and closed-world handling. Answers use an <span class="key">invented closed vocabulary</span> (a gender-neutral "nieph", a "bond-" prefix for in-law-style links, a relation-distance cutoff).</p>
+    <p class="small">An instance is a few facts plus one query; output is one/two words from the closed vocabulary or a 4-way MC letter (true / false / both / unknown), scored 0/1 exact match against a <span class="key">graph-traversal oracle</span>.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">This seed: <code>tovv</code> is transitive, non-symmetric; two <code>tovv</code> hops map to codeword <code>nieph</code>; <code>brell</code> is symmetric; closed-world default for <code>tovv</code> is <em>unknown</em>.</p>
+<pre><code>Facts:
+  Marn tovv Belu.
+  Belu tovv Sagre.
+  NOT (Sagre brell Marn).
+
+Q1: What is Sagre to Marn? (one word, task vocabulary)
+Gold: nieph   — two tovv-hops.
+Naive prompt: "grandchild" → 0.
+
+Q2: Does Belu tovv Marn? A true / B false / C both / D unknown
+Gold: D   — tovv not symmetric; closed-world default unknown.
+Naive prompt guessing symmetry: A → 0.</code></pre>
+  </div>
+  <div class="card">
+    <h3>Scorecard: straight 2s, and the floor is structural</h3>
+    <ul>
+      <li><span class="key">Criterion 4 is structural, not tuned</span>: the hidden rulebook is arbitrary seeded information — no zero-shot prompt can contain the per-seed property assignments or the codebook, and the rules are under-determined from any single instance, so "infer the rules yourself" prompts cannot shortcut the ladder.</li>
+      <li><span class="key">~9 independent strata</span> (six relation-property rules + three vocabulary rules), each worth roughly 10-15 points of pool score (criterion 10).</li>
+      <li><span class="key">Diagnostic failures</span>: codebook misses (standard English kin term emitted) separate cleanly from traversal misses; within traversal, the violated rule is identifiable from expected-vs-got (criterion 11).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weak spots (from the verdicts; none refuting)</h3>
+    <ul>
+      <li>A best-effort "uninterpreted-symbols, closed-world literal logician" prompt could land at 40-60% if hidden-rule strata are under-weighted.</li>
+      <li>Some rules (composition table, distance cutoff) may be practically <span class="key">non-inducible from 0/1 feedback</span>, stalling all optimizers at the same sub-ceiling.</li>
+      <li>Multiple-valid-answer instances and an incoherent "both" label are latent generator bugs.</li>
+      <li>Uniform random 10-task minibatches have a ~21% chance of missing a given stratum entirely.</li>
+    </ul>
+  </div>
+</div>
+
+<h3 class="space-top">Surviving skeptic caveats → mitigations already in the plan</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Caveat</th><th>Mitigation</th></tr></thead>
+  <tbody>
+    <tr><td>Literal-logician baseline could sit mid-high</td><td>Pin that engineered prompt as an explicit measured baseline; weight ≥60-70% of instances to strata requiring a nonstandard seeded property or codebook term so it scores ≤~50%.</td></tr>
+    <tr><td>Non-inducible rules could falsify the success criterion for reasons unrelated to optimizer quality</td><td>Per-rule discoverability check before pinning: feed a reflection LM k failure traces from one stratum; shrink/drop rules it cannot state (keep the composition table tiny, the distance cutoff small).</td></tr>
+    <tr><td>In-context rule induction via large demo sets</td><td>Cap few-shot demo counts; adversarially test an "induce the hidden conventions from the examples" prompt on the pinned model.</td></tr>
+    <tr><td>Non-unique answers / incoherent "both"</td><td>Rejection-sample instances whose rule-closure admits &gt;1 valid closed-vocab answer (run the oracle over the whole vocabulary, reject ties); "both" arises only for relations whose seeded profile lacks the negation-precedence property.</td></tr>
+    <tr><td>Stratum-starved minibatches</td><td>Stratified minibatch composition: ≥1-2 tasks per latent-rule stratum in every 10-20 task internal eval.</td></tr>
+    <tr><td>Silent ceiling shortfall</td><td>Empirically verify the reference prompt at ~100% and the naive floor on the pinned model at temp 0 before freezing the manifest, tuning hop depth down until the ceiling holds.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 class="space-top">Adaptation plan</h3>
+<div class="steps">
+  <div class="step"><h3>Build the two pinned artifacts</h3><p>A graph sampler (nonce entities + per-seed relation property profiles) and a traversal oracle computing exact answers. Pin generator version, dataset manifest, and disjoint minibatch/subset/official split identities.</p></div>
+  <div class="step"><h3>Cap hop depth and balance answers</h3><p>Full-rule reference prompt must reach ~100%; balance the four MC outcomes and closed-vocab answers so constant-guess baselines are pinned low (25% MC floor).</p></div>
+  <div class="step"><h3>Tag every instance with its latent-rule stratum</h3><p>For failure attribution and stratified aggregation (average 0/1 within, then across strata).</p></div>
+  <div class="step"><h3>Store baselines and pre-register the success criterion</h3><p>Reference ~100% prompt, naive baseline, literal-logician baseline; e.g. recover ≥90% of the gap within 8 iterations — set only after the discoverability check confirms every retained rule is inducible.</p></div>
+  <div class="step"><h3>Normalize answers</h3><p>Lowercase, strip whitespace, canonicalize hyphenated <code>bond-</code> terms; unparseable/off-vocabulary/empty outputs are decisive 0s (exercises criterion 13).</p></div>
+  <div class="step"><h3>Add the second objective</h3><p>Mean output UTF-8 bytes as the distinct second objective with a fixed length-budget axis, per the rubric's two-objective callout.</p></div>
+</div>
+
+<p class="space-top"><strong>Tie-breaker: strong (2/2).</strong> Sits squarely in the active in-context rule-learning / synthetic-formal-language ICL lines (cipher-ICL, GINC/RegBench, MIR-Bench, FalsifyBench, the LINGOLY/Linguini linguistics-olympiad family), directly adjacent to PrOntoQA's fictional-symbol methodology (ICLR 2023). The invented-vocabulary + seeded-property design is exactly the contamination-proof, decomposable, few-shot-sensitive probe those 2025-2026 lines care about; it could grow into a standalone optimizer-comparison benchmark. Only gap: no flagship live leaderboard to anchor to.</p>
+
+<div class="section-head" id="c03"><h2>2 · c03 — Keyed Custom-Operator Expression Evaluation</h2></div>
+
+<p><span class="status partial">backup</span> Invented operators / nonstandard precedence arithmetic · rubric <strong>27/28</strong> (criterion 4 = 1) · both lenses not refuted (major-severity caveats with concrete fixes) — the only other candidate left standing by both skeptics.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: per-instance symbol tables, family-constant hidden conventions</h3>
+    <p class="small">Each instance opens with a per-instance symbol table defining invented infix operators as closed forms (e.g. <code>(a·k + b) mod m</code>), decoy symbols, an opaque mode token, and a short chained expression. Output is one integer (or a 4-way MC letter), scored 0/1 exact match against a <span class="key">~10-line reference evaluator</span>.</p>
+    <p class="small">Latent, family-constant conventions carry the headroom: modular wrap into residues <span class="key">1..m</span> (not 0..m-1), the opaque mode token's semantics (precedence/associativity), threshold post-processing, and a recurrence stratum with an index term.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Family-latent conventions: <code>⊞</code> binds tighter than <code>◇</code>; results wrap into 1..m.</p>
+<pre><code>Definitions: x ◇ y = (3x + 2y) mod 6
+             x ⊞ y = |x − y| + 1
+             x ⨂ y = x        (decoy, never used)
+             mode: K3
+Evaluate: 2 ◇ 4 ⊞ 3
+
+Gold: 4   — house precedence: 4 ⊞ 3 = 2, then 2 ◇ 2 = 10 mod 6 = 4.
+Naive PEMDAS/left-to-right: 2 ◇ 4 = 2, then 2 ⊞ 3 = 2 → answers 2 → 0.</code></pre>
+  </div>
+  <div class="card">
+    <h3>Highlights</h3>
+    <ul>
+      <li>Textbook single-call + exact-integer-match graph (criteria 1-3, 14); per-instance random parameters make it the most straightforwardly <span class="key">contamination-proof</span> candidate.</li>
+      <li>The reference evaluator gives an exact, checkable ceiling (criterion 9).</li>
+      <li><span class="key">Diagnostic error signatures</span>: off-by-one at the residue boundary flags the wrap rule, order errors flag associativity, magnitude errors flag precedence.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weak spots</h3>
+    <ul>
+      <li><span class="key">Criterion 4 scored 1</span>: a generic "ignore PEMDAS, read the table literally, obey the flags, output only the integer" prompt captures everything the instance states legibly. Headroom lives entirely in conventions the instance does not state or actively mis-states. Fixable but load-bearing.</li>
+      <li><span class="key">Quantified measurement hole</span> (found by simulation in the verdict): naive 0..m-1 and house 1..m answers coincide on 85-97% of unforced instances, so learning the wrap rule would be worth ~2 points on a 15-task eval — far below the ≥10-point resolvability bar.</li>
+    </ul>
+  </div>
+</div>
+
+<h3 class="space-top">Surviving skeptic caveats → fixes</h3>
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>Legible flags = one-shot rungs.</strong> All per-instance rule toggles become <span class="key">opaque tokens</span> (<code>mode: K3</code>) whose semantics are family-global latents never stated in any instance; surface <code>mod m</code> notation stays deliberately misleading vs the 1..m truth.</li>
+  <li><strong>Invisible wrap-rule effect size.</strong> <span class="key">Foil-bank rejection sampling</span>: evaluate every candidate instance under wrong-wrap, wrong-associativity, PEMDAS, no-threshold, and no-index foils; accept only instances where each active stratum's foil answer differs from truth (~m extra evaluator calls per instance). MC distractors come from the deduplicated foil outputs.</li>
+  <li><strong>Demo leak.</strong> Scope few-shot demos by stratum so no single demo set reveals more than one hidden convention.</li>
+  <li><strong>COPRO scoping (structural, applies to every strong candidate).</strong> A score-only instruction rephraser cannot produce per-run hidden conventions, so COPRO validates plumbing and generic-instruction gains, not deep hyperparameter comparison — but the anti-PEMDAS/table-following rung is deliberately kept reachable by blind instruction search, so a broken COPRO is still distinguishable from a stumped one.</li>
+</ul>
+
+<h3 class="space-top">Adaptation plan</h3>
+<div class="steps">
+  <div class="step"><h3>Seeded generator + tiny reference evaluator define ground truth</h3><p>Pin seed ranges for disjoint splits; per-stratum labels on every instance.</p></div>
+  <div class="step"><h3>Enforce the observability partition</h3><p>Per-instance-random conventions printed in the instance; hidden headroom carried only by family-constant latents (1..m wrap, mode-token semantics, threshold, recurrence).</p></div>
+  <div class="step"><h3>Foil-bank rejection sampling</h3><p>Force ≥1 intermediate ≡0 mod m in every wrap-stratum instance; ≥3 operands so associativity errors always surface.</p></div>
+  <div class="step"><h3>Verify per-rung effect sizes at calibration</h3><p>≥10 points on 10-20 tasks, using ablated reference prompts (one per latent rule); verify ceiling ≈100% and a low naive floor on the pinned model before freezing.</p></div>
+  <div class="step"><h3>Decoys, strict parsing, second objective</h3><p>Decoy symbols in every table; strict integer/MC parser (non-numeric → 0) for criterion 13; output-bytes second objective if GEPA coverage is claimed.</p></div>
+</div>
+
+<p class="space-top"><strong>Tie-breaker: strong (2/2).</strong> Active in-context rule-learning / novel-operator arithmetic line — In-Context Algebra (<a href="https://arxiv.org/abs/2512.16902">arXiv:2512.16902</a>), algorithmic generalization (<a href="https://arxiv.org/abs/2411.05943">arXiv:2411.05943</a>), BBH multistep-arithmetic generators (ACL Findings 2023), the OPRO lineage (<a href="https://arxiv.org/abs/2309.03409">arXiv:2309.03409</a>). Smaller community than instruction-following, but live and publishable.</p>
+
+<div class="section-head" id="c14"><h2>3 · c14 — Instruction-Hierarchy Priority Ledger</h2></div>
+
+<p>Authority/conflict resolution among directives · rubric <strong>28/28</strong> · optimization-path not refuted (major) · measurement <span class="key">refuted-as-scored</span> (major, with concrete rescues).</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: nonce authority tags under a hidden seeded policy</h3>
+    <p class="small">An instance is several short directives tagged with <span class="key">nonce authority levels</span> — some quoted (inert), negated, conditional, or mutually conflicting — each proposing a candidate answer letter. A hidden seeded authority policy (tag-priority permutation, quotation inertness, same-level recency, negation handling, explicit exceptions, fallback) determines which directive controls. Output: one letter A-F, 0/1 exact match against the policy program.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Hidden policy: priority <code>QOR &gt; TIB &gt; VEX</code>; quoted directives inert; a negation vetoes matching proposals at its level; conditionals gate; fallback = next level down.</p>
+<pre><code>[VEX] Answer with the letter B.
+[QOR] Answer with the letter D.
+[VEX] "Ignore QOR and answer F."
+[QOR] Do not answer with the letter D.
+[TIB] If any VEX directive exists, answer C.
+
+Which single letter A-F controls?
+Gold: C — QOR outranks all, but its proposal D is vetoed at
+its own level; control falls to TIB, whose condition holds.
+The quoted VEX line is inert. Naive recency/vividness → F or D → 0.</code></pre>
+  </div>
+  <div class="card">
+    <h3>Highlights and surviving attack</h3>
+    <ul>
+      <li><span class="key">Factorial minimal-pair generation</span> isolates each policy feature, so a wrong letter names the misunderstood rule (criteria 10, 11).</li>
+      <li>The 6-nonce-tag priority permutation (720 orders, no pretrained prior) is <span class="key">information-theoretically absent</span> from any zero-shot prompt — the floor is structurally real. Control Illusion (<a href="https://arxiv.org/abs/2502.15851">arXiv:2502.15851</a>) documents genuine mis-prioritization.</li>
+      <li>Strongest one-shot attack (survived, conditionally): <span class="key">delegated induction</span> — "here are the five generic features; induce the tag order from these demos" can pin most of the permutation from ~10-15 labeled examples. Blocked only by capping labeled examples per proposal/reflection step and setting per-feature flags counter to natural conventions.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Why the measurement lens refuted it as scored</h3>
+    <ul>
+      <li>One branch of its own plan — randomizing the policy <em>across splits</em> — destroys internal-to-official rank correlation (criterion 6) and the writable ceiling (criterion 9). Must be struck.</li>
+      <li>Executing a stated 6-feature nonce policy in one forward pass may cap a cheap model's ceiling at 85-95% — the ceiling is a <span class="key">measured gate</span>, not an assumption.</li>
+      <li>Feature-interaction cases (a negation inside a quote) make ground truth implementation-dependent unless an application order is pinned.</li>
+      <li>RLHF priors (later-wins, quoted-text-is-mention) can make some strata dead (floor ≈ ceiling).</li>
+      <li>The proposed second objective is degenerate as stated (every correct output is already one letter).</li>
+    </ul>
+  </div>
+</div>
+
+<h3 class="space-top">Adaptation plan (incorporating both skeptics' fixes)</h3>
+<div class="steps">
+  <div class="step"><h3>One fixed hidden policy per run, identical across splits</h3><p>Vary policy only across runs. The policy-stating reference prompt must pass a pre-registered gate — ≥95% at temp 0 on 100+ held-out instances on the pinned cheap model — else shrink directive count/tag alphabet. Record the measured ceiling as the criterion-9 anchor.</p></div>
+  <div class="step"><h3>Seed anti-prior flag settings</h3><p>Quotation not always inert, primacy sometimes beating recency; measure per-stratum floors at calibration and drop/reweight dead strata.</p></div>
+  <div class="step"><h3>Pin the feature-application order</h3><p>Inertness → negation → exceptions → priority → recency → fallback, in the versioned schema; exclude cross-feature interactions from single-feature strata or give them an explicit interaction stratum.</p></div>
+  <div class="step"><h3>Throttle demo evidence</h3><p>Cap demos/reflection minibatch sizes so pairwise-order evidence per step underdetermines the permutation; the calibration adversary is the delegated-induction prompt, not a naive one.</p></div>
+  <div class="step"><h3>Fix normalization and the second objective</h3><p>Strip, casefold, must equal one char A-F, else 0. Score correctness on the final line while measuring bytes over the full output, so reasoning-before-answer trades accuracy against bytes.</p></div>
+</div>
+
+<p class="space-top"><strong>Tie-breaker: the strongest in the pool.</strong> Instruction hierarchy is top-tier, safety-relevant, actively benchmarked 2025-2026 territory: IHEval (<a href="https://arxiv.org/abs/2502.08745">arXiv:2502.08745</a>), The Instruction Hierarchy (<a href="https://arxiv.org/abs/2404.13208">arXiv:2404.13208</a>), Control Illusion (<a href="https://arxiv.org/abs/2502.15851">arXiv:2502.15851</a>). A synthetic nonce-tag priority ledger with factorial minimal pairs would be a novel, contamination-proof contribution with genuine standalone-benchmark potential. If the tie-breaker were weighted equal to the rubric, this candidate would rank #2.</p>
+
+<div class="section-head" id="c11"><h2>4 · c11 — House-Convention Canonicalizer</h2></div>
+
+<p>Serialization/normalization under invented house rules · rubric <strong>28/28</strong> · optimization-path not refuted (major) · measurement <span class="key">refuted-as-specified</span> (major, rescued by a rule-set change).</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: one pipeline, 5-6 invented house rules</h3>
+    <p class="small">One deterministic normalization pipeline (canonical JSON or slug preferred) governed by 5-6 invented house rules that <span class="key">deliberately deviate from every public standard</span>. Instance = a messy value; output = the canonical string; 0/1 whole-string exact match against a ~40-line reference function. Each rule owns a stratum, so pool accuracy climbs rule by rule and expected/got diffs name the violated rule.</p>
+    <p class="small">Directly mirrors the project's <span class="key">dr-serialize canonical-JSON theme</span>, so intuitions transfer to the main experiment.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Slug family; house rules: lowercase; separator <code>~</code> not <code>-</code>; invented stopword list {the, of, an}; ordinals map through an invented table (<code>2nd</code> → <code>twyx</code>); keep ≤4 tokens, truncating from the end.</p>
+<pre><code>Input title: The Quick   Brown Fox (2nd Edition)!
+
+Gold: quick~brown~fox~twyx
+Naive slugify: the-quick-brown-fox-2nd-edition → 0.
+Each wrong rule (kept "the", used -, missed twyx,
+no truncation) is visible in the diff.</code></pre>
+  </div>
+  <div class="card">
+    <h3>Why the measurement lens refuted it as specified</h3>
+    <ul>
+      <li>The merged rule set included <span class="key">computation-heavy rules</span> — a custom check digit, length-then-codepoint sorts over long key lists, bespoke float formatting — that a small model cannot reliably execute in one constrained pass even with the rules stated verbatim. True ceiling 70-90% and unknowable in advance (criterion 9 fails), with residual slips landing exactly where temp-0 provider nondeterminism flips tokens.</li>
+      <li>The output-bytes second objective is <span class="key">degenerate</span> (correct canonical strings have fixed length); raw whole-completion matching conflates format compliance with rule knowledge.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Optimization-path caveats (survived)</h3>
+    <ul>
+      <li>The plan's own "demo sets covering <em>all</em> invented month abbreviations, <em>all</em> check-digit cases" manufactures its strongest one-shot attack — <span class="key">full-coverage demos turn lookup rules into copy-from-context</span>.</li>
+      <li>Table-width vs minibatch-width was never pinned, so one GEPA reflection could transcribe every rule visible in a batch.</li>
+    </ul>
+  </div>
+</div>
+
+<h3 class="space-top">Adaptation plan (incorporating both skeptics' fixes)</h3>
+<div class="steps">
+  <div class="step"><h3>Restrict rules to single-pass-executable transformations</h3><p>Table lookups (invented month/stopword/ordinal tables), character-class rewrites, fixed replacements, whitespace collapsing, truncation policy, sorts of ≤3 short keys. Drop the arithmetic check digit and long-list sorts (or reduce the check digit to a fully enumerable ≤3-digit lookup). Rule count ≤6.</p></div>
+  <div class="step"><h3>Enforce table-width &gt; coverage</h3><p>Table-valued rules get more entries (12-20) than any demo set or GEPA minibatch (cap minibatch ~5; cap demo sets below full table coverage) so rules must accrete over iterations. Strike "cover all cases" from demo curation.</p></div>
+  <div class="step"><h3>Generator is adversarial per instance</h3><p>Every instance actively distinguishes house rule from public standard (reject inputs where they coincide); global formatting rules form an explicit first-rung stratum; ≥2 tasks per stratum in every internal subset.</p></div>
+  <div class="step"><h3>Pre-freeze certification</h3><p>Reference prompt ≥95% exact match with 3 agreeing temp-0 repeats on the pinned official split; derive floor/gap targets from measured numbers. Freeze exactly one trivial normalization (strip surrounding whitespace/code fences) in the eval config.</p></div>
+  <div class="step"><h3>Red-team the demo attack; declare the objective limitation</h3><p>Run the "infer every rule from the examples" one-shot with the largest permitted demo set; treat &gt;50% as a rule-mix bug. Document that the output-bytes objective is degenerate here — this candidate validates single-objective optimization plus two-objective plumbing only (a real limitation vs c21/c14).</p></div>
+</div>
+
+<p class="space-top"><strong>Tie-breaker: strong (2/2).</strong> Rides the verifiable/constraint-based instruction-following surge and text normalization specifically — PolyNorm (<a href="https://arxiv.org/abs/2511.03080">arXiv:2511.03080</a>), StructEval (<a href="https://arxiv.org/abs/2505.20139">arXiv:2505.20139</a>), JSONSchemaBench (<a href="https://arxiv.org/abs/2501.10868">arXiv:2501.10868</a>), with RFC 8785 JCS as a task donor. Derivative of an active wave rather than opening one — but the dr-serialize alignment is a project-specific bonus no other candidate has.</p>
+
+<div class="section-head" id="c12"><h2>5 · c12 — Sigil-Schema Field Extraction and Dialect Routing</h2></div>
+
+<p>Structured extraction under invented markups · rubric <strong>28/28</strong> · optimization-path not refuted (major) · measurement <span class="key">refuted-as-specified</span> (major, rescued by stratum redesign).</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: one field per instance, invented markups</h3>
+    <p class="small">Synthetic records in invented markups — sigil-tagged fields, fixed-width columns, custom-escaped delimiters, or dialects signaled by a header token — where each instance asks for <span class="key">ONE field</span> returned in normalized house form. Output is a single short token, 0/1 exact match against the generator's own record.</p>
+    <p class="small">Latent rules: sigil→field map, per-dialect conventions, padding/order conventions, escape handling, per-field normalization (randomized implied-decimal position), enum precedence.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Dialect <code>VEL</code>: <code>ᚠ</code> marks unit price with implied decimal at 3 places this run; <code>ᚷ</code> marks a date; a second money-shaped field <code>ᚢ</code> is a distractor.</p>
+<pre><code>Record: ⟦hdr:VEL⟧ ᚠ7203 ᚢ1150 ᚷ0925
+Query: unit price, in house form.
+
+Gold: 7.203 — sigil map picks ᚠ over the same-type
+distractor ᚢ; this run's implied-decimal position is 3.
+Naive extraction: 7203 or 72.03 → 0.</code></pre>
+  </div>
+  <div class="card">
+    <h3>Why the measurement lens refuted it as specified</h3>
+    <ul>
+      <li>The checksum VALID/INVALID stratum breaks three criteria at once: <span class="key">50% guess floor</span>, zero-bit binary failures a reflection LM cannot learn from, and an arithmetic-execution ceiling a cheap model cannot reach.</li>
+      <li>Exact character offsets in fixed-width strata <span class="key">fight BPE tokenization</span>.</li>
+      <li>Cents→decimal at a fixed position is world knowledge, not latent headroom.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Optimization-path caveats (survived)</h3>
+    <ul>
+      <li>A semantic type-matching prompt ("find the field matching the queried type") solves the sigil stratum for free unless every record carries <span class="key">≥2 same-type distractors</span>.</li>
+      <li>COPRO's score-only proposer cannot reach per-run randomized rules — scope it to plumbing validation, as with c03/c21.</li>
+    </ul>
+  </div>
+</div>
+
+<h3 class="space-top">Adaptation plan (incorporating both skeptics' fixes)</h3>
+<div class="steps">
+  <div class="step"><h3>Drop or replace the checksum stratum</h3><p>Use a non-arithmetic decision rule — e.g. output the field whose stated check char mismatches a stated reference (comparison/lookup, not modular arithmetic).</p></div>
+  <div class="step"><h3>Redesign fixed-width strata</h3><p>Field order plus an invented padding glyph (short ≤4-char widths, distinctive pad runs) rather than character counting.</p></div>
+  <div class="step"><h3>Force distractors; randomize normalization</h3><p>≥2 same-type distractor fields per record; randomize the implied-decimal position per run (2/3/4 places) so normalization is an inducible rule, not a Stripe convention.</p></div>
+  <div class="step"><h3>Pre-flight gate per stratum</h3><p>Spec-dump reference prompt ≥98% per stratum on the pinned model/seed before a stratum enters the pool; record per-stratum reference/floor scores in the manifest so gap-recovery is falsifiable per stratum.</p></div>
+  <div class="step"><h3>Stratified splits and strict output surface</h3><p>Even dialect/normalization mixes; canonical single-token output with a published exact-match normalizer; pinned generator + seed metadata.</p></div>
+</div>
+
+<p class="space-top"><strong>Tie-breaker: solid, not flagship (2/2 with caveats).</strong> EDC (<a href="https://arxiv.org/abs/2404.03868">arXiv:2404.03868</a>) canonicalization, StructText (<a href="https://arxiv.org/abs/2507.21340">arXiv:2507.21340</a>) as a reverse generator, plus an LLMStructBench-style "prompting beats model size" finding whose provenance is unverified — <span class="key">do not cite it publicly without checking</span>.</p>
+
+<div class="section-head" id="exclusions"><h2>Near-misses and exclusions</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>c06 — Artificial-Grammar Violation Classification (28/28).</strong> Same verdict profile as c11/c12 (opt-path survives with major caveats, measurement refuted-then-rescued). Excluded from the top five only because its rescue moves headroom from execution difficulty to hidden rule tables — converging on what c21 and c03 already do more cleanly — and its convention-exploiting-prompt floor (~50-60% if instantiations are mnemonic) needs a red-team gate the others don't. A fine sixth choice. Sources: MLRegTest (JMLR 2024), FLaRe (<a href="https://arxiv.org/abs/2411.07107">arXiv:2411.07107</a>).</li>
+  <li><strong>c05, c15, c01</strong> — both skeptic lenses refuted each; see the ordering section above.</li>
+  <li><strong>c07 — Case-Marked Micro-Conlang</strong> — refuted on the optimization path outright: its gloss table hands the latent morphology to the model in-context, and its "hard rule" (case beats word order) is the highest-prior rule in linguistics; the rescue (MTOB-style withheld glosses) is a structural redesign that converts it into a different candidate.</li>
+</ul>
+
+<div class="section-head" id="decide"><h2>How to decide among these</h2></div>
+
+<div class="callout">
+  <strong>One scoping fact, true of all five survivors:</strong> any task that is genuinely not one-shot guessable (criterion 4) and contamination-proof (criterion 8) puts the decisive knowledge <span class="key">outside COPRO's score-only instruction rephrasing</span>. On every candidate, COPRO validates contract plumbing and generic-instruction gains; deep hyperparameter ranking comes from MIPROv2/GEPA/agent. Plan for that regardless of choice.
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Lowest risk, most rungs → c21</h3>
+    <ul>
+      <li>Only candidate with no major-severity finding; ~9 independent strata gives the finest-grained optimizer/hyperparameter resolution; all remaining work is verification gates, not redesign.</li>
+      <li>Cost: the graph oracle + rejection sampler is the most intricate generator in the set; the discoverability check adds a pre-pinning step.</li>
+      <li><span class="key">Choose this unless generator effort is the binding constraint.</span></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Simplest build → c03</h3>
+    <ul>
+      <li>A ~10-line evaluator and an expression sampler; the foil-bank fix is mechanical.</li>
+      <li>Cost: fewer rungs (~4-5 family-constant latents), coarser hyperparameter resolution; criterion 4 depends entirely on keeping mode-token semantics opaque — one legibility slip collapses a rung.</li>
+      <li><span class="key">Choose this if you want the quick test running this week.</span></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Best research upside → c14</h3>
+    <ul>
+      <li>Top-tier, safety-relevant instruction-hierarchy line; strongest standalone publication; the only candidate with a non-degenerate two-objective story after its fix.</li>
+      <li>Cost: heaviest calibration burden (measured ceiling gate, dead-strata audit, anti-prior seeding, demo-leak throttling); its ladder is the most vulnerable to a strong reflection LM naming several features in one step.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Best transfer to the main experiment → c11</h3>
+    <ul>
+      <li>Canonical-JSON house rules directly rehearse dr-serialize intuitions.</li>
+      <li>Cost: its second objective is provably degenerate (must declare single-objective-plus-plumbing coverage per the rubric callout); needs the rule-set diet plus table-width policing before its ceiling is trustworthy.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Best failure-taxonomy workout → c12</h3>
+    <ul>
+      <li>Dialect routing + format traps naturally exercise parse-failure paths and the retry machinery.</li>
+      <li>Cost: needed the most stratum surgery (checksum removal, fixed-width redesign); its per-instance single-token failures are the least individually diagnostic for GEPA — diagnosis lives at the batch level.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="verdict good space-top">
+  <p><strong>Recommended path.</strong> Build c21; while its generator is under construction, stand up c03 in a day or two as the <span class="key">plumbing smoke test</span> (its evaluator is trivial), then retire c03 or keep it as a second pinned family for cross-checking optimizer rankings. If the team later wants the quick test to grow into its own research direction, c14 is the one to invest the extra calibration effort in.</p>
+</div>
+
+</main>
+</body>
+</html>

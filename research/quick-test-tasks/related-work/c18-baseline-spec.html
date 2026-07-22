@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Baseline-spec additions — only what doc.css/flow.css lack. */
+
+/* DRAFT badge, matching the candidate-page .badge convention */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.draft { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+
+.hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.hdr-row h1 { margin: 0; }
+
+/* Outcome cards for the three-outcome decision rule */
+.outcome-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; margin: 16px 0; }
+.outcome {
+  padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.outcome .oc-tag {
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.outcome.a { border-color: var(--red); } .outcome.a .oc-tag { color: var(--red); background: var(--red-soft); }
+.outcome.b { border-color: var(--amber); } .outcome.b .oc-tag { color: var(--amber); background: var(--amber-soft); }
+.outcome.c { border-color: var(--green); } .outcome.c .oc-tag { color: var(--green); background: var(--green-soft); }
+.outcome h3 { font-size: 15px; margin: 0; }
+.outcome .cond { font: 600 12.5px/1.4 var(--font-mono); color: var(--muted); }
+.outcome p { font-size: 13.5px; margin: 0; }
+.outcome .decision { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.outcome .decision b { color: var(--ink); }
+
+/* Recommendation vs constraint distinction (skill §3) */
+.constraint {
+  margin: 14px 0; padding: 14px 20px; border: 1.5px solid var(--ink); border-radius: 10px;
+  background: var(--surface);
+}
+.constraint .tag {
+  display: inline-block; margin-bottom: 6px; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--ink);
+}
+.constraint ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.constraint li { margin-bottom: 5px; }
+
+.proposed-tag {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--accent);
+  font: 700 9.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+  vertical-align: middle; margin-left: 6px;
+}
+
+/* Open decisions list — visually prominent */
+.open-decisions {
+  margin: 16px 0; padding: 20px 24px; border: 2px solid var(--amber); border-radius: 12px;
+  background: var(--amber-soft);
+}
+.open-decisions h3 { color: var(--amber); margin-bottom: 10px; }
+.open-decisions ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+.open-decisions li { margin-bottom: 10px; }
+.open-decisions li::marker { color: var(--amber); font-weight: 800; }
+.open-decisions li:last-child { margin-bottom: 0; }
+.open-decisions li.top-risk { padding: 8px 12px; margin: -4px -4px 10px; border: 1.5px solid var(--amber); border-radius: 8px; background: var(--surface); }
+
+.evnote {
+  margin: 10px 0; padding: 10px 16px; border-left: 3px solid var(--muted);
+  background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+}
+.evnote em { color: var(--ink); }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+/* Open-decisions mapping table */
+.od-table th, .od-table td { vertical-align: top; }
+.od-table td.default { color: var(--muted); }
+
+@media (max-width: 900px) {
+  .outcome-grid { grid-template-columns: 1fr; }
+}
+</style>
+<title>whetstone-ai · c18 Baseline Spec</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c18.html">&larr; Back to c18 candidate page</a></nav>
+
+<div class="hdr-row">
+  <h1>c18 Baseline Spec: Headroom Before Complexity</h1>
+  <span class="badge draft">Draft</span>
+</div>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<div class="callout warn">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the numeric thresholds (&sect;3), and seven other open items
+  (&sect;7) are explicitly owner-gated. The <strong>top open decision is O1</strong> &mdash; whether the
+  codebase's native distractor setting (<code>--distractors</code>) runs <strong>ON or OFF</strong> for this
+  baseline &mdash; because it is the single biggest swing factor on whether any headroom exists to measure.
+  See the <a href="#open">open decisions</a> list before treating anything here as final.
+</div>
+
+<p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt
+on the <span class="key">existing PrOntoQA task shape</span> &mdash; before building any of c18's
+added-complexity axes (the Unknown/open-world label, the constraint-puzzle stratum, soft-rule strata, or the
+independent forward-chaining oracle as a design element). It is a <span class="key">go/no-go instrument</span>,
+not the benchmark itself: c18's biggest early-kill risk is that without distractors, a naive prompt already
+answers almost perfectly by string-matching the queried property against context (PrOntoQA:
+"InstructGPT is able to predict the label almost perfectly" with no distractors). If that risk is real on the
+reseed-only task, this baseline finds it cheaply, before any added-complexity build.</p>
+
+<div class="constraint">
+  <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
+  <ul>
+    <li><span class="key">Instances regenerated as-is</span> from <code>asaparov/prontoqa</code>
+    (<code>run_experiment.py --model-name json</code>), fresh <code>--seed</code> per split, fresh
+    <code>--ontology fictional</code> nonce ontologies. Never reuse a published instance (rubric criterion 8;
+    contamination resistance).</li>
+    <li><span class="key">Existing hop-depth settings and native question format.</span> No new axes: no
+    added Unknown-label handling beyond what the codebase natively emits, no distractor or soft-rule strata
+    <strong>added by us</strong> &mdash; the codebase's own <code>--distractors</code> setting is a separate
+    matter, left as Open Decision O1.</li>
+    <li><span class="key">Output is True/False, exact match</span> against the generator's stored
+    <code>answer</code> gold, scored 0/1 by a simple function against an independent oracle (forward-chaining
+    fixpoint re-derivation, ~30&ndash;50 lines). No partial credit.</li>
+    <li><span class="key">Temperature 0.</span> Repeats = 3 (<code>repeat_id</code> distinct) to validate the
+    aggregation plumbing; determinism means repeats should largely agree (rubric criterion 5).</li>
+  </ul>
+</div>
+
+<!-- STRATA -->
+<div class="section-head"><h2>1. Strata design</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One stratification axis: hop depth. Ontology type held constant.</h3>
+    <p><span class="key">Hop depth</span> (4 levels) &mdash; D1, D2, D3, D5, via the native
+    <code>--min-hops/--max-hops</code> loop. This is the single most robust accuracy dial in the literature:
+    monotonic decline with depth across every dossier paper. It gives an incremental ladder with a
+    designer-known ceiling. <span class="key">Ontology type</span> is fixed to <code>fictional</code> for
+    contamination-resistance (criterion 8); <code>true</code>/<code>false</code> ontologies are excluded
+    because real-world priors create a ceiling effect &mdash; PrOntoQA shows the <code>true</code> ontology
+    does not degrade D3&rarr;D5, which would confound the headroom read. Ontology type is therefore held
+    constant, not a stratum axis, in this baseline &mdash; a deliberate simplification consistent with
+    "measure headroom on the existing shape."</p>
+  </div>
+  <div class="card">
+    <h3>Depth levels D1, D2, D3, D5 <span class="proposed-tag">proposed</span></h3>
+    <p>D1 is the near-solved anchor (expected ceiling-adjacent); D2/D3 are the predicted mid-band; D5 is the
+    hard tail where cheap models approach the two-way floor. D4 is dropped to keep N bounded; D0 is dropped as
+    trivially saturated. <strong>Open:</strong> the owner may re-add either (&sect;7, O2).</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>N = 150 per depth stratum <span class="proposed-tag">proposed</span> &times; 4 strata = 600 instances total</h3>
+  <p><span class="key">Design driver:</span> rubric criterion 5 resolvability. A meaningful prompt change must
+  produce a &ge;10-point effect that exceeds residual noise on a 10&ndash;20 task internal eval. Because
+  decoding is temperature 0, per-task behavior is near-deterministic given a prompt, so residual noise on a
+  10&ndash;20 task internal eval is small and a 10-point effect (&ge;1&ndash;2 of 10&ndash;20 tasks flipping)
+  resolves cleanly. The pool must be large enough that each depth stratum can supply <strong>disjoint</strong>
+  internal-eval subsets (&ge;10&ndash;20 tasks) and a held-out official split (criterion 7) without reusing
+  tasks, and that per-stratum aggregate accuracy has a tight enough CI to read a &ge;10-point floor-vs-ceiling
+  gap as real.</p>
+  <p>At N=150/stratum a Wilson 95% CI half-width is &asymp;&plusmn;7&ndash;8 points near p=0.7 &mdash; enough
+  to resolve a 10-point gap per stratum, and comfortably enough to carve disjoint 10&ndash;20-task
+  internal-eval subsets plus a &ge;100-task official split. <strong>150 &times; 4 = 600 instances</strong> in
+  the baseline pool, keeping a single full run cheap (&sect;5) while exceeding the "hundreds of tasks" pool
+  requirement (criterion 7). Aggregation crosses strata by averaging exact 0/1 scores first by repeat within
+  task, then across tasks within stratum, then reporting per-depth and a depth-weighted overall.</p>
+  <div class="evnote"><em>Evidence note:</em> PrOntoQA itself used 400/condition with 95% Wilson intervals
+  &mdash; the reviewer-expected standard for a publishable number. <strong>Owner may prefer 400/stratum</strong>
+  to match that regime exactly (&sect;7, O3); 150 is the cheap-iteration floor, 400 is the publication-grade
+  target.</div>
+</div>
+
+<!-- PROBE PROMPTS -->
+<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<p>Both prompts take the generator's native <code>question</code> (facts + rules) and <code>query</code>
+concatenated, and must elicit a single <code>True</code>/<code>False</code> token for exact match. These
+operationalize rubric criterion 4 (default prompts score low; better prompts close the gap) and criterion 9
+(floor, ceiling, and a reference prompt known in advance).</p>
+
+<h3 style="margin-top:22px;">2.1 Probe (a) &mdash; deliberately naive prompt</h3>
+<pre><code class="language-plaintext">{question}
+
+{query}
+
+Answer True or False.</code></pre>
+<p>Design intent: no chain-of-thought, no statement of the closed-world convention, no statement that only
+the listed rules may be used, no output-format discipline beyond "True or False." This is the intended
+<span class="key">floor</span> &mdash; it invites surface-plausibility answering, which the candidate doc's
+own worked example shows misses a two-hop chain. Per the capability synthesis this should land materially
+above the 50% two-way floor (clean fictional surface, easy A&asymp;2 rule regime) but well below the ceiling
+prompt.</p>
+
+<h3 style="margin-top:26px;">2.2 Probe (b) &mdash; best-effort ceiling prompt (all standard conventions stated)</h3>
+<pre><code class="language-plaintext">You are a careful deductive reasoner. You are given a set of facts and if-then
+rules, followed by a single query statement. Every predicate is fictional and
+carries no real-world meaning — rely ONLY on the facts and rules given, never on
+outside knowledge or surface plausibility.
+
+Determine whether the query statement is entailed by the facts and rules under
+the closed-world assumption: a statement is True if it can be derived by
+chaining the given rules from the given facts, and False otherwise. Apply the
+rules step by step, following each "every X is a Y" / "X are (not) Z" rule in
+order, until you reach the queried property.
+
+Facts and rules:
+{question}
+
+Query:
+{query}
+
+Reason step by step through the chain of rules, then end your reply with exactly
+one word on its own final line: either
+True
+or
+False</code></pre>
+<p>Design intent &mdash; each clause maps to a lever the literature shows works: <span class="key">"rely ONLY
+on the facts and rules&hellip; never on outside knowledge or surface plausibility"</span> blocks the
+property-string-match shortcut and the real-world-prior shortcut. <span class="key">"closed-world
+assumption&hellip; True if derivable&hellip; False otherwise"</span> states the native 2-way convention
+precisely &mdash; the CWA/Unknown ambiguity risk flagged elsewhere is sidestepped here because the native
+format is 2-way, with no Unknown to mishandle. <span class="key">"Reason step by step"</span> (CoT) is the
+single largest reliable lever for non-reasoning cheap models: +8 to +12 points across JustLogic.
+<span class="key">"following each rule in order"</span> names the reasoning form and ordering, a measured
+lever. <span class="key">"exactly one word on its own final line"</span> makes exact-match extraction clean
+and guards the format-violation failure path (rubric criterion 13).</p>
+<div class="evnote"><em>Evidence note (thin):</em> no dossier paper ran a CoT-vs-naive ablation on PrOntoQA
+label-only for a modern cheap model &mdash; the +8&ndash;12 CoT lift is extrapolated from JustLogic's harder
+natural-language surface (uncertainty "moderate"). Treat the predicted gap magnitude as a hypothesis this run
+tests, not a known quantity.</div>
+
+<!-- DECISION RULE -->
+<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<p>Let <strong>N</strong> = naive-prompt aggregate accuracy, <strong>C</strong> = ceiling-prompt aggregate
+accuracy, both depth-weighted over the four strata, cheap tier, temperature 0. Thresholds are grounded in the
+capability synthesis, which predicts (cheap tier, 2-way native, distractors ON): <strong>naive floor
+~60&ndash;78%, ceiling ~75&ndash;90%</strong>, with the strong caveat that if distractors are OFF the naive
+prompt may already score <strong>85&ndash;95%</strong> by shortcut-matching.</p>
+
+<div class="card full">
+  <p style="margin-bottom:0;"><strong>Proposed numeric anchors</strong> <span class="proposed-tag">all owner-adjustable</span>:
+  <code>HIGH</code> &ge; 85%, <code>MID</code> = 65&ndash;85%, <code>LOW</code> &lt; 65% (bands apply to the
+  <em>ceiling</em> score C); gap <code>G = C &minus; N</code>, with <strong>"small" G &lt; 10 points</strong>
+  (below the criterion-5 resolvability threshold) and <strong>"large" G &ge; 15 points</strong>.</p>
+</div>
+
+<div class="outcome-grid">
+  <div class="outcome a">
+    <span class="oc-tag">Outcome (a) &middot; No headroom</span>
+    <h3>N &asymp; C, both HIGH</h3>
+    <div class="cond">C &ge; 85% <strong>and</strong> G &lt; 10</div>
+    <p>The task is near-saturated even naively; likely the distractor-shortcut regime (&sect;1's O1 risk).
+    No gap for an optimizer to close.</p>
+    <div class="decision"><b>Decision:</b> proceed to the candidate's added-complexity design (distractors
+    on/deeper, the Unknown axis) &mdash; the existing shape is too easy to discriminate.</div>
+  </div>
+  <div class="outcome b">
+    <span class="oc-tag">Outcome (b) &middot; Headroom, not prompt-closable</span>
+    <h3>N &asymp; C, both MID/LOW</h3>
+    <div class="cond">C &lt; 85% <strong>and</strong> G &lt; 10</div>
+    <p>Both prompts stay stuck below ceiling: a raw capability deficit at depth, not a prompt gap. Matches
+    the depth-collapse finding &mdash; CoT does not remove depth degradation.</p>
+    <div class="decision"><b>Decision:</b> proceed to added-complexity design <strong>and</strong> keep base
+    difficulty shallow &mdash; deep hops are unsolvable by prompting, so the discriminating band is
+    shallow-to-mid depth.</div>
+  </div>
+  <div class="outcome c">
+    <span class="oc-tag">Outcome (c) &middot; Prompt-closable headroom</span>
+    <h3>N &ll; C</h3>
+    <div class="cond">G &ge; 15 points, C in MID/HIGH</div>
+    <p>The ceiling prompt's CoT plus convention-stating closes a real gap &mdash; the gap is prompt-shaped,
+    not a raw capability wall.</p>
+    <div class="decision"><b>Decision:</b> direct prompt optimization is viable on the existing shape &mdash;
+    run COPRO/MIPROv2/GEPA on the reseed-only task; this is the publishable path identified in the
+    positioning synthesis.</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Threshold justification:</strong> the 85% HIGH cut sits at the top of the predicted ceiling band
+  (75&ndash;90%) and inside the distractor-off shortcut band (85&ndash;95%) &mdash; a naive score at/above it
+  is the saturation signature. The 65% LOW cut sits just below the predicted naive floor (60&ndash;78%) &mdash;
+  a ceiling score below it means even best-effort prompting cannot lift the aggregate, i.e. deep-hop
+  capability collapse dominates the mix. The G &ge; 15 "large gap" cut sits comfortably above the criterion-5
+  resolvability floor (10 points), consistent with the CoT lift magnitude (+8&ndash;12 at the JustLogic
+  surface, expected somewhat larger at PrOntoQA's cleaner surface). <strong>Per-depth override:</strong> even
+  when the aggregate reads (a), inspect the D3/D5 strata &mdash; if the gap concentrates there while D1/D2
+  saturate, that is effectively outcome (c) restricted to the hard tail and argues for prompt optimization
+  scoped to deep instances. Report the per-depth gap regardless.
+</div>
+<div class="evnote"><em>Evidence-thinness caveat:</em> the exact band boundaries are extrapolations &mdash; no
+dossier tests this precise (cheap-2026-tier &times; 2-way-native &times; PrOntoQA-label-only) cell
+(uncertainty "moderate-to-high"). The rule is robust to being off on absolute levels because it keys on the
+<em>shape</em> (N&asymp;C vs N&ll;C, and where C lands), not on hitting a precise number.</div>
+
+<!-- MODEL EVIDENCE -->
+<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
+<div class="callout warn">Not finalized here. See &sect;7, O4. The owner decides which of the four proposed
+models to run, how many, and whether to add a mid/frontier anchor.</div>
+
+<h3 style="margin-top:18px;">4.1 Models tested by the seven dossier papers (label/answer-accuracy rows only)</h3>
+<p class="small muted" style="margin-bottom:10px;">c18 is label-only; proof-accuracy collapses do not
+translate 1:1 to label accuracy. Tier tags are the spec author's own.</p>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Model</th><th>Tier</th><th>Task (label space)</th><th>Result</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>DeepSeek R1</td><td>frontier reasoning</td><td>JustLogic 3-way</td><td>80.9% (best; only model &gt; human avg 73%)</td><td>2501.14851</td></tr>
+      <tr><td>o1 (2024-12)</td><td>frontier reasoning</td><td>JustLogic 3-way</td><td>72.9% (depth-7 "Uncertain" degeneracy)</td><td>2501.14851</td></tr>
+      <tr><td>o1-mini</td><td>frontier reasoning</td><td>JustLogic 3-way</td><td>62.0% (sharp deep-depth decline)</td><td>2501.14851</td></tr>
+      <tr><td>DeepSeek R1 Distill Qwen 14B</td><td>mid reasoning</td><td>JustLogic 3-way</td><td>61.7%</td><td>2501.14851</td></tr>
+      <tr><td>o4-mini</td><td>frontier reasoning</td><td>SATBench (search)</td><td>89.3% overall / 65.0% hard-UNSAT</td><td>2505.14615</td></tr>
+      <tr><td>DeepSeek R1</td><td>frontier reasoning</td><td>SATBench</td><td>87.8% overall</td><td>2505.14615</td></tr>
+      <tr><td>DeepSeek-V3</td><td>frontier chat</td><td>SATBench</td><td>84.0% overall</td><td>2505.14615</td></tr>
+      <tr><td>Claude-3.7-Sonnet</td><td>frontier chat</td><td>SATBench</td><td>74.8% overall</td><td>2505.14615</td></tr>
+      <tr><td>GPT-4o</td><td>mid chat</td><td>JustLogic 3-way</td><td>0-shot 53.8% / CoT 65.6% / ToT 71.4%</td><td>2501.14851</td></tr>
+      <tr><td><strong>GPT-4o-mini</strong></td><td><strong>cheap</strong></td><td>JustLogic 3-way</td><td><strong>0-shot 53.0% / few-shot 54.7% / CoT 51.8%</strong></td><td>2501.14851</td></tr>
+      <tr><td>GPT-4o-mini</td><td>cheap</td><td>SATBench</td><td>53.9% (near-random)</td><td>2505.14615</td></tr>
+      <tr><td><strong>Llama3-8B</strong></td><td><strong>cheap/open</strong></td><td>JustLogic 3-way</td><td><strong>0-shot 49.8% / CoT 57.8%</strong></td><td>2501.14851</td></tr>
+      <tr><td>Llama3-70B</td><td>mid/open</td><td>JustLogic 3-way</td><td>0-shot 53.1% / CoT 64.6%</td><td>2501.14851</td></tr>
+      <tr><td>GPT-3.5-Turbo</td><td>(dated) cheap</td><td>FLD 3-way (hard axiom set)</td><td>answer-acc 35.8% / 37.6% (&asymp;random)</td><td>2308.07336</td></tr>
+      <tr><td>LongAlpaca-13B</td><td>cheap/open</td><td>FLD 3-way</td><td>21.2% / 19.6% (below floor)</td><td>2308.07336</td></tr>
+      <tr><td>GPT-4</td><td>frontier (2023)</td><td>FLD 3-way</td><td>answer-acc 52.4% / 49.4%</td><td>2308.07336</td></tr>
+      <tr><td>Mistral-7B-Instruct</td><td>cheap/open</td><td>Multi-LogiEval Yes/No</td><td>PL d1 80.8% &rarr; d5 44.4%; FOL d5 20.0%</td><td>2406.17169</td></tr>
+      <tr><td>Yi-34B-Chat</td><td>mid/open</td><td>Multi-LogiEval</td><td>PL d1 85% &rarr; d5 26.7%; FOL d5 13.3%</td><td>2406.17169</td></tr>
+      <tr><td>Orca-2-13B</td><td>cheap/open</td><td>Multi-LogiEval</td><td>PL d5 15.6%; FOL d5 6.7% (lowest)</td><td>2406.17169</td></tr>
+      <tr><td>Gemini-Pro</td><td>mid chat</td><td>Multi-LogiEval</td><td>PL d1 90% &rarr; d5 60%; FOL 76.9% &rarr; 53.3%</td><td>2406.17169</td></tr>
+      <tr><td>ChatGPT (3.5)</td><td>cheap chat</td><td>Multi-LogiEval</td><td>PL d1 91.7% &rarr; d5 44.4%; FOL d5 37.8%</td><td>2406.17169</td></tr>
+      <tr><td>GPT-4</td><td>frontier (2023)</td><td>Multi-LogiEval</td><td>PL d1 89.2% &rarr; d5 66.7%; FOL d5 66.7%</td><td>2406.17169</td></tr>
+      <tr><td>text-davinci-002</td><td>dated</td><td>PrOntoQA (proof-acc)</td><td>1&amp;3-hop handled; 5-hop top-down &rarr; chance</td><td>2210.01240</td></tr>
+      <tr><td>PaLM-540B / LLaMA-65B / FLAN-T5-11B</td><td>dated</td><td>PrOntoQA-OOD</td><td>size &ne; perf; charts only, no exact %</td><td>2305.15269</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="small muted" style="margin-top:10px;"><strong>Key reads for our tier:</strong> the closest
+task-shape proxy (JustLogic 3-way, exact-match, single-shot) puts cheap-tier models at ~50&ndash;57%
+zero-shot, ~52&ndash;65% with CoT. Our native format is 2-way (50% floor, not 33%), cleaner surface, easier
+rules, and the 2026 cheap tier is stronger than these 2024 proxies &mdash; all four factors push c18 above
+these numbers.</p>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>4.2 Proposed candidate set <span class="proposed-tag">not finalized</span></h3>
+    <p>The 2026 cheap tier named as the quick-test target (no dossier tests these directly):</p>
+    <ul>
+      <li><span class="key">Gemini-2.5-Flash</span></li>
+      <li><span class="key">GPT-5-mini</span></li>
+      <li><span class="key">Claude Haiku 4.5</span></li>
+      <li><span class="key">DeepSeek-Chat</span></li>
+    </ul>
+    <p>Proposed baseline: run <strong>2 of these 4</strong> for the first headroom pass (one to anchor cost
+    estimates, a second to check cross-model agreement of the go/no-go read), expanding to all 4 only if the
+    two disagree on the outcome bucket.</p>
+  </div>
+  <div class="card">
+    <h3>4.3 Tradeoffs for the owner</h3>
+    <ul>
+      <li><span class="key">More models</span> &mdash; stronger evidence the headroom read is not
+      model-specific, and cross-model transfer becomes checkable (a reviewer demand); but linear cost/wall-clock growth.</li>
+      <li><span class="key">A single cheap model</span> &mdash; cheapest, fastest iteration, but a
+      single-model read is explicitly not publishable and risks reading model-idiosyncrasy as task property.</li>
+      <li><span class="key">Include one mid/frontier anchor</span> (e.g. Claude Sonnet or DeepSeek-V3) &mdash;
+      bounds the ceiling and shows whether the gap is cheap-tier-specific; adds cost. The quick test's whole
+      point is cheap iteration, so a frontier anchor is optional and probably a later ablation.</li>
+      <li><span class="key">Reasoning vs non-reasoning cheap models</span> &mdash; GPT-5-mini / DeepSeek-Chat
+      behave differently on depth than pure chat models; mixing them tests robustness of the go/no-go read but
+      muddies a clean single-tier number.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- COST -->
+<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<p><span class="key">Formula:</span> instances (N) &times; probes &times; models (M) &times; repeats = LLM
+calls; calls &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: N = 600 instances (150
+&times; 4 depth strata); 2 probes (naive, ceiling); repeats = 3.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Per-instance token estimate <span class="proposed-tag">proposed</span></h3>
+    <p class="small muted" style="margin-bottom:10px;">Native PrOntoQA fictional instance surface is short
+    (facts+rules paragraph + one-line query); a single theory+query without in-context demos is small.
+    Deeper hops (D5) grow the facts/rules block, but demo-free even D5 stays well under ~600 input tokens
+    &mdash; use ~500 input as a safe upper bound.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Naive probe</th><th>Ceiling probe (CoT)</th></tr></thead>
+        <tbody>
+          <tr><td>Input tokens (instance + prompt scaffold)</td><td class="num">~250</td><td class="num">~400</td></tr>
+          <tr><td>Output tokens</td><td class="num">~3 (True/False)</td><td class="num">~250 (CoT chain + label)</td></tr>
+          <tr><td><strong>Total tokens/instance</strong></td><td class="num"><strong>~253</strong></td><td class="num"><strong>~650</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Calls, tokens, and dollar cost</h3>
+    <p><strong>Calls per model per full run:</strong> 600 &times; 2 probes &times; 3 repeats =
+    <strong>3,600 calls/model</strong>.</p>
+    <p><strong>Tokens per model per full run:</strong> using a blended ~450 tok/call (half naive ~253, half
+    ceiling ~650): 3,600 &times; 450 &asymp; <strong>1.62M tokens/model</strong> (&asymp;0.9M input +
+    0.7M output).</p>
+    <p><strong>By model count (M):</strong> 1 model &asymp; 1.6M tokens, est. <strong>$0.5&ndash;1</strong>;
+    2 models (proposed) &asymp; 3.2M tokens, est. <strong>$1&ndash;2</strong>; 4 models &asymp; 6.5M tokens,
+    est. <strong>$2&ndash;4</strong> &mdash; at a representative cheap-tier blended rate of
+    ~$0.30&ndash;0.60 per 1M tokens.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <p style="margin-bottom:0;"><strong>Wall-clock</strong> (proposed): 3,600&times;M short calls at temp 0. At
+  modest concurrency (~20 in flight) and ~1&ndash;3s/call, one model's 3,600 calls &asymp;
+  <strong>3&ndash;9 minutes</strong>; 2 models &asymp; <strong>6&ndash;18 minutes</strong>; 4 models &asymp;
+  <strong>12&ndash;36 minutes</strong> &mdash; assuming no rate-limit bottleneck. Ceiling-prompt CoT calls
+  dominate wall-clock (longer outputs). Comfortably "minutes, not hours."</p>
+</div>
+<div class="evnote"><em>Evidence note (thin):</em> the per-instance token estimates are stated assumptions,
+not measured &mdash; confirm against a real reseeded batch, especially D5 input size demo-free, before
+committing the full run (&sect;7, O5). Provider price sheet for the chosen cheap tier is also unconfirmed
+(&sect;7, O6); concurrency/rate-limit headroom per provider is unverified locally (&sect;7, O7).</div>
+
+<!-- RUBRIC MAPPING -->
+<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
+    <tbody>
+      <tr><td>One LLM call &rarr; one exact-match eval; label-only True/False</td><td>1, 2</td></tr>
+      <tr><td>Short inputs, bounded output (naive ~3 tok; CoT capped)</td><td>3, 14</td></tr>
+      <tr><td>Naive vs ceiling probe prompts; three-outcome gap rule</td><td><strong>4</strong>, <strong>9</strong></td></tr>
+      <tr><td>Temp 0; repeats=3; N sized so &ge;10-pt effect &gt; noise on 10&ndash;20-task subset</td><td><strong>5</strong></td></tr>
+      <tr><td>Per-depth + depth-weighted aggregation across strata; disjoint internal/official splits</td><td>5, 6, 7, "aggregation crosses strata" callout</td></tr>
+      <tr><td>Fresh <code>--seed</code> per split; <code>--ontology fictional</code> nonce symbols; no published reuse</td><td><strong>8</strong></td></tr>
+      <tr><td>Floor (naive) &amp; ceiling (best-effort) known/estimated in advance; falsifiable go/no-go</td><td><strong>9</strong></td></tr>
+      <tr><td>Hop-depth ladder = latent difficulty dial; per-depth gap inspectable</td><td>10</td></tr>
+      <tr><td>Exact-match "expected X got Y"; independent oracle re-derives label</td><td>2, 11</td></tr>
+      <tr><td>Ceiling prompt's explicit rule-chaining convention = a discoverable latent rule</td><td>10, 12</td></tr>
+      <tr><td>Ceiling prompt's "exactly one word final line" format discipline; format-violation path exercised</td><td>13</td></tr>
+      <tr><td>~600-instance pool from a pinned generator version + seed manifest</td><td>7, 8</td></tr>
+      <tr><td>Minutes-scale wall-clock at cheap tier, concurrency-bounded</td><td>14</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="small muted" style="margin-top:10px;">Criteria <strong>4, 5, 8, 9</strong> (the emphasis set) are
+each served by &ge;2 independent design choices above.</p>
+
+<!-- OPEN DECISIONS -->
+<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="open-decisions">
+  <h3>Nothing below is frozen &mdash; all nine items require an explicit owner call before this spec can run.</h3>
+  <ol>
+    <li class="top-risk"><strong>O1 &mdash; Distractors ON or OFF</strong> in the reseed-only baseline
+    (codebase <code>--distractors {none,relevant,irrelevant}</code>). <strong>The single biggest swing
+    factor:</strong> distractors OFF risks naive-prompt saturation at 85&ndash;95% via
+    property-string-matching, collapsing all headroom. Must verify the generator's default in the codebase
+    before running. Note: "no distractor strata added by us" does not itself decide whether to leave the
+    native distractor knob on. <em>Default if unspecified:</em> ON (<code>relevant</code>) &mdash; required
+    to avoid the trivial shortcut and keep the headroom read meaningful. Flagged as the top thing to
+    confirm.</li>
+    <li><strong>O2 &mdash; Depth levels</strong> (&sect;1): proposed {D1, D2, D3, D5}. Add D4? Add D0? Extend
+    beyond D5? Determines where the informative mid-band sits and whether the hard tail is represented.
+    <em>Default:</em> {D1, D2, D3, D5}.</li>
+    <li><strong>O3 &mdash; N per stratum</strong> (&sect;1): 150 (cheap-iteration) vs 400 (PrOntoQA CI-grade).
+    Publication-grade CIs (Wilson, 400/condition) vs fast iteration. <em>Default:</em> 150 for first pass,
+    400 for any publishable run.</li>
+    <li><strong>O4 &mdash; Model set</strong> (&sect;4): which of {Gemini-2.5-Flash, GPT-5-mini, Haiku 4.5,
+    DeepSeek-Chat}, how many, and whether to add a mid/frontier anchor. Cost/wall-clock vs evidence strength;
+    a single model is not publishable. <em>Default:</em> 2 cheap models first pass.</li>
+    <li><strong>O5 &mdash; Confirm per-instance token estimates</strong> (&sect;5) against a real reseeded
+    batch, especially D5 input size demo-free. Affects cost/wall-clock accuracy. <em>Default:</em> ~500 input
+    / ~250 CoT output upper bound.</li>
+    <li><strong>O6 &mdash; Provider price sheet</strong> for the chosen cheap tier (&sect;5). Turns the token
+    estimate into a dollar figure. <em>Default:</em> ~$0.3&ndash;0.6 / 1M tokens blended.</li>
+    <li><strong>O7 &mdash; Concurrency / rate-limit headroom</strong> per provider at intended parallelism
+    (&sect;5). The wall-clock claim (criterion 14) assumes no rate-limit bottleneck. <em>Default:</em> 20 in
+    flight, assumed unthrottled.</li>
+    <li><strong>O8 &mdash; Independent-oracle scope</strong>: full forward-chaining fixpoint (30&ndash;50 LOC)
+    vs spot-check subset. The native label is definitional (a negation flag), not a prover verdict &mdash; a
+    generation bug is invisible in the label alone. Reviewers demand a verifier-soundness check.
+    <em>Default:</em> full fixpoint check on 100% of instances (cheap for A&asymp;2 chaining).</li>
+    <li><strong>O9 &mdash; Ceiling-prompt exact wording</strong> (&sect;2): freeze after 2&ndash;3 pre-freeze
+    gate reads? The candidate doc names 2&ndash;3 pre-freeze gates for CWA/Unknown wording; even at 2-way,
+    the "closed-world True/False" phrasing should be sanity-checked so it doesn't itself leak the answer or
+    bias toward one label. <em>Default:</em> freeze &sect;2(b) after one gate read.</li>
+  </ol>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Appendix: grounding notes on floor/ceiling expectations</h2></div>
+<div class="card full">
+  <ul style="margin:0; padding-left:18px; font-size:14.5px;">
+    <li><strong>Floor (naive), predicted ~60&ndash;78% aggregate</strong> &mdash; extrapolated from
+    JustLogic 3-way zero-shot ~53% for cheap tier, adjusted up for 2-way format, cleaner fictional surface,
+    easier A&asymp;2 rules, and a stronger 2026 tier. <strong>Uncertainty moderate-to-high;</strong>
+    distractors OFF could push it to 85&ndash;95% (O1).</li>
+    <li><strong>Ceiling (best-effort CoT), predicted ~75&ndash;90% aggregate</strong> &mdash; floor + CoT
+    (+8&ndash;12) + convention-naming, but the depth ceiling is real and prompting does not remove deep-hop
+    degradation, so the aggregate stays short of ~95%. <strong>Uncertainty moderate.</strong></li>
+    <li><strong>Thin-evidence flag:</strong> no dossier measures the exact (2026-cheap &times; 2-way native
+    &times; PrOntoQA label-only) cell; the closest PrOntoQA numbers are <em>proof</em> accuracy on a 2022
+    model. The decision rule (&sect;3) is deliberately shape-based to survive absolute-level error.</li>
+  </ul>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c18.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c18 candidate page</a>
+  <a href="c18-related-work.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">c18 related work</a>
+</nav>
+
+</main>
+</body>
+</html>

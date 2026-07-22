@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Recommendations — Round 2</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Recommendations — Round 2</h1>
+<div class="byline">whetstone-ai · 2026-07-21 · implementation-aware rescore</div>
+
+<div class="card">
+  <h3>Amended 2026-07-21</h3>
+  <p class="small">The round-1 tie-breaker=1 exclusion is dropped by user decision: <strong>c10, c04, and c02</strong> are folded into the official ranking on equal terms with the other 21 candidates — their I1–I6 scores were produced by the same pipeline (web discovery, desk scoring with the same rubric and exercises, deep active-path code reads under <a href="repos/">repos/</a>). Run verification carries over at the repo level for c10 and c04: their best repo, open-thought/reasoning-gym, was run-verified during round 2 under c24 (same-seed byte-identical, 6/6 independent ground-truth checks), while their candidate-specific task logic (interlocking-cycle semantics for c10, rewrite-system tasks for c04) is authored on top of the reused infra; c02's NUMCoT scored I1=1 and never met the run-verification bar. No previously published relative order changes — the three insert at ranks 5 (c10), 7 (c04), and 12 (c02), giving 20 ranked + 4 gated = 24 — and the adoption call (<strong>c19 adopt, c18 backup</strong>) is unchanged.</p>
+</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Round 1</a>
+  <span class="here">Round 2</span>
+  <a href="landscape.html">Landscape</a>
+</div>
+
+<div class="intro">
+  <p>Round 2 rescores the 24 candidates by <span class="key">implementation difficulty</span>, layered on top of the round-1 rubric ranking (initially published over the 21 candidates surviving the round-1 tie-breaker filter; the amendment above folds the three tie-breaker-1 candidates back in). Round 1 (<a href="recommendations.html">recommendations.html</a>) is preserved unchanged; this document supersedes its adoption call, not its design analysis. New inputs: per-candidate web discovery of reusable codebases, deep active-path code reads (<a href="repos/">repos/</a>), and run verification of finalist generators.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>Adopt c19 — Grid-World State Prediction on Farama-Foundation/Minigrid (14/16).</strong> The only candidate combining a <span class="key">run-verified I1=3 codebase</span> with <span class="key">verification-only skeptic debt</span>: Apache-2.0, actively maintained, seed plumbing confirmed byte-identical, and the entire diff is ~120–200 lines of glue with zero repo edits. <strong>Backup: c18 — Depth-Controlled Synthetic Deduction on asaparov/prontoqa (13/16)</strong> — the other run-verified I1=3 generator (~100 lines of external glue). The prontoqa harness built for c18 is ~80% of a harness for <strong>c21</strong>, the round-1 winner (now #6 at 11/16), so the backup path keeps round 1's theoretical favorite alive at marginal cost.</p>
+</div>
+
+<div class="section-head" id="method"><h2>Methodology: codebase reuse is the primary sort key</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The I1–I6 rubric (higher = easier/safer)</h3>
+    <ul>
+      <li><strong>I1 (0–3, double-weighted) — reusable existing codebase.</strong> 3 = maintained; permissive or paper-attached license; used in 2025–2026 work; diff is <span class="key">config + scoring glue</span>; active path well-written and verified by a <span class="key">direct deep code read</span> — never README/stars alone. 2 = reusable, one property missing. 1 = major surgery / partial frozen generator. 0 = no usable codebase.</li>
+      <li><strong>I2 (0–2) — oracle independence.</strong> 2 = truth checkable via a <span class="key">second independent path</span> and hand-verifiable in under a minute.</li>
+      <li><strong>I3 (0–2) — moving parts of the adapted design</strong>, incl. round-1 mandated foil banks, rejection samplers, discoverability checks.</li>
+      <li><strong>I4 (0–2) — calibration burden</strong>: pre-freeze empirical gates (ceilings, floors, audits, red-team runs). 2 = 0–1; 1 = 2–3; 0 = 4+.</li>
+      <li><strong>I5 (0–2) — change-tolerance</strong>: 2 = a rule change regenerates one stratum with a local manifest diff.</li>
+      <li><strong>I6 (0–2) — redesign debt from round-1 verdicts</strong>: 2 = verification-only; 1 = bounded; 0 = structural.</li>
+      <li><strong>TOTAL = 2·I1 + I2 + I3 + I4 + I5 + I6, max 16.</strong></li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weighting, gating, and how scores were produced</h3>
+    <ul>
+      <li><span class="key">Why I1 is doubled</span>: reusing a clean benchmark codebase already in active use — which makes fast publishing much likelier — is roughly 2× more important than a task being theoretically somewhat nicer. Implementation total is the primary sort; round-1 score/TB only break ties.</li>
+      <li><span class="key">Verdict health is a gate, not a score</span>: candidates round 1 refuted without a concrete rescue (c01, c05, c07, c15) cannot be recommended at any implementation score. Bounded-redesign candidates stay eligible; I6 prices their debt.</li>
+      <li><span class="key">Pool filter — applied initially, dropped by amendment</span>: round 2 initially ranked only the 21 candidates with round-1 tie-breaker 2; the 2026-07-21 amendment drops that exclusion by user decision, folding c02/c04/c10 in on equal terms, their cells produced by the same pipeline.</li>
+      <li>Production: desk scoring of I2–I6 from round-1 docs with cited evidence → web discovery per candidate → <span class="key">deep active-path code reads</span> by dedicated agents (seed plumbing traced, tests run, red flags at file:line) → <span class="key">run verification</span> of finalists (same-seed byte-identical, different-seed varies, independent ground-truth spot checks) → I1 finalized: failed run caps at 1, confirmed run keeps, no repo = 0.</li>
+      <li>I1 adjustments: c18/c19/c21 confirmed at 3; c01/c11/c17/c24 confirmed at 2; c07/c23 held at 1 (InductionBench: three verified import-time crashes + PYTHONHASHSEED nondeterminism); c12/c13/c14/c16 = 0 (no reusable repo found); unverified provisionals kept as read. Amendment fold-ins: c04 = 3 (reasoning-gym's <code>ab.py</code> is a genuine term-rewriting-to-normal-form generator; repo-level run verification carries over from c24, with the seeded rule-table generalization authored on top); c10 = 2 (same run-verified base, but the invented interlocking-cycle task exists nowhere in-repo and must be authored on top); c02 = 1 (NUMCoT: unseeded dead-code generator, provably buggy <code>solve_hard</code> oracle — never run-verified, below the I1≥2 bar).</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="table"><h2>Full rescore: all 24 candidates (20 ranked + 4 gated)</h2></div>
+
+<p class="small muted">Sorted by implementation total; ties broken by I1 (per the reuse priority), then round-1 score, then round-1 tie-breaker. c09 edges c08 on salvageable-code substance. The three amendment fold-ins (c10, c04, c02) are marked ◆. c13 was desk-scored by a follow-up agent after its in-run scorer failed; the scores confirmed the synthesis estimates cell-for-cell, and its I1=0 is firm. Gated rows are ineligible regardless of total.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Rank</th><th>ID</th><th>Candidate</th><th>R1 score/TB</th><th>I1</th><th>I2</th><th>I3</th><th>I4</th><th>I5</th><th>I6</th><th>Total</th><th>Movement vs round 1</th></tr></thead>
+  <tbody>
+    <tr><td class="num"><strong>1</strong></td><td><strong>c19</strong></td><td><strong>Grid-World State Prediction</strong></td><td class="num">27/2</td><td class="num"><strong>3</strong></td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num"><strong>14</strong></td><td>▲▲ 27-tier mid-pack → adopt</td></tr>
+    <tr><td class="num"><strong>2</strong></td><td><strong>c18</strong></td><td><strong>Depth-Controlled Synthetic Deduction</strong></td><td class="num">27/2</td><td class="num"><strong>3</strong></td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num"><strong>13</strong></td><td>▲▲ 27-tier → backup</td></tr>
+    <tr><td class="num">3</td><td>c17</td><td>Invented-Gate Circuit Evaluation</td><td class="num">27/2</td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">13</td><td>▲ 27-tier → podium</td></tr>
+    <tr><td class="num">4</td><td>c24</td><td>Composite-Key Sorting &amp; Canonical Ordering</td><td class="num">27/2</td><td class="num">2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">12</td><td>▲ 27-tier → top 5</td></tr>
+    <tr><td class="num">5</td><td>c10</td><td>Interlocking-Cycle Calendar &amp; Clock Arithmetic</td><td class="num">27/1</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">12</td><td>◆ folded in from TB-filter exclusion → #5</td></tr>
+    <tr><td class="num">6</td><td>c21</td><td>Relational Micro-World (Invented Vocabulary)</td><td class="num">28/2</td><td class="num">3</td><td class="num">2</td><td class="num">0</td><td class="num">0</td><td class="num">1</td><td class="num">2</td><td class="num">11</td><td>▼▼ round-1 winner → #6</td></tr>
+    <tr><td class="num">7</td><td>c04</td><td>Term-Rewriting to Normal Form</td><td class="num">26/1</td><td class="num">3</td><td class="num">2</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">1</td><td class="num">11</td><td>◆ folded in from TB-filter exclusion → #7</td></tr>
+    <tr><td class="num">8</td><td>c11</td><td>House-Convention Canonicalizer</td><td class="num">28/2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">1</td><td class="num">11</td><td>▼ 28-tier finalist → #8</td></tr>
+    <tr><td class="num">9</td><td>c22</td><td>Stacked Verifiable-Constraint Micro-Generation</td><td class="num">26/2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">11</td><td>▲ 26-tier → #9</td></tr>
+    <tr><td class="num">10</td><td>c03</td><td>Keyed Custom-Operator Expression Evaluation</td><td class="num">27/2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">10</td><td>▼ round-1 backup → #10</td></tr>
+    <tr><td class="num">11</td><td>c23</td><td>Hidden-Rule String-Transform Induction Ladder</td><td class="num">26/2</td><td class="num">1</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">10</td><td>▲ 26-tier → #11</td></tr>
+    <tr><td class="num">12</td><td>c02</td><td>Fictional Mixed-Radix Unit Conversion</td><td class="num">26/1</td><td class="num">1</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">2</td><td class="num">10</td><td>◆ folded in from TB-filter exclusion → #12</td></tr>
+    <tr><td class="num">13</td><td>c06</td><td>Artificial-Grammar Violation Classification</td><td class="num">28/2</td><td class="num">2</td><td class="num">2</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">1</td><td class="num">9</td><td>▼ 28-tier finalist → #13</td></tr>
+    <tr><td class="num">14</td><td>c09</td><td>Composable Cipher-Chain Decode</td><td class="num">26/2</td><td class="num">1</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">9</td><td>▲ slight</td></tr>
+    <tr><td class="num">15</td><td>c08</td><td>Rosetta-to-Match-Up MC Linguistic Puzzles</td><td class="num">26/2</td><td class="num">1</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">9</td><td>▲ slight</td></tr>
+    <tr><td class="num">16</td><td>c20</td><td>Invented Micro-Game Turn Resolution</td><td class="num">27/2</td><td class="num">2</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">8</td><td>▼ 27-tier → #16</td></tr>
+    <tr><td class="num">17</td><td>c13</td><td>Precedence-Ordered Decision-List Classification</td><td class="num">27/2</td><td class="num">0</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">2</td><td class="num">7</td><td>▼▼ no reusable repo exists</td></tr>
+    <tr><td class="num">18</td><td>c16</td><td>Wason Implication-Compliance Classifier</td><td class="num">27/2</td><td class="num">0</td><td class="num">2</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">6</td><td>▼▼ no reusable repo exists</td></tr>
+    <tr><td class="num">19</td><td>c14</td><td>Instruction-Hierarchy Priority Ledger</td><td class="num">28/2</td><td class="num">0</td><td class="num">2</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">1</td><td class="num">5</td><td>▼▼▼ 28-tier finalist → near-bottom</td></tr>
+    <tr><td class="num">20</td><td>c12</td><td>Sigil-Schema Field Extraction &amp; Dialect Routing</td><td class="num">28/2</td><td class="num">0</td><td class="num">1</td><td class="num">0</td><td class="num">1</td><td class="num">1</td><td class="num">1</td><td class="num">4</td><td>▼▼▼ 28-tier finalist → bottom</td></tr>
+    <tr><td class="num muted">—</td><td class="muted">c01</td><td class="muted">Invented-Glyph Positional Base Arithmetic</td><td class="num muted">27/2</td><td class="num muted">2</td><td class="num muted">2</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">0</td><td class="num muted">(9)</td><td><span class="status fail">gated</span> refuted, no concrete rescue</td></tr>
+    <tr><td class="num muted">—</td><td class="muted">c05</td><td class="muted">Deterministic Execution &amp; State Tracking</td><td class="num muted">28/2</td><td class="num muted">2</td><td class="num muted">2</td><td class="num muted">1</td><td class="num muted">0</td><td class="num muted">1</td><td class="num muted">0</td><td class="num muted">(8)</td><td><span class="status fail">gated</span> refuted, no concrete rescue</td></tr>
+    <tr><td class="num muted">—</td><td class="muted">c07</td><td class="muted">Case-Marked Micro-Conlang Translation</td><td class="num muted">27/2</td><td class="num muted">1</td><td class="num muted">2</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">0</td><td class="num muted">(7)</td><td><span class="status fail">gated</span> refuted, no concrete rescue</td></tr>
+    <tr><td class="num muted">—</td><td class="muted">c15</td><td class="muted">Opaque-Codebook Remapped-Label Classification</td><td class="num muted">28/2</td><td class="num muted">1</td><td class="num muted">2</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">1</td><td class="num muted">0</td><td class="num muted">(7)</td><td><span class="status fail">gated</span> refuted, no concrete rescue</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="c19"><h2>1 · c19 — Grid-World State Prediction (14/16)</h2></div>
+
+<p><span class="status pass">adopt</span> Deterministic spatial simulation · round-1 27/2 · the only run-verified I1=3 codebase whose skeptic debt is verification-only.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Reusable codebase: Minigrid, zero repo edits</h3>
+    <p class="small"><a href="https://github.com/Farama-Foundation/Minigrid">Farama-Foundation/Minigrid</a> — Apache-2.0, v3.1.0, actively maintained. Deep read + run verification: <a href="repos/farama-foundation-minigrid.md">repos/farama-foundation-minigrid.md</a>. Seed threads <code>reset(seed)</code> → <code>self.np_random</code> through all generation; <span class="key">no module-global seeding</span>. Run-verified: seed 42 byte-identical SHA-256 across runs on five envs, seed 43 differs, 3/3 ground-truth spot checks via an independent object-model walk.</p>
+    <p class="small"><span class="key">Adaptation diff</span>: ~120–200 lines of glue in our package — seeded instance gen (<code>reset(seed)</code> + <code>pprint_grid</code>/<code>grid.encode</code>), independent derived-fact oracle, strata over env id/size, optional nonce symbol remap, single LLM call + strict 0/1 scorer.</p>
+  </div>
+  <div class="card">
+    <h3>Remaining risks are ours, not the repo's</h3>
+    <ul>
+      <li>The <span class="key">invented-command / wrap-vs-clamp convention strata</span> that defeat one-shot guessing are net-new simulation-layer logic; Minigrid supplies generation, serialization, determinism — not nonstandard dynamics.</li>
+      <li>Use <span class="key">stochastic-layout envs</span> (Fetch, Crossing, FourRooms, Empty-Random); fixed Empty-8x8 does not vary by seed.</li>
+      <li>Avoid off-path unseeded spots (<code>wrappers.py:800</code>, WFC subpackage).</li>
+      <li>2–3 pre-freeze gates: measured ceiling, per-stratum floors, single-fixed-convention red-team.</li>
+      <li>License-metadata mismatch (LICENSE=Apache-2.0, pyproject says MIT) — cite the LICENSE file.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="c18"><h2>2 · c18 — Depth-Controlled Synthetic Deduction (13/16)</h2></div>
+
+<p><span class="status partial">backup</span> Synthetic logic / multi-hop · round-1 27/2 · run-verified I1=3; the same harness is ~80% of a c21 harness.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Reusable codebase: prontoqa, ~100 lines of glue</h3>
+    <p class="small"><a href="https://github.com/asaparov/prontoqa">asaparov/prontoqa</a> — Apache-2.0, maintained, actively cited. Deep read + run verification: <a href="repos/asaparov-prontoqa.md">repos/asaparov-prontoqa.md</a>. <code>--seed</code> threads both RNGs once; run-verified byte-identical at seed 12345, varying at 999; 3/3 hand-traced labels correct. <code>--model-name json</code> emits <span class="key">gold-labeled JSON with no model call</span>.</p>
+    <p class="small"><span class="key">Adaptation diff</span>: subprocess per stratum (<code>--min-hops/--max-hops</code>, <code>--ontology fictional</code> for nonce vocab, <code>--distractors</code>, deduction rule), parse JSON, single LLM call, exact match vs <code>answer</code>. No required repo edits.</p>
+  </div>
+  <div class="card">
+    <h3>Known sharp edges, all cheap to route around</h3>
+    <ul>
+      <li>Avoid <code>--deduction-rule Composed</code> + postorder (verified crash); use <code>--ordering random</code>.</li>
+      <li>The T/F label is <span class="key">definitional, not an independent prover verdict</span> — add our own ~30–50-line forward-chaining fixpoint check.</li>
+      <li>Must run from repo root (<code>bad_patterns.txt</code> relative path).</li>
+      <li>CWA-vs-Unknown semantics needs a precise reference prompt; 2–3 gates total.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="c17"><h2>3 · c17 — Invented-Gate Circuit Evaluation (13/16)</h2></div>
+
+<div class="card">
+  <h3>Best desk profile in the pool; codebase needs a small verified fix</h3>
+  <p class="small"><a href="https://github.com/ctrl-gaurav/BeyondBench">BeyondBench</a> — Apache-2.0, ICLR 2026, active. Deep read + run verification: <a href="repos/beyondbench.md">repos/beyondbench.md</a>. Run-verified deterministic; 50/50 instances validated by an independent recursive-descent evaluator. I1=2, and the only top candidate with I3=2, I5=2, I6=2. <span class="key">Adaptation diff</span>: ~100-line external adapter — vendor <code>_make_expr</code>/<code>_eval_expr</code>, fix the <span class="key">verified XOR-dropping bug</span> (OR-substring replace ordering; 0/200 XOR instances as shipped), add invented-gate random-truth-table evaluation (~40 lines, a small rewrite of the <code>eval</code>-based core), thread a per-instance <code>random.Random</code>. Strongest third option if grid-nav familiarity floors worry us.</p>
+</div>
+
+<div class="section-head" id="c24"><h2>4 · c24 — Composite-Key Sorting &amp; Canonical Ordering (12/16)</h2></div>
+
+<div class="card">
+  <h3>reasoning-gym as a dependency; composite keys are our net-new logic</h3>
+  <p class="small"><a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> — Apache-2.0, actively used 2025–2026. Deep read + run verification: <a href="repos/open-thought-reasoning-gym.md">repos/open-thought-reasoning-gym.md</a>. Clean per-item <code>Random(seed+idx)</code> plumbing; 21 tests pass in a fresh venv; run-verified with 6/6 independent ground-truth checks. <span class="key">Adaptation diff</span>: 0 repo lines changed; new composite-key sorting generator subclass (~100–150 LOC) + <span class="key">strict 0/1 <code>score_answer</code> override</span> (base class gives substring partial credit) + glue. Risks: randomized tie-breaker keys are net-new; swap the bundled real-text corpus for nonce vocab; shared reference sorter couples strata to re-certification.</p>
+</div>
+
+<p class="small muted">Detail sections were written for the pre-amendment top five; headings carry the amended ranks. The folded-in c10 (#5) and c04 (#7) share the run-verified reasoning-gym base detailed above under c24 — see the amendment entries in the movers section below.</p>
+
+<div class="section-head" id="c21"><h2>6 · c21 — Relational Micro-World (11/16), the round-1 winner, priced honestly</h2></div>
+
+<div class="card">
+  <h3>The codebase is fine; the build and calibration are the heaviest in the pool</h3>
+  <p class="small">Same run-verified prontoqa base as c18 (<a href="repos/asaparov-prontoqa.md">repos/asaparov-prontoqa.md</a>), I1=3. It fell because round 1 itself calls the adapted design <span class="key">"the most intricate generator in the set"</span> — graph/nonce sampler + relation-property profiles + unique-answer rejection sampler + MC/foil balance + stratified minibatches (I3=0) — with <span class="key">4+ pre-freeze gates</span> (ceiling tuning, naive floor, literal-logician baseline, per-rule discoverability, adversarial induce-conventions run; I4=0). Cleanest skeptic verdict (I6=2), heaviest build. Still the best theoretical task; the adoption path keeps it one harness-extension away.</p>
+</div>
+
+<div class="section-head" id="movers"><h2>What changed vs round 1, and the load-bearing fact for each mover</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Up</h3>
+    <ul>
+      <li><strong>c19 (27-tier → #1).</strong> Minigrid is the pool's only run-verified I1=3 codebase with <span class="key">verification-only</span> skeptic debt; round 1 flagged nothing beyond mild grid-nav familiarity.</li>
+      <li><strong>c18 (27-tier → #2).</strong> prontoqa's <code>--seed</code> → deterministic gold-labeled JSON path run-verified end to end; the whole adaptation is ~100 lines.</li>
+      <li><strong>c22 (26-tier → #9).</strong> IFBench's 59-test oracle library passes verbatim; only the seeded sampler is net-new.</li>
+      <li><strong>c23 (26-tier → #11).</strong> InductionBench's algorithm is sound and its desk profile clean, though the code needs vendoring + crash fixes (I1=1).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Down</h3>
+    <ul>
+      <li><strong>c21 (#1 → #6).</strong> Round 1's own adaptation table demands the most intricate generator plus 4+ calibration gates — the only eligible top-tier candidate scoring I3=0 <em>and</em> I4=0.</li>
+      <li><strong>c12 (finalist → #20), c14 (finalist → #19).</strong> Discovery found <span class="key">no plausibly reusable codebase</span> for either (I1=0): every candidate repo was frozen, LLM-driven, or the wrong task shape.</li>
+      <li><strong>c05, c15 (finalists → gated).</strong> Round 1 refuted both at major severity with only structural-redesign rescues; the gate removes them regardless of implementation scores.</li>
+      <li><strong>c03 (round-1 backup → #10).</strong> BIG-bench multistep_arithmetic's oracle is <code>eval()</code> of the generator's own string — <span class="key">tautological and invalid for invented operators</span> — so the load-bearing oracle is new code.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="card space-top">
+  <h3>Amendment fold-ins (2026-07-21)</h3>
+  <ul>
+    <li><strong>c10 (TB-excluded → #5).</strong> The same run-verified reasoning-gym base as c24 (repo-level verification carries over) with a clean fold-in profile (I5=2, I6=2); the interlocking-cycle semantics are authored on top of the reused infra rather than shipped in-repo.</li>
+    <li><strong>c04 (TB-excluded → #7).</strong> The landscape's <span class="key">"strongest anti-one-shot design"</span> in the pool now carries I1=3 — reasoning-gym's <code>ab.py</code> is a genuine term-rewriting-to-normal-form generator on the framework run-verified in round 2 under c24.</li>
+    <li><strong>c02 (TB-excluded → #12).</strong> Lands mid-table: the design survives, but its headline repo NUMCoT is unusable (unseeded dead-code generator, buggy oracle), so I1=1 and it was never run-verified.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="adopt"><h2>Adoption path: build c19 this week, keep c18/c21 one harness away</h2></div>
+
+<div class="steps">
+  <div class="step"><h3>Day 1–2 · c19 harness</h3><p>Add Minigrid as a dependency (no vendoring). Write the ~120–200-line glue package: seeded instance gen over Fetch/Crossing/FourRooms/Empty-Random, text render via <code>pprint_grid</code>, the invented-command/convention layer (wrap vs clamp, indexing, 2–3 invented commands) as a tiny stepper over <code>grid.encode</code> state, independent derived-fact oracle, strict 0/1 scorer.</p></div>
+  <div class="step"><h3>Day 2–3 · freeze gates for c19</h3><p>Reference "state-all-rules" ceiling prompt at temp 0; per-stratum floors; red-team check that no single fixed convention statement covers the pool. Pin seeds + manifest.</p></div>
+  <div class="step"><h3>Day 3–4 · c18 smoke harness in parallel</h3><p>~100 lines: prontoqa subprocess per stratum, JSON parse, exact-match scorer. Validates optimizer plumbing on a second family and is ~80% of a future c21 harness — the cheap option on round 1's theoretical winner.</p></div>
+  <div class="step"><h3>End of week · decision point</h3><p>If c19's convention layer or red-team gate struggles, promote c18. If grid familiarity floors run high and deduction load runs heavy, c17 (BeyondBench + XOR fix, ~100-line adapter) is the ready third option.</p></div>
+</div>
+
+<p class="small space-top"><strong>Amendment note (2026-07-21):</strong> the adoption call above is unchanged (c19 adopt, c18 backup), but c10 (#5) and c04 (#7) are newly competitive options sharing the already-run-verified reasoning-gym base with c24 — one harness (reasoning-gym as a dependency, a generator subclass, a strict 0/1 <code>score_answer</code> override) could serve c24, c10, and c04.</p>
+
+<div class="verdict bad space-top">
+  <p><strong>Do not invest</strong> in c12/c13/c14/c16 — no reusable codebase exists, so every hour is from-scratch construction — or in the gated c01/c05/c07/c15, whose round-1 refutations have no concrete rescue.</p>
+</div>
+
+<div class="section-head" id="changelog"><h2>Change log</h2></div>
+
+<div class="card">
+  <ul>
+    <li><strong>2026-07-21 — initial publication.</strong> Round-2 rescore over the 21 candidates surviving the round-1 tie-breaker filter (17 ranked + 4 gated).</li>
+    <li><strong>2026-07-21 — amendment (fold-in).</strong> Tie-breaker=1 exclusion dropped by user decision; c10, c04, and c02 folded into the ranking on equal terms at ranks 5, 7, and 12 (20 ranked + 4 gated = 24). No previously published relative order changed; adoption call (c19 adopt, c18 backup) unchanged.</li>
+  </ul>
+</div>
+
+</main>
+</body>
+</html>

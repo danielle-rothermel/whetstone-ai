@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Baseline-spec additions — only what doc.css/flow.css lack. */
+
+/* DRAFT badge, matching the candidate-page .badge convention */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.draft { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+
+.hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.hdr-row h1 { margin: 0; }
+
+/* Outcome cards for the three-outcome decision rule */
+.outcome-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; margin: 16px 0; }
+.outcome {
+  padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.outcome .oc-tag {
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.outcome.a { border-color: var(--red); } .outcome.a .oc-tag { color: var(--red); background: var(--red-soft); }
+.outcome.b { border-color: var(--amber); } .outcome.b .oc-tag { color: var(--amber); background: var(--amber-soft); }
+.outcome.c { border-color: var(--green); } .outcome.c .oc-tag { color: var(--green); background: var(--green-soft); }
+.outcome h3 { font-size: 15px; margin: 0; }
+.outcome .cond { font: 600 12.5px/1.4 var(--font-mono); color: var(--muted); }
+.outcome p { font-size: 13.5px; margin: 0; }
+.outcome .decision { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.outcome .decision b { color: var(--ink); }
+
+/* Recommendation vs constraint distinction (skill §3) */
+.constraint {
+  margin: 14px 0; padding: 14px 20px; border: 1.5px solid var(--ink); border-radius: 10px;
+  background: var(--surface);
+}
+.constraint .tag {
+  display: inline-block; margin-bottom: 6px; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--ink);
+}
+.constraint ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.constraint li { margin-bottom: 5px; }
+
+.proposed-tag {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--accent);
+  font: 700 9.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+  vertical-align: middle; margin-left: 6px;
+}
+
+/* Open decisions list — visually prominent */
+.open-decisions {
+  margin: 16px 0; padding: 20px 24px; border: 2px solid var(--amber); border-radius: 12px;
+  background: var(--amber-soft);
+}
+.open-decisions h3 { color: var(--amber); margin-bottom: 10px; }
+.open-decisions ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+.open-decisions li { margin-bottom: 10px; }
+.open-decisions li::marker { color: var(--amber); font-weight: 800; }
+.open-decisions li:last-child { margin-bottom: 0; }
+
+.evnote {
+  margin: 10px 0; padding: 10px 16px; border-left: 3px solid var(--muted);
+  background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+}
+.evnote em { color: var(--ink); }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .outcome-grid { grid-template-columns: 1fr; }
+}
+</style>
+<title>whetstone-ai · c23 Baseline Spec</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c23.html">&larr; Back to c23 candidate page</a></nav>
+
+<div class="hdr-row">
+  <h1>c23 Baseline Spec: Headroom Before Complexity</h1>
+  <span class="badge draft">Draft</span>
+</div>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<div class="callout warn">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), the k=3 stratum keep/drop
+  call, and five other open items (&sect;7) are explicitly owner-gated &mdash; see the
+  <a href="#open">open decisions</a> list before treating anything here as final.
+</div>
+
+<p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt on
+the <span class="key">existing</span> InductionBench-style single-rule ISL/OSL task shape &mdash; before any
+build effort goes into c23's added complexity (the composition ladder, invented multi-rule stacking, the MC
+variant, multi-family strata). It is a <span class="key">go/no-go instrument</span>, not the benchmark itself:
+InductionBench's own headline finding is that frontier models collapse to 0.00&ndash;5.69% compatibility at
+moderate difficulty. If the existing shape is already unreachable &mdash; or already trivial &mdash; at the
+cheap tier, this baseline finds that cheaply, before the composition-ladder work that is c23's real cost gets
+built.</p>
+
+<div class="constraint">
+  <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
+  <ul>
+    <li><span class="key">InductionBench-style subregular (ISL/OSL) instances only.</span> No composition
+    ladder, no invented multi-rule stacking, no MC variant, no multi-family strata &mdash; that added
+    complexity is exactly what this experiment tests the necessity of, so it cannot appear in the baseline.</li>
+    <li><span class="key">Fresh seeds, never a published InductionBench instance</span> &mdash; regenerated with
+    the vendored + patched codebase (<code>config.py</code> stub, drop the
+    <code>translate_fewshot_input_output_pairs</code> import, thread a real <code>seed</code> param, replace
+    <code>list(set(...))</code> hash-order nondeterminism with <code>sorted(...)</code> at lines
+    53/61/107/132/208/244 rather than pinning <code>PYTHONHASHSEED</code>). Contamination resistance, rubric
+    criterion 8.</li>
+    <li><span class="key">Single-rule instances only.</span> <code>--number_of_rules = 1</code> is fixed under
+    this constraint.</li>
+    <li><span class="key">Existing I/O-demos-plus-query format; short-string exact-match output.</span></li>
+    <li><span class="key">Exact 0/1 scoring</span> vs. the independent oracle (<code>apply_ISL_rule</code> /
+    <code>apply_L_OSL_rule</code> / <code>apply_R_OSL_rule</code> re-applied to the held-out query, compared for
+    string equality).</li>
+    <li><span class="key">Temperature 0.</span> Repeats = 3 to exercise the aggregation plumbing.</li>
+  </ul>
+</div>
+
+<!-- STRATA -->
+<div class="section-head"><h2>1. Strata design</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Three live axes: type, k (context window), vocab size &mdash; k is primary</h3>
+    <p>The candidate and repo expose four generator knobs on the ISL/OSL path: <code>--type</code> (ISL / L-OSL /
+    R-OSL), <code>--k</code> (context window), <code>--vocab_size</code> (|&Sigma;|), and
+    <code>--number_of_rules</code>. Under the single-rule constraint, <code>--number_of_rules = 1</code> is
+    fixed, leaving three live axes. <span class="key">k is the single largest difficulty driver</span>
+    (InductionBench Sec 5.2): k=2&rarr;k=4 collapses most models from partial success to ~0 compatibility, so it
+    is the primary stratum axis. <code>--type</code> (ISL / L-OSL / R-OSL) is the secondary axis &mdash; it
+    changes the transducer family via one generation diff and all three share one oracle codepath, so covering
+    them is cheap. <code>--vocab_size</code> (|&Sigma;|) matters less than k, so it is held small and fixed
+    (|&Sigma;|=4) to keep the axis count down and land in the partial-success regime; it becomes a curation
+    knob only if the pilot shows the band collapsing.</p>
+  </div>
+  <div class="card">
+    <h3>Proposed strata <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Stratum</th><th>type</th><th>k</th><th>|&Sigma;|</th><th>rules</th><th>Expected regime</th></tr></thead>
+        <tbody>
+          <tr><td>S1</td><td>ISL</td><td>2</td><td>4</td><td>1</td><td>Easiest &mdash; GPT-4o ~40 compat, Llama-3.3-70B 60&rarr;80</td></tr>
+          <tr><td>S2</td><td>L-OSL</td><td>2</td><td>4</td><td>1</td><td>Easy &mdash; output-strictly-local left variant</td></tr>
+          <tr><td>S3</td><td>R-OSL</td><td>2</td><td>4</td><td>1</td><td>Easy &mdash; right variant</td></tr>
+          <tr><td>S4</td><td>ISL</td><td>3</td><td>4</td><td>1</td><td>Moderate &mdash; interpolation point between "holds" (k=2) and "collapse" (k=4)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:10px;"><strong>Why the k ladder stops at 3, not 4:</strong> the
+    synthesis shows k=4 sends everything except o3-mini to ~0 (IB Table 1). A baseline whose hardest stratum is
+    unreachable violates criterion 9 (a known-reachable ceiling) and criterion 4 (room to improve). k&isin;{2,3}
+    keeps all strata inside the partial-success band. <strong>Open:</strong> the pilot must confirm S4 (k=3) is
+    reachable by the ceiling prompt; if it sits near floor for all models, drop it and hold k=2 across the board
+    (&sect;7.3). k=4 is reserved only as a curation lever if k=2 turns out one-shot-guessable.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>N per stratum = 50 <span class="proposed-tag">proposed</span>; 200 instances total</h3>
+  <p><span class="key">Design driver:</span> rubric criterion 5 resolvability &mdash; a meaningful prompt change
+  (&ge;10 points) must exceed residual noise on a 10&ndash;20 task internal eval. Exact-match is per-instance
+  binary, so N is sized so a 10-point (0.10) shift is resolvable and per-stratum averages are stable. At
+  p&asymp;0.5 (worst-case binomial variance), the standard error of a single-stratum exact-match rate at N=50 is
+  &radic;(0.25/50) &asymp; 0.071; a 10-point true difference is ~1.4 SE &mdash; marginal alone. The go/no-go
+  decision (&sect;3) reads the <strong>pooled</strong> naive-vs-ceiling contrast across all four strata, not one
+  stratum, which amplifies resolution.</p>
+  <p><span class="key">4 strata &times; N=50 = 200 instances</span> in the pinned pool. Pooled across strata, the
+  SE of the overall exact-match rate at p&asymp;0.5 is &radic;(0.25/200) &asymp; 0.035; the naive-vs-ceiling
+  difference SE (two independent 200-instance measurements) is &radic;2 &times; 0.035 &asymp; 0.050. A 10-point
+  pooled gap is ~2 SE (resolvable at ~95%); the synthesis-predicted 20&ndash;40-point gap is 4&ndash;8 SE
+  (unambiguous). This satisfies criterion 5's resolvability requirement at the decision level. Repeats=3 at
+  temp&nbsp;0 validate the aggregation plumbing (criterion 5), not variance reduction &mdash; they should
+  largely agree.</p>
+  <div class="evnote"><em>Evidence note:</em> N=50/stratum is a proposal balancing criterion-5 resolution
+  against &sect;5's cost. If the owner wants each <em>individual</em> stratum (not just the pool) to resolve a
+  10-point effect at ~95%, raise to N&asymp;100&ndash;200/stratum &mdash; the pooled-decision framing is why 50
+  is proposed as the floor, not the target (&sect;7.2).</div>
+</div>
+
+<!-- PROBE PROMPTS -->
+<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<p>Both probes are run <span class="key">verbatim, temperature 0, repeats=3</span>, against the same pinned
+instance pool; the only difference between them is the instruction text &mdash; same demos, same query, same
+extraction. These operationalize rubric criterion 4 (default prompts score low; better prompts close the gap)
+and criterion 9 (floor, ceiling, and a reference prompt known in advance). Output extraction for both: take the
+text after the last <code>Output:</code> line, strip surrounding whitespace and markdown fences, compare for
+exact string equality to the oracle output. <span class="key">No CoT is forced in either prompt</span> &mdash;
+the synthesis shows no-CoT beats forced-CoT unanimously for the cheap tier; forcing it would confound the
+ceiling.</p>
+
+<h3 style="margin-top:22px;">2.1 Probe (a) &mdash; deliberately naive prompt (floor probe)</h3>
+<pre><code class="language-plaintext">Here are some examples:
+
+vez fam qor -> VEZ vez fam qor
+qor luz tam -> QOR tam luz luz
+fam vez luz -> FAM vez luz luz
+
+luz qor vez -> </code></pre>
+<p class="small muted">Verbatim instruction string used to build the prompt: <code>&lt;demos as "IN -&gt; OUT"
+lines&gt;\n&lt;query IN&gt; -&gt; </code>. That is the entire prompt &mdash; no system prompt beyond the
+provider default.</p>
+<p>Design intent: gives the demonstration pairs and the query &mdash; nothing else. No task framing, no
+statement that a hidden rule exists, no output-format instruction, no delimiter guidance. This is the
+"repeat the transformation shown" level of scaffolding; it leans entirely on the model's own ability to notice a
+pattern exists and infer it unaided, which is precisely where the too-easy-or-too-hard floor risk lives.</p>
+
+<h3 style="margin-top:26px;">2.2 Probe (b) &mdash; best-effort ceiling prompt (states all standard conventions)</h3>
+<pre><code class="language-plaintext">SYSTEM:
+You are solving a hidden-rule string-transformation puzzle. Each puzzle has one fixed,
+deterministic transformation rule that maps an input string to an output string. The rule
+depends only on the tokens in the input (their identity, their length, their position, and
+the characters at the ends of each token) — it never uses outside knowledge, randomness, or
+context beyond the examples. Tokens are the whitespace-separated words. The same rule was
+applied to every example below. Your job: infer that single rule from the examples, then
+apply exactly the same rule to the final query.
+
+Rules of the format:
+- Read all the demonstration pairs. Each is written "INPUT -> OUTPUT".
+- The transformation is a length- and position- and suffix/prefix-sensitive edit over the
+  tokens: tokens may be duplicated, reordered, re-cased, or rewritten based on their local
+  context (the characters immediately around each token position, up to a small window).
+- Determine the exact rule that makes ALL demonstrations correct simultaneously. If more than
+  one rule fits the demonstrations, choose the simplest one that fits every pair.
+- Do not explain your reasoning. Output only the transformed string for the query.
+- Preserve spacing and casing exactly as the rule dictates. Do not add quotes, punctuation,
+  or commentary.
+
+USER:
+Demonstrations:
+vez fam qor -> VEZ vez fam qor
+qor luz tam -> QOR tam luz luz
+fam vez luz -> FAM vez luz luz
+
+Query:
+luz qor vez ->
+
+Output only the transformed string, on a single line prefixed with "Output:".</code></pre>
+<p>Design intent: states every standard convention of the existing task family &mdash; single deterministic
+rule, tokens = whitespace-separated words, local/suffix/positional sensitivity matching the ISL/OSL substrate,
+the "fits all demos / simplest rule" induction principle, direct-answer / no-CoT, and a strict
+<code>Output:</code> format for robust extraction.</p>
+<div class="evnote"><em>Why this is a legitimate ceiling, not cheating:</em> it states the <em>conventions and
+inductive bias</em> of the task family (what kind of rule, how to read the format, how to answer) but
+<strong>does not reveal the specific latent rule</strong> of any instance &mdash; the model still has to induce
+it from the demos. This is the "designer can write a prompt that scores &asymp;100% because they know the
+conventions" sense of criterion 9, adapted to the reality (synthesis) that &asymp;100% is not reachable at the
+cheap tier even with perfect conventions stated. <strong>Open:</strong> the owner should confirm the wording
+does not over-hint and inflate the ceiling (&sect;7.6).</div>
+
+<!-- DECISION RULE -->
+<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<p>Read the <strong>pooled naive rate A</strong> and <strong>pooled ceiling rate C</strong> (across all 200
+instances &times; 3 repeats &times; chosen models, exact-match). Thresholds are proposals grounded in the
+capability synthesis, whose headline predictions are: naive floor ~5&ndash;25%, ceiling ~35&ndash;65%, gap
+~20&ndash;40 points, and <em>no cheap model saturates</em> (ceiling well below 100%).</p>
+
+<div class="card full">
+  <p style="margin-bottom:0;"><strong>Proposed numeric anchors</strong> <span class="proposed-tag">all owner-adjustable</span>:
+  <code>HIGH</code> band = pooled rate &ge; 70% (near the top of the synthesis ceiling range or above);
+  <code>MID/LOW</code> band = pooled rate &le; 45% (at or below the synthesis-predicted ceiling midpoint);
+  "gap significant" means <code>C &minus; A &ge; 15</code> points (&asymp;3 SE of the pooled difference,
+  comfortably above criterion 5's 10-point resolvability floor).</p>
+</div>
+
+<div class="outcome-grid">
+  <div class="outcome a">
+    <span class="oc-tag">Outcome (a) &middot; No headroom</span>
+    <h3>A &asymp; C, both HIGH</h3>
+    <div class="cond">gap &lt; 15 pts <strong>and</strong> both &ge; 70%</div>
+    <p>The existing shape is already near-ceiling; there is nothing for an optimizer to close. Hitting HIGH
+    would itself be a genuine surprise &mdash; the synthesis predicts no cheap model saturates, so this would
+    indicate the strata are too easy (one-shot-guessable, a criterion 4 failure).</p>
+    <div class="decision"><b>Decision:</b> proceed to the candidate's added-complexity design (composition
+    ladder / multi-family strata) &mdash; the baseline shape is too easy to validate optimizers.</div>
+  </div>
+  <div class="outcome b">
+    <span class="oc-tag">Outcome (b) &middot; Headroom, not prompt-closable</span>
+    <h3>A &asymp; C, both MID/LOW</h3>
+    <div class="cond">gap &lt; 15 pts <strong>and</strong> both &le; 45%</div>
+    <p>Raw capability deficit: even best-effort conventions don't lift the cheap tier. This is
+    InductionBench's own "even the simplest complexity class fails" thesis showing up again.</p>
+    <div class="decision"><b>Decision:</b> build the added-complexity design <strong>and</strong> keep base
+    difficulty shallow &mdash; hold k=2, small vocab; the ladder must add decomposable difficulty on top of a
+    reachable floor, not push deeper into the collapse regime.</div>
+  </div>
+  <div class="outcome c">
+    <span class="oc-tag">Outcome (c) &middot; Prompt-closable headroom</span>
+    <h3>C &minus; A &ge; 15, A in MID/LOW</h3>
+    <div class="cond">gap significant, ceiling meaningfully higher</div>
+    <p>The naive prompt leaves recoverable points on the table that stating conventions closes &mdash; exactly
+    the substrate an optimizer benchmark needs.</p>
+    <div class="decision"><b>Decision:</b> direct prompt optimization is viable on the existing shape &mdash;
+    run COPRO/MIPROv2/GEPA on this baseline substrate; no added complexity needed for a usable optimizer
+    signal.</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Justification of the numeric thresholds (&sect;7.5):</strong> the 15-point gap threshold sits below
+  the synthesis-predicted 20&ndash;40-point gap (so a real effect clears it) but above criterion 5's 10-point
+  noise floor and the ~5-point pooled difference-SE band (so noise doesn't trip it). The 70% HIGH band is
+  deliberately above the synthesis ceiling top (~65%). The 45% MID/LOW band is the synthesis ceiling midpoint.
+  <strong>Format-refusal caveat:</strong> Claude-Haiku-class and Gemini-Flash-class models can crater to single
+  digits purely from misreading the I/O block (MIR refusal behavior; WILT Haiku 1/50, Flash-8b 0/50). If one
+  specific model shows A&asymp;C&asymp;near-zero while others show a healthy gap, that is <strong>not</strong>
+  outcome (b) &mdash; it is a per-model representation problem. Report per-model rates, not only the pool, and
+  treat a single model's floor-crater as a format bug to fix before concluding.
+</div>
+
+<!-- MODEL EVIDENCE -->
+<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
+<div class="callout warn">Not finalized here. See &sect;7.1. No dossier tests c23's exact cheap tier; all
+cheap-tier numbers below are same-family proxies. This table is the evidence the owner needs to choose &mdash;
+it is not a recommendation.</div>
+
+<h3 style="margin-top:18px;">4.1 What the papers actually tested</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Model (as tested)</th><th>Paper / setting</th><th>Result</th><th>Proxy for (our tier)</th></tr></thead>
+    <tbody>
+      <tr><td>o3-mini</td><td>IB moderate (k4/|&Sigma;|4/r3)</td><td>10/10/30 compat (only nonzero model); 5.69% weighted leaderboard</td><td>frontier reasoning (not our tier)</td></tr>
+      <tr><td>o1-mini</td><td>IB moderate</td><td>0.00 compat; MIR best ~0.696 no-CoT</td><td>frontier reasoning</td></tr>
+      <tr><td>GPT-4o</td><td>IB moderate: 0/0/0 compat; IB easy ISL k2/v2/r1: 40 compat; MIR-Core 0.540 no-CoT</td><td><strong>GPT-5-mini</strong> (non-reasoning)</td></tr>
+      <tr><td>DeepSeek-V3 / Chat</td><td>IB moderate 0/0/0; recall 3&ndash;23; WILT v2.5-chat 6/50</td><td><strong>DeepSeek-Chat</strong></td></tr>
+      <tr><td>DeepSeek-R1</td><td>MIR 0.757 no-CoT (reasoning model &mdash; overstates plain Chat)</td><td>over-states DeepSeek-Chat</td></tr>
+      <tr><td>Claude-3.5-Haiku</td><td>MIR: "surprisingly low," refuses / misreads I/O block</td><td><strong>Claude Haiku 4.5</strong> (format-refusal risk)</td></tr>
+      <tr><td>Claude-3-Haiku</td><td>WILT 1/50 (fails to use turns)</td><td>Claude Haiku 4.5 (refusal risk)</td></tr>
+      <tr><td>Claude-3.5-Sonnet</td><td>MIR 0.775 no-CoT / 0.585 CoT</td><td>mid/frontier (optional upper anchor)</td></tr>
+      <tr><td>Gemini-1.5-Flash / Flash-8b</td><td>WILT 7/50 / <strong>0/50</strong>; MIR-2.0-Flash anomalous</td><td><strong>Gemini-2.5-Flash</strong> (refusal/anomaly risk)</td></tr>
+      <tr><td>Llama-3.3-70B</td><td>IB easy ISL k2/v2/r1: 60&rarr;80 with 0&rarr;3 shot; ~0&ndash;10 at k4</td><td>open cheap-ish; most encouraging on-target datapoint</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>4.2 Proposed candidate set <span class="proposed-tag">not finalized</span></h3>
+    <p>A 3-model set balancing coverage, cost, and the synthesis's warnings:</p>
+    <ul>
+      <li><span class="key">GPT-5-mini</span> &mdash; cleanest GPT-4o proxy; GPT-4o is the best-behaved cheap
+      datapoint on-target.</li>
+      <li><span class="key">DeepSeek-Chat</span> &mdash; cheapest, and the synthesis's DeepSeek proxies are the
+      least refusal-prone of the cheap tier.</li>
+      <li><span class="key">Claude Haiku 4.5</span> &mdash; deliberately included <em>because</em> it is the
+      format-refusal risk; if the baseline is going to break on I/O-block comprehension, better to see it here
+      than in the expensive run (serves criterion 13 &mdash; failure paths exercised on purpose).</li>
+    </ul>
+    <p class="small muted" style="margin-top:8px;">Optional 4th: <span class="key">Gemini-2.5-Flash</span>
+    (second refusal-risk data point) or a <span class="key">Claude-3.5-Sonnet-class</span> upper anchor (to see
+    how much of the gap is tier-limited vs. task-limited).</p>
+  </div>
+  <div class="card">
+    <h3>4.3 Tradeoffs for the owner</h3>
+    <ul>
+      <li><span class="key">Pro (more models):</span> better separation of "task headroom" from "this one
+      model," and satisfies the &ge;2&ndash;3-model positioning demand &mdash; but multiplies &sect;5 cost
+      linearly.</li>
+      <li><span class="key">Pro/Con (refusal-risk models):</span> including Haiku/Flash surfaces the
+      representation failure early (good for the debug loop) but risks a per-model floor-crater that muddies
+      the pooled decision rule &mdash; mitigated by reading per-model rates (&sect;3 caveat).</li>
+      <li><span class="key">Con (a reasoning model):</span> o1/o3-mini class would show the ceiling of the
+      substrate but is off-tier and expensive; probably out of scope for a baseline headroom measurement.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- COST -->
+<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<p><span class="key">Formula:</span> instances &times; prompts &times; models &times; repeats = LLM calls; calls
+&times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: N = 200 instances; 2 prompts (naive,
+ceiling); repeats = 3.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Per-instance token estimate <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Prompt A (naive)</th><th>Prompt B (ceiling)</th></tr></thead>
+        <tbody>
+          <tr><td>Input tokens (short strings, small vocab, few demos)</td><td class="num">~120</td><td class="num">~400</td></tr>
+          <tr><td>Output tokens (short transformed-string answer)</td><td class="num">~20</td><td class="num">~20</td></tr>
+          <tr><td><strong>Blended average</strong></td><td colspan="2" class="num"><strong>~300 in + ~20 out &asymp; 320 tok/instance/prompt</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Calls, tokens, and dollar cost</h3>
+    <p><strong>Calls per full baseline run:</strong> 200 instances &times; 2 prompts &times; 3 models &times; 3
+    repeats = <strong>3,600 LLM calls</strong>.</p>
+    <p><strong>Token volume:</strong> input &asymp; 3,600 &times; ~260 avg input tok &asymp; 0.94M input tokens;
+    output &asymp; 3,600 &times; ~20 output tok &asymp; 0.07M output tokens.</p>
+    <p><strong>Cost</strong> (order-of-magnitude, cheap-tier pricing ~$0.15&ndash;$0.60/M input,
+    ~$0.60&ndash;$2.40/M output, 3 models averaged): input &asymp; 0.94M &times; ~$0.40/M &asymp; $0.38; output
+    &asymp; 0.07M &times; ~$1.50/M &asymp; $0.11; <strong>per full baseline run &asymp; $0.50</strong> &mdash;
+    well under the "cents-to-a-dollar" band rubric criterion 3 wants.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <p style="margin-bottom:0;"><strong>Wall-clock</strong> (proposed): 3,600 calls at short output length. At a
+  modest 10 concurrent requests and ~1.5s latency/call, &asymp; 3,600 &times; 1.5 / 10 &asymp;
+  <strong>~9 minutes</strong>; at 20 concurrent, <strong>~4.5 minutes</strong>. Comfortably inside criterion
+  14's "minutes, not hours," assuming no rate-limit bottleneck.</p>
+</div>
+<div class="evnote"><em>Evidence note:</em> costs scale linearly with model count and N. Adding a 4th model
+&rarr; ~$0.67/run, ~12 min. Raising N to 100&ndash;200/stratum doubles both. All figures are order-of-magnitude;
+pin real per-model pricing before the owner signs off.</div>
+
+<!-- RUBRIC MAPPING -->
+<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
+    <tbody>
+      <tr><td>Single LLM-call driver + single 0/1 exact-match scorer</td><td>1 (single node graph), 2 (deterministic string equality, no partial credit)</td></tr>
+      <tr><td>Short strings, ~20-token outputs, ~320 tok/instance</td><td>3, 14 (bounded per-rollout cost, minutes wall-clock)</td></tr>
+      <tr><td>Prompt A (naive) vs. Prompt B (ceiling), run verbatim</td><td><strong>4</strong> (default low, better closes gap), <strong>9</strong> (known floor/ceiling/reference prompt)</td></tr>
+      <tr><td>4 strata &times; 50 = 200 instances; pooled-difference SE &asymp; 0.05</td><td><strong>5</strong> (10-pt effect resolves above noise at the decision level)</td></tr>
+      <tr><td>Temperature 0, repeats = 3</td><td>5 (determinism isolates prompt effect; repeats validate plumbing)</td></tr>
+      <tr><td>Fresh seeds via patched generator; never published IB instances</td><td><strong>8</strong> (contamination resistance)</td></tr>
+      <tr><td>Latent single rule per instance; oracle re-applies rule to held-out query</td><td>7, 10, 11 (generated pool with known ground truth, independent rule structure, diagnostic failures)</td></tr>
+      <tr><td>I/O demos are the only channel for the rule</td><td>12 (few-shot demos load-bearing by construction)</td></tr>
+      <tr><td>Haiku/Flash included as refusal-risk models; per-model rates reported</td><td>13 (format-violation / refusal failure paths exercised on purpose)</td></tr>
+      <tr><td><code>sorted(...)</code> seed-determinism fix (not just <code>PYTHONHASHSEED</code>)</td><td>5, 7, 8 (reproducible re-runs, stable task identity, defensible held-out-seed generalization)</td></tr>
+      <tr><td>ISL/L-OSL/R-OSL as independent strata, one generation diff each</td><td>7, 10 (independent latent-rule strata, cross-stratum aggregation)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- OPEN DECISIONS -->
+<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="open-decisions">
+  <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
+  <ol>
+    <li><strong>Model set</strong> (&sect;4) &mdash; finalize the 3-model set (proposed: GPT-5-mini,
+    DeepSeek-Chat, Claude Haiku 4.5); decide whether to add a 4th refusal-risk model (Gemini-2.5-Flash) and/or
+    an upper anchor (Sonnet-class).</li>
+    <li><strong>N per stratum</strong> (&sect;1.3) &mdash; proposed 50 (pooled-decision resolution). Owner may
+    raise to 100&ndash;200 if per-stratum (not just pooled) 10-point resolution is required, at linear cost.</li>
+    <li><strong>Keep or drop the k=3 stratum (S4)</strong> (&sect;1.2) &mdash; contingent on the pilot: if S4
+    sits near floor for all models, drop it and hold k=2. Owner sets the reachability bar for keeping it.</li>
+    <li><strong>Vocab size</strong> (&sect;1.1) &mdash; fixed at |&Sigma;|=4 in this draft; owner confirms, or
+    authorizes it as a curation lever if k=2 proves one-shot-guessable.</li>
+    <li><strong>Decision-rule thresholds</strong> (&sect;3) &mdash; confirm the 15-point gap / 70% HIGH / 45%
+    MID-LOW bands, or adjust to the owner's risk tolerance.</li>
+    <li><strong>Prompt B wording</strong> (&sect;2.2) &mdash; the verbatim ceiling prompt states conventions but
+    not the specific rule; owner should confirm it doesn't over-hint (which would inflate the ceiling and mask
+    headroom).</li>
+    <li><strong>CoT axis</strong> (&sect;2) &mdash; this draft fixes both prompts to direct-answer / no-CoT per
+    the synthesis (no-CoT beats forced-CoT unanimously at the cheap tier). Owner confirms the baseline does not
+    sweep CoT (it is a phase-2 optimizer confound to control, not a baseline variable).</li>
+    <li><strong>Pilot gate</strong> (&sect;1.2, repo Step 5) &mdash; a small pilot must confirm reachability
+    before freezing the pool. Owner approves the pilot-first sequencing and the go/no-go it feeds.</li>
+  </ol>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c23.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c23 candidate page</a>
+  <a href="c23-related-work.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">c23 related work</a>
+</nav>
+
+</main>
+</body>
+</html>

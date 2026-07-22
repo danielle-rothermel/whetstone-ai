@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Brainstorm</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Brainstorm</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Brainstorm</span>
+</div>
+
+<div class="intro">
+  <p>The full idea pool for the quick-test task: the one cheap, single-call, exact-scored task family that validates the prompt-optimization harness (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) before the expensive HumanEval+ code-compression experiment. This page preserves all <span class="key">76 brainstormed ideas</span>, grouped by <span class="key">theme (A-H)</span>, each tagged with the <span class="key">source model lens</span> that produced it and with duplicates flagged inline. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The recurring signal is that the strongest task families cluster in a few places, and repeats across independent model lenses mark the robust themes.</strong> The most robust regions are <span class="key">rewrite-to-normal-form</span> (Theme D, 3-4 independent instances), <span class="key">deterministic simulation / state machines</span> (Theme E), <span class="key">invented-notation arithmetic</span> (Theme A), <span class="key">remapped-label classification</span> (Theme F), and <span class="key">canonicalization / extraction</span> (Theme G, the largest cluster and the closest analog to the project's own dr-serialize work). See <a href="landscape.html">Landscape</a> for how these 76 ideas were merged with 108 literature candidates and scored, and <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
+</div>
+
+<div class="section-head" id="scope"><h2>Scope and reading key</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>What an ideal task looks like</h3>
+    <p class="small muted">Per the <a href="../../design/quick-test-rubric.html">rubric</a>, in short:</p>
+    <ul>
+      <li>One LLM call + exact deterministic scoring, <span class="key">no sandbox</span>.</li>
+      <li>Bounded MC / few-word output.</li>
+      <li>Default prompts well below a <span class="key">known ceiling</span>, with an <span class="key">incremental gap</span>.</li>
+      <li>Difficulty decomposes into <span class="key">independent latent rules</span>.</li>
+      <li>Synthetic / generatable pool with exact ground truth (hundreds of instances, contamination-resistant).</li>
+      <li>Diagnostic failures for a reflection LM.</li>
+      <li>Few-shot demos that measurably help.</li>
+      <li>Prompt-quality differences resolvable on <span class="key">10-20 evals at temperature 0</span>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Source-model legend</h3>
+    <p class="small muted">Each idea is tagged with the raw brainstorm lens that produced it. Duplicates across the independent passes are flagged inline — repeats are a useful signal that a theme is robust.</p>
+    <ul>
+      <li><code>claude-opus-4-8[1m]</code></li>
+      <li><code>kimi-k2p7</code></li>
+      <li><code>deepseek-v4-flash</code></li>
+      <li><code>minimax-m3</code></li>
+      <li><code>gpt-5.x-codex</code></li>
+      <li><strong>first-principles design</strong> (untagged model)</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="theme-a"><h2>Theme A — Constructed notation / invented arithmetic &amp; number systems</h2></div>
+
+<p class="small muted">Invent glyphs, bases, operators, or units and ask for a numeric or short-string result under nonstandard conventions. Strong on independent latent rules (glyph maps, precedence, radix, carry, modulus) and contamination resistance via per-instance randomization. Core one-shot risk: arithmetic is a known skill, so ceiling prompts can be compact — mitigated by stacking quirks and randomizing which quirks fire.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Glyphscript Arithmetic Decode</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Invented numeral+operator system; infer <span class="key">glyph→digit map</span>, operator meanings, nonstandard precedence, associativity, modular wrap, reset-glyph edge case. Output: single integer. One-shot risk MODERATE (mitigate by randomizing the glyph→digit map per instance).</p>
+  </div>
+  <div class="card">
+    <h3>Notation Unit-System Conversion</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Made-up units with non-decimal factors, <span class="key">mixed-radix</span> write-out, carry/borrow, canonical normalization, truncation/rounding, a balanced/signed-digit unit. Output: integer or mixed-radix string.</p>
+  </div>
+  <div class="card">
+    <h3>Nonstandard Positional Base Evaluation</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Invented positional numerals, non-uniform/negative/balanced base, digit legend, endianness varied per instance, null glyph that skips a position. Output: single integer (possibly negative). Flagged <span class="key">higher one-shot risk</span> in its lens (positional eval is a known skill).</p>
+  </div>
+  <div class="card">
+    <h3>Constructed Calendar / Cycle Date Arithmetic</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Interlocking <span class="key">coprime cycles</span> (Tzolk'in/Haab-style, randomized); independent modular advance per cycle, legend parse, a leap/skip rule, canonical tuple formatting. Output: tuple string.</p>
+  </div>
+  <div class="card">
+    <h3>Custom binary operator (layered # operator)</h3>
+    <p class="small muted">first-principles</p>
+    <p><code>a # b</code> defined by a stack of 4-6 rules keyed on operand properties (parity branch, modular residues 1..m, prime bonus, threshold subtract, left-associativity, identity). Output: single integer. <em>Near-duplicate of Glyphscript's operator-semantics core.</em></p>
+  </div>
+  <div class="card">
+    <h3>Nonstandard modular clock arithmetic</h3>
+    <p class="small muted">untagged</p>
+    <p>Clock labeled 1..m, forward-only subtraction, sticky moves ignored under a condition, direction-flip on even sizes. Output: integer in 1..m. One-shot risk MODERATE-HIGH (needs 3+ orthogonal conventions). <em>Overlaps Constructed Calendar (modular advance) themes.</em></p>
+  </div>
+  <div class="card">
+    <h3>Balanced mixed-radix / invented positional number system</h3>
+    <p class="small muted">untagged</p>
+    <p>Nonstandard/signed digit set (balanced ternary, factorial base, aliased alphabet), carry threshold, MSD ordering, zero representation. Output: short string. <em>Duplicate of Nonstandard Positional Base Evaluation and Notation Unit-System (mixed-radix) above.</em></p>
+  </div>
+  <div class="card">
+    <h3>Custom-precedence arithmetic mini-grammar</h3>
+    <p class="small muted">untagged</p>
+    <p>Redefined <span class="key">precedence/associativity</span> over a small operator set + custom unary op; evaluate unparenthesized expression under the table. Output: single integer. One-shot risk MODERATE-HIGH (precedence tables are compact).</p>
+  </div>
+  <div class="card">
+    <h3>Modular polynomial / linear-recurrence next-term</h3>
+    <p class="small muted">untagged</p>
+    <p>Recurrence over a nonstandard modulus with aliased residues, additive index term, 0/1-based indexing. Output: single residue/aliased symbol.</p>
+  </div>
+  <div class="card">
+    <h3>Custom Arithmetic Precedence (CAP)</h3>
+    <p class="small muted"><code>kimi-k2p7</code></p>
+    <p>MC over 4 integer options; custom precedence, operator semantics (+ means max/mod, * means subtract), wrap/clamp rule, parentheses-ignored-or-override. Output: A/B/C/D. <em>MC variant of Custom-precedence grammar.</em></p>
+  </div>
+  <div class="card">
+    <h3>EncodedArith</h3>
+    <p class="small muted"><code>deepseek-v4-flash</code></p>
+    <p>Add two ints, left-pad sum to 3 digits, encode each digit via a per-instance <span class="key">digit→letter key</span>, space-join. Output: 3 space-separated tokens.</p>
+  </div>
+  <div class="card">
+    <h3>Keyed-DSL Arithmetic</h3>
+    <p class="small muted"><code>minimax-m3</code></p>
+    <p>Per-instance symbol table maps 6-10 tokens to ops, then a chained expression; precedence flipped per instance, decoy symbols, <span class="key">mid-expression state mutations</span>, final post-processing (abs/mod/sign). Output: single integer. <em>Strongest anti-one-shot member of this theme (state-mutating ops resist verbalization).</em></p>
+  </div>
+  <div class="card">
+    <h3>Micro-Logic Notation Truth Evaluation</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Invented connective glyphs incl. a nonstandard gate, nonstandard precedence, atom-truth legend, undefined propagation, ill-formedness detection. Output: A/B/C/D (true/false/undefined/ill-formed). <em>Bridges to Theme D (logic); listed here for the invented-notation evaluator core.</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-b"><h2>Theme B — Constructed language / morphology / translation</h2></div>
+
+<p class="small muted">Artificial grammars mapping marked tokens to a canonical output template. Independent affix rules; default prompts assume English SVO. One-shot risk rises if the affix inventory is small and stable.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Case-Marked Micro-Language Translation</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Agglutinative suffixes mark role/number/tense; <span class="key">case suffix</span> determines subject/object regardless of position; topic-fronting particle reorders output. Output: fixed-template 3-6 word English phrase. One-shot risk MODERATE-HIGH.</p>
+  </div>
+  <div class="card">
+    <h3>Invented Tonal/Diacritic Orthography Disambiguation</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Base glyph + stacked diacritics; tone resolves homographs, context particle overrides tone, precedence among markers. Output: A/B/C/D meaning. <em>Shares homograph/precedence structure with the enum/codebook tasks in Theme F.</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-c"><h2>Theme C — Ciphers, encodings &amp; composable reversible transforms</h2></div>
+
+<p class="small muted">Layered invented transforms decoded back to a closed vocabulary. Clean per-layer diagnostics; main caveat is char-arithmetic noise threatening temp-0 resolvability (criterion 5), partly mitigated by closed-vocab nearest-match outputs.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Composable Cipher Chain Resolution</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Ordered stack of named reversible ops with a per-instance key; decode applies <span class="key">inverses in reverse order</span>; keyed block sizes, invented digraph swaps. Output: few closed-vocabulary words.</p>
+  </div>
+  <div class="card">
+    <h3>Cipher-With-Invented-Rules Decoder</h3>
+    <p class="small muted">first-principles</p>
+    <p>Per-position shift schedule + substitution twist + positional skip; decode to a closed nonsense-word list. Output: short plaintext token. Flagged <span class="key">higher-noise</span> / one-shot risk MEDIUM-HIGH. <em>Near-duplicate of Composable Cipher Chain (composed reversible layers).</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-d"><h2>Theme D — Formal grammars, rewrite systems &amp; logic / deduction</h2></div>
+
+<p class="small muted">Abstract symbol systems: well-formedness judgments, term rewriting to normal form, truth evaluation, implication compliance. Some of the strongest anti-one-shot designs (abstract productions have nothing to guess); risk instead is being too hard to learn.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Artificial Grammar Well-Formedness Judgment</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Verdict MC over agreement / nesting-depth / adjacency / balanced-delimiter violations; report <span class="key">earliest by scan order</span>. Output: A/B/C/D. Injected single-class violations make failures maximally diagnostic.</p>
+  </div>
+  <div class="card">
+    <h3>Symbolic Rewrite-System Normal Form</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p>Confluent rewrite rules, leftmost-outermost strategy, reduce to fixpoint, overlap disambiguation, guarded rule. Output: short normal-form string.</p>
+  </div>
+  <div class="card">
+    <h3>Expression rewriting under invented rewrite rules</h3>
+    <p class="small muted">untagged</p>
+    <p>Small term-rewriting system (<code>ab-&gt;c</code>, etc.), leftmost-innermost, fixpoint, empty-string deletions, rule priority. Output: short string or <code>NORMAL</code>. <em>Duplicate of Symbolic Rewrite-System Normal Form.</em></p>
+  </div>
+  <div class="card">
+    <h3>Grammar-of-rewrites: apply an ordered rule set</h3>
+    <p class="small muted">first-principles</p>
+    <p>Abstract productions over a tiny alphabet, leftmost-innermost, iterate to fixed point, empty-string handling. Output: reduced string, ~1-8 chars. Rated <span class="key">VERY LOW / lowest one-shot risk</span> in the set. <em>Third instance of the rewrite-to-normal-form idea.</em></p>
+  </div>
+  <div class="card">
+    <h3>Turing-Tape Rewrite (bounded tag-system)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Tag-system with per-leading-symbol append + front-delete, append-vs-delete ordering, halt condition, step cap. Output: final string or integer length. Flagged char-arithmetic-noisy. <em>Rewrite-system family.</em></p>
+  </div>
+  <div class="card">
+    <h3>Micro-Logic Notation Truth Evaluation</h3>
+    <p class="small muted"><code>claude-opus-4-8[1m]</code></p>
+    <p><em>Also relevant here;</em> primary listing under Theme A (invented connective glyphs, undefined propagation, ill-formedness detection; A/B/C/D).</p>
+  </div>
+  <div class="card">
+    <h3>Invented congruence / 'nonstandard equals' classification</h3>
+    <p class="small muted">untagged</p>
+    <p>Equivalence relation over integers (digit-sum-mod-k AND last-digit-parity, etc.); MC YES/NO. Output: YES/NO or A/B/C/D. One-shot risk HIGH; author flags it as the <span class="key">cheap format / failure-path validator</span> rather than the primary incrementality test.</p>
+  </div>
+  <div class="card">
+    <h3>Wason-Style Rule Compliance Classifier</h3>
+    <p class="small muted">first-principles</p>
+    <p>Implication rules over attributes; <span class="key">vacuous-truth</span> handling, directionality (not biconditional), conjunction, distractor attributes. Output: OK / VIOLATION. Notable: even a perfect instruction leaves <span class="key">model-side residual</span> (implication errors), so one-shot risk is MEDIUM-LOW.</p>
+  </div>
+  <div class="card">
+    <h3>Relational Micro-World</h3>
+    <p class="small muted"><code>gpt-5.x-codex</code></p>
+    <p>Nonce entities/relations; learn symmetry, transitivity, inverse, two-relation composition, negation precedence, closed-world handling. Output: A/B/C/D (true/false/both/unknown). RuleTaker/ProofWriter-adjacent.</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Cross-theme overlap:</strong> the Symbolic Sequence Categorization (SSC) entry in Theme F also tests conjunctive symbolic feature rules, sharing the artificial-grammar / well-formedness structure.
+</div>
+
+<div class="section-head" id="theme-e"><h2>Theme E — Deterministic simulation &amp; state machines</h2></div>
+
+<p class="small muted">Micro-games, protocols, automata. Run an invented machine/game/graph forward to a bounded answer. Rich independent-rule decomposition (per-transition, per-gate, per-move) and injected-violation diagnostics. Familiar templates (grids, schedulers) raise one-shot risk; invented commands/tables lower it.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Glyph Automaton (deterministic FSM tape machine)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Arbitrary transition table (latent), undefined-transition fallback, reset symbols, accept condition. Output: state label / ACCEPT / REJECT. One-shot risk LOW (table randomized per run).</p>
+  </div>
+  <div class="card">
+    <h3>Protocol Handshake Validator</h3>
+    <p class="small muted">first-principles</p>
+    <p>State-machine protocol over message logs; ordering, mutual-exclusion/counts, field monotonicity, post-CLOSE prohibitions, required-response pairing. Output: VALID or first-violation index. Injected per-rule violations.</p>
+  </div>
+  <div class="card">
+    <h3>Protocol Bitmask</h3>
+    <p class="small muted"><code>gpt-5.x-codex</code></p>
+    <p>Synthetic packet; return an error code under a seeded protocol (field order, case norm, required-field logic, checksum, mode constraint, forbidden pair, arbitrary error-bit assignments). Output: integer 0-127. <span class="key">XOR-diagnosable</span>. <em>Overlaps Protocol Handshake Validator and Signed-Checksum Validator.</em></p>
+  </div>
+  <div class="card">
+    <h3>Grid Robot Deterministic Navigator</h3>
+    <p class="small muted">first-principles</p>
+    <p>Commands F/L/R + invented (jump-2, wrap); obstacle blocking, edge wrap-vs-block, origin convention. Output: coordinate or heading. One-shot risk MEDIUM (grid nav is familiar).</p>
+  </div>
+  <div class="card">
+    <h3>Dice/Token Resource Micro-Game Resolver</h3>
+    <p class="small muted">first-principles</p>
+    <p>Invented exchange rates, resource caps/overflow, action priority/resolution order, payment-before-gain, win threshold. Output: integer count or WIN/LOSE.</p>
+  </div>
+  <div class="card">
+    <h3>Invented Card Trick-Taking Scorer</h3>
+    <p class="small muted">first-principles</p>
+    <p>Invented suits/ranks, trump precedence, follow-suit eligibility, non-standard rank order, override cards, tie-break, combo bonus. Output: card id or integer score. <span class="key">Strong prior toward real card games</span> = headroom.</p>
+  </div>
+  <div class="card">
+    <h3>Priority-Rule Scheduler Resolver</h3>
+    <p class="small muted">first-principles</p>
+    <p>Invented scheduling discipline (preemption, tie-breaks, aging/priority-boost, idle handling, inclusive/exclusive time). Output: job id or integer time.</p>
+  </div>
+  <div class="card">
+    <h3>Marble-Track / Logic-Gate Signal Propagator</h3>
+    <p class="small muted">first-principles</p>
+    <p>DAG of invented 2-input gates (arbitrary truth tables), topological eval, unconnected-input default, multi-fanin rule. Output: bit or small integer count. One-shot risk LOW-MEDIUM (tables must come from demos); makes <span class="key">MIPROv2's demo axis load-bearing</span>.</p>
+  </div>
+  <div class="card">
+    <h3>Opaque Device State</h3>
+    <p class="small muted"><code>gpt-5.x-codex</code></p>
+    <p>&lt;=6 nonce commands over 3 binary lamps; per-command effect, toggle vs assignment, parity-conditioned command, adjacent-command cancellation, reset scope, opaque state→label map. Output: A-H. <em>Near-duplicate of Grid Robot / Glyph Automaton simulation core with an opaque output mapping.</em></p>
+  </div>
+  <div class="card">
+    <h3>Permutation composition with nonstandard notation</h3>
+    <p class="small muted">untagged</p>
+    <p>Cycle notation, composition direction convention, 1-indexing, canonical cycle form. Output: cycle string or integer image. <em>Group-theory sim; overlaps automata/rewrite execution demands.</em></p>
+  </div>
+  <div class="card">
+    <h3>Constraint-Satisfaction Seating Puzzle (single-answer)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Unique-solution line/circle placement; immediate-vs-loose adjacency, left/right directionality, circular wrap, negation, exclusivity. Output: name or YES/NO. Zebra-puzzle-adjacent.</p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-f"><h2>Theme F — Classification under nonstandard / remapped label semantics</h2></div>
+
+<p class="small muted">Opaque codebooks and override policies defeat the pretrained label prior. Excellent independent-rule / precedence decomposition and clean MC or short-label scoring. Main risk: a diligent engineer can enumerate a small codebook in one paragraph — mitigated by 4+ interacting rules with precedence, per-instance keys, and compositional labels.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Contrarian Sentiment Codebook</h3>
+    <p class="small muted">first-principles</p>
+    <p>Opaque codes ALPHA..DELTA; base map, sarcasm inversion, grudging-triggers, neutral-fact carve-out, precedence. Output: single code token. One-shot risk MEDIUM-HIGH.</p>
+  </div>
+  <div class="card">
+    <h3>Cipher-Category Tagger (symbol semantics remap)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Compositional tag (base #up/#dn/#mix + optional .cal suffix); polarity map, co-occurrence → #mix, weekday suffix, cancellation, exact formatting. Output: composed tag string.</p>
+  </div>
+  <div class="card">
+    <h3>Inverted Multiple-Choice (answer-the-wrong-one)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Report a letter that is NOT the correct option under a selection convention. Output: A-D. One-shot risk HIGH; author flags it as a <span class="key">floor/plumbing check</span>, not the main incremental task.</p>
+  </div>
+  <div class="card">
+    <h3>Priority Vote Aggregator (weighted-label reconciliation)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Role-weighted votes, senior veto, guest-ignore-unless-alone, conservative tie-break, precedence. Output: ACCEPT/REVISE/REJECT. <em>Overlaps Priority-Conflict Record Reconciler (Theme G) and Priority Ledger.</em></p>
+  </div>
+  <div class="card">
+    <h3>Traffic-Light Priority Classifier</h3>
+    <p class="small muted">first-principles</p>
+    <p>Incident flags → P0..P3/SUPPRESS via overrides (security forces P0, region downgrade, age upgrade, paying-never-suppress, precedence). Output: 5-way label. <span class="key">Archetypal independent-rules task</span>.</p>
+  </div>
+  <div class="card">
+    <h3>Temporal-Window Event Labeler</h3>
+    <p class="small muted">first-principles</p>
+    <p>Routing label from date/time/type; cutoff → FREEZE, Friday rule, regional cutoff shift, hotfix bypass, weekend HOLD, boundary inclusivity. Output: routing label.</p>
+  </div>
+  <div class="card">
+    <h3>Unit-Convention Numeric QA</h3>
+    <p class="small muted">first-principles</p>
+    <p>Trivial arithmetic reported under stacked conventions (unit divisor, rounding direction, numeral base) selected by keywords with precedence. Output: number/numeral string. <em>Bridges to Theme A.</em></p>
+  </div>
+  <div class="card">
+    <h3>Kinship Convention QA (nonstandard family tree)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Invented gender-neutral relation terms, distance cutoff, in-law 'bond-' prefix, directionality. Output: 1-2 words from a <span class="key">closed invented vocabulary</span>.</p>
+  </div>
+  <div class="card">
+    <h3>Modular Digit Oracle (base-and-offset)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Hidden arithmetic convention over a digit string (position selection, per-class sign, modulus, permutation table). Output: single digit. One-shot risk HIGH (closed-form saturates fast); a <span class="key">floor sanity task</span>. <em>Bridges to Theme A.</em></p>
+  </div>
+  <div class="card">
+    <h3>Symbolic Sequence Categorization (SSC)</h3>
+    <p class="small muted"><code>kimi-k2p7</code></p>
+    <p>Classify an 8-12 char sequence into one of four categories defined by a <span class="key">conjunction of features</span> (target bigram, count parity, prefix pattern, run-length threshold). Output: A/B/C/D.</p>
+  </div>
+  <div class="card">
+    <h3>TokenCounter</h3>
+    <p class="small muted"><code>deepseek-v4-flash</code></p>
+    <p>Output <code>V|C|W</code> = distinct vowels, distinct consonants, total words; the counterintuitive <span class="key">"distinct" nuance</span> is the trap. Output: pipe-delimited ints.</p>
+  </div>
+  <div class="card">
+    <h3>MultiRuleSort</h3>
+    <p class="small muted"><code>deepseek-v4-flash</code></p>
+    <p>Sort (letter,number) pairs by number then alpha, then double-if-even/triple-if-odd, comma-join. Output: comma-separated ints. <em>Overlaps CaseOrder / Invented-rule sorting (Theme G).</em></p>
+  </div>
+  <div class="card">
+    <h3>Orthogonal-Feature Labeling</h3>
+    <p class="small muted"><code>minimax-m3</code></p>
+    <p>4-5 categorical attributes + few-shot demos; label from 2-3 hidden instance-specific rules with override conditions and tie-breaks. Output: short string. Tie-breaker: 2024-2026 in-context rule-induction research.</p>
+  </div>
+  <div class="card">
+    <h3>Compositional String Decode (CSD)</h3>
+    <p class="small muted"><code>kimi-k2p7</code></p>
+    <p>Pick which of 4 candidates results from a hidden fixed protocol (op order, casing rule, delimiter rule, truncation). Output: A/B/C/D. <em>Overlaps Theme C ciphers and Theme G string transforms, but MC-scored as classification.</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-g"><h2>Theme G — Structured extraction / canonicalization / serialization</h2></div>
+
+<p class="small muted">House-style normalizers and extractors: exact-string canonical output under arbitrary conventions. Directly mirrors the project's own dr-serialize canonical-JSON theme. Independent per-field/per-rule ladders; contamination-proofed by inventing the house style. Watch all-or-nothing cascades (use per-field partial scoring or few fields). The largest cluster in the pool.</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Canonical JSON Serializer (house style)</h3>
+    <p class="small muted">first-principles</p>
+    <p>Nonstandard key order, float normalization, whitespace policy, escape policy, arrays-not-sorted trap, last-wins dedup. Output: canonical string. One-shot risk MEDIUM (deviate from RFC-8785/JCS deliberately).</p>
+  </div>
+  <div class="card">
+    <h3>Identifier case-and-affix normalizer</h3>
+    <p class="small muted">untagged</p>
+    <p>camelCase target, acronym collapse, verb-prefix strip, digit boundaries, separator collapse, stopword lowercasing. Output: one token.</p>
+  </div>
+  <div class="card">
+    <h3>Phone/number canonicalizer with regional latent rules</h3>
+    <p class="small muted">untagged</p>
+    <p>Fictional numbering plan; strip separators, dial-code table, invented grouping, extension rewrite, trunk stripping. Output: formatted string. One-shot risk LOW (invented plan).</p>
+  </div>
+  <div class="card">
+    <h3>Whitespace/quote/style linter fixup (single-line)</h3>
+    <p class="small muted">untagged</p>
+    <p>Comma spacing, paren padding, quote-preference with exception, operator spacing, semicolon spacing, comment-gap rule. Output: one line.</p>
+  </div>
+  <div class="card">
+    <h3>Date/time reserialization to a fictional locale format</h3>
+    <p class="small muted">untagged</p>
+    <p>DMY with <code>.</code> separators, invented month abbreviations, <code>HHhMM</code> dropping seconds, pad-day-not-hour, locale suffix, offset table. Output: formatted datetime string. <em>Overlaps Temporal-Window (Theme F) on date parsing.</em></p>
+  </div>
+  <div class="card">
+    <h3>Roman-numeral / base-N transcoder with house quirks</h3>
+    <p class="small muted">untagged</p>
+    <p>Roman with IIII-not-IV exception + overline thousands, plus invented base-4 alphabet mode. Output: numeral string. <em>Overlaps Theme A number-system tasks.</em></p>
+  </div>
+  <div class="card">
+    <h3>Multi-rule text redaction/masking canonical form</h3>
+    <p class="small muted">untagged</p>
+    <p>Per-field masks (account keep last 4 with <code>#</code>, PIN all <code>*</code>, name → initials), preserve labels, leave unknown fields untouched. Output: masked line.</p>
+  </div>
+  <div class="card">
+    <h3>Slug/URL canonicalizer with independent transforms</h3>
+    <p class="small muted">untagged</p>
+    <p>Lowercase+hyphenate, diacritic fold, symbol substitution table, stopword removal, section prefix, truncate at word boundary, collapse hyphens. Output: slug string. <span class="key">Long incremental ladder</span>.</p>
+  </div>
+  <div class="card">
+    <h3>CSV/record reserializer with quoting and column rules</h3>
+    <p class="small muted">untagged</p>
+    <p>Trim outer/preserve inner, RFC-style quoting with doubling, boolean coercion table on designated columns, empty-field render trap. Output: CSV row. <em>Overlaps Escaped-Delimiter CSV.</em></p>
+  </div>
+  <div class="card">
+    <h3>Whitespace-and-indent block canonicalizer</h3>
+    <p class="small muted">untagged</p>
+    <p>Mixed tabs/spaces: tab=2 spaces, snap to even multiple preserving depth, strip trailing ws, collapse blank lines, exact join sentinel. Output: joined multi-line string.</p>
+  </div>
+  <div class="card">
+    <h3>Glyph-Ledger Field Extraction</h3>
+    <p class="small muted">first-principles</p>
+    <p>Sigil-tagged receipt; sigil→field map, vendor uppercase, amount = int/100, ref trailing-numeric, status synonym→enum. Output: pipe-joined fields.</p>
+  </div>
+  <div class="card">
+    <h3>Nested-Bracket Path Resolver</h3>
+    <p class="small muted">untagged</p>
+    <p>Mixed bracket styles denote node kinds; some kinds depth-transparent; sibling index origin; whitespace significance. Output: node label. <em>Parsing sibling of the rewrite/tree themes.</em></p>
+  </div>
+  <div class="card">
+    <h3>Priority-Conflict Record Reconciler</h3>
+    <p class="small muted">untagged</p>
+    <p>Conflicting source-tagged records; per-field source-priority, missing-value semantics, tie-break. Output: pipe-joined fields. One-shot risk LOW (per-field tables are arbitrary). <em>Overlaps Priority Vote Aggregator / Priority Ledger.</em></p>
+  </div>
+  <div class="card">
+    <h3>Unit-and-Sign Normalizer</h3>
+    <p class="small muted">untagged</p>
+    <p>Mixed conventions (F→C, dB→linear, hex→dec) at fixed precision. Output: pipe-joined numerics. <em>Overlaps Theme A conversions.</em></p>
+  </div>
+  <div class="card">
+    <h3>Positional Fixed-Width Decoder</h3>
+    <p class="small muted">untagged</p>
+    <p>No-delimiter record; column widths, implied decimal, trim/pad, field ordering. Output: pipe-joined fields. <span class="key">Cascade caveat</span> noted (use per-field scoring or 2-3 columns).</p>
+  </div>
+  <div class="card">
+    <h3>Escaped-Delimiter CSV Under Custom Quoting</h3>
+    <p class="small muted">untagged</p>
+    <p>2-char delimiter, backslash escaping, escaped-delimiter literal, trim policy; return Nth field. Output: field string.</p>
+  </div>
+  <div class="card">
+    <h3>Enum-Canonicalization With Hierarchy</h3>
+    <p class="small muted">untagged</p>
+    <p>Free text → dotted 2-level code; synonym clusters, hierarchy, most-specific-wins, fallback. Output: dotted enum code. One-shot risk LOW. <em>Overlaps Cipher-Category Tagger / Contrarian Sentiment codebook structure.</em></p>
+  </div>
+  <div class="card">
+    <h3>Interval-Overlap Field Selection</h3>
+    <p class="small muted">untagged</p>
+    <p>Tagged intervals + point query; endpoint inclusivity, overlap tie-break, format normalization, out-of-range fallback. Output: tag token.</p>
+  </div>
+  <div class="card">
+    <h3>Reference-Chained Value Deref</h3>
+    <p class="small muted">untagged</p>
+    <p>Key-value store with <code>@k</code> pointers; transitive resolution, cycle→sentinel, undefined→default, max-depth cap. Output: number or sentinel.</p>
+  </div>
+  <div class="card">
+    <h3>Multi-Schema Router Extraction</h3>
+    <p class="small muted">untagged</p>
+    <p>Header token routes among dialects (JSON-ish / KV / positional); extract field b regardless. Output: field value. One-shot risk LOW (per-dialect rules).</p>
+  </div>
+  <div class="card">
+    <h3>Signed-Checksum Field Validator</h3>
+    <p class="small muted">untagged</p>
+    <p>Custom check-digit; segmentation, letter→value map, weights, modulus, valid threshold. Output: pipe fields + VALID/INVALID. <span class="key">Checksum resists demo-only learning</span> — good for differentiating instruction-carrying optimizers. <em>Overlaps Protocol Bitmask.</em></p>
+  </div>
+  <div class="card">
+    <h3>Invented-rule sorting / canonical ordering</h3>
+    <p class="small muted">untagged</p>
+    <p>Composite sort key (primary + tie-breaks + vowel/consonant reranking + stability). Output: ordered list or token. <em>Overlaps MultiRuleSort / CaseOrder.</em></p>
+  </div>
+  <div class="card">
+    <h3>Symbolic unit / dimension algebra</h3>
+    <p class="small muted">untagged</p>
+    <p>Numeric conversion + symbolic unit-simplification rewrites with priority, canonical-range normalization, formatting. Output: <code>number unit</code> string. <em>Bridges Theme A (units) and Theme D (rewriting).</em></p>
+  </div>
+  <div class="card">
+    <h3>CaseOrder</h3>
+    <p class="small muted"><code>deepseek-v4-flash</code></p>
+    <p>Sort words by length, reverse each, title-case, comma-join. Output: single line. <em>Overlaps Invented-rule sorting / MultiRuleSort.</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="theme-h"><h2>Theme H — Instruction following / constrained generation (IFEval-style)</h2></div>
+
+<p class="small muted">Simultaneous constraints or an authority policy over directives. Note: some require a deterministic constraint-checker or canonical reference rather than pure free-gen scoring.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Constrained Micro-Description</h3>
+    <p class="small muted"><code>minimax-m3</code></p>
+    <p>4-7 word description satisfying 5-7 hidden per-instance constraints (required/forbidden word, exact count, first-letter, allowed alphabet, casing, digit-at-position, punctuation). Output: 4-7 word phrase; needs <span class="key">exact-match reference or a per-constraint checker</span>. Tie-breaker: IFEval / FollowBench.</p>
+  </div>
+  <div class="card">
+    <h3>Priority Ledger</h3>
+    <p class="small muted"><code>gpt-5.x-codex</code></p>
+    <p>Several tagged directives (quoted/negated/conditional/conflicting); identify the <span class="key">controlling directive</span> under a seeded authority policy (tag-priority, quoted-text-inert, recency, negation, conditional activation, exception priority, fallback). Output: A-F. Tie-breaker: instruction-hierarchy research. <em>Overlaps Priority Vote Aggregator / Priority-Conflict Reconciler.</em></p>
+  </div>
+</div>
+
+<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>Most robust themes</strong> (appear repeatedly across independent lenses): <span class="key">rewrite-to-normal-form</span> (Theme D, 3-4 instances), <span class="key">deterministic simulation/state machines</span> (Theme E), invented-notation arithmetic (Theme A), remapped-label classification (Theme F), and canonicalization/extraction (Theme G, the largest cluster and the closest analog to the project's own dr-serialize work).</li>
+  <li><strong>Priority/authority reconciliation</strong> recurs across Themes F/G/H (Priority Vote Aggregator, Priority-Conflict Record Reconciler, Priority Ledger, Traffic-Light Classifier) — a strong <span class="key">independent-rules-with-precedence</span> pattern.</li>
+  <li><strong>Best anti-one-shot designs</strong> (rules must be induced from demos, so <span class="key">MIPROv2's demo axis is load-bearing</span>): abstract rewrite systems, invented gate/transition tables (Marble-Track, Glyph Automaton), per-dialect routers, per-field priority tables, arbitrary checksums.</li>
+  <li><strong>Weakest on incrementality / saturate fast</strong> (better as <span class="key">floor / plumbing / format validators</span>): Inverted Multiple-Choice, Modular Digit Oracle, Invented congruence YES/NO.</li>
+  <li><strong>Temp-0 resolvability caveats</strong> (char-arithmetic noise; validate <span class="key">criterion 5</span> before adopting): Cipher-With-Invented-Rules Decoder, Turing-Tape Rewrite, and cipher chains generally — prefer closed-vocabulary or output-length variants.</li>
+  <li><strong>Vestigial second metric</strong> (rubric callout): <span class="key">output length in characters</span> as the compression analog, with a length-budget knob as the variance source, applies cheaply to most text-output tasks here (Themes A/D/E/G especially).</li>
+</ul>
+
+<p class="small muted space-top">Next step: these 76 ideas were merged with 108 literature candidates and scored — see <a href="landscape.html">Landscape</a> for the ranked pool and <a href="recommendations.html">Recommendations</a> for the finalist adoption case.</p>
+
+</main>
+</body>
+</html>

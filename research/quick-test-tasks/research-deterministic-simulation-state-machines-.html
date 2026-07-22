@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Candidates: Deterministic Simulation, State Machines, and Protocol/Game Execution</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Candidates: Deterministic Simulation, State Machines, and Protocol/Game Execution</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">State machines</span>
+</div>
+
+<div class="intro">
+  <p>A breadth-focused literature scan of execution and state-tracking benchmarks, evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. This domain earns attention because it offers bounded single-token / few-word answers, rich decomposition into independent latent rules, deliberate per-rule violation injection (criterion 13), and a mature literature that quantifies where models break — which directly informs floor/ceiling calibration (criteria 4 and 9). Twelve candidates below, not ranked.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The dominant adaptation across the whole domain is output projection.</strong> Almost every execution benchmark natively wants a <span class="key">multi-step trace</span>, which violates criterion 3's bounded output. The fix is identical everywhere: ask only for the <span class="key">final state or one derived token</span>, generated deep enough that it is not guessable. Candidates that are natively single-token need the least surgery. The best-fit picks are the <span class="key">synthetic-family</span> tasks — FSM/protocol execution (#12), invented card games (#11), circuits (#9) — which are contamination-proof by construction, at the cost of authoring effort and a reference 100%-scoring prompt.</p>
+</div>
+
+<div class="section-head" id="how-to-read"><h2>How to read the rubric-fit notes</h2></div>
+
+<p>The rubric's load-bearing criteria for this domain:</p>
+
+<ul>
+  <li><span class="key">1-3 (cheap):</span> single LLM call, exact deterministic scoring, output bounded to MC / a few words.</li>
+  <li><span class="key">4 (incremental gap):</span> default prompts well below a KNOWN ceiling, not one-shot guessable.</li>
+  <li><span class="key">5 (small-sample resolvable):</span> ≥10-point effect resolvable on 10-20 tasks at temp 0.</li>
+  <li><span class="key">7-9:</span> synthetic, contamination-resistant, known ceiling/floor/reference.</li>
+  <li><span class="key">10-11:</span> independent latent rules; diagnostic failures.</li>
+  <li><span class="key">12:</span> few-shot helps. <span class="key">13:</span> inject failures.</li>
+</ul>
+
+<p class="small muted">A recurring tension in this domain: most execution/state-tracking benchmarks ask for a multi-step trace (per-step queue/state), which violates criterion 3's bounded output. The adaptation is almost always the same — ask only for the final state / a single derived token, and generate depth so that the final token is not guessable. Flagged per candidate below.</p>
+
+<div class="section-head" id="summary"><h2>Candidate summary</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Candidate</th><th>Native output</th><th>Type</th><th>Primary weakness</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td>TMBench (Turing Machine / m-tag simulation)</td><td>multi-step trace → project to token</td><td>published + generator</td><td>native multi-step trace; small N is one-shottable</td></tr>
+    <tr><td class="num">2</td><td>Long-Horizon Execution (dictionary retrieve-and-sum)</td><td>single integer (final sum)</td><td>procedural, near drop-in</td><td>too clean; may be one-shot solvable without added rules</td></tr>
+    <tr><td class="num">3</td><td>CRUXEval (code output/input prediction)</td><td>short Python literal</td><td>published, must regenerate</td><td>severe contamination; return types must be constrained</td></tr>
+    <tr><td class="num">4</td><td>GridRoute / grid navigation execution</td><td>final coordinate / cell (token)</td><td>procedural</td><td>path variant is non-deterministic; spatial modality confounds</td></tr>
+    <tr><td class="num">5</td><td>LLM-BabyBench (BabyAI text, Predict split)</td><td>single state field</td><td>published, must regenerate</td><td>public set; verbose full-state; naive floor may be too low</td></tr>
+    <tr><td class="num">6</td><td>MLRegTest / FLaRe (regular-language membership)</td><td>binary accept/reject token</td><td>procedural</td><td>50% chance floor; thin diagnostics unless "reject-because"</td></tr>
+    <tr><td class="num">7</td><td>bAbI entity/world-state tracking</td><td>single word (location/object)</td><td>published, must regenerate</td><td>floor too high — frontier models near ceiling; contamination</td></tr>
+    <tr><td class="num">8</td><td>SATBench (Boolean satisfiability)</td><td>SAT/UNSAT token</td><td>procedural</td><td>50% floor; search-heavy reasoning may not decompose into prompt rules</td></tr>
+    <tr><td class="num">9</td><td>Circuit / logic-gate DAG evaluation</td><td>one output bit</td><td>synthetic-family (build)</td><td>no ready-made benchmark; single-bit = 50% chance</td></tr>
+    <tr><td class="num">10</td><td>Dyck-n / bounded-depth balanced brackets</td><td>accept/reject or next bracket</td><td>procedural</td><td>accept/reject inherits 50% floor; well-known, shallow is one-shottable</td></tr>
+    <tr><td class="num">11</td><td>Invented card/resource game state execution</td><td>one derived field (token)</td><td>synthetic-family (build)</td><td>highest design effort; rule ambiguity risk</td></tr>
+    <tr><td class="num">12</td><td>Scheduler / protocol-validator (FSM execution)</td><td>single state label / accept-reject</td><td>synthetic-family (build)</td><td>small state set has chance baseline; build effort</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="candidates"><h2>Candidate detail</h2></div>
+
+<div class="grid-2">
+
+  <div class="card">
+    <h3>1 · TMBench (Turing Machine / m-tag simulation)</h3>
+    <p><strong>What it is.</strong> LLMs simulate a Universal-Turing-complete <em>m-tag system</em>: given production rules and an initial symbol queue, execute deterministic steps (read head symbol, append per the matching rule, delete m symbols) until halt or a step limit. Fully synthetic and knowledge-agnostic. 100 sampled systems; difficulty controlled by alphabet size, max queue length, and rule length. Models &lt;8B score near-zero; Gemini-2.5-Pro reaches ~94% at 30 steps but fails deep (step ~683). Exact-match per step.</p>
+    <p class="small muted"><strong>Citation.</strong> Wu et al., <em>Turing Machine Evaluation for Large Language Model</em>, 2025. arXiv:2504.20771. <a href="https://arxiv.org/abs/2504.20771">https://arxiv.org/abs/2504.20771</a></p>
+    <p><strong>Adaptation.</strong> (a) Regenerate the m-tag pool procedurally with a seeded generator to control split sizes (hundreds of instances) — trivial to reimplement. (b) <span class="key">Bound output to a single token</span>: ask for the head symbol after exactly N steps (or halting-length parity), not the full trace. (c) Latent rules decompose cleanly — "delete exactly m," "append rule for head symbol," "halt condition," "read head not tail" — inject per-rule violations for criterion 13.</p>
+    <p><strong>Rubric-fit.</strong> Very strong for criteria 7-11: procedural, exact ground truth, independent rules, floor/ceiling documented. Few-shot should help teach the step mechanic (criterion 12). <em>Weakness:</em> native format is a multi-step trace — truncate to a single derived answer or blow the token budget and reintroduce partial-credit ambiguity. <em>Weakness:</em> if N is small, a competent prompt may one-shot the mechanic — tune N and rule length so default prompts land mid-range.</p>
+  </div>
+
+  <div class="card">
+    <h3>2 · Long-Horizon Execution (dictionary retrieve-and-sum)</h3>
+    <p><strong>What it is.</strong> A deliberately minimal synthetic execution task: a fixed in-context dictionary maps vocab tokens to integers; the model gets a plan (a list of keys) and must retrieve values and maintain a running sum across steps. Isolates <em>execution</em> from planning/knowledge. Introduces H₀.₅ (max length at 50% success), the "self-conditioning effect" (errors in context beget errors), and shows near-perfect single-step accuracy collapsing over turns. Procedurally generated, contamination-free.</p>
+    <p class="small muted"><strong>Citation.</strong> Sinha, Arun, Goel, Staab, Geiping, <em>The Illusion of Diminishing Returns: Measuring Long Horizon Execution in LLMs</em>, 2025/2026. arXiv:2509.09677. <a href="https://arxiv.org/abs/2509.09677">https://arxiv.org/abs/2509.09677</a></p>
+    <p><strong>Adaptation.</strong> Almost drop-in. (a) Fix horizon length to a small K so the answer is a <span class="key">single integer</span> (final sum). (b) The dictionary + plan generator is a few lines; regenerate per seed for splits. (c) Latent rules to layer for incremental gap: "sum vs last-value," "skip sentinel keys," "modular arithmetic wrap," "ignore distractor keys."</p>
+    <p><strong>Rubric-fit.</strong> Excellent on cheapness (1-3) and determinism (5): single integer, exact match. Excellent floor/ceiling — the paper <em>is</em> a floor/ceiling study, so you inherit calibration curves. <em>Weakness:</em> so clean that a good instruction may one-shot it (criterion 4 risk) — add latent rules (distractors, conditional skips, modular wrap) to create an incremental path. <em>Weakness:</em> few-shot may help less than instruction here, which is actually useful signal for MIPROv2 vs COPRO.</p>
+  </div>
+
+  <div class="card">
+    <h3>3 · CRUXEval (code output/input prediction)</h3>
+    <p><strong>What it is.</strong> 800 deterministic, side-effect-free Python functions each with one input/output pair. CRUXEval-O = predict output given input (forward execution); CRUXEval-I = predict an input that yields a given output (inverse). GPT-4 ~67%/63%; Code-Llama-34B ~47%/44%. CRUXEval-X extends to 19 languages / 19k tasks.</p>
+    <p class="small muted"><strong>Citation.</strong> Gu et al., <em>CRUXEval: A Benchmark for Code Reasoning, Understanding and Execution</em>, 2024. <a href="https://crux-eval.github.io/">https://crux-eval.github.io/</a> ; arXiv:2401.03065. CRUXEval-X: Xu et al., 2024, arXiv:2408.13001. <a href="https://arxiv.org/abs/2408.13001">https://arxiv.org/abs/2408.13001</a></p>
+    <p><strong>Adaptation.</strong> (a) <span class="key">Contamination is a real risk</span> — the 800 functions are public. Generate fresh functions with a small DSL/templater (reimplement the pipeline with your own operator set) so ground truth is exact and unseen. (b) Restrict operators to a few families (string slicing, list ops, dict updates, arithmetic) so each family is a latent rule and output is a short literal. (c) Output is already short — enforce a canonical serialization for exact match.</p>
+    <p><strong>Rubric-fit.</strong> Strong on decomposition (operator families = independent rules) and diagnostic failures ("expected [3,1], got [1,3]" reveals a sort/reverse rule miss). Well-studied floor/ceiling. <em>Weakness:</em> contamination of the published set is severe — must regenerate. <em>Weakness:</em> output can be an arbitrary structure; constrain return type to keep exact-match clean and outputs bounded. <em>Weakness:</em> "a few words" is stretched if functions return long structures — cap length.</p>
+  </div>
+
+  <div class="card">
+    <h3>4 · GridRoute / grid navigation execution</h3>
+    <p><strong>What it is.</strong> ASCII grid worlds; the model emits {UP,DOWN,LEFT,RIGHT} to route a robot to a goal, or predicts the resulting cell after a fixed move sequence. GridRoute benchmarks classical-algorithm-guided prompting (A*, Dijkstra, DFS embedded in the prompt). Related: GRASP (commonsense spatial reasoning on grids), MiniGrid.</p>
+    <p class="small muted"><strong>Citation.</strong> GridRoute, 2025, arXiv:2505.24306. <a href="https://arxiv.org/abs/2505.24306">https://arxiv.org/abs/2505.24306</a> ; GRASP, 2024, arXiv:2407.01892. <a href="https://arxiv.org/abs/2407.01892">https://arxiv.org/abs/2407.01892</a></p>
+    <p><strong>Adaptation.</strong> (a) Flip from <em>plan generation</em> to <em>state prediction</em>: give a start cell + a fixed move string + walls, ask for the <span class="key">final coordinate or cell contents</span> (single token). Makes scoring exact and output bounded (2-3), dodges the "many valid paths" partial-credit problem. (b) Procedurally generate grids with seeds (native to MiniGrid-style generators). (c) Latent rules: "walls block (stay in place)," "grid wrap vs clamp at edges," "move order," "one-way tiles."</p>
+    <p><strong>Rubric-fit.</strong> Strong on synthetic generation and rule decomposition; failures highly diagnostic (off-by-one on a wall reveals the wall rule). Few-shot worked traces measurably help (shown in GridRoute's Algo-Reasoning). <em>Weakness:</em> if you ask for a <em>path</em> it becomes non-deterministic-answer and multi-token — ask for a <em>derived single state</em>. <em>Weakness:</em> spatial reasoning has known modality confounds; keep grids small and ASCII to isolate execution.</p>
+  </div>
+
+  <div class="card">
+    <h3>5 · LLM-BabyBench (BabyAI text, Predict split)</h3>
+    <p><strong>What it is.</strong> Textual adaptation of the procedurally generated BabyAI grid world. Three splits; the <strong>Predict</strong> split asks the model to predict the <em>final environment state</em> after executing a low-level action sequence. Ground truth extracted from an expert agent in the simulator. Procedural generation inherited from BabyAI.</p>
+    <p class="small muted"><strong>Citation.</strong> <em>LLM-BabyBench</em>, 2025, arXiv:2505.12135. <a href="https://arxiv.org/abs/2505.12135">https://arxiv.org/abs/2505.12135</a> ; dataset: <a href="https://huggingface.co/datasets/salem-mbzuai/LLM-BabyBench">https://huggingface.co/datasets/salem-mbzuai/LLM-BabyBench</a></p>
+    <p><strong>Adaptation.</strong> (a) Use only the <strong>Predict</strong> split and reduce the queried state to a <span class="key">single field</span> (agent facing direction, "carrying? y/n," or final cell). (b) Regenerate levels with new seeds to avoid the released set (contamination). (c) Latent rules: object-interaction semantics (pickup/drop/toggle), direction turning, door open/closed — each independently discoverable.</p>
+    <p><strong>Rubric-fit.</strong> Good synthetic generator (BabyAI is battle-tested and free), clean per-rule decomposition, diagnostic failures. <em>Weakness:</em> the released dataset is public — regenerate. <em>Weakness:</em> full-state prediction is verbose; project to one field. <em>Weakness:</em> action semantics are rich, so the naive-prompt floor may be <em>too</em> low (near zero) — pick a subset of actions to keep the gap incremental.</p>
+  </div>
+
+  <div class="card">
+    <h3>6 · MLRegTest / FLaRe (regular-language membership)</h3>
+    <p><strong>What it is.</strong> MLRegTest: hundreds of regular languages from 11 subclasses of the subregular / Piecewise-Local-Testable hierarchy, organized by formal complexity — a membership (accept/reject) task. FLaRe (Formal Language Recognition) releases languages across the Chomsky hierarchy with code. Classic result: transformers fail on non-star-free / periodic languages; LSTMs solve all Tomita grammars.</p>
+    <p class="small muted"><strong>Citation.</strong> MLRegTest, van der Poel et al., JMLR 2024. <a href="https://www.jmlr.org/papers/volume25/23-0518/23-0518.pdf">https://www.jmlr.org/papers/volume25/23-0518/23-0518.pdf</a> ; <em>Training Neural Networks as Recognizers of Formal Languages</em>, 2024, arXiv:2411.07107. <a href="https://arxiv.org/abs/2411.07107">https://arxiv.org/abs/2411.07107</a></p>
+    <p><strong>Adaptation.</strong> (a) The task is <span class="key">already a single binary token</span> (accept/reject) — ideal for 2-3 and 5. (b) Instead of training recognizers, prompt the LLM to decide membership; procedurally sample strings from a chosen grammar with a seeded generator (exact ground truth by construction). (c) Latent rules = the grammar's constraints (e.g., "even number of a's," "no 'ab' substring," "ends in c"); compose several so partial rule-knowledge earns partial score.</p>
+    <p><strong>Rubric-fit.</strong> Best-in-domain on output boundedness (one token) and independent-rule decomposition (each subregular constraint is a rule). Deep formal-language literature gives principled floor/ceiling per grammar class. <em>Weakness:</em> binary output means chance = 50%, so ensure the default-prompt floor is clearly below ceiling and effects ≥10 points resolve on 10-20 tasks — use class-balanced sampling and a few composed constraints so guessing is penalized. <em>Weakness:</em> pure accept/reject gives thin diagnostics (criterion 11) unless you also ask <em>which</em> rule was violated — consider a "reject-because" variant with a small label set.</p>
+  </div>
+
+  <div class="card">
+    <h3>7 · bAbI entity/world-state tracking (regenerated)</h3>
+    <p><strong>What it is.</strong> The classic 20-task synthetic QA suite; several tasks are pure entity movement / world-state tracking ("John went to the kitchen... Where is the apple?"). Synthetically generated over a tiny lexicon with exact answers. Even GPT-3-scale models historically miss basic entity tracking; recent work shows LMs aggregate state at the query token rather than tracking incrementally.</p>
+    <p class="small muted"><strong>Citation.</strong> Weston et al., <em>Towards AI-Complete QA: bAbI tasks</em>, 2015, arXiv:1502.05698; EntNet, Henaff et al., ICLR 2017, arXiv:1612.03969. <a href="https://arxiv.org/abs/1612.03969">https://arxiv.org/abs/1612.03969</a> ; entity-tracking: Kim &amp; Schuster, ACL 2023; <em>Do Language Models Track Entities Across State Changes?</em>, 2026, arXiv:2605.30233. <a href="https://arxiv.org/abs/2605.30233">https://arxiv.org/abs/2605.30233</a></p>
+    <p><strong>Adaptation.</strong> (a) <span class="key">Regenerate</span> with your own grammar/generator (the original generator is open) — the published set is thoroughly contaminated. (b) Answers are already single words (location/object) — perfect for exact-match. (c) Add latent rules to lift the ceiling gap: negation ("no longer in"), transfer chains, containment vs co-location, distractor sentences.</p>
+    <p><strong>Rubric-fit.</strong> Excellent boundedness (single-word answer), excellent synthetic generation, diagnostic failures ("expected kitchen, got garden" pinpoints the missed move). <em>Weakness:</em> modern frontier models solve simple bAbI tracking near-ceiling — the <span class="key">floor is too high</span> unless you deliberately add depth (long chains, negation, multi-hop) to push default prompts down. This is the primary thing to engineer. <em>Weakness:</em> contamination of the original — must regenerate.</p>
+  </div>
+
+  <div class="card">
+    <h3>8 · SATBench (Boolean satisfiability puzzles)</h3>
+    <p><strong>What it is.</strong> Logical puzzles auto-generated from Boolean SAT formulas; 2,100 puzzles. Evaluates satisfiability prediction (SAT/UNSAT — binary) plus reasoning-trace validity. Difficulty scales with clause count; o4-mini drops to ~65% on hard UNSAT (near the 50% random baseline). Fully automated generation from SAT instances.</p>
+    <p class="small muted"><strong>Citation.</strong> Wei et al., <em>SATBench: Benchmarking LLMs' Logical Reasoning via Automated Puzzle Generation from SAT Formulas</em>, 2025, arXiv:2505.14615. <a href="https://arxiv.org/abs/2505.14615">https://arxiv.org/abs/2505.14615</a></p>
+    <p><strong>Adaptation.</strong> (a) <span class="key">Output is one token</span> (SAT/UNSAT) — clean exact match. (b) Generator is fully synthetic and parameterized (clauses, variables) — control split sizes and difficulty directly. (c) For a richer, more diagnostic variant, ask for a satisfying assignment as a bounded bit-string (still short) — exact-check by substitution. Latent rules: unit propagation, pure-literal elimination, clause counting.</p>
+    <p><strong>Rubric-fit.</strong> Strong on cheapness, synthetic generation, tunable floor/ceiling (clause count is a difficulty dial). <em>Weakness:</em> binary SAT/UNSAT = 50% chance floor and thin diagnostics (criterion 11) — mitigate by requiring an assignment or a "which clause is violated" label. <em>Weakness:</em> the reasoning is search-heavy and may not decompose into neat independent latent <em>prompt</em> rules the way an execution task does — the gap may be driven more by raw reasoning than by prompt-discoverable rules, weakening criterion 4/10.</p>
+  </div>
+
+  <div class="card">
+    <h3>9 · Circuit / logic-gate DAG evaluation</h3>
+    <p><strong>What it is.</strong> Evaluate a Boolean circuit (AND/OR/NOT/XOR gates wired as a DAG) on a given input assignment and predict the single output bit — a canonical deterministic "execute the state machine" task. Related published work: CIRCUIT (analog-circuit QA, 510 pairs) and propositional-logic circuit-analysis studies, though these are adjacent rather than exact matches to a synthetic gate-evaluation generator.</p>
+    <p class="small muted"><strong>Citation.</strong> CIRCUIT, 2025, arXiv:2502.07980. <a href="https://arxiv.org/pdf/2502.07980">https://arxiv.org/pdf/2502.07980</a> ; <em>A Implies B: Circuit Analysis in LLMs for Propositional Logical Reasoning</em>, 2024, arXiv:2411.04105. (No off-the-shelf synthetic gate-eval benchmark found — this is a synthetic-family candidate you'd build.)</p>
+    <p><strong>Adaptation.</strong> Build a small generator: random DAG of gates over k inputs; sample an input assignment; ground-truth output computed by evaluating the DAG. (a) Output = <span class="key">one bit</span> (or a k-bit bounded string for multi-output). (b) Latent rules: gate semantics per type, evaluation order (topological), NOT/negation handling, fan-out reuse. (c) Difficulty dials: gate count, depth, gate-type mix.</p>
+    <p><strong>Rubric-fit.</strong> Ideal boundedness and exact scoring; independent-rule decomposition is clean (each gate type is a rule; get XOR wrong and a diagnostic pattern appears). Contamination-proof (fully generated). Few-shot worked evaluations should help. <em>Weakness:</em> no ready-made benchmark to borrow — this is <span class="key">synthetic-family</span> work, more build effort. <em>Weakness:</em> single-bit output = 50% chance; use several outputs or deeper circuits so guessing is penalized and the effect size stays resolvable on 10-20 tasks.</p>
+  </div>
+
+  <div class="card">
+    <h3>10 · Dyck-n / bounded-depth balanced brackets</h3>
+    <p><strong>What it is.</strong> Membership or next-token / closing-bracket prediction for Dyck-n languages (k bracket types, max depth m): a pushdown-stack tracking task. Heavily studied in the transformer-expressivity literature; transformers struggle for n&gt;1 and at higher depth.</p>
+    <p class="small muted"><strong>Citation.</strong> Yao et al., <em>Self-Attention Networks Can Process Bounded-Hierarchy Languages</em>, ACL 2021; <em>bounded Dyck grammars</em> case study, NSF-PAR:10489627. <a href="https://par.nsf.gov/servlets/purl/10489627">https://par.nsf.gov/servlets/purl/10489627</a> ; FLaRe / <em>Training NNs as Recognizers</em>, 2024, arXiv:2411.07107.</p>
+    <p><strong>Adaptation.</strong> (a) Two clean bounded outputs: <span class="key">accept/reject</span> (one token) OR <span class="key">predict the single next legal closing bracket</span> given a prefix (one token) — the latter is more diagnostic and less chance-driven. (b) Generate strings from a seeded sampler at controlled depth/length (exact ground truth). (c) Latent rules: matching by bracket type, LIFO order, depth bound, ignore-non-bracket tokens.</p>
+    <p><strong>Rubric-fit.</strong> Excellent boundedness and determinism; depth is a clean floor/ceiling dial; failures diagnostic (wrong bracket type reveals the type-matching rule). <em>Weakness:</em> if you use accept/reject you inherit the 50%-chance / thin-diagnostic problem — prefer the next-closing-bracket variant. <em>Weakness:</em> very well-known task; a strong prompt engineer may one-shot shallow instances — push depth so default prompts sit below ceiling (criterion 4).</p>
+  </div>
+
+  <div class="card">
+    <h3>11 · Invented card/resource game state execution</h3>
+    <p><strong>What it is.</strong> Simulate one deterministic turn (or N turns) of a small <em>invented</em> card / resource game: given rules (in-prompt) + current state + a move, output the resulting state field (score, whose turn, top-of-pile card). TextArena (50+ text games) and GameBench / Game-Reasoning-Arena provide surrounding infrastructure and rule-encoding patterns; ZeroSumEval / GVGAI-LLM show synthetic/infinite game generation.</p>
+    <p class="small muted"><strong>Citation.</strong> TextArena, 2025, arXiv:2504.11442; Game Reasoning Arena, 2025, arXiv:2508.03368. <a href="https://arxiv.org/pdf/2508.03368">https://arxiv.org/pdf/2508.03368</a> ; ZeroSumEval, 2025, arXiv:2504.12562; GVGAI-LLM, 2025, arXiv:2508.08501.</p>
+    <p><strong>Adaptation.</strong> A <span class="key">synthetic-family</span> candidate: invent a tiny deterministic game with a seeded generator (deck/state/move), and ask for <span class="key">one derived field</span> after applying the move(s). (a) Bounded single-token output (resulting score, or legal/illegal move). (b) <em>Invented</em> rules make it contamination-proof by construction (criterion 8) — no published answers exist. (c) Latent rules: precedence of card effects, resource caps, turn-passing, illegal-move rejection — each independently discoverable.</p>
+    <p><strong>Rubric-fit.</strong> Best-in-domain on contamination-resistance (rules are novel) and on deliberate rule-violation injection (criterion 13 — feed illegal moves and require a "reject" token). Few-shot demos of worked turns should strongly help (criterion 12). <em>Weakness:</em> highest design effort — you must author and validate the rules and a reference 100%-scoring prompt (criterion 9). <em>Weakness:</em> easy to accidentally make rules ambiguous; keep the state transition a pure deterministic function to preserve exact-match.</p>
+  </div>
+
+  <div class="card">
+    <h3>12 · Scheduler / protocol-validator execution (FSM)</h3>
+    <p><strong>What it is.</strong> Execute a small deterministic scheduler or protocol state machine: given a transition table (states × events → next-state/action) and an event trace, output the final state or whether the trace is <em>accepted</em>. The FSM-simulation and protocol-acceptance theme; supported by the mechanistic state-tracking literature (transformers learn "associative"/"parity-associative" algorithms; CoT helps) and TMBench's precedent.</p>
+    <p class="small muted"><strong>Citation.</strong> <em>Finite State Automata Inside Transformers with CoT: A Mechanistic Study on State Tracking</em>, 2025, arXiv:2502.20129. <a href="https://arxiv.org/abs/2502.20129">https://arxiv.org/abs/2502.20129</a> ; <em>(How) Do Language Models Track State?</em>, 2025, arXiv:2503.02854. <a href="https://arxiv.org/html/2503.02854v1">https://arxiv.org/html/2503.02854v1</a> ; <em>Exploring State Tracking Capabilities of LLMs</em>, 2025, arXiv:2511.10457.</p>
+    <p><strong>Adaptation.</strong> Synthetic-family: seeded generator emits a random FSM (transition table) + an event sequence; ground truth = final state or accept/reject computed by running the FSM. (a) Output = <span class="key">single state label</span> (from a small set) or one accept/reject token. (b) Latent rules: the transition table itself (each event's effect), reset/error states, self-loops, "unknown event → error." (c) Contamination-proof by construction.</p>
+    <p><strong>Rubric-fit.</strong> Excellent on all cheap criteria and on independent-rule decomposition (each transition is a rule; the reflection LM can read "in state S on event E, expected T, got U" — maximally diagnostic, criterion 11). The mechanistic literature gives you <em>why</em> CoT/few-shot help, aiding floor/ceiling design. Active 2025-2026 research interest (tie-breaker). <em>Weakness:</em> if the state set is small, single-state output has a nontrivial chance baseline — use enough states/steps so guessing is penalized and effects resolve on 10-20 tasks. <em>Weakness:</em> build effort (no drop-in dataset), but the generator is genuinely small.</p>
+  </div>
+
+</div>
+
+<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Output projection is the universal adaptation</h3>
+    <p>Almost every execution benchmark natively wants a multi-step trace (violating criterion 3). The fix is identical everywhere: <span class="key">ask only for the final state or one derived token</span>, generated deep enough that it is not guessable. Candidates natively single-token — MLRegTest accept/reject (#6), Dyck next-bracket (#10), SATBench (#8), FSM final-state (#12), long-horizon final-sum (#2) — need the least surgery.</p>
+  </div>
+  <div class="card">
+    <h3>Binary output carries a 50% floor and thin diagnostics</h3>
+    <p>Binary-output candidates (#6, #8, #10-accept, #9-single-bit) carry a <span class="key">50%-chance floor</span> and thin diagnostics. Prefer variants with a small-but-&gt;2 label set (next-bracket, final FSM state, "which rule was violated") to keep criterion 5 effect sizes resolvable and criterion 11 diagnostics rich.</p>
+  </div>
+  <div class="card">
+    <h3>Contamination hits the published sets; synthetic families are proof by construction</h3>
+    <p>Contamination is a real hazard for the published sets (#3 CRUXEval, #5 LLM-BabyBench, #7 bAbI). All three have open generators, so <span class="key">regeneration is cheap</span>. The synthetic-family candidates (#9 circuits, #11 invented games, #12 FSM/protocol) are contamination-proof by construction but cost more to author and validate a reference prompt (criterion 9).</p>
+  </div>
+  <div class="card">
+    <h3>Floor calibration cuts both ways</h3>
+    <p>For #7 bAbI the opposite risk applies — frontier models sit near ceiling on simple tracking, so you must <span class="key">add depth</span>. Depth is the <em>right</em> risk for #1 TMBench, #2 long-horizon, #12 FSM, where it is a clean, monotone difficulty dial.</p>
+  </div>
+</div>
+
+<div class="callout space-top">
+  <strong>Tie-breaker (active 2025-2026 research).</strong> State-tracking / execution is a hot area — TMBench (#1), long-horizon execution (#2), FSM-in-transformers mechanistic work (#12), and cellular-automata-as-simulation (LOGOS-CA / LifeGPT, adjacent) all appeared in 2025-2026, so a quick test built here could grow into its own research direction.
+</div>
+
+<div class="section-head" id="adjacent"><h2>Adjacent items noted but not promoted to candidates</h2></div>
+
+<ul>
+  <li><strong>Cellular-automata simulation</strong> (LOGOS-CA arXiv:2602.00036; LifeGPT arXiv:2409.12182): deterministic local-rule update, single-cell-next-state is a bounded output; promising as a synthetic family but currently framed as generative/simulation rather than a scored benchmark.</li>
+  <li><strong>CoRe / CRUXEval-X / "Reason About Complex Execution Paths"</strong> (arXiv:2507.05269, arXiv:2408.13001, arXiv:2511.18288): code-execution variants; same contamination + output-bounding caveats as #3.</li>
+</ul>
+
+<p class="small muted space-top">Breadth scan, not ranked. See the <a href="landscape.html">Landscape</a> for how this domain (cluster E) placed against the other seven, and <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
+
+</main>
+</body>
+</html>

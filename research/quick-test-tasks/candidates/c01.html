@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c01 Invented-Glyph Positional Base Arithmetic</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c01</span>Invented-Glyph Positional Base Arithmetic</h1>
+  <span class="badge gated">GATED</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">the counterfactual non-decimal base-arithmetic probe from <em>Reasoning or Reciting?</em></span> — dressed in a per-instance invented glyph alphabet so the model cannot fall back on memorized base tables.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict bad">
+  <p><strong>Gated in round 2 — refuted by both round-1 skeptic lenses at major severity, with no concrete rescue.</strong> The task is structurally attractive: a ten-line positional evaluator gives exact ground truth, per-instance random legends make it contamination-proof, and the literature documents a genuine default-prompt floor. But it is trapped between two failure modes its own design cannot escape at once. When the base and legend are stated explicitly, a single competent instruction — read the glyph-to-digit map, apply place weights — one-shots the pool and collapses the incremental gap criterion four requires. When the quirks are left implicit, there is no writable reference prompt that reaches roughly full accuracy, so there is no known ceiling to optimize toward. Compounding this, the natural inverse of encoding a decimal into the glyph system has non-unique ground truth once null-glyph and signed-digit strata are active, which breaks exact-match scoring. The gate is a round-1 verdict-health decision, so it applies regardless of the implementation score: the only fixes are structural redesigns that turn this into a different candidate, closer to c03's opaque keyed operators. The implementation total is recorded for completeness but does not lift the gate.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">(9)</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Evaluate a numeral in a per-instance invented glyph alphabet under a nonstandard positional base</h3>
+    <p>A seeded generator emits one or two numerals in an <span class="key">invented glyph alphabet</span> together with an inline <span class="key">legend</span> (glyph&rarr;digit map) and a <span class="key">base spec</span> that varies per stratum: base 9 or 11 (bases 8 and 16 are avoided as pretraining-frequent), mixed-radix, balanced or signed digits, MSB- vs LSB-first ordering, and a null-glyph position skip. The model returns a <span class="key">single decimal integer</span> (or a fixed-width glyph string), scored by exact match against a roughly ten-line positional evaluator. The latent rules &mdash; legend parse, place weights, signed-digit handling, endianness, null glyph, carry variant &mdash; are stratified across the pool so no fixed one-shot instruction covers every quirk at once, and per-instance random legends make the pool contamination-proof.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Constructed faithfully from the merged summary; illustrative, not a run-verified generator output. Seeded conditions: base 9, MSB-first ordering, invented nine-glyph legend.</p>
+<pre><code>Legend: &#9671;=0 &#9650;=1 &#9675;=2 &#10022;=3 &#9672;=4 &#9661;=5 &#9680;=6 &#10005;=7 &#9645;=8
+Base: 9, most-significant glyph first.
+Numeral: &#9675;&#9661;&#10005;
+Q: Give the value as a single decimal integer.
+
+Gold: 214   (2&middot;81 + 5&middot;9 + 7 = 162 + 45 + 7 = 214)
+Naive-prompt miss: a base-10 reading of "257" -&gt; exact-match 0;
+a "convert to base-10 then back" attempt that ignores the
+invented legend also misses.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a> (Wu et al., NAACL 2024)</span> — the core anchor: counterfactual non-decimal base (8/9/11/16) addition, documenting the default-vs-ceiling floor c01 exploits (corpus cites "Wu et al. 2023"; published 2024).</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2211.09066">Teaching Algorithmic Reasoning via In-Context Learning</a> (Zhou et al., NeurIPS MATH-AI workshop 2022)</span> — shows the addition algorithm's prompt phrasing moves accuracy incrementally; supplies c01's ceiling-prompt vs naive-prompt template.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2304.02015">How well do LLMs perform in Arithmetic tasks?</a> (Yuan et al., 2023)</span> — non-decimal base summation; names the "convert-to-decimal-then-back" round-trip failure mode c01 uses as a reflection diagnostic (overlapping, not independent, evidence).</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2410.15787">Arithmetic Transformers Can Length-Generalize</a> (Cho et al., ICLR 2025)</span> — length-generalization arithmetic suite; c01 borrows operand length and count as orthogonal difficulty dials.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/1807.11580">Enumerating Cryptarithms Using DFAs</a> (Nozaki et al., 2018)</span> — methodology for the cryptarithmetic hard-tail stratum only (unique-solution generation).</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2512.10964">Tekum: Balanced Ternary Tapered Precision Real Arithmetic</a> (Hunhold, 2025)</span> — recent formalization backing the balanced/signed-digit ternary stratum; background, not an LLM benchmark.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2502.11075">NumericBench: Exposing Numeracy Gaps</a> (Li et al., ACL 2025)</span> — cited as the synthetic number-list arithmetic generator donor for c01's instance pool.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../candidates-merged.html#c01">Glyphscript Arithmetic Decode; Nonstandard Positional Base Evaluation; Balanced mixed-radix system; Roman-numeral / base-N transcoder; EncodedArith</a> — the five brainstorm items merged into c01.</li>
+      <li><a href="../candidates-merged.html#c01">c01 in candidates-merged</a> — origin recorded as "both" (brainstorm and literature).</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>Encode direction (decimal &rarr; glyph string) — <span class="why">dropped as a scored surface: once null-glyph and signed-digit strata are active, the encode direction has non-unique ground truth, so exact-match scoring is undefined</span>.</li>
+    <li>Bases 8 / 16 — <span class="why">excluded from the base spec: pretraining-frequent, so a model leans on memorized tables and the floor is too high</span>.</li>
+    <li>c02 Fictional Mixed-Radix Unit Conversion — <span class="why">a sibling that stayed alive but was edged out on research currency; it overlaps c01/c10</span>.</li>
+    <li>Cryptarithmetic (general) — <span class="why">folded to a hard-tail stratum only; full cryptarithmetic is combinatorial search that favors scratchpads and is noisy at temperature 0</span>.</li>
+    <li>D3 TokenCounter / D9 char-level string tasks — <span class="why">adjacent glyph-manipulation ideas killed because letter/char counting is tokenization-bound and noisy at temp 0, threatening criterion 5</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2512.16902">In-Context Algebra</a> (Todd et al., 2025 preprint / ICLR 2026)</span> — contextually-defined-symbol arithmetic; supports c01's invented-glyph legend-parse premise and its 2025-2026 currency (arXiv id 2512 = December 2025 submission, ICLR 2026 venue).</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2605.28700">The Importance of Being Statistically Earnest: A Critical Re-evaluation of GSM-Symbolic</a> (Dlugosz et al., EMNLP 2026 submission)</span> — 2026 re-evaluation of symbolic-template arithmetic fragility; relevant to c01's floor/ceiling calibration, though primarily a c02-adjacent methodology reference.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Scored high; only criterion 4 (not one-shot guessable) is soft. Exact single-integer scoring, contamination-proof legends, clean latent-rule decomposition, diagnostic per-rule failures</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The soft criterion is the decisive one — positional evaluation is a known skill, so a competent prompt approaches the ceiling; it is the shared weakness of the whole invented-notation cluster</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>If per-stratum conventions are kept secret and demo coverage is capped, individual quirks (endianness, null glyph, signed digits) form a real multi-rung ladder in principle</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Refuted at major severity — with explicit specs a single instruction one-shots the pool; the gap the optimizer must close does not survive an honest ceiling prompt</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Ground truth from a tiny reference evaluator is deterministic and cheap to verify</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Refuted at major severity — with implicit quirks there is no writable roughly-full-accuracy reference prompt, so no known ceiling; and the encode direction has non-unique ground truth, breaking exact match</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The reasoning-gym infrastructure is clean and run-verified (seeded, deterministic, re-seedable); the arithmetic oracle is trivial. I1 held at 2 on a confirmed run</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>I6 is 0 — the refutation debt is not a bounded repair but a structural redesign, which is exactly what gates the candidate; the invented-glyph legend is net-new code, not in-repo</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Counterfactual/non-standard arithmetic and in-context symbol definition are actively studied through 2025-2026 (In-Context Algebra, GSM-Symbolic re-evaluations, length-generalization)</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Yuan et al. overlaps the anchor rather than extending it, and the balanced-ternary and length-generalization sources are training-side, not prompt-optimization evidence — the incremental-gap claim is untested here</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Subclass the reasoning-gym generator</h3><p><code>base_conversion</code> ships standard-glyph base conversion with no invented legend; write a new <code>ProceduralDataset</code> subclass (~80-120 LOC) that samples value + base with <code>rng = Random(seed + idx)</code>, samples an invented-glyph permutation from a nonce alphabet, and renders the source numeral under the legend</p></div>
+  <div class="step"><h3>Build the oracle and strict scorer</h3><p>Compute the gold via standard integer conversion mapped through the same legend; override <code>score_answer</code> for strict 0/1 exact match (~10 LOC), since the base class gives substring partial credit</p></div>
+  <div class="step"><h3>Stratify the latent rules</h3><p>Expose base value, endianness, null-glyph skip, and signed/balanced-digit family as config fields so no single instruction sentence covers the pool; avoid bases 8/16; cap demo coverage so few-shot cannot leak the whole convention set</p></div>
+  <div class="step"><h3>(Never reached) rescue gates</h3><p>A pass would require a red-team check that no fixed one-shot prompt matches the ceiling and a resolution of the encode-direction non-uniqueness — but these are structural redesigns, so the candidate is gated before this step</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>One-shot collapse: an explicit-spec prompt reaches the ceiling in a single call, erasing the incremental gap (the major optimization-path refutation).</li>
+      <li>No known ceiling under implicit quirks: without a writable roughly-full-accuracy reference prompt, the measurement story has no anchor (the major measurement refutation).</li>
+      <li>Non-unique encode ground truth: the decimal&rarr;glyph direction admits multiple correct strings once null/signed strata are on, so it cannot be scored by exact match.</li>
+      <li>Decimal round-trip shortcut: CoT-capable models can "convert to base-10 and back"; invented glyphs and bounded output are the only mitigations, and they only partly work.</li>
+      <li>Shared-logic oracle: the reasoning-gym oracle reuses the generator's own conversion routine, so a shared bug would corrupt prompt and answer symmetrically (no independent cross-check).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> (Apache-2.0) — deep-read notes at <a href="../repos/open-thought-reasoning-gym.md">repos/open-thought-reasoning-gym.md</a>. Seed plumbing is threaded and clean (<code>Random(self.seed + idx)</code> per item); the invented-glyph semantics are net-new (~250-350 LOC in our tree, 0 lines changed in reasoning-gym).</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status partial">partial</span>
+        the <code>base_conversion</code> generator ran on 2026-07-21, was byte-identical at seed 42 across runs, varied at seed 123, and passed ground-truth spot checks — confirming the infrastructure. The invented-glyph task layer itself was never run-verified because it is not yet written; I1 held at 2 for exactly this reason.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../candidates-table.html">Back to candidates table</a>
+    <a href="../recommendations-round2.html#table">Full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Atlas order</span>
+    <a href="c12.html">&larr; c12 Sigil-Schema Field Extraction</a>
+    <a href="c05.html">c05 Deterministic Execution &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c03.html">c03 Keyed Custom-Operator</a>
+    <a href="c02.html">c02 Fictional Mixed-Radix</a>
+    <a href="c09.html">c09 Cipher-Chain Decode</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c01">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

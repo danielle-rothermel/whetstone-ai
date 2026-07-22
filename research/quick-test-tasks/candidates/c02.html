@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c02 Fictional Mixed-Radix Unit Conversion</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER -->
+<div class="cand-head">
+  <h1><span class="cand-id">c02</span>Fictional Mixed-Radix Unit Conversion</h1>
+  <span class="badge ranked">RANKED #12</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">NUMCoT-style unit-conversion brittleness</span>, rebuilt as an invented mixed-radix ladder (grol/blen/mir) with a per-instance conversion legend and an exact reducer oracle.</div>
+
+<!-- (2) VERDICT BOX -->
+<div class="verdict"><!-- plain tone: ranked, neither adopted nor gated -->
+  <p><strong>Officially ranked #12 of 20 (24 total with the 4 gated), mid-table on desk strengths.</strong> The task earns its place on real desk strengths &mdash; isolatable conversion-rung strata and a cheap independent oracle &mdash; but its headline repo NUMCoT is unusable: an unseeded dead-code generator with hard-coded real-unit oracles and a provably buggy hard oracle, giving I1=1, and it was never run-verified. It also overlaps the invented-notation evaluators c01 and c10, both of which outrank it. It was initially excluded by the round-2 tie-breaker=1 filter and folded into the official ranking by the 2026-07-21 amendment on equal terms with the other candidates; its I1&ndash;I6 scores were produced post-hoc by the same pipeline (web discovery + desk scoring with the same rubric and exercises + deep active-path code reads), so they now stand as its official implementation evidence. The landscape note records the overlap with c01/c10; per the tie-break rule (impl total desc, then I1 desc, then round-1 score, then round-1 TB) it inserts at rank 12.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">26</span></span>
+    <span class="chip"><span class="k">TB</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">10</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES -->
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Convert a quantity through an invented, per-instance unit ladder to a canonical form</h3>
+    <p>A seeded generator invents a <span class="key">unit ladder</span> with mixed radices — no real-world ratios — and prints an inline <span class="key">conversion legend</span> ("1 grol = 7 blens, 1 blen = 12 mirs"), then poses one conversion request. The model returns either a single integer in the smallest unit or a <span class="key">canonical mixed-radix string</span> ("4 grol 0 blen 2 mir"), scored by exact match against a trivial <span class="key">mixed-radix reducer</span>. Difficulty decomposes into independent latent rules: legend parse, per-boundary factors, carry and normalization so no unit exceeds its base, a truncation-versus-rounding keyword, one signed-unit stratum, and unit-simplification rewrites. Because ratios and names are randomized per instance, the prompt must encode the general procedure rather than memorized numbers.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative, constructed faithfully from the merged summary — invented three-unit ladder, mixed radices 7 and 12, carry-normalized answer.</p>
+<pre><code>Legend: 1 grol = 7 blens, 1 blen = 12 mirs
+Query:  Express 350 mirs in canonical grol/blen/mir form.
+
+Reduce: 350 mirs = 29 blens + 2 mirs
+        29 blens  =  4 grol  + 1 blen
+Gold:   4 grol 1 blen 2 mir
+
+Naive-prompt miss: model treats both boundaries as base 10
+(or divides by 84 without carrying the blen remainder),
+returning "4 grol 0 blen 2 mir" or a bare "350".</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE -->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2406.02864">NUMCoT</a> (Xu et al., arXiv 2024)</span> — the core anchor; documents that LLMs consistently fail to apply numeral and units-of-measurement conversion ratios in chain-of-thought, and mixed-radix systems (time, imperial, ancient units) are its native ground. Source of the low-floor claim.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a> (Mirzadeh et al., ICLR 2025)</span> — donates the per-instance symbolic-template methodology with exact ground truth; c02 borrows the templating and perturbation idea, not the natural-language narrative.</li>
+      <li><span class="cite"><a href="https://aclanthology.org/2024.acl-long.163/">GSM-Plus</a> (Li et al., ACL 2024)</span> — robustness benchmark adding numeric and distractor perturbations to GSM8K; c02 reuses the perturbation-templating idea only.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2110.14168">GSM8K</a> (Cobbe et al., arXiv 2021)</span> — the lineage root underlying both GSM-Symbolic and GSM-Plus, hence the template-generation methodology c02 inherits at one remove.</li>
+    </ul>
+    <p class="small muted">Attribution correction: NUMCoT is cited elsewhere in the corpus as "Wang et al."; the canonical arXiv:2406.02864 first author is Ancheng Xu, so "Xu et al., 2024" is used here.</p>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../candidates-merged.html#c02">Notation Unit-System Conversion</a> — the seed idea of a legend-plus-quantity conversion problem over a bespoke unit system.</li>
+      <li><a href="../candidates-merged.html#c02">Symbolic unit / dimension algebra</a> — contributed the unit-simplification-rewrite stratum and the notion of algebra over invented dimensions.</li>
+      <li><a href="../candidates-merged.html#c02">Unit-Convention Numeric QA</a> — supplied the single-question, single-answer framing that keeps output bounded and exactly scorable.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>Interval-Overlap Field Selection (dropped cluster D2) — <span class="why">only two or three boundary/tie conventions, enumerable in one prompt, so the boundary flavor was absorbed into c12/c13 strata rather than kept as a task</span>.</li>
+    <li>Contaminated real-unit conversion (imperial/metric direct) — <span class="why">real-world ratios are contaminated and one-shot memorizable; the adaptation mandates inventing all units, which is why NUMCoT ships only as a design reference, not a reusable dataset</span>.</li>
+    <li>NumericBench-style numeracy breadth — <span class="why">folded into c01's source list as reference-only literature; most sub-tasks are off-scope and standard-notation arithmetic is near-ceiling without a notation swap</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH -->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2502.15823">InductionBench</a> (Hua et al., arXiv 2025)</span> — evaluates inductive rule-inference from examples; directly relevant to c02's withheld-ratio strata, where the conversion procedure must be induced from demos rather than stated.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a> (Mirzadeh et al., ICLR 2025)</span> — the active-research face of the templating methodology c02 borrows; its published fragility curve is the closest evidence that per-instance perturbation moves accuracy incrementally.</li>
+    <li class="unverified"><span class="cite">A Critical Re-evaluation of GSM-Symbolic (Dlugosz et al., arXiv 2026)</span> — statistical re-evaluation of GSM-Symbolic's conclusions, bearing on the methodology c02 borrows; single-fetch only and the arXiv id (2605.28700) is anomalous, so provenance is treated as provisional.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES -->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Trivial reference reducer plus single-integer or canonical-string output gives exact deterministic scoring with a known near-100% ceiling when the legend is fully stated</li>
+      <li>Per-instance randomized ratios and names buy contamination resistance and force the prompt to encode a general procedure</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>Scored one rung below the finalists, landing at the rubric floor of the invented-notation cluster</li>
+      <li>Published task is natural-language and CoT-heavy, so the narrative must be stripped and output hard-bounded before the fit holds</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Stacking rounding, signed-unit, and simplification strata means single-rule prompts leave points on the table, keeping the gap multi-step rather than one-shot</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>No dedicated skeptic pass was run on c02 — it sits below the tier that received optimization-path and measurement verdicts, so this lens never formally examined it</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>A canonical carry-normalized form and 0/1 exact match remove partial-credit ambiguity and resolve cleanly at temperature zero</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>No measurement verdict was recorded below the finalist tier; the landscape note flags only overlap with c01/c10 and carries no repair or redesign flag, so mandated-fix status is unexamined</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Now official ranking evidence: the ground-truth math is a trivial positional weighted sum that an independent second path confirms, and add-a-rule or fix-a-bug touches one arithmetic function with no cross-rule coupling</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>Six-plus latent rules including signed-digit and simplification lift the moving-part count above a minimal design; the scores were folded into the official ranking by the 2026-07-21 amendment, scored via the same pipeline post-hoc, and were never run-verified</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Unit-conversion brittleness and inductive rule-learning are actively studied (NUMCoT, GSM-Symbolic ICLR 2025 and its re-evaluations, InductionBench ACL 2025)</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>It was initially excluded on research currency by the round-2 tie-breaker before the 2026-07-21 amendment folded it in; it still carries the lower currency value while overlapping cousins c01 and c10 cover the same invented-notation ground and outrank it</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION -->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Build a seeded invented-ladder generator</h3><p>Add a re-seedable per-instance RNG and sample an invented unit ladder with mixed radices into a per-run conversion table, sample a quantity, and render the legend plus one-line question — this is entirely new plumbing since NUMCoT has no seeding anywhere and its radices are hard-coded literals</p></div>
+  <div class="step"><h3>Write the exact reducer oracle around a passed-in table</h3><p>Reduce to the base unit and re-express canonically over the sampled table, verified by an independent second path (multiply place-weights and sum, versus carry-normalization); discard NUMCoT's buggy solve_hard oracle and its double-subtraction correction</p></div>
+  <div class="step"><h3>Stratify the latent rules and glue single-call scoring</h3><p>Add ladder depth, radix magnitude, the truncation-versus-rounding keyword, the signed-unit stratum, and unit-simplification rewrites as knobs, then wire one LLM call plus 0/1 exact-match on canonical form, dropping the repo's substring-regex scorer, five-prompt fan-out, threads, and Windows CSV I/O</p></div>
+  <div class="step"><h3>Calibrate the floor and add tests</h3><p>Tune the default prompt to land mid-range and calibrate the rounding and signed-unit strata so the score climbs rung-by-rung, adding determinism-by-seed, oracle round-trip, and hand-checked boundary tests that the repo entirely lacks</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>The NUMCoT code is a design reference only, not config-plus-glue — serving c02 is a rewrite of generator, oracle, and scoring, so the effort is major surgery on effectively frozen code (impl I1 = 1)</li>
+      <li>Six-plus latent rules including a signed-digit stratum and simplification rewrites raise the moving-part count and the number of pre-freeze calibration gates, risking a floor that does not climb cleanly rung-by-rung</li>
+      <li>Overlap with c01 and c10 means the invented-notation ground is already covered; without a distinguishing angle the task adds little beyond the finalists</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/CAS-SIAT-XinHai/NUMCoT">CAS-SIAT-XinHai/NUMCoT</a> (CC0-1.0) — deep-read notes at <a href="../repos/numcot.md">repos/numcot.md</a>. The provided TIGER-AI-Lab lead 404s; this is the real ACL 2024 repo.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified; the shipped experiment consumes frozen CSVs, the generator/oracle is uncalled dead code with no seeding, and solve_hard is provably buggy, so nothing was seed-checked or oracle-agreement-checked.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV -->
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c23.html">&larr; c23 Hidden-Rule String-Transform Induction Ladder</a>
+    <a href="c06.html">c06 Artificial-Grammar Violation Classification &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c01.html">c01 Invented-Glyph Base Arithmetic</a>
+    <a href="c10.html">c10 Calendar &amp; Clock</a>
+    <a href="c03.html">c03 Keyed Custom-Operator</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c02">Candidates merged</a>
+    <a href="../landscape.html">Landscape</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

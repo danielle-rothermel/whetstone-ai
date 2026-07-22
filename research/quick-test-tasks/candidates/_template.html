@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · {{ID}} {{NAME}}</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">{{ID}}</span>{{NAME}}</h1>
+  <!-- Swap the class + label together: adopt / backup / ranked / gated / below-cut -->
+  <span class="badge adopt">ADOPT</span>
+  <!-- <span class="badge backup">BACKUP</span> -->
+  <!-- <span class="badge ranked">RANKED #{{RANK}}</span> -->
+  <!-- <span class="badge gated">GATED</span> -->
+  <!-- <span class="badge below-cut">BELOW CUT</span> -->
+</div>
+<div class="anchor-sub">You know this as: <span class="key">{{ACADEMIC_ANCHOR}}</span> — {{ANCHOR_GLOSS}}.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict good"><!-- .good = adopt/backup · .bad = gated/below-cut · plain = ranked -->
+  <p><strong>{{ROUND2_STANDING}}.</strong> {{VERDICT_WHY_ONE_PARAGRAPH — reasons-first prose,
+  complete sentences, no bare numbers; explain in words why this candidate sits where it does
+  after the implementation-aware rescore.}}</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">{{R1_SCORE}}</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">{{I1}}</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">{{I2}}</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">{{I3}}</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">{{I4}}</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">{{I5}}</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">{{I6}}</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">{{IMPL_TOTAL}}</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>{{TASK_HEADING — a contract-style title naming the task and its behavior}}</h3>
+    <p>{{TASK_DESCRIPTION — what the generator builds and what the model must do, in prose;
+    accent the <span class="key">load-bearing nouns</span> only.}}</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">{{SEED_NOTE — the seeded conditions that make this concrete instance the way it is.}}</p>
+<pre><code>{{CONCRETE_EXAMPLE_INSTANCE — facts, query, gold answer, and a naive-prompt miss.}}</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="{{URL}}">{{PARENT_NAME}}</a> ({{AUTHORS}}, {{VENUE}} {{YEAR}})</span> — {{WHAT_IT_CONTRIBUTES}}.</li>
+      <li><span class="cite">{{PARENT_NAME}} ({{AUTHORS}}, {{VENUE}} {{YEAR}})</span> — {{WHAT_IT_CONTRIBUTES}}.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html#{{ANCHOR}}">{{BRAINSTORM_ITEM}}</a> — {{HOW_IT_SEEDED_THIS_CANDIDATE}}.</li>
+      <li><a href="../candidates-merged.html#{{ID}}">{{MERGED_ENTRY}}</a> — {{ROLE_IN_MERGE}}.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>{{DROPPED_RELATIVE}} — <span class="why">{{WHY_DROPPED — the specific refutation or redundancy that killed it}}</span>.</li>
+    <li>{{DROPPED_RELATIVE}} — <span class="why">{{WHY_DROPPED}}</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="{{VERIFIED_URL}}">{{WORK_NAME}}</a> ({{AUTHORS}}, {{VENUE}} {{YEAR}})</span> — {{WHY_RELEVANT}}.</li>
+    <!-- Mark anything you could not open/confirm with .unverified on the anchor or the <li>. -->
+    <li class="unverified"><span class="cite">{{WORK_NAME}} ({{AUTHORS}}, {{VENUE}} {{YEAR}})</span> — {{WHY_RELEVANT}}; link or citation not yet confirmed.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>{{PRO}}.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>{{CON}}.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>{{PRO}}.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>{{CON}}.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>{{PRO}}.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>{{CON}}.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>{{PRO}}.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>{{CON}}.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>{{PRO}}.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>{{CON}}.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>{{STEP_HEADING}}</h3><p>{{STEP_DETAIL}}.</p></div>
+  <div class="step"><h3>{{STEP_HEADING}}</h3><p>{{STEP_DETAIL}}.</p></div>
+  <div class="step"><h3>{{STEP_HEADING}}</h3><p>{{STEP_DETAIL}}.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>{{RISK — the concrete failure mode and its consequence}}.</li>
+      <li>{{RISK}}.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="{{REPO_URL}}">{{REPO_NAME}}</a> ({{LICENSE}}) — deep-read notes at <a href="../repos/{{REPO_SLUG}}.md">repos/{{REPO_SLUG}}.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status pass">verified</span> <!-- .pass verified · .partial partial · .fail failed · .open not run -->
+        {{RUN_VERIFICATION_NOTE — e.g. same-seed byte-identical, different-seed varies, oracle spot-checked}}.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="{{PREV_ID}}.html">&larr; #{{PREV_RANK}} {{PREV_ID}}</a>
+    <a href="{{NEXT_ID}}.html">#{{NEXT_RANK}} {{NEXT_ID}} &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="{{RELATED_ID}}.html">{{RELATED_ID}} {{RELATED_NAME}}</a>
+    <a href="{{RELATED_ID}}.html">{{RELATED_ID}} {{RELATED_NAME}}</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html#{{ID}}">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#{{ID}}">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

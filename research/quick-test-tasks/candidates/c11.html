@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c11 House-Convention Canonicalizer</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c11</span>House-Convention Canonicalizer</h1>
+  <span class="badge ranked">RANKED #8</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">canonical-JSON / house-style normalization</span> — a deterministic serializer whose invented house rules deviate from every public standard (RFC 8785 JCS, slugify, ISO dates), scored by whole-string exact match.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain tone: ranked candidate, neither adopt nor gated -->
+  <p><strong>Officially ranked #8 of 20 after the implementation-aware rescore, a slip from its round-1 28-tier finalist standing.</strong> The candidate's distinctive strength is <span class="key">project alignment</span>: canonical-JSON house rules directly rehearse the dr-serialize intuitions the main experiment cares about, a transfer bonus no other finalist carries. Its generator story is genuinely reusable — json-schema-faker is a clean, seed-threaded instance producer that ran green in a fresh environment — but the reusable half is only the <span class="key">input generator</span>; the canonicalizer and its oracle are new code we author, which is why the codebase cell settles at reusable-but-incomplete rather than drop-in glue. The rescore also inherits round 1's live obligations: the merged <span class="key">rule set must go on a diet</span> (the check-digit and long-list-sort strata are things a small model cannot execute in one constrained forward pass, making the true ceiling both lower and unknowable), the rule <span class="key">tables must stay wider</span> than any demo set or GEPA minibatch to block full-coverage copy-from-context, and the <span class="key">second objective is degenerate</span> — correct canonical strings have fixed length, so output-bytes validates single-objective optimization plus two-objective plumbing only. Those are bounded fixes, but they are why it sits below the run-verified generators rather than beside them.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">11/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Normalize a messy value to one canonical string under invented house rules</h3>
+    <p>The generator picks ONE deterministic normalization pipeline — <span class="key">canonical JSON</span> or <span class="key">slug</span> are the preferred families — governed by five to six <span class="key">invented house rules</span> that deliberately deviate from every public standard: length-then-codepoint key sort, a bespoke float and escape policy, invented month abbreviations and grouping tables, a custom slug separator and stopword list. Each instance is a messy input value; the model must emit the <span class="key">canonical string</span>; scoring is 0/1 <span class="key">whole-string exact match</span> against a roughly forty-line reference function that <em>is</em> the ceiling definition. Every rule owns a stratum of instances, so pool accuracy climbs rule by rule and the expected/got diff names precisely which rule was violated. Random inputs give an infinite, contamination-proof pool, and because the conventions are invented they are not one-shot guessable.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative, from the round-1 corpus (slug family; house rules: lowercase; token separator is <code>~</code> not <code>-</code>; drop words in an invented stopword list {the, of, an}; ordinals map through an invented table so <code>2nd</code> → <code>twyx</code>; keep at most 4 tokens, truncating from the end).</p>
+<pre><code>Input title:  The Quick   Brown Fox (2nd Edition)!
+Gold:         quick~brown~fox~twyx
+
+Naive slugify emits `the-quick-brown-fox-2nd-edition` → 0.
+Each wrong rule (kept "the", used `-`, missed `twyx`, no
+truncation) is separately visible in the diff.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://www.rfc-editor.org/info/rfc8785">RFC 8785 JSON Canonicalization Scheme / JCS</a> (Rundgren, Jordan &amp; Erdtman, IETF Informational 2020)</span> — the named task donor: canonical JSON is the generatable task, and c11 invents house rules that deliberately deviate from JCS rather than reproduce it.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2511.03080">PolyNorm: Few-Shot LLM-Based Text Normalization for TTS</a> (Wong et al., arXiv 2025)</span> — evidence that date/phone/number normalization is a live LLM few-shot task; the slugify/checksum "family" itself is practitioner/standards material (python-slugify, Luhn/ISBN-13/IBAN mod-97), not a single academic paper.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2505.20139">StructEval</a> (Yang et al., arXiv 2025)</span> — its non-renderable slice (JSON/YAML/CSV/TOML) supplies the format taxonomy and below-ceiling floor evidence.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2501.10868">JSONSchemaBench</a> (Geng et al., arXiv 2025)</span> — the schema-pool donor: a graded schema corpus for calibrating canonicalization difficulty, contamination-proofed by regeneration.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2311.07911">IFEval</a> (Zhou et al., arXiv 2023)</span> — verifier-library design donor: ready-made deterministic exact checkers and the verifiable-instruction paradigm c11's scoring reuses.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2404.03868">EDC: Extract, Define, Canonicalize</a> (Zhang &amp; Soh, EMNLP 2024)</span> — a canonicalize-step reference for the domain; primarily c12's parent, but it anchors the canonicalization framing c11 shares.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Canonical JSON Serializer &amp; the normalizer family</a> — the seed cluster: slug/URL canonicalizer, identifier case-and-affix normalizer, phone/number canonicalizer, date/time fictional locale, whitespace/quote linter, CSV reserializer, and the Signed-Checksum Field Validator.</li>
+      <li><a href="../candidates-merged.html#c11">Merged entry (origin: both)</a> — where the ten brainstorm normalizer variants plus the four literature donors were consolidated into one "pick ONE pipeline, 5–8 invented rules" task.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D8 · FoFo format-following (<span class="cite"><a href="https://arxiv.org/abs/2402.18667">FoFo</a> (Xia et al., 2024)</span>) — <span class="why">its LLM-as-judge scoring fails the deterministic exact-check criterion; the format-following content was folded into c11 and c22 rather than kept as its own cluster</span>.</li>
+    <li>Signed-Checksum Field Validator (brainstorm sibling, absorbed then diet-flagged) — <span class="why">the arithmetic check digit it contributes is exactly the computation-heavy rule the measurement lens says a small model cannot execute in one forward pass; the plan drops it or reduces it to an enumerable ≤3-digit lookup</span>.</li>
+    <li>JSONSchemaBench as a standalone cluster — <span class="why">not counted as a cluster; folded into c11's source list as the schema-pool donor rather than a task in its own right</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025–2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2507.02833">IFBench / Generalizing Verifiable Instruction Following</a> (Pyatkin et al., arXiv 2025)</span> — 58 new verifiable out-of-domain constraints with programmatic exact checks; directly extends the constraint-following surge c11's tie-breaker names.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2507.21340">StructText</a> (Kashyap et al., arXiv 2025)</span> — a synthetic table-to-text generator reversible into a canonicalization instance source; cited for c12 but applies to c11's synthetic-pool design.</li>
+    <li><a href="../related-work/c11-related-work.html">c11 related work</a> — deep-read dossiers + capability/positioning synthesis, 2026-07-22.</li>
+    <li><a href="../related-work/c11-baseline-spec.html">c11 baseline spec</a> — draft baseline experiment spec — headroom before complexity.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Scored a full round-1 rubric — infinite contamination-proof pool, a reference function that <em>is</em> the ceiling definition, and strict no-partial-credit scoring (one wrong rule fails the whole example)</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The tie-breaker is strong but derivative — it rides the verifiable-instruction wave rather than opening one</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Not refuted (major caveats survived) — invented conventions are not one-shot specifiable, and with enough stratified rules the gap accretes rule by rule across GEPA iterations</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The plan's own "demo sets covering all invented tables" step manufactures its strongest attack: full-coverage demos turn lookup rules into copy-from-context, and table-width vs. minibatch-width is never pinned, so one reflection pass could transcribe every rule visible in a batch</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Refuted-as-specified but rescued by a rule-set change — restricting rules to single-pass-executable transformations restores a knowable ceiling</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>As specified the check digit, long-list sorts, and bespoke float formatting push the true ceiling into an unknowable band, with residual slips landing exactly where temp-0 provider nondeterminism flips tokens; the output-bytes second objective is degenerate</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The generator half is genuinely reusable — json-schema-faker is seed-threaded, byte-deterministic on a fixed seed, and ran its full test suite green in a fresh environment; rfc8785.py offers a ready-made canonical-JSON oracle to fork or post-process</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Neither repo supplies the actual task substance — the canonicalizer plus oracle (the invented house rules) is roughly two-to-three hundred lines of new logic, so the diff is task-logic-plus-glue, not config-plus-glue, which caps the codebase cell</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Text normalization and verifiable instruction-following are both active waves (PolyNorm, IFBench, StructEval), and the dr-serialize alignment is a project-specific bonus no other candidate has</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No skeptic pass examined this candidate below the 28 tier — the finer-grained adversarial lenses ran on the round-1 finalists as a group, and no dedicated currency re-audit was recorded past the tie-breaker line</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Put the rule set on a diet</h3><p>Restrict rules to single-pass-executable transformations — table lookups (invented month/stopword/ordinal tables), character-class rewrites, fixed replacements, whitespace collapsing, truncation, sorts of a few short keys. Drop the arithmetic check digit and long-list sorts (or reduce the check digit to a fully enumerable short lookup). Cap the rule count.</p></div>
+  <div class="step"><h3>Enforce table-width &gt; coverage</h3><p>Table-valued rules get more entries than any demo set or GEPA minibatch, so rules must accrete over iterations. Strike "cover all cases" from demo curation.</p></div>
+  <div class="step"><h3>Make the generator adversarial per instance</h3><p>Every instance actively distinguishes a house rule from its public standard (reject inputs where they coincide); global formatting rules form an explicit first-rung stratum. Reuse json-schema-faker as the seeded input producer, pinning date bounds to sidestep its one wall-clock nondeterminism source.</p></div>
+  <div class="step"><h3>Build the canonicalizer + oracle as new external code</h3><p>Write the deterministic house-rule pipeline that is both the reference the model reproduces and the ground truth; optionally fork rfc8785.py and edit its escape table, key-sort comparator, and float format for the canonical-JSON family.</p></div>
+  <div class="step"><h3>Pre-freeze certification</h3><p>Reference prompt near-perfect with agreeing temp-0 repeats on the pinned split; derive floor/gap targets from measured numbers; freeze exactly one trivial normalization in the Eval Config; run the "infer every rule from the examples" one-shot with the largest permitted demo set and treat a high score as a rule-mix bug; document that the output-bytes objective is degenerate.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li><span class="key">Ceiling unknowability if the diet is skipped:</span> leaving computation-heavy rules in place makes the true ceiling a band no one can predict in advance, with residual failures indistinguishable from temp-0 provider nondeterminism — the measurement lens's refutation.</li>
+      <li><span class="key">Full-coverage demo leakage:</span> if demo sets or minibatches cover every table entry, lookup rules degrade into copy-from-context and the gap the task measures collapses; table-width policing is the only guard.</li>
+      <li><span class="key">Degenerate second objective:</span> output-bytes is fixed for correct canonical strings, so this candidate validates single-objective optimization plus two-objective plumbing only — a real limitation versus c21/c14 that must be declared per the rubric callout.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase (generator):</span> <a href="https://github.com/json-schema-faker/json-schema-faker">json-schema-faker</a> (MIT) — deep-read notes at <a href="../repos/json-schema-faker-json-schema-faker.md">repos/json-schema-faker-json-schema-faker.md</a>.</li>
+      <li><span class="key">Codebase (oracle):</span> <a href="https://github.com/trailofbits/rfc8785.py">trailofbits/rfc8785.py</a> (Apache-2.0) — deep-read notes at <a href="../repos/trailofbits-rfc8785-py.md">repos/trailofbits-rfc8785-py.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status partial">partial</span>
+        json-schema-faker ran out of the box: full test suite green, same seed byte-identical, different seed varies, seeded ground-truth hand-checks pass. The verified half is the input generator only — the canonicalizer/oracle does not exist in either repo and was never run-verified because it is not yet written; rfc8785.py's oracle is well-tested for the public standard but must be forked or post-processed to express the invented house rules.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c04.html">&larr; #7 c04</a>
+    <a href="c22.html">#9 c22 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c12.html">c12 Sigil-Schema Extraction</a>
+    <a href="c24.html">c24 Composite-Key Sorting</a>
+    <a href="c22.html">c22 Stacked Constraints</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html#c11">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c11">Candidates merged</a>
+    <a href="../related-work/c11-related-work.html">Related work</a>
+    <a href="../related-work/c11-baseline-spec.html">Baseline spec</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Candidate Pool — Merged Brainstorm + Literature</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Candidate Pool — Merged Brainstorm + Literature</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Merged pool</span>
+</div>
+
+<div class="intro">
+  <p>This is the merged candidate pool for the quick-test task: the two search passes reconciled into one deduplicated list of task families. The authoritative selection criteria are the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. The <a href="landscape.html">Landscape</a> scores and ranks these same candidates; the <a href="recommendations.html">Recommendations</a> pick the finalist.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>76 brainstormed ideas plus 108 literature candidates merged into <span class="key">24 kept candidates</span> (c01–c24), with <span class="key">9 merged clusters dropped</span>.</strong> Two rubric constraints shaped every merge: (a) scoring is strict per-example 0/1 exact match — <em>no partial credit inside an example</em> — so all "per-field partial scoring" brainstorm variants were rewritten as single-field / single-token queries with incrementality coming from <span class="key">rule strata across the task pool</span>; (b) outputs are bounded to MC or a few words, single LLM call, no sandbox.</p>
+</div>
+
+<div class="section-head" id="inputs"><h2>Inputs and rubric constraints</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Inputs</h3>
+    <ul>
+      <li><span class="key">76 brainstormed ideas</span> (model-lens and first-principles design).</li>
+      <li><span class="key">108 literature candidates</span> anchored in 2024–2026 benchmarks.</li>
+      <li>Rubric: <a href="../../design/quick-test-rubric.html">quick-test-rubric.html</a> (authoritative).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>The two constraints that reshaped every merge</h3>
+    <ul>
+      <li><span class="key">Strict per-example 0/1 exact match</span> — no partial credit inside an example; partial-scoring variants became single-field / single-token queries with incrementality relocated to <span class="key">rule strata across the pool</span>.</li>
+      <li><span class="key">Bounded output</span> — MC or a few words, single LLM call, no sandbox.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="kept"><h2>Kept candidates (24)</h2></div>
+
+<p class="small muted">Each card is a stable anchor (<code>#c01</code> … <code>#c24</code>) for deep-linking from sibling docs. Origin marks whether the candidate came from the brainstorm pass, the literature pass, or both. "Merged from" preserves the full lineage; "Adaptation" preserves the build notes.</p>
+
+<div class="card" id="c01">
+  <h3>c01 · Invented-Glyph Positional Base Arithmetic</h3>
+  <p class="small muted"><strong>Domain:</strong> constructed notation / nonstandard numeral systems · <strong>Origin:</strong> both</p>
+  <p>Instance = one or two numerals in an invented glyph alphabet plus an inline legend (glyph→digit map) and a base spec that varies per stratum (base 9/11, mixed-radix, balanced/signed digits, MSB- vs LSB-first, null-glyph position skip). Output = a single decimal integer or fixed-width glyph string; exact match vs a ~10-line positional evaluator; seeded per-instance random legends. Latent rules: legend parse, place weights, signed-digit handling, endianness, null glyph, carry variant. Literature documents the low default floor and the named "decimal round-trip" failure mode (diagnostic for reflection).</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Glyphscript Arithmetic Decode; Nonstandard Positional Base Evaluation; Balanced mixed-radix / invented positional number system; Roman-numeral / base-N transcoder (base-mode); EncodedArith.<br>
+  <strong>Merged from (literature):</strong> Base Arithmetic counterfactual (Wu et al. 2023); non-decimal sub-tasks (Yuan et al. 2023); balanced-ternary family; length-generalization arithmetic suites; Teaching Algorithmic Reasoning via ICL (2022); NumericBench (generator donor); cryptarithmetic (hard-tail stratum only).<br>
+  <strong>Adaptation:</strong> Build the seeded generator; avoid bases 8/16 (pretraining-frequent); randomize which quirks are active per stratum so no fixed one-shot prompt covers the pool; constrain output to the bare numeral.</p>
+</div>
+
+<div class="card" id="c02">
+  <h3>c02 · Fictional Mixed-Radix Unit Conversion</h3>
+  <p class="small muted"><strong>Domain:</strong> invented measurement systems / mixed-radix arithmetic · <strong>Origin:</strong> both</p>
+  <p>Instance = a quantity in invented units with an inline randomized conversion legend ("1 mor = 7 kel, 1 kel = 12 tiv") plus a conversion request; output = a single integer in the smallest unit or a canonical mixed-radix string ("4 mor 0 kel 2 tiv"), exact match vs trivial mixed-radix reduction. Latent rules: legend parse, per-boundary factors, carry/normalization (no unit exceeds its base), truncation vs rounding keyword, one signed-digit unit stratum, unit-simplification rewrites. Per-instance randomized ratios/names are contamination-proof and force the prompt to encode the general procedure, not numbers. NUMCoT documents genuine conversion-ratio brittleness (low floor).</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Notation Unit-System Conversion; Symbolic unit / dimension algebra; Unit-Convention Numeric QA.<br>
+  <strong>Merged from (literature):</strong> NUMCoT (2024); GSM-Symbolic / GSM-Plus (template-generation methodology only).<br>
+  <strong>Adaptation:</strong> Strip NL narrative to a one-line question; invent all units (no real-world ratios); stratify quirks (rounding, signed unit) so score climbs rule by rule.</p>
+</div>
+
+<div class="card" id="c03">
+  <h3>c03 · Keyed Custom-Operator Expression Evaluation</h3>
+  <p class="small muted"><strong>Domain:</strong> invented operators / nonstandard precedence arithmetic · <strong>Origin:</strong> both</p>
+  <p>Instance opens with a per-instance symbol table defining invented infix operators (closed forms like (a·k+b) mod m), a precedence/associativity flag, decoy symbols, and a short chained expression; output = one integer, exact match vs a tiny reference evaluator. Latent rules: table lookup, precedence tier per operator, associativity direction, modular wrap into residues 1..m, threshold post-processing, recurrence stratum with index term. Naive prompts assume PEMDAS and standard semantics; the ceiling prompt states the general read-table-then-evaluate procedure. Per-instance random parameters give contamination-proofing and a known ~100% ceiling.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Custom binary operator (# operator); Keyed-DSL Arithmetic; Custom-precedence arithmetic mini-grammar; Custom Arithmetic Precedence (CAP); Modular polynomial / linear-recurrence next-term.<br>
+  <strong>Merged from (literature):</strong> Novel-operator / keyed-DSL in-context arithmetic family; In-Context Algebra (2025); BBH multistep-arithmetic generators (OPRO/EvoPrompt substrate).<br>
+  <strong>Adaptation:</strong> Flip precedence per instance; keep expressions deep enough (3+ operands) that associativity errors surface; add MC-over-four-results variant for the cheapest format.</p>
+</div>
+
+<div class="card" id="c04">
+  <h3>c04 · Term-Rewriting to Normal Form</h3>
+  <p class="small muted"><strong>Domain:</strong> abstract rewriting systems / formal grammars · <strong>Origin:</strong> both</p>
+  <p>Instance = 3–6 productions over invented symbols + a start string of 8–14 symbols, with the system confluent+terminating (or a fixed leftmost-innermost strategy) so the normal form is unique; output = the short normal-form string, or a bounded derived feature (final length / symbol at position k) for the L-system stratum, exact match vs a reference rewriter run to fixpoint. Latent rules: each production, redex-selection strategy, iterate-to-fixpoint (not one pass), empty-production deletion, guard conditions, parallel-vs-sequential application. Failures localize to a single un-applied production or a halted iteration — ideal reflection signal. Seeded random rule sets are contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Symbolic Rewrite-System Normal Form; Expression rewriting under invented rewrite rules; Grammar-of-rewrites (RS3).<br>
+  <strong>Merged from (literature):</strong> Abstract Term-Rewriting to Normal Form (Terese; confluence-strategy work 2024); L-system derivation (parallel-rewriting stratum, bounded feature).<br>
+  <strong>Adaptation:</strong> Build generator + oracle; enforce determinism via confluence checks or fixed strategy; cap L-system iterations so outputs stay bounded.</p>
+</div>
+
+<div class="card" id="c05">
+  <h3>c05 · Deterministic Execution &amp; State Tracking (FSM / protocol / pointer)</h3>
+  <p class="small muted"><strong>Domain:</strong> state-machine simulation and protocol execution · <strong>Origin:</strong> both</p>
+  <p>A seeded generator emits a small deterministic machine — FSM transition table + event trace, a message protocol with injected single-rule violations, a device-command or tag-system sequence, or a key→value store with pointer chains — and asks ONE bounded question: final state label, index of first violating message, final device state letter, or fully dereferenced value/final sum. Output = single token, exact match vs the reference machine. Latent rules: per-transition entries, undefined-transition fallback, ordering constraints (AUTH-before-DATA), monotone sequence fields, cycle→sentinel, undefined→default, max-depth cap, append-vs-delete ordering. Injected violations map each failure to a known rule, making this the most diagnostic cluster for GEPA reflection. Randomized tables/traces are contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Glyph Automaton; Protocol Handshake Validator; Opaque Device State; Priority-Rule Scheduler Resolver; Turing-Tape Rewrite (bounded tag-system); Reference-Chained Value Deref.<br>
+  <strong>Merged from (literature):</strong> TMBench (2025); Scheduler/protocol-validator FSM family (state-tracking mechanistic work 2025); Long-Horizon Execution retrieve-and-sum (2026).<br>
+  <strong>Adaptation:</strong> Truncate all outputs to one derived token (never a trace); tune step counts so a default prompt lands mid-range; stratify by which rule the injected violation breaks.</p>
+</div>
+
+<div class="card" id="c06">
+  <h3>c06 · Artificial-Grammar Violation Classification</h3>
+  <p class="small muted"><strong>Domain:</strong> formal-language membership / constraint diagnosis (MC) · <strong>Origin:</strong> both</p>
+  <p>Generator samples strings from a randomized formal grammar (feature-agreement pairs, nesting-depth limits, forbidden adjacencies, balanced multi-type delimiters) and either keeps them well-formed or injects exactly one violation of a known class; model outputs an MC letter: A well-formed / B agreement / C nesting / D adjacency, with an earliest-violation-by-scan-order tie-break. Exact letter match; GT is the injected class. Each constraint the prompt captures catches one violation class — clean pool-level incremental strata — and the MC label directly names the violated rule (maximally diagnostic). Variants: next-legal-closing-bracket, depth-transparent bracket-kind path queries. Seeded grammars are contamination-proof; 25% guess floor.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Artificial Grammar Well-Formedness Judgment; Symbolic Sequence Categorization (SSC); Nested-Bracket Path Resolver.<br>
+  <strong>Merged from (literature):</strong> MLRegTest (JMLR 2024) / FLaRe; Dyck membership &amp; next-legal-bracket (transformer-expressivity line).<br>
+  <strong>Adaptation:</strong> Balance labels across classes; compose 4–5 constraint types incl. one attribute-dependent depth limit so one-shot prompts catch 2–3 of 4 classes.</p>
+</div>
+
+<div class="card" id="c07">
+  <h3>c07 · Case-Marked Micro-Conlang Translation</h3>
+  <p class="small muted"><strong>Domain:</strong> constructed-language morphology / translation to fixed template · <strong>Origin:</strong> both</p>
+  <p>A generator builds an agglutinative micro-language per run: random roots plus affixes marking case, number, tense, plus a topic-fronting particle; instance = one conlang sentence + a tiny gloss table; output = an English paraphrase in a rigid 3–6-word template (fixed articles, fixed order), exact match after trivial normalization. Latent rules: case suffix determines subject/object regardless of position (the load-bearing rule naive SVO prompts miss), number/tense affixes, article insertion, fronting reorder, plus an inflection stratum with allomorphy. GT = deterministic template filler. Randomized morphology per run is contamination-proof; MTOB/LingOly document large headroom for grammar-from-context learning.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Case-Marked Micro-Language Translation.<br>
+  <strong>Merged from (literature):</strong> Synthetic Case-Marked Micro-Language family; MTOB paradigm (2024); ConLangs metalinguistic probing generator (2025); SIGMORPHON-style synthetic inflection.<br>
+  <strong>Adaptation:</strong> Replace chrF/METEOR with exact template match; keep affix inventory rotating; few-shot glossed pairs are the natural MIPROv2 demo axis.</p>
+</div>
+
+<div class="card" id="c08">
+  <h3>c08 · Rosetta→Match-Up MC Linguistic Puzzles</h3>
+  <p class="small muted"><strong>Domain:</strong> linguistic-puzzle rule induction (multiple choice) · <strong>Origin:</strong> both</p>
+  <p>Seeded conlang grammar; instance = N glossed example pairs plus one held-out query presented as 4-way multiple choice (which pairing/meaning is correct), including a diacritic/tone homograph-disambiguation variant with a marker-precedence hierarchy (tone resolves homograph, context particle overrides tone). Distractors are constructed so each differs from the truth by exactly one latent rule (word order, agreement, affix meaning, diacritic override), so every captured rule eliminates one distractor — a built-in incremental ladder with diagnostic wrong answers. Output = single letter, exact match. Contamination-proof by regeneration; converts translation difficulty into clean MC scoring.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Invented Tonal/Diacritic Orthography Disambiguation.<br>
+  <strong>Merged from (literature):</strong> LingOly (NeurIPS 2024); From Rosetta to Match-Up (2026); Synthetic Rosetta/Match-Up generator family; rare-script decipherment (2025).<br>
+  <strong>Adaptation:</strong> The distractor-isolates-one-rule construction is the load-bearing engineering; validate distractor quality on a pilot batch.</p>
+</div>
+
+<div class="card" id="c09">
+  <h3>c09 · Composable Cipher-Chain Decode (closed vocabulary)</h3>
+  <p class="small muted"><strong>Domain:</strong> invented composable ciphers / reversible transforms · <strong>Origin:</strong> both</p>
+  <p>Plaintext drawn from a fixed closed word list ("north gate open") is encoded by an ordered stack of 2–3 named STRUCTURAL reversible ops (keyed block reversal, invented digraph swap, positional skip — no shift arithmetic, which the char-level literature shows is token-noise-prone) with a per-instance key; instance = ciphertext + op stack + key; output = the plaintext words, exact match against the closed vocabulary. Latent rules: each op's inverse, the apply-inverses-in-REVERSE-order meta-rule, key-derived block sizes. Layer count is the difficulty dial; seeded keys/ops are contamination-proof. Failures are diagnostic per layer.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Composable Cipher Chain Resolution; Cipher-With-Invented-Rules Decoder.<br>
+  <strong>Merged from (literature):</strong> CipherBank (2025); CipherBench novel-cipher methodology; ICL Ciphers / Rashid (2025–2026); closed-vocab cipher-chain family; char-level caveat cluster (StringLLM/CUTE) as a design constraint.<br>
+  <strong>Adaptation:</strong> Keep ops structural not arithmetic; closed vocab (or MC over candidate plaintexts) to protect temp-0 resolvability; validate the noise floor before adoption.</p>
+</div>
+
+<div class="card" id="c10">
+  <h3>c10 · Interlocking-Cycle Calendar / Clock Arithmetic</h3>
+  <p class="small muted"><strong>Domain:</strong> constructed cyclic systems / modular conventions · <strong>Origin:</strong> brainstorm</p>
+  <p>An invented calendar of 2–3 coprime named cycles (Tzolk'in-style but randomized), plus a clock variant with positions labeled 1..m, forward-only subtraction, and sticky-move rules; instance = current tuple/position + "advance N"; output = canonical tuple string or single position, exact match vs per-cycle modular arithmetic. Latent rules: independent moduli (no shared carry), 1-indexed labels, a skip/leap rule on one cycle, sticky/ignored moves, canonical formatting. Randomized cycle lengths and names per run are contamination-proof; wrong-cycle errors isolate which modulus rule broke. Quirks are stratified so no single instruction sentence covers the whole pool.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Constructed Calendar/Cycle Date Arithmetic; Nonstandard modular clock arithmetic; Invented congruence classification; Modular Digit Oracle (sanity-stratum only).<br>
+  <strong>Merged from (literature):</strong> — (modular counterfactual evidence covered under c01 sources).<br>
+  <strong>Adaptation:</strong> Add 2–3 interacting quirks (offset cycle, every-other-day cycle) to keep the modular-arithmetic prior from collapsing the gap one-shot.</p>
+</div>
+
+<div class="card" id="c11">
+  <h3>c11 · House-Convention Canonicalizer</h3>
+  <p class="small muted"><strong>Domain:</strong> serialization/normalization under invented house rules · <strong>Origin:</strong> both</p>
+  <p>Pick ONE deterministic normalization pipeline (canonical JSON, slug, identifier, or fictional-locale date/phone) governed by 5–8 invented house rules that deliberately deviate from every public standard: length-then-codepoint key sort, bespoke float/escape policy, invented month abbreviations and grouping tables, custom check digit. Instance = a messy value; output = the canonical string; exact whole-string match vs a ~40-line reference function (satisfying no-partial-credit — a single wrong rule fails the example). Each rule owns a stratum of instances so pool accuracy climbs rule by rule and expected/got diffs name the violated rule. Random inputs give an infinite contamination-proof pool; invented conventions are not one-shot guessable. Directly mirrors the project's dr-serialize canonical-JSON theme, so results transfer conceptually.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Canonical JSON Serializer; Identifier case-and-affix normalizer; Phone/number canonicalizer; Whitespace/quote linter fixup; Date/time fictional locale; Multi-rule redaction/masking; Slug/URL canonicalizer; CSV/record reserializer; Whitespace-and-indent block canonicalizer; Signed-Checksum Field Validator.<br>
+  <strong>Merged from (literature):</strong> RFC 8785 JCS as generatable task; House-style normalizer family (slugify/phone/date/checksum, PolyNorm 2025); StructEval non-renderable slice; JSONSchemaBench (schema-pool donor).<br>
+  <strong>Adaptation:</strong> Choose one family (slug or canonical-JSON strongest); keep values small so canonical output stays under ~120 chars; output bytes doubles as the vestigial second objective.</p>
+</div>
+
+<div class="card" id="c12">
+  <h3>c12 · Sigil-Schema Field Extraction &amp; Dialect Routing</h3>
+  <p class="small muted"><strong>Domain:</strong> structured extraction under invented markups · <strong>Origin:</strong> both</p>
+  <p>Synthetic records in invented markups — sigil-tagged fields, fixed-width columns with implied decimals, custom-escaped delimiters, or one of several dialects signaled by a header token — where each instance asks for ONE field returned in normalized house form (integer-cents→decimal, dotted enum code via most-specific-wins, checksum VALID/INVALID). Output = a single short token; exact match vs the generator's own record; strictly one field per instance so scoring stays 0/1 with no intra-example partial credit. Latent rules: sigil→field map, per-dialect parsing conventions, column widths, escape handling, per-field normalization, enum precedence — each stratified across the pool. Randomized sigils/widths/delimiters/enum vocabularies per run are contamination-proof and genuinely resist one-shot guessing.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Glyph-Ledger Field Extraction; Positional Fixed-Width Decoder; Escaped-Delimiter CSV; Multi-Schema Router Extraction; Enum-Canonicalization With Hierarchy; Unit-and-Sign Normalizer; Protocol Bitmask.<br>
+  <strong>Merged from (literature):</strong> EDC canonicalize step (EMNLP 2024); StructText reversed as generator (2025); DTBench/ExtractBench/LLMStructBench (provenance-unverified, motivation only).<br>
+  <strong>Adaptation:</strong> Rewrite all multi-field pipe-output brainstorm variants as single-field queries; ensure dialect mix is balanced so per-dialect rule capture shows as pool-level steps.</p>
+</div>
+
+<div class="card" id="c13">
+  <h3>c13 · Precedence-Ordered Decision-List Classification</h3>
+  <p class="small muted"><strong>Domain:</strong> policy/triage classification with override rules · <strong>Origin:</strong> both</p>
+  <p>Generator samples a short ordered decision list (first-match semantics) over 4–6 categorical/numeric features plus override rules — security=true forces P0, senior veto, regional cutoff shift, paying-never-SUPPRESS floor — with an explicit precedence chain; instance = one record (or vote set / event), output = one label from a ~5-way set, exact match vs executing the list. Each rule owns a distinct case slice, so partial rule coverage yields partial pool score and failures are diagnostic ("all security=true cases wrong" = that rule missed). Feature-combinatorial seeded generation is contamination-proof; ≥5 interacting rules with ordering resist one-shot specification. Boolean-concept complexity is a principled difficulty dial.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Traffic-Light Priority Classifier; Priority Vote Aggregator; Temporal-Window Event Labeler; Priority-Conflict Record Reconciler; Orthogonal-Feature Labeling.<br>
+  <strong>Merged from (literature):</strong> Certifiably optimal rule lists (first-match semantics); LLMTabBench (2026); RuleArena synthetic rule engine (ACL 2025); In-Context Boolean Concept Learning (2024).<br>
+  <strong>Adaptation:</strong> Build the rule-list sampler; relabel classes with opaque symbols to defeat priors; balance strata so 10–20-task internal evals resolve prompt differences.</p>
+</div>
+
+<div class="card" id="c14">
+  <h3>c14 · Instruction-Hierarchy Priority Ledger</h3>
+  <p class="small muted"><strong>Domain:</strong> authority/conflict resolution among directives · <strong>Origin:</strong> both</p>
+  <p>Instance = several short directives tagged with NONCE authority levels — some quoted (inert), negated, conditional, or mutually conflicting — each proposing a candidate answer token; a hidden seeded authority policy (tag-priority order, quotation inertness, same-level recency, negation handling, explicit exceptions, fallback) determines which directive controls. Output = a single letter A–F, exact match vs the policy program. Factorial minimal-pair generation isolates each policy feature, so a wrong answer names the misunderstood rule. Nonce tags whose hierarchy differs from familiar system&gt;user conventions defeat pretrained priors; Control Illusion documents that models genuinely mis-prioritize, giving a real non-one-shot gap. Fully synthetic and contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Priority Ledger.<br>
+  <strong>Merged from (literature):</strong> IHEval (2025); The Instruction Hierarchy (2024); Control Illusion (2025); CFBench requirement-prioritization.<br>
+  <strong>Adaptation:</strong> Verify the gap is incremental (not binary) on the chosen cheap model; keep 5+ independently seeded policy features.</p>
+</div>
+
+<div class="card" id="c15">
+  <h3>c15 · Opaque-Codebook Remapped-Label Classification</h3>
+  <p class="small muted"><strong>Domain:</strong> classification under remapped label semantics · <strong>Origin:</strong> both</p>
+  <p>Template-generated short texts (reviews / event sentences) are labeled with opaque codes (ALPHA..DELTA, or compositional tags like <code>#mix.cal</code>) by a deterministic feature→code function with 4+ interacting rules: base polarity map, sarcasm inversion, grudging-praise trigger ("finally", "after N tries"), neutral-fact carve-out, weekday suffix, and a precedence order among them. Output = one code token, exact match. Default prompts follow the pretrained sentiment prior and score near floor (the flipped-label literature's documented mechanism); each rule conveyed lifts its stratum. Seeded slot-filling generation is contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Contrarian Sentiment Codebook; Cipher-Category Tagger.<br>
+  <strong>Merged from (literature):</strong> Flipped-label ICL (Wei et al. 2023); Symbol Tuning / SUL-ICL; Semantic Anchors (2025); In-Context Fixation (2026); Demonstration Shortcut (2024); contrarian-codebook synthetic family; Ethos/Liar/SST-suite (format template only).<br>
+  <strong>Adaptation:</strong> Use 4+ rules with precedence (a bare flip is one-shot guessable); per the Semantic Anchors caution, confirm the chosen cheap model can override priors at all before adopting.</p>
+</div>
+
+<div class="card" id="c16">
+  <h3>c16 · Wason Implication-Compliance Classifier</h3>
+  <p class="small muted"><strong>Domain:</strong> conditional-rule compliance (binary/MC) · <strong>Origin:</strong> both</p>
+  <p>Records of 4–6 visible attributes are checked against 4–5 conjoined implication rules ("if shape=circle then edge=solid"); a record is VIOLATION iff some rule's antecedent holds and its consequent fails (vacuous cases are OK). Output = OK/VIOLATION, or the violated-rule letter for richer diagnostics and a lower guess floor; exact match vs a trivial boolean. Latent rules: each implication, vacuous-truth handling, directionality (not biconditional), distractor attributes. Distinctive property: models systematically err on vacuous truth and directionality even when rules are fully stated, so a "perfect" instruction does not instantly hit ceiling — unusual, desirable model-side residual. Attribute-combinatorial seeded generation is contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Wason-Style Rule Compliance Classifier.<br>
+  <strong>Merged from (literature):</strong> Wason Selection Task LLM adaptations (EACL 2026; deductive-competence 2023).<br>
+  <strong>Adaptation:</strong> Prefer the which-rule-violated MC output over bare binary to escape the 50% guess floor; balance vacuous/violating cases across strata.</p>
+</div>
+
+<div class="card" id="c17">
+  <h3>c17 · Invented-Gate Circuit Evaluation</h3>
+  <p class="small muted"><strong>Domain:</strong> boolean-circuit / invented-connective evaluation · <strong>Origin:</strong> both</p>
+  <p>A random small DAG of 4–6 gate types whose truth tables are INVENTED and randomized per run; a formula-syntax variant adds invented connective glyphs, nonstandard precedence, undefined-atom propagation, and ill-formedness detection. Instance gives primary inputs and asks the value at a named node (0/1) or an MC verdict (true/false/undefined/ill-formed); output = a single token, exact match vs evaluating the DAG/formula. Each gate/connective table is an independent, cleanly demo-learnable latent rule — no fixed instruction can encode randomized tables without demos, making the MIPROv2 demo axis load-bearing. Wrong-gate errors produce diagnostic patterns. Seeded random semantics are contamination-proof; boolean arithmetic gives strong temp-0 determinism.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Marble-Track / Logic-Gate Signal Propagator; Micro-Logic Notation Truth Evaluation.<br>
+  <strong>Merged from (literature):</strong> Circuit / logic-gate DAG synthetic family (CIRCUIT 2025; propositional circuit-analysis 2024).<br>
+  <strong>Adaptation:</strong> Use 4–6 gate types so table capture is incremental; query nodes whose paths cover different gates per stratum.</p>
+</div>
+
+<div class="card" id="c18">
+  <h3>c18 · Depth-Controlled Synthetic Deduction (True/False/Unknown)</h3>
+  <p class="small muted"><strong>Domain:</strong> synthetic logic / multi-hop deduction · <strong>Origin:</strong> both</p>
+  <p>Regenerate RuleTaker/FLD/PrOntoQA-style theories: sampled facts + if-then rules over fictional predicates ("every wumpus is a yumpus") with controlled proof depth (D0–D5), distractor rules, and closed- vs open-world semantics; instance = theory + query; output = True/False/Unknown, exact match. GT comes from the generator's proof engine, which also names the failed inference step — strong reflection diagnostics. Latent rules: chaining depth, negation-as-failure vs explicit negation, open-world Unknown, exceptions, quantifiers; depth bins give the incremental ladder and a known ceiling. A unique-solution constraint-puzzle stratum (seating arrangement queried for one fact, name or YES/NO output) covers the CSP flavor. Fresh symbols per run are contamination-proof.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Constraint-Satisfaction Seating Puzzle (unique-solution stratum).<br>
+  <strong>Merged from (literature):</strong> RuleTaker (2020); ProofWriter (2021); FLD/FLD* (ICML 2023, NeurIPS 2024); PrOntoQA(-OOD) (2023); LogicNLI (2021); RuleBERT (soft-rule stratum); SATBench (2025, hard tail); FOLIO (style reference only).<br>
+  <strong>Adaptation:</strong> Drop all proof-chain generation (label only); regenerate rather than reuse published sets; strip NL templating toward compact symbolic rendering to bound tokens.</p>
+</div>
+
+<div class="card" id="c19">
+  <h3>c19 · Grid-World State Prediction</h3>
+  <p class="small muted"><strong>Domain:</strong> deterministic spatial micro-simulation · <strong>Origin:</strong> both</p>
+  <p>A small seeded ASCII grid (≈6x6) with walls, a robot pose, and a command string including invented commands (J=jump-2, W=wrap); the model predicts ONE derived fact — final coordinate, heading, or carrying-flag — never a path, which removes many-valid-answers ambiguity. Output = a single token ("3,5" or "E"), exact match vs a tiny simulator. Latent rules: relative turn semantics, wall blocking vs edge wrap/clamp, invented command semantics (jump-through-wall behavior), origin/indexing convention — varied across strata so a single fixed convention statement cannot cover the pool. Randomized grids are contamination-proof; off-by-one-at-a-wall failures are cleanly diagnostic.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Grid Robot Deterministic Navigator.<br>
+  <strong>Merged from (literature):</strong> GridRoute (2025); GRASP (2024); LLM-BabyBench Predict split (2025); bAbI entity/state tracking (regenerated).<br>
+  <strong>Adaptation:</strong> State-prediction framing only; add 2–3 invented commands whose semantics are best pinned by demos; keep grids small ASCII.</p>
+</div>
+
+<div class="card" id="c20">
+  <h3>c20 · Invented Micro-Game Turn Resolution</h3>
+  <p class="small muted"><strong>Domain:</strong> invented game rules / deterministic resolution · <strong>Origin:</strong> both</p>
+  <p>A seeded generator invents a tiny deterministic game per run: nonstandard rank order (7-high), trump/override cards, resource exchange rates, caps with overflow discard, and a counterintuitive action-resolution priority; instance = a game state plus a trick or move sequence; output = winning card id, a final token count, or WIN/LOSE — one token, exact match vs the reference resolver. Each rule flips a distinct instance subset, so rule capture is incremental and failures are diagnostic ("used real-world ace-high" is legible to a reflection LM). Strong priors toward real card games guarantee a low default floor; invented rules per run are contamination-proof and few-shot worked turns measurably teach rank order and priority.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Invented Card Trick-Taking Scorer; Dice/Token Resource Micro-Game Resolver.<br>
+  <strong>Merged from (literature):</strong> TextArena-style invented-game family; Game Reasoning Arena (2025); ZeroSumEval (2025).<br>
+  <strong>Adaptation:</strong> Highest design effort in the list: rules must be validated unambiguous with a reference ~100% prompt before use; inject illegal moves for the failure-path criterion.</p>
+</div>
+
+<div class="card" id="c21">
+  <h3>c21 · Relational Micro-World with Invented Vocabulary</h3>
+  <p class="small muted"><strong>Domain:</strong> relational/kinship QA over nonce graphs · <strong>Origin:</strong> brainstorm</p>
+  <p>A generator builds a small graph of nonce entities and relations where relation symbols carry seeded nonstandard properties (symmetry, transitivity, inverse mapping, two-relation composition, explicit-negation precedence, closed-world handling) and answers use an invented closed vocabulary (gender-neutral 'nieph', 'bond-' prefix for in-law links, a relation-distance cutoff). Instance = a few facts + one query; output = one/two words from the closed vocabulary or a 4-way MC letter (true/false/both/unknown), exact match vs graph traversal under the seeded property assignments. Failures cleanly separate codebook misses (model used a standard English term) from traversal misses. Seeded names and property assignments are contamination-proof; demos teach the invented vocabulary directly.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Kinship Convention QA; Relational Micro-World.<br>
+  <strong>Merged from (literature):</strong> — (adjacent to PrOntoQA's fictional-symbol approach, covered separately in c18).<br>
+  <strong>Adaptation:</strong> Keep hop depth low enough that a full-rule prompt reaches ~100%; balance unknown cases.</p>
+</div>
+
+<div class="card" id="c22">
+  <h3>c22 · Stacked Verifiable-Constraint Micro-Generation</h3>
+  <p class="small muted"><strong>Domain:</strong> instruction following / constrained generation · <strong>Origin:</strong> both</p>
+  <p>Instance = a trivial micro-task plus 3–5 composed constraints drawn from a deterministic checker library (exact word count, forbidden letter, required keyword, casing, end-with token), including conditional Selection constraints ("if the input has property P obey rule A else rule B") that must be DISCOVERED, not just copied. Output = a few words; the example scores 1 iff ALL checkers pass (0/1, no partial credit), with per-checker verdicts logged as diagnostic facts for reflection. Constraint atoms and base tasks are generated synthetically (COLLIE-style grammar), giving an infinite contamination-proof pool; constraint count/level is the difficulty dial and IFBench-style OOD atoms resist one-shot enumeration. LIFEBench/VFF document low small-model floors.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Constrained Micro-Description.<br>
+  <strong>Merged from (literature):</strong> IFEval (2023) checker library; COLLIE (2024) constraint grammar; VFF (2025); IFBench + IF-RLVR OOD constraints (2025); FollowBench levels; InFoBench/DRFR decomposition; ComplexBench Selection operator; CFBench taxonomy; LIFEBench length; RewardBench 2 Precise-IF atoms; GEPA IFBench results.<br>
+  <strong>Adaptation:</strong> Restrict to short-output-checkable atoms; use strict all-pass scoring with stratified constraint combos so pool score climbs as prompts internalize more atom types.</p>
+</div>
+
+<div class="card" id="c23">
+  <h3>c23 · Hidden-Rule String-Transform Induction Ladder</h3>
+  <p class="small muted"><strong>Domain:</strong> compositional rule induction from I/O examples · <strong>Origin:</strong> both</p>
+  <p>The designer defines K independent transformation rules (casing keyed to token length, positional swaps, subregular ISL/OSL string edits, per-primitive command→action mappings, 1D-ARC-style short-array transforms); each seeded instance applies a rule subset to an input. The model sees few-shot I/O demos plus one query and outputs the transformed short string — or a 4-way MC among candidates each wrong in exactly one rule. Exact match vs the reference transformer; prompt quality equals how many rules it states or induces, giving a smooth incremental ladder with a known ceiling (state all rules) and floor (naive prompt); demos are load-bearing (MIPROv2 axis alive by construction). Randomized rule subsets and invented vocabularies are contamination-proof. InductionBench's finding that frontier models fail even simple classes warns to curate complexity so the easiest strata are provably reachable.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Compositional String Decode (CSD).<br>
+  <strong>Merged from (literature):</strong> InductionBench (2025, both survey entries); Instruction Induction suite (ACL 2023 / APE); List Functions (2021) + MIR-Bench (2025); symbolic hidden-rule mapping family; PCFG SET (2020); SCAN/MiniSCAN + COGS/SLOG (regenerated, bounded); Re-ARC/1D-ARC (linearized stratum); WILT/HERO'S JOURNEY/ARISE (generators only).<br>
+  <strong>Adaptation:</strong> Curate rule complexity against the reachability risk; bound outputs to short strings or MC; use the wrong-in-exactly-one-rule distractor trick for maximal diagnosis.</p>
+</div>
+
+<div class="card" id="c24">
+  <h3>c24 · Composite-Key Sorting &amp; Canonical Ordering</h3>
+  <p class="small muted"><strong>Domain:</strong> ordering/formatting under invented conventions · <strong>Origin:</strong> both</p>
+  <p>Instance = 3–6 tokens or (letter,number) pairs — or, in one stratum, 3–4 small permutations in cycle notation with a stated composition-direction convention — governed by a nonstandard composite key: sort by second letter, ties by length descending, vowels reranked after consonants, per-element transforms (double if even, triple if odd), canonical cycle form (smallest element leads). Output = one comma-joined line or canonical string, exact match vs a reference sorter/composer. Latent rules: primary key, each tie-breaker, rerank rule, element transform, formatting/separator conventions — each visible as a distinct diff signature. Sort keys and directions are randomized per batch so the prompt must convey them rather than guess; seeded token lists are contamination-proof and BBH evidences large prompt-sensitive headroom on this format.</p>
+  <p class="small muted"><strong>Merged from (brainstorm):</strong> Invented-rule sorting of symbolic tokens; CaseOrder; MultiRuleSort; Permutation composition with nonstandard conventions.<br>
+  <strong>Merged from (literature):</strong> BBH word_sorting / symbolic-subset generators (OPRO/EvoPrompt substrate).<br>
+  <strong>Adaptation:</strong> Randomize key/direction per batch; ask for the full ordering so every key level is exercised; keep lists short so the output stays one bounded line.</p>
+</div>
+
+<div class="section-head" id="dropped"><h2>Dropped clusters (9)</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Cluster</th><th>Constituents</th><th>Why dropped</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>D1</td>
+      <td>Inverted multiple-choice convention</td>
+      <td>brainstorm "Inverted Multiple-Choice"; lit "Option-label / MC format-remapping sensitivity"</td>
+      <td>Both sources flag HIGH one-shot risk — a single sentence ("answer the alphabetically-first incorrect option") closes the gap, failing criterion 4. Remapped-label ground covered by c15; usable at most as a plumbing check.</td>
+    </tr>
+    <tr>
+      <td>D2</td>
+      <td>Interval-Overlap Field Selection</td>
+      <td>brainstorm item</td>
+      <td>Only 2–3 boundary/tie conventions, enumerable in one prompt; boundary-convention flavor absorbed by c12/c13 strata.</td>
+    </tr>
+    <tr>
+      <td>D3</td>
+      <td>TokenCounter (distinct vowel/consonant counting)</td>
+      <td>brainstorm item</td>
+      <td>Letter counting is tokenization-bound; StringLLM/CUTE literature shows char-count tasks are noisy at temp 0, directly threatening criterion 5.</td>
+    </tr>
+    <tr>
+      <td>D4</td>
+      <td>CRUXEval-style code-output prediction</td>
+      <td>lit CRUXEval/CRUXEval-X</td>
+      <td>Published set heavily contaminated; regeneration needs a code DSL and unconstrained return types fight exact-match bounding. Execution flavor covered by c05, rule-induction flavor by c23.</td>
+    </tr>
+    <tr>
+      <td>D5</td>
+      <td>Grounded grid compositional (gSCAN/ReaSCAN)</td>
+      <td>lit items</td>
+      <td>Grid rendering + action-sequence outputs are the most expensive to bound; own reviewer judged it "not worth the adaptation cost." Grid covered by c19, compositional splits by c23.</td>
+    </tr>
+    <tr>
+      <td>D6</td>
+      <td>DSPy/GEPA reference benchmarks</td>
+      <td>lit GSM8K, HotpotQA, HoVer, PUPA</td>
+      <td>Retrieval pipelines, multi-node graphs, soft/composite metrics, contamination — fail criteria 1–2 outright. Retained only as published evidence that COPRO/MIPROv2/GEPA close incremental gaps.</td>
+    </tr>
+    <tr>
+      <td>D7</td>
+      <td>Contaminated classification templates</td>
+      <td>lit Ethos, Liar, SST-2/Subj/TREC/AG-News suite</td>
+      <td>Single latent construct, contaminated, subjective labels; their cheap single-call MC format is inherited by c13/c15 synthetic reframes.</td>
+    </tr>
+    <tr>
+      <td>D8</td>
+      <td>FoFo format-following</td>
+      <td>lit item</td>
+      <td>LLM-as-judge scoring fails criterion 2 (deterministic exact check); format-idea content absorbed into c11/c22.</td>
+    </tr>
+    <tr>
+      <td>D9</td>
+      <td>Char-level string-task cluster</td>
+      <td>lit StringLLM, CUTE, letter-counting, Divide-and-Conquer</td>
+      <td>Not a task: kept as the red-flag design caveat that justifies closed-vocab/MC framing in c09 and the D3 drop.</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout space-top">
+  <strong>Reference-only literature entries</strong> were folded into kept candidates' source lists rather than counted as clusters: GSM-Symbolic/GSM-Plus (c02 methodology), NumericBench (c01), JSONSchemaBench (c11), StructText/DTBench/ExtractBench/LLMStructBench (c12, provenance caveats noted), FOLIO (c18 style reference), cryptarithmetic (c01 hard tail), L-systems (c04), Long-Horizon Execution (c05), MTOB/ConLangs/SIGMORPHON (c07), rare-script decipherment (c08).
+</div>
+
+</main>
+</body>
+</html>

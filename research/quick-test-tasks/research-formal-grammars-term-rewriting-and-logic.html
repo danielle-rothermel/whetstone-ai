@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Candidates: Formal Grammars, Term-Rewriting, and Logic</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Candidates: Formal Grammars, Term-Rewriting, and Logic</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Grammars &amp; logic</span>
+</div>
+
+<div class="intro">
+  <p>Breadth survey of the formal-grammars / term-rewriting / logic-deduction domain (RuleTaker / ProofWriter style) for the whetstone-ai quick-test task selection. Twelve candidates, <span class="key">not ranked</span>. Each is evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a> criteria.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The strongest rubric fits are abstract-symbol rewriting families</strong> where the LLM applies invented productions to reach a normal form or a True/False/Unknown entailment. A recurring theme: the natural-language logic benchmarks (RuleTaker, ProofWriter, FOLIO, PrOntoQA) are all published, so they <span class="key">fail contamination-resistance (C8)</span> as-is and must be <span class="key">regenerated synthetically</span>. Their generators, on the other hand, are exactly what the rubric wants. The best pure-rubric fits are <span class="key">Candidate 5 (term rewriting to normal form)</span>, <span class="key">Candidate 3 (FLD generator)</span>, <span class="key">Candidate 4 (PrOntoQA fictional ontologies)</span>, and <span class="key">Candidate 11 (L-system derivation)</span> — they maximize C8/C10/C11 simultaneously.</p>
+</div>
+
+<div class="section-head" id="rubric"><h2>Rubric quick-reference: what a good candidate needs</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><span class="key">C1</span> single LLM-call node + eval node (no encoder→decoder chain)</li>
+  <li><span class="key">C2</span> exact deterministic programmatic scoring, no sandbox, no partial credit</li>
+  <li><span class="key">C3</span> short inputs; output bounded to multiple-choice or a few words</li>
+  <li><span class="key">C4</span> default prompts score well below a <span class="key">known</span> ceiling; gap closes <span class="key">incrementally</span></li>
+  <li><span class="key">C5</span> temp-0 deterministic; ≥10-point prompt effect resolvable on 10–20 tasks</li>
+  <li><span class="key">C7</span> hundreds of synthetic, parameterized instances with exact labels</li>
+  <li><span class="key">C8</span> contamination-resistant (not a memorizable published set)</li>
+  <li><span class="key">C9</span> ceiling/floor/reference prompt known in advance</li>
+  <li><span class="key">C10</span> difficulty decomposes into independent latent rules</li>
+  <li><span class="key">C11</span> failures diagnostic ("expected X, got Y" reveals which rule was violated)</li>
+  <li><span class="key">C12</span> few-shot demos measurably help</li>
+  <li><span class="key">C13</span> format violations exercised</li>
+  <li><span class="key">Tie-breaker</span> active 2025–2026 research interest</li>
+</ul>
+
+<div class="section-head" id="summary"><h2>All twelve candidates at a glance</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Candidate</th><th>Kind</th><th>Output</th><th>Fit summary</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1</strong></td><td>RuleTaker</td><td>benchmark + parametric generator</td><td>True/False (3-way)</td><td>Strong C1/C2/C3/C7/C9/C10; depth ladder for C4. Regenerate to dodge C8; CWA semantics demand a precise reference prompt.</td></tr>
+    <tr><td><strong>2</strong></td><td>ProofWriter</td><td>benchmark + generator</td><td>True/False/Unknown</td><td>RuleTaker strengths plus cleaner OWA "Unknown" for C11 and open/closed-world latent rule for C10. Trim proof/abduction; regenerate for C8.</td></tr>
+    <tr><td><strong>3</strong></td><td>FLD / FLD★</td><td>benchmark + principled generator</td><td>proved / disproved / unknown</td><td>Among the best fits: open principled generator, GPT-4 ~50% (C4 headroom), decomposable (C10), active research. Restrict to label; some NL is long (C3).</td></tr>
+    <tr><td><strong>4</strong></td><td>PrOntoQA (+OOD)</td><td>benchmark + ontology generator</td><td>True/False</td><td>Best NL set on C8 (fictional predicates); strong C10/C11 via proof-step diagnosis. Single-hop near-ceiling — push depth/distractors; verbose NL.</td></tr>
+    <tr><td><strong>5</strong></td><td>Abstract term-rewriting to normal form</td><td>synthetic family (TRS theory)</td><td>normal-form string / few tokens</td><td>Arguably the purest fit: abstract symbols, exact oracle, per-production decomposition. Must control determinism; build generator in-house.</td></tr>
+    <tr><td><strong>6</strong></td><td>SATBench</td><td>benchmark + automated generator</td><td>SAT / UNSAT</td><td>Strong C2/C4/C7, very recent; documented large headroom. LLM story background adds a model + length (C3); C10 weaker (monolithic search).</td></tr>
+    <tr><td><strong>7</strong></td><td>FOLIO</td><td>benchmark (expert-written, FOL-verified)</td><td>True/False/Unknown</td><td>Weak as-is: human-written, ~1.4k (fails C7), memorizable (C8), real-world knowledge leaks. Best as a style reference, not the quick test.</td></tr>
+    <tr><td><strong>8</strong></td><td>LogicNLI</td><td>benchmark + templated generator</td><td>entailment class</td><td>Good structural fit (abstract, depth-controlled, generatable). Published surface memorizable; small AST set reverse-engineerable — expand the grammar.</td></tr>
+    <tr><td><strong>9</strong></td><td>Wason Selection Task</td><td>psychology paradigm, LLM-adapted</td><td>small set of card labels</td><td>Excellent C10/C11 (errors map to specific fallacies), known low floor (C4). Few independent instances (C7); one prompt may one-shot the abstract case.</td></tr>
+    <tr><td><strong>10</strong></td><td>Dyck / formal-language membership</td><td>synthetic family (formal-language theory)</td><td>yes/no or small integer</td><td>Clean, cheap, deterministic parser oracle. Membership is one skill (counting depth) — C10 thin unless enriched; C11 coarse.</td></tr>
+    <tr><td><strong>11</strong></td><td>L-system derivation</td><td>synthetic family (Lindenmayer rewriting)</td><td>bounded derived feature</td><td>Very strong synthetic fit; parallel rewriting is a distinct latent rule (C4 headroom). Length blows up — cap n, ask a bounded feature (C3).</td></tr>
+    <tr><td><strong>12</strong></td><td>RuleBERT / soft-rule deduction</td><td>benchmark + synthetic generator</td><td>True/False or probability bin</td><td>Adds a weight-combination latent dimension (C4/C10). Probabilistic answers risk non-exact scoring — discretize for C2; weight arithmetic less diagnostic (C11).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="details"><h2>Candidate detail</h2></div>
+
+<div class="grid-2">
+
+  <div class="card">
+    <h3>1 · RuleTaker (Transformers as Soft Reasoners over Language)</h3>
+    <p class="small muted">Existing benchmark + parametric generator.</p>
+    <p><strong>What it is:</strong> Synthetically generated theories (facts + if-then rules in templated NL) with a query; label is True/False under closed-world assumption + negation-as-failure. Five datasets D0–D5 by reasoning depth, ~100k theories each. Generate-and-test guarantees the depth label. Includes the "birds"/exceptions rulebase (abnormality, ostriches can't fly).</p>
+    <p><strong>Adaptation:</strong> Output is already a 3-way label → trivially bounded (C3). Regenerate from the open generator with fresh predicate/entity names to dodge contamination (C8). Bin by depth D0–D5 for the incremental gap and known ceiling (C4/C9). Latent rules = negation-as-failure, rule-chaining depth, exception handling — each an independent prompt lever (C10). Strip the NL templating toward abstract symbols to further harden C8.</p>
+    <p><strong>Fit / weaknesses:</strong> Very strong on C1/C2/C3/C7/C9/C10; depth-labelling gives a natural incremental ladder for C4. Weakness: templated NL is highly stylized and may be partially memorized (C8 risk) — must regenerate. CWA semantics can make "Unknown"/"False" ambiguous for a naive prompt, which actually <em>helps</em> C4 (headroom) but demands a precise reference prompt (C9).</p>
+    <p class="small muted">Clark, Tafjord, Richardson, "Transformers as Soft Reasoners over Language", IJCAI 2020 — <a href="https://arxiv.org/pdf/2002.05867">arxiv.org/pdf/2002.05867</a> (2020). D* datasets: <a href="https://allenai.org/data/ruletaker">allenai.org/data/ruletaker</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>2 · ProofWriter</h3>
+    <p class="small muted">Existing benchmark + generator (RuleTaker successor).</p>
+    <p><strong>What it is:</strong> Theories of NL rules+facts with queries; supports closed-world (CWA) and open-world (OWA, with explicit "Unknown"). Answers True/False/Unknown plus optional full proof chains and abductive statements. Depth-controlled like RuleTaker.</p>
+    <p><strong>Adaptation:</strong> For the quick test, discard proof generation (it pushes toward multi-node / long output) and keep only the True/False/Unknown label (C1/C3). Use OWA so "Unknown" is a real third class → richer failure taxonomy for C11. Regenerate synthetically with novel symbols (C8).</p>
+    <p><strong>Fit / weaknesses:</strong> Same strengths as RuleTaker with a cleaner OWA "Unknown" that makes failures more diagnostic (C11) and adds a latent rule (open- vs closed-world) for C10. Weakness: the richer proof/abduction outputs are a distraction — must be trimmed. Published, so C8 needs regeneration.</p>
+    <p class="small muted">Tafjord, Dalvi, Clark, "ProofWriter: Generating Implications, Proofs, and Abductive Statements over Natural Language", ACL Findings 2021 — <a href="https://aclanthology.org/2021.findings-acl.317/">aclanthology.org/2021.findings-acl.317</a>; <a href="https://allenai.org/data/proofwriter">allenai.org/data/proofwriter</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>3 · FLD / FLD★ (Formal Logic Deduction)</h3>
+    <p class="small muted">Existing benchmark + principled synthetic corpus generator.</p>
+    <p><strong>What it is:</strong> Synthetic deductive-reasoning corpus built from a <em>complete</em> set of first-order predicate-logic deduction rules (axiomatically grounded, so multistep composition can derive any rule). Task: given facts + hypothesis, decide proved / disproved / unknown (and optionally emit proof steps). GPT-4 solves only ~half, showing large headroom on knowledge-free logic.</p>
+    <p><strong>Adaptation:</strong> Keep only the 3-way answer, drop proof-step generation for C1/C3. The generator is designed for controlled difficulty (rule set, depth, distractors) → directly supports C4/C7/C10. Regenerate with fresh symbols (C8). Reference prompt = spell out the specific deduction rules used (C9).</p>
+    <p><strong>Fit / weaknesses:</strong> Among the best-fit: an open, principled <em>generator</em> (not just a frozen set), demonstrated large headroom (C4), decomposable rules (C10), active 2023–2024 research (tie-breaker). Weakness: the intended framing includes proof generation (long output) — must be restricted to the label. Some FLD instances embed multi-sentence NL longer than ideal (C3).</p>
+    <p class="small muted">Morishita, Morio, Yamaguchi, Sogawa, "Learning Deductive Reasoning from Synthetic Corpus based on Formal Logic", ICML 2023 — <a href="https://arxiv.org/abs/2308.07336">arxiv.org/abs/2308.07336</a> (2023); code <a href="https://github.com/hitachi-nlp/FLD">github.com/hitachi-nlp/FLD</a>. Follow-up "Enhancing Reasoning Capabilities of LLMs via Principled Synthetic Logic Corpus", NeurIPS 2024 — <a href="https://arxiv.org/pdf/2411.12498">arxiv.org/pdf/2411.12498</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>4 · PrOntoQA (+ PrOntoQA-OOD)</h3>
+    <p class="small muted">Existing benchmark + synthetic ontology generator.</p>
+    <p><strong>What it is:</strong> Each instance samples a synthetic FOL ontology (often <em>fictional</em> predicates like "every wumpus is a yumpus"), builds a proof chain, and renders it to NL; the model answers a True/False query. Ground-truth proof structure enables diagnosing which inference step failed. Distractor rules guard against pattern-matching.</p>
+    <p><strong>Adaptation:</strong> Fictional-name ontologies are already strongly contamination-resistant (C8) — the best of the NL logic sets on that axis. Bound output to the True/False token only (C3). Vary hops, distractor count, and rule types (composition, negation) for the incremental ladder (C4/C10). Use the generator's exact proof to define which latent rule a failure violated (C11).</p>
+    <p><strong>Fit / weaknesses:</strong> Very strong on C8 (fictional symbols), C10/C11 (proof-step diagnosis), active research. Weakness: the pure single-hop version can be near-ceiling for strong models — must push depth/distractors to preserve C4 headroom. NL rendering is verbose; consider a symbolic render.</p>
+    <p class="small muted">Saparov, He, "Language Models Are Greedy Reasoners: A Systematic Formal Analysis of Chain-of-Thought", ICLR 2023 — <a href="https://arxiv.org/abs/2210.01240">arxiv.org/abs/2210.01240</a>; PrOntoQA-OOD, NeurIPS 2023 — <a href="https://arxiv.org/abs/2305.15269">arxiv.org/abs/2305.15269</a>; code <a href="https://github.com/asaparov/prontoqa">github.com/asaparov/prontoqa</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>5 · Abstract term-rewriting to normal form (synthetic, no NL)</h3>
+    <p class="small muted">Synthetic family (design proposal grounded in TRS theory).</p>
+    <p><strong>What it is:</strong> Give the model a small <strong>term/string rewriting system</strong> over invented symbols (rules ℓ→r) and a start term; ask for the <strong>normal form</strong> (irreducible result) or a bounded property (final symbol, length, or symbol at a position). Confluence/termination theory guarantees a unique normal form when the system is confluent + terminating, so the label is exact and program-checkable.</p>
+    <p><strong>Adaptation:</strong> Fully synthetic and generatable with a reference rewriter as oracle (C2/C7/C8 — no published set exists, maximal contamination resistance). Bound output to the normal-form string / a few tokens (C3). Latent rules = each production, plus meta-rules like innermost/outermost strategy, overlap handling, and termination (C10). Failures localize to a single misapplied production (C11 — ideal for GEPA reflection). Few-shot demos of rule application should help strongly (C12).</p>
+    <p><strong>Fit / weaknesses:</strong> Arguably the purest rubric fit: abstract symbols, exact oracle, per-production decomposition, single call, bounded output. Weakness: the designer must <strong>control determinism</strong> — either restrict to confluent+terminating systems (unique normal form) or fix a deterministic reduction strategy, else the label is ambiguous. Requires building the generator/oracle in-house (no off-the-shelf dataset).</p>
+    <p class="small muted">Terese, <em>Term Rewriting Systems</em>, Cambridge 2003 (foundational); Baader &amp; Nipkow, <em>Term Rewriting and All That</em>, 1998. Automation context: "Automated Strategy Invention for Confluence of Term Rewrite Systems", 2024 — <a href="https://arxiv.org/html/2411.06409v2">arxiv.org/html/2411.06409v2</a>; Newman's lemma (local confluence ⇒ confluence for terminating systems).</p>
+  </div>
+
+  <div class="card">
+    <h3>6 · SATBench (puzzles from SAT/CNF formulas)</h3>
+    <p class="small muted">Existing benchmark + automated generator.</p>
+    <p><strong>What it is:</strong> Samples CNF formulas, then generates a natural-language logic puzzle whose satisfiability mirrors the formula. Answer is SAT/UNSAT (is there a consistent assignment). 2100 puzzles; solver-based validation. Even o4-mini ~65% on hard UNSAT (near random) → large headroom.</p>
+    <p><strong>Adaptation:</strong> Answer is already binary → bounded (C3). Difficulty via clause/variable count gives the incremental ladder (C4). Regenerate CNFs with novel story surface (or skip the story, present raw CNF) to control contamination (C8). The SAT solver is the exact oracle (C2).</p>
+    <p><strong>Fit / weaknesses:</strong> Strong C2/C4/C7, very recent (tie-breaker), documented large headroom. Weakness: the LLM-generated "story background" adds a generation model into the pipeline and lengthens inputs (C3), and can inject noise into the label — either present formulas symbolically or lean on solver validation. Latent-rule decomposition (C10) is weaker than rewriting/deduction tasks (SAT is more monolithic search).</p>
+    <p class="small muted">Wei et al., "SATBench: Benchmarking LLMs' Logical Reasoning via Automated Puzzle Generation from SAT Formulas", EMNLP 2025 — <a href="https://arxiv.org/abs/2505.14615">arxiv.org/abs/2505.14615</a>; <a href="https://github.com/Anjiang-Wei/SATBench">github.com/Anjiang-Wei/SATBench</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>7 · FOLIO (first-order-logic NLI)</h3>
+    <p class="small muted">Existing benchmark (expert-written, FOL-verified).</p>
+    <p><strong>What it is:</strong> 1,430 conclusions over 487 premise sets, each labeled True/False/Unknown, with FOL annotations verified by an inference engine. Open-domain, human-authored, logically complex.</p>
+    <p><strong>Adaptation:</strong> 3-way label is well-bounded (C3). But it is human-written and small (~1.4k) → fails C7 (hundreds of <em>generatable</em> instances) and C8 (published, memorizable). To use it, treat its FOL schemas as templates and <em>regenerate</em> with fresh predicates — at which point it becomes closer to Candidate 3/8 than to FOLIO proper.</p>
+    <p><strong>Fit / weaknesses:</strong> Included for breadth as the canonical FOL-NLI reference. Weak fit as-is: not synthetically generatable at scale, real-world knowledge leaks in (breaks the "knowledge-free logic" headroom), and contamination risk is high. Best used as a <em>style reference</em>, not the quick test.</p>
+    <p class="small muted">Han et al., "FOLIO: Natural Language Reasoning with First-Order Logic", EMNLP 2024 — <a href="https://aclanthology.org/2024.emnlp-main.1229/">aclanthology.org/2024.emnlp-main.1229</a>; <a href="https://arxiv.org/abs/2209.00840">arxiv.org/abs/2209.00840</a>; <a href="https://github.com/Yale-LILY/FOLIO">github.com/Yale-LILY/FOLIO</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>8 · LogicNLI (controlled FOL NLI)</h3>
+    <p class="small muted">Existing benchmark + templated generator.</p>
+    <p><strong>What it is:</strong> NLI-style dataset diagnostically isolating FOL reasoning; up to 5 reasoning depths, small vocabulary (~1077 words), fewer than 50 distinct abstract syntax trees → highly parametric and abstract. Labels are entailment classes.</p>
+    <p><strong>Adaptation:</strong> The small AST inventory + templated surface is close to what the rubric wants: regenerate from the templates with novel entities/predicates (C8), bin by depth for the ladder (C4), bound to the entailment label (C3). Latent rules = quantifier handling, negation, multi-hop chaining (C10).</p>
+    <p><strong>Fit / weaknesses:</strong> Good structural fit (abstract, depth-controlled, generatable). Weakness: the published surface is memorizable and the limited AST set can be reverse-engineered by a strong prompt engineer, threatening C4's "not one-shot guessable" — mitigate by expanding the template grammar. Less active recently than SATBench/FLD.</p>
+    <p class="small muted">Tian et al., "Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI", EMNLP 2021 — <a href="https://aclanthology.org/2021.emnlp-main.303/">aclanthology.org/2021.emnlp-main.303</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>9 · Wason Selection Task (abstract + deontic conditionals)</h3>
+    <p class="small muted">Existing psychology paradigm, recently adapted to LLMs; synthetic-family potential.</p>
+    <p><strong>What it is:</strong> Given a conditional rule "if P then Q" and four cards, pick exactly which cards must be turned to test the rule. Abstract versions are famously hard (humans ~10–20%); deontic framings are easier. Recent work builds an LLM dataset encoding deontic vs descriptive conditionals.</p>
+    <p><strong>Adaptation:</strong> Output is a small set of card labels → bounded multiple-choice-like answer with an exact match check (C2/C3). Generate synthetically over invented P/Q predicates and card values (C8). Latent rules = correct modus-ponens + modus-tollens card selection, avoidance of affirming-the-consequent, deontic vs descriptive framing (C10/C11 — errors map cleanly to specific fallacies, great for reflection). Documented low baseline gives strong C4 headroom.</p>
+    <p><strong>Fit / weaknesses:</strong> Excellent diagnostic structure (C10/C11) and known low floor (C4). Weakness: the space of distinct instances is small (four-card structure), so hundreds of truly independent instances (C7) require varying framing/domain heavily; risk that a single well-crafted prompt ("check P-true and Q-false cards") one-shot-solves the abstract case, threatening C4's incrementality. Best combined with framing/latent-rule variation rather than used bare.</p>
+    <p class="small muted">"Evaluation of Deontic Conditional Reasoning in LLMs: The Case of Wason's Selection Task", EACL 2026 — <a href="https://aclanthology.org/2026.eacl-short.42.pdf">aclanthology.org/2026.eacl-short.42.pdf</a> / <a href="https://arxiv.org/html/2603.06416">arxiv.org/html/2603.06416</a>; classic: Wason 1968.</p>
+  </div>
+
+  <div class="card">
+    <h3>10 · Dyck / formal-language membership &amp; repair</h3>
+    <p class="small muted">Synthetic family (formal-language theory).</p>
+    <p><strong>What it is:</strong> Present a string over a bracket/symbol alphabet and ask a bounded question: is it a member of Dyck-k (balanced)? / minimal edits to balance it? / next legal symbol? Membership in Dyck-k and CFG acceptance are exactly checkable by a parser.</p>
+    <p><strong>Adaptation:</strong> Fully synthetic, exact parser oracle (C2/C7/C8). Output bounded to yes/no or a small integer (C3). Latent rules = matching nesting, multiple bracket types, depth limits (C10). Few-shot demos of balanced/unbalanced strings should help (C12). Contamination-resistant since instances are random strings.</p>
+    <p><strong>Fit / weaknesses:</strong> Clean, cheap, deterministic. Weakness: pure balanced-parenthesis membership can be too easy or too monolithic — the difficulty is one skill (counting depth), so C10 decomposition is thin unless enriched (multiple bracket types, forbidden-substring regular constraints, "Dyck ∩ regular" per Chomsky–Schützenberger). Failure diagnosis (C11) is coarse compared to rewriting/deduction.</p>
+    <p class="small muted">Dyck language / Chomsky–Schützenberger theorem (foundational); "Self-Attention Networks Can Process Bounded Hierarchical Languages", ACL 2021 — <a href="https://aclanthology.org/2021.acl-long.292/">aclanthology.org/2021.acl-long.292</a>; hierarchical-recognition analysis 2024 — <a href="https://arxiv.org/pdf/2410.12413">arxiv.org/pdf/2410.12413</a>.</p>
+  </div>
+
+  <div class="card">
+    <h3>11 · L-system derivation (parallel rewriting to a target string)</h3>
+    <p class="small muted">Synthetic family (Lindenmayer-system rewriting).</p>
+    <p><strong>What it is:</strong> Give an alphabet, an axiom, and a set of <strong>parallel</strong> production rules; ask for the string after <em>n</em> rewriting iterations, or a bounded feature of it (length, count of a symbol, symbol at position k). Deterministic L-systems (D0L) produce an exact unique derivation → exact label. Distinct from sequential grammars: rules apply to <em>all</em> symbols simultaneously each step.</p>
+    <p><strong>Adaptation:</strong> Build a generator that samples D0L systems and asks for a bounded derived feature (C3/C7), scored by an exact reference expander (C2). Novel symbols → contamination-proof (C8). Latent rules = each production, parallel-vs-sequential application, iteration counting (C10); an error reveals which production or the application discipline was misunderstood (C11). Few-shot demos of one/two derivation steps should strongly help (C12).</p>
+    <p><strong>Fit / weaknesses:</strong> Very strong synthetic fit; parallel rewriting is a genuinely distinct latent rule that models get wrong (good for C4 headroom). Weakness: string length blows up exponentially with iterations, so you must cap <em>n</em> and ask for a bounded feature rather than the full string to satisfy C3. The cited 2025 paper targets compiler benchmarks (no QA ground truth), so the dataset itself isn't reusable — only the mechanism.</p>
+    <p class="small muted">Lindenmayer 1968; Prusinkiewicz &amp; Lindenmayer, <em>The Algorithmic Beauty of Plants</em>, 1990. "Multi-Language Benchmark Generation via L-Systems", 2025 — <a href="https://arxiv.org/abs/2512.17616">arxiv.org/abs/2512.17616</a> (uses L-systems to generate programs; the rewriting mechanism is the reusable idea).</p>
+  </div>
+
+  <div class="card">
+    <h3>12 · RuleBERT / soft-rule probabilistic deduction</h3>
+    <p class="small muted">Existing benchmark + synthetic generator.</p>
+    <p><strong>What it is:</strong> Deduction over <strong>soft (weighted) logical rules</strong> — rules hold with a probability/confidence, and the task is to infer a fact's truth (or its probability bucket) given weighted rules and facts. Extends RuleTaker-style deduction with a confidence dimension.</p>
+    <p><strong>Adaptation:</strong> Bound the output to a discrete label (True/False, or a coarse probability bin) for exact matching (C2/C3). Regenerate weighted theories synthetically (C7/C8). Latent rules = rule chaining plus the weight-combination semantics (a genuinely extra latent rule beyond hard deduction → good for C10).</p>
+    <p><strong>Fit / weaknesses:</strong> Adds a distinctive latent dimension (rule weights) that increases headroom (C4) and decomposition (C10). Weakness: probabilistic answers risk <em>non-exact</em> scoring — must discretize carefully to keep C2 clean and avoid partial-credit ambiguity; the exact-weight arithmetic can make failures less linguistically diagnostic (C11) than pure symbolic deduction. Published set → regenerate for C8.</p>
+    <p class="small muted">Saeed et al., "RuleBERT: Teaching Soft Rules to Pre-Trained Language Models", EMNLP 2021 — <a href="https://aclanthology.org/2021.emnlp-main.110/">aclanthology.org/2021.emnlp-main.110</a>; <a href="https://github.com/MhmdSaiid/RuleBert">github.com/MhmdSaiid/RuleBert</a>.</p>
+  </div>
+
+</div>
+
+<div class="section-head" id="cross-cutting"><h2>Cross-cutting notes</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Best pure-rubric fits</h3>
+    <p class="small muted">Abstract, generatable, decomposable, diagnostic.</p>
+    <ul>
+      <li>Candidate 5 (term rewriting to normal form), Candidate 3 (FLD generator), Candidate 4 (PrOntoQA fictional ontologies), Candidate 11 (L-system derivation) — these <span class="key">maximize C8/C10/C11 simultaneously</span>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Best off-the-shelf generators to bootstrap quickly</h3>
+    <ul>
+      <li>RuleTaker (1), ProofWriter (2), FLD (3), PrOntoQA (4), SATBench (6) — all ship <span class="key">open code with exact oracles</span>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Determinism caveat (C5)</h3>
+    <ul>
+      <li>Rewriting-based tasks (5, 11) must <span class="key">fix a reduction/derivation strategy</span> or restrict to confluent+terminating systems so the ground-truth label is unique.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weakest fits as-is</h3>
+    <ul>
+      <li>FOLIO (7 — human-written, small, not scalable) and bare Wason (9 — too few independent instances). Both are strong <span class="key">references</span> but weak quick-test tasks without heavy adaptation.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout warn space-top">
+  <strong>Contamination (C8) is the dominant filter.</strong> Every published NL logic set (1, 2, 4, 6, 7, 8, 12) must be regenerated with fresh/invented symbols. The two families that never had a public dataset — <span class="key">5 (term rewriting)</span> and the QA-repurposed <span class="key">11 (L-systems)</span> — are contamination-proof by construction.
+</div>
+
+<p class="small muted space-top"><strong>Tie-breaker / 2025–2026 activity:</strong> SATBench (EMNLP 2025), Wason/deontic (EACL 2026), FLD follow-up (NeurIPS 2024), automated confluence-strategy invention (2024), L-system benchmark generation (2025).</p>
+
+</main>
+</body>
+</html>

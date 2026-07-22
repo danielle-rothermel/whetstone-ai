@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Structured Extraction &amp; Canonicalization: Quick-Test Candidates</title>
+</head>
+<body>
+<main>
+<h1>Structured Extraction &amp; Canonicalization: Quick-Test Candidates</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Extraction</span>
+</div>
+
+<div class="intro">
+  <p>A breadth-focused literature scan of the structured-extraction and canonicalization domain for the whetstone-ai quick-test task. Every candidate must satisfy the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>: a single LLM call plus exact deterministic programmatic scoring (no sandbox), output bounded to multiple choice or a few words, default prompts scoring well below a known ceiling, a gap that closes incrementally, difficulty that decomposes into independent latent rules, a synthetic and generatable pool with exact ground truth (hundreds of contamination-resistant instances), diagnostic failures, few-shot demos that help, and prompt differences resolvable on 10-20 evals at temperature 0.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>House-style canonicalizers are an unusually good fit for this rubric.</strong> Canonical JSON, slugs, phone/date normalizers, checksum validators, and CSV/fixed-width serializers all share one property: the ground truth is produced by a <span class="key">deterministic reference function the designer writes</span>, so exact-string scoring is free and the ceiling is provably 100%. The transformation is governed by a <span class="key">ladder of independent normalization rules</span> (sort keys, strip whitespace, lowercase, transliterate, escape, zero-pad, trim hyphens, compute a checksum), which is exactly the "difficulty decomposes into independent latent rules" mechanism behind incremental gap-closing. Contamination is dodged by inventing a house convention that exists nowhere in pretraining. The two strongest direct candidates are the <span class="key">house-style normalizer family (#12)</span> and <span class="key">invented-convention canonical JSON (#1)</span>; FollowBench (#6) and IFEval (#5) are the best mechanism donors. This domain corresponds to cluster G in the <a href="landscape.html">Landscape</a>.</p>
+</div>
+
+<div class="callout space-top">
+  <strong>The one recurring caveat.</strong> If you want per-field partial credit you must design the scoring metric carefully. For the quick test, a <span class="key">single exact-match on the whole canonical string</span> (or on one bounded field) sidesteps that entirely. Use rule-count only as post-hoc analysis of which latent rules a prompt recovered, never as the training signal.
+</div>
+
+<div class="callout warn space-top">
+  <strong>Provenance flags.</strong> Several arxiv IDs surfaced by search carried implausible future-year prefixes (2602..2607) in this environment; they are flagged <span class="key">[date unverified]</span> below — treat them as leads to confirm, not settled citations. The well-established works (RFC 8785, IFEval, FollowBench, FoFo, JSONSchemaBench, StructEval, StructText, EDC, PolyNorm) are solidly dated.
+</div>
+
+<div class="section-head" id="direct"><h2>A. Direct-use and closest-analog benchmarks</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>1. RFC 8785 JSON Canonicalization Scheme (JCS)</h3>
+    <p class="small muted">Canonical JSON <em>as</em> the task · reference spec, not a benchmark</p>
+    <ul>
+      <li><strong>What it is.</strong> An IETF spec (informational, 2020) defining a deterministic byte-exact JSON serialization: I-JSON subset, lexicographic sorting of object keys by UTF-16 code units, ECMAScript number formatting, minimal string escaping, no insignificant whitespace. Independent implementations produce byte-identical output — the whole point (hash/sign stability).</li>
+      <li><strong>Adaptation.</strong> Weaponize the spec into a generator: emit random small JSON objects (bounded depth/width, mixed types), ask the model to return the JCS canonical form, score exact-string against a reference canonicalizer. This is the near-exact analog of the project's own <span class="key">dr-serialize</span> work. To dodge contamination and keep the ceiling designer-owned, replace the RFC's rules with an <span class="key">invented house convention</span> (sort keys by length-then-reverse-alpha, a bespoke escape table, a custom number format) so no pretrained JCS knowledge shortcuts the task.</li>
+      <li><strong>Rubric fit — excellent.</strong> Deterministic exact scoring; provable 100% ceiling; rules are independent and stackable (sorting, whitespace, escaping, number format, unicode) → clean incremental ladder and inspectable "which rule did the prompt discover"; few-shot demos plainly teach individual rules; synthetic and infinite. <strong>Weakness:</strong> genuine JCS is a plausible pretraining hit, so you <em>must</em> invent the convention; full canonical JSON can grow long — bound object size to keep outputs at "a few tokens" scale, or score only one canonicalized field.</li>
+      <li class="small muted">RFC 8785, <em>JSON Canonicalization Scheme (JCS)</em>, IETF, 2020. rfc-editor.org/info/rfc8785 · datatracker.ietf.org/doc/html/rfc8785</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>2. StructEval — structured-output generation across 18 formats</h3>
+    <p class="small muted">Format taxonomy and below-ceiling evidence</p>
+    <ul>
+      <li><strong>What it is.</strong> Benchmark evaluating generation of renderable (HTML, React, SVG, Mermaid) and non-renderable (JSON, YAML, CSV, TOML) formats over 44 task types, scored by Syntax / Keyword-Matching / VQA. Reports meaningful headroom: even o1-mini ≈ 75.58 average; open models ~10 pts lower.</li>
+      <li><strong>Adaptation.</strong> Use only the <span class="key">non-renderable, programmatically-checkable slice</span> (JSON/YAML/CSV/TOML) and swap its LLM-judge/VQA components for exact-string equality against a synthetically-generated target. Pick one format, invent a house style, generate instances. The value is the format taxonomy and the empirical below-ceiling floor, not the harness.</li>
+      <li><strong>Rubric fit — good</strong> as a source of formats and difficulty evidence. <strong>Weakness:</strong> as published it uses Keyword/VQA/LLM-judge scoring (not exact-match), some formats are renderable (need a sandbox — disqualified by criterion 2), and it is a published set (contamination) so instances must be regenerated.</li>
+      <li class="small muted">arXiv:2505.20139 (May 2025). arxiv.org/abs/2505.20139</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>3. JSONSchemaBench — 10K schemas for constrained decoding</h3>
+    <p class="small muted">Difficulty-graded schema pool</p>
+    <ul>
+      <li><strong>What it is.</strong> Rigorous benchmark of ~10K JSON schemas spanning constraint types of varying complexity, used to compare six constrained-decoding stacks (Guidance, Outlines, llama.cpp, XGrammar, OpenAI, Gemini) on efficiency, coverage, and output quality. Frameworks fail notably on GitHub-Hard / JSON Schema Store.</li>
+      <li><strong>Adaptation.</strong> Not a plug-in task (it measures decoder compliance, not a canonicalization gap), but a <span class="key">rich, graded schema pool</span>: sample a simple schema, generate a valid instance, task = "return the canonical/normalized instance conforming to schema S", scored exact-match. Also a reference for calibrating schema-complexity as a difficulty knob and for the partial-credit caveat.</li>
+      <li><strong>Rubric fit — moderate.</strong> Great graded schema corpus and clear demonstration that JSON structure is hard below the ceiling. <strong>Weakness:</strong> the benchmark's own objective is constrained decoding, not prompt-optimizable canonicalization; you borrow the schemas, not the task; contamination on real schemas → regenerate.</li>
+      <li class="small muted">Geng et al., arXiv:2501.10868 (Jan 2025). arxiv.org/abs/2501.10868 · github.com/guidance-ai/jsonschemabench</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>4. EDC (Extract, Define, Canonicalize)</h3>
+    <p class="small muted">Schema canonicalization pipeline · conceptual heart of the domain</p>
+    <ul>
+      <li><strong>What it is.</strong> Three-phase LLM knowledge-graph framework: open extraction → schema definition → <span class="key">post-hoc canonicalization</span> of triples to a (possibly auto-built) schema, with a trained retriever for relevant schema elements. The canonicalize phase — mapping free surface forms onto a fixed vocabulary — is the conceptual heart of this domain.</li>
+      <li><strong>Adaptation.</strong> Distill the canonicalize step into a bounded task: give a surface entity/relation string and a small fixed target vocabulary, ask for the exact canonical label. Latent rules = the mapping conventions (casing, synonym collapse, unit normalization). Generate synthetically with an invented vocabulary → exact-match on the chosen label (multiple-choice-like, bounded output).</li>
+      <li><strong>Rubric fit — good</strong> conceptual template; bounded output is natural (one label). <strong>Weakness:</strong> real KG canonicalization is semantic/fuzzy (many "correct" mappings) which fights determinism — you must constrain to a designer-owned invented vocabulary with a single correct answer per instance.</li>
+      <li class="small muted">Zhang &amp; Soh, EMNLP 2024. aclanthology.org/2024.emnlp-main.548 · arXiv:2404.03868 · github.com/clear-nus/edc</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="mechanism"><h2>B. Format-following and instruction-constraint benchmarks (mechanism donors)</h2></div>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>5. IFEval — verifiable format/lexical instruction following</h3>
+    <ul>
+      <li><strong>What it is.</strong> ~500 prompts with 25 types of <span class="key">programmatically verifiable</span> instructions (word/keyword counts, casing, JSON-only output, bullet counts, "wrap in quotes"), scored by strict and loose accuracy — no LLM judge. The canonical example of rule-based, exact, reproducible format eval.</li>
+      <li><strong>Adaptation.</strong> Borrow the <span class="key">verifier library</span> (each instruction type ships a Python checker) but compose <em>many independent constraints per instance</em> to build a latent-rule ladder, and generate synthetic input+constraint combos so instances are fresh. Bound output to a few words / one line.</li>
+      <li><strong>Rubric fit — strong</strong> on determinism and diagnostic failures (checker names which rule failed). <strong>Weakness:</strong> single-constraint instances are near one-shot guessable by a competent prompt engineer (violates criterion 4); you fix this only by <em>stacking</em> independent constraints. Published prompts → regenerate.</li>
+      <li class="small muted">Zhou et al., arXiv:2311.07911 (Nov 2023). arxiv.org/abs/2311.07911</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>6. FollowBench — multi-level incremental-constraint following</h3>
+    <ul>
+      <li><strong>What it is.</strong> Benchmark that starts from a base instruction and <span class="key">incrementally adds constraints (levels 1→5)</span> across Content/Situation/Style/Format/Example categories. The level mechanism is essentially the rubric's "incremental gap that closes in steps" made explicit.</li>
+      <li><strong>Adaptation.</strong> Adopt the <span class="key">level-ladder design pattern</span> for a synthetic canonicalization task: level N = N house rules active. Restrict to Format constraints that are exactly checkable; replace the strong-LLM judge with programmatic exact-match; generate fresh instances.</li>
+      <li><strong>Rubric fit — excellent</strong> conceptual donor for the incremental-rule structure and for measuring "how many rules did the prompt recover". <strong>Weakness:</strong> as published it leans on LLM-as-judge for open-ended constraints — not directly usable; you keep the <em>design</em>, not the scoring.</li>
+      <li class="small muted">Jiang et al., ACL 2024. aclanthology.org/2024.acl-long.257 · arXiv:2310.20410</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>7. FoFo — domain-specific format-following</h3>
+    <ul>
+      <li><strong>What it is.</strong> 494 instructions requiring adherence to real-world domain formats (medical reports, LaTeX), built via AI-human collaboration. Demonstrates format-following is hard and below ceiling.</li>
+      <li><strong>Adaptation.</strong> Evidence source for "default prompts score below ceiling on format tasks" and a catalog of real formats to imitate. Not directly usable: scoring is <span class="key">LLM-as-judge</span>, formats are open-ended, and it is published. Would need full synthetic regeneration + programmatic checker.</li>
+      <li><strong>Rubric fit — weak</strong> as a direct task (judge-based, not exact), useful as floor-evidence and format-idea donor.</li>
+      <li class="small muted">Xia et al., arXiv:2402.18667 (Feb 2024). arxiv.org/abs/2402.18667</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="pool"><h2>C. Synthetic-generation methods and extraction benchmarks (pool builders)</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>8. StructText — synthetic table→text generator (run backwards)</h3>
+    <ul>
+      <li><strong>What it is.</strong> End-to-end framework that starts from <span class="key">tabular ground truth</span> and generates natural-language passages via a plan-then-execute pipeline, yielding key-value extraction benchmarks at scale with exact cell ground truth; scored on factuality/hallucination/coherence/numeric-temporal accuracy.</li>
+      <li><strong>Adaptation.</strong> Run it <span class="key">backwards</span> as your generator: since the table cells are known ground truth, the quick-test task = "extract field X and return it in canonical form", scored exact-match on that one bounded field. The plan-then-execute text synthesis gives contamination-free inputs with guaranteed labels.</li>
+      <li><strong>Rubric fit — good</strong> pool-generation recipe with exact cell truth. <strong>Weakness:</strong> its own metrics are multi-dimensional/soft; you use the <em>generator</em>, not the metrics. Free-text fields need bounding to a few tokens for clean exact scoring.</li>
+      <li class="small muted">Shirai et al., arXiv:2507.21340; VLDB 2025 TaDA workshop. arxiv.org/abs/2507.21340 · github.com/IBM/struct-text</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>9. DTBench — synthetic document→table extraction</h3>
+    <p class="small muted"><span class="key">[date unverified — arXiv:2602.13812]</span></p>
+    <ul>
+      <li><strong>What it is.</strong> Synthetic benchmark for document-to-table extraction with programmatically known ground truth.</li>
+      <li><strong>Adaptation.</strong> Similar to StructText: use the synthetic generator to produce input docs with exact ground-truth cells; reduce the task to a single bounded canonical-field extraction for exact scoring.</li>
+      <li><strong>Rubric fit — moderate;</strong> promising synthetic-generation lead but must be verified (future-dated ID). Table outputs are wide → bound to one field to keep tokens small and scoring exact.</li>
+      <li class="small muted">arXiv:2602.13812 (confirm date/venue). arxiv.org/pdf/2602.13812</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>10. ExtractBench — complex extraction, exact &amp; tolerance metrics</h3>
+    <p class="small muted"><span class="key">[date unverified — arXiv:2602.12247]</span></p>
+    <ul>
+      <li><strong>What it is.</strong> Benchmark + methodology for complex structured extraction; notably specifies <span class="key">exact-match and tolerance-based numeric comparison</span> plus semantic array alignment as metrics.</li>
+      <li><strong>Adaptation.</strong> Mine its metric design (exact vs tolerance vs alignment) to justify the quick-test's choice of strict whole-string exact-match, and borrow task shapes for a synthetic single-field extractor.</li>
+      <li><strong>Rubric fit — moderate;</strong> primarily a metric-design reference. Verify provenance before citing.</li>
+      <li class="small muted">arXiv:2602.12247 (confirm date/venue). arxiv.org/pdf/2602.12247</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>11. LLMStructBench — extraction across prompting strategies</h3>
+    <p class="small muted"><span class="key">[date unverified — arXiv:2602.14743]</span></p>
+    <ul>
+      <li><strong>What it is.</strong> Benchmarks many LLMs on structured extraction across parsing scenarios and ~five prompting strategies; reports that <span class="key">prompting strategy matters more than model size</span> and that semantic errors persist even when structural validity holds.</li>
+      <li><strong>Adaptation.</strong> The "prompting strategy &gt; model size" finding is <span class="key">direct evidence</span> that prompt optimization has real headroom on structured tasks — useful to justify the whole quick-test premise. Borrow task templates; regenerate synthetically; bound output.</li>
+      <li><strong>Rubric fit — moderate</strong> as a task source, <strong>strong as motivation evidence.</strong> Verify provenance.</li>
+      <li class="small muted">arXiv:2602.14743 (confirm date/venue). arxiv.org/html/2602.14743v1</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="normalizers"><h2>D. Deterministic normalizer families (pure synthetic, designer-owned ceiling)</h2></div>
+
+<div class="card">
+  <h3>12. House-style normalizer family — slugify / phone / date / checksum</h3>
+  <p class="small muted">Best all-around fit in this domain · a family you build, not a published benchmark</p>
+  <ul>
+    <li><strong>What it is.</strong> A synthetic family drawing on well-defined deterministic normalization pipelines: slugification (Unicode NFKD → transliterate → lowercase → strip to <code>[a-z0-9-]</code> → collapse/trim hyphens → dedupe suffix), ISO-8601 date normalization, E.164 phone formatting, and checksum validators/formatters (Luhn, ISBN-13, IBAN mod-97). Each pipeline is an <span class="key">ordered stack of small, independent, exactly-checkable rules</span>.</li>
+    <li><strong>Adaptation.</strong> Pick one family (<span class="key">slugify is the strongest single choice</span>) and invent a house convention that diverges from any public library (custom transliteration table, non-standard hyphen rules, a bespoke check digit) so pretraining can't shortcut it. Generate hundreds of random inputs; the reference function is the exact ground truth; score whole-output exact-match. Latent rules = each pipeline stage; few-shot demos teach individual stages; failures are diagnostic ("expected <code>cafe-2</code>, got <code>café_2</code>" reveals the transliteration+separator rule was missed).</li>
+    <li><strong>Rubric fit — best all-around fit.</strong> Provable 100% ceiling (you own the function); fully synthetic + infinite + contamination-proof (invented convention); output is one short slug/number (bounded); deterministic at temp 0; long independent rule ladder → clean incremental gap and inspectable rule discovery; few-shot measurably helps; checksum/format violations give natural, injectable failure cases (criterion 13); a length-budget knob (max slug length) provides the vestigial second metric the rubric suggests.</li>
+    <li><strong>Weakness.</strong> Rules must be tuned so the naive-prompt floor is genuinely low but the ladder is long enough to avoid one-shot guessing — do not make it a single obvious "lowercase and hyphenate" step; <span class="key">stack 5-8 non-obvious rules</span>. Per-field partial credit (if ever wanted) needs care, but a single whole-string exact-match avoids that.</li>
+    <li class="small muted">Rule sources: python-slugify conventions &amp; Unicode NFKD/transliteration (peasydesign.com/guides/slug-url-safe-string-generation); Luhn / ISBN-13 EAN check digit / IBAN mod-97 (ISO 7064) standard checksum definitions; PolyNorm — <em>Few-Shot LLM-Based Text Normalization for TTS</em>, arXiv:2511.03080 (2025), as evidence that date/phone/number normalization is a live LLM few-shot task.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="cross"><h2>Cross-cutting notes</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>Strongest direct candidates:</strong> <span class="key">#12 (house-style slugify/normalizer family)</span> and <span class="key">#1 (invented-convention canonical JSON)</span> — both give a designer-owned 100% ceiling, exact scoring, an independent-rule ladder, and trivial contamination-proofing. <strong>#6 (FollowBench level-ladder)</strong> and <strong>#5 (IFEval verifier library)</strong> are the best design/mechanism donors to structure the incremental rule ladder and to reuse ready-made exact checkers.</li>
+  <li><strong>Recurring caveat across the literature.</strong> Most published structured-output/format benchmarks (StructEval, FoFo, FollowBench, ExtractBench) lean on LLM-judge or soft/multi-dimensional scoring and on published prompts. For this rubric they contribute <span class="key">task shapes, difficulty evidence, and rule inventories</span>, but the actual quick-test should be synthetically regenerated with a programmatic exact-match checker.</li>
+  <li><strong>Partial-credit caveat (from the extraction literature).</strong> Per-field scoring invites tolerance/alignment metrics (ExtractBench) that break determinism-friendly exact-match. For the quick test, prefer a <span class="key">single bounded output scored by exact equality</span>; use rule-count only as post-hoc analysis of which latent rules a prompt recovered, not as the training signal.</li>
+  <li><strong>Provenance flags.</strong> #9 DTBench, #10 ExtractBench, #11 LLMStructBench surfaced with future-year arxiv IDs in this environment; confirm exact dates/venues before citing. The established works (RFC 8785, IFEval, FollowBench, FoFo, EDC, JSONSchemaBench, StructEval, StructText, PolyNorm) are reliably dated.</li>
+</ul>
+
+<div class="section-head" id="sources"><h2>Sources</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Work</th><th>Year / status</th><th>Link</th></tr></thead>
+  <tbody>
+    <tr><td>RFC 8785 (JCS)</td><td>2020</td><td>rfc-editor.org/info/rfc8785 · datatracker.ietf.org/doc/html/rfc8785</td></tr>
+    <tr><td>StructEval</td><td>May 2025</td><td>arxiv.org/abs/2505.20139</td></tr>
+    <tr><td>JSONSchemaBench</td><td>Jan 2025</td><td>arxiv.org/abs/2501.10868 · github.com/guidance-ai/jsonschemabench</td></tr>
+    <tr><td>EDC</td><td>EMNLP 2024</td><td>aclanthology.org/2024.emnlp-main.548 · arXiv:2404.03868 · github.com/clear-nus/edc</td></tr>
+    <tr><td>IFEval</td><td>Nov 2023</td><td>arxiv.org/abs/2311.07911</td></tr>
+    <tr><td>FollowBench</td><td>ACL 2024</td><td>aclanthology.org/2024.acl-long.257 · arXiv:2310.20410</td></tr>
+    <tr><td>FoFo</td><td>Feb 2024</td><td>arxiv.org/abs/2402.18667</td></tr>
+    <tr><td>StructText</td><td>VLDB 2025 (TaDA)</td><td>arxiv.org/abs/2507.21340 · github.com/IBM/struct-text</td></tr>
+    <tr><td>DTBench</td><td class="muted">verify</td><td>arxiv.org/pdf/2602.13812</td></tr>
+    <tr><td>ExtractBench</td><td class="muted">verify</td><td>arxiv.org/pdf/2602.12247</td></tr>
+    <tr><td>LLMStructBench</td><td class="muted">verify</td><td>arxiv.org/html/2602.14743v1</td></tr>
+    <tr><td>PolyNorm</td><td>2025</td><td>arxiv.org/html/2511.03080v1</td></tr>
+    <tr><td>Slugify best practices</td><td>—</td><td>peasydesign.com/guides/slug-url-safe-string-generation</td></tr>
+  </tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>

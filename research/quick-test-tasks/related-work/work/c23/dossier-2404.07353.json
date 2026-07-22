@@ -1,0 +1,77 @@
+{
+  "key": "2404.07353-re-arc",
+  "title": "Addressing the Abstraction and Reasoning Corpus via Procedural Example Generation",
+  "authors": ["Michael Hodel (Institute of Neuroinformatics, University of Zurich and ETH Zurich)"],
+  "venue": "arXiv preprint, v1 only (10 Apr 2024); cs.LG, cs.AI; CC BY 4.0. No LLM-evaluation venue — a data/tooling paper (code: https://github.com/michaelhodel/re-arc).",
+  "claim": "The paper presents Re-ARC, a set of 400 task-specific Python generator+verifier pairs that procedurally produce large numbers of new, verified input/output examples for each of the original 400 ARC training tasks by reverse-engineering the assumed underlying example distribution of each task. This gives access to far more examples per task than ARC's native few-shot demonstrations, plus an explicit difficulty-control parameter (an interval in [0,1] governing sampled cardinalities), intended to enable sample-efficiency and within-task-generalization experiments that were previously infeasible on ARC's fixed, tiny example sets.",
+  "novelty": "The authors position the contribution against naive data augmentation: applying fixed augmentation schemes to existing ARC examples 'would yield only minimal diversity and, more importantly, can't work in general in the first place, as the augmentations may break examples' (Sec. 2). Instead, Re-ARC constructs each new example 'from the ground up' via a task-specific generator that independently samples every relevant degree of freedom (grid dimensions, object counts/sizes/colors/placement, etc.), paired with a task-specific verifier written in the ARC-DSL (Hodel, 2023) that checks each generated example is valid. The explicit, tunable difficulty-control mechanism (RNG-Difficulty and PSO-Difficulty metrics, Sec. 5) and the guarantee of at least 10,000 unique verified examples per task (with median ~1,000 verified examples/sec generation throughput, Sec. 6) are presented as the enabling novelty over the native ARC corpus, which has only a handful of demonstration pairs per task.",
+  "protocol": {
+    "mode": "not-applicable",
+    "description": "unverified — missing from extraction / not applicable. This is a procedural data-generation and verification paper, not an LLM-evaluation paper. It defines no prompting protocol, no model-facing observation format, and reports no experiments in which a model is queried. The extracted text (all six sections + abstract + references, confirmed 'full-text'/'verbatim' per the header) contains no prompt templates, no model call, and no interactive/single-shot evaluation loop of any kind. Note: 'mode' was previously mislabeled 'single-shot' by verification-pass error — that value falsely implies a single-shot LLM protocol exists in this paper; corrected to 'not-applicable' to match this field's own description text.",
+    "observation_content": "Not applicable — the paper describes what a *generator+verifier pair* produces (an input grid, a corresponding output grid, and a pass/fail check via the verifier), not what an LLM or other model observes per call. No prompt text, few-shot demo format, or query format is specified anywhere in the extracted body."
+  },
+  "representations": "unverified — missing from extraction / not applicable. The paper discusses representational choices for the *generated data itself* (grids up to 30x30, up to 10 symbols/colors, matching native ARC format per Sec. 2: 'to stay at least somewhat close to the original ARC format, the number of symbols was kept at 10 and the maximum grid height and width were kept at 30'), and mentions RNG-Difficulty vs. PSO-Difficulty as two candidate difficulty metrics (Sec. 5), but reports no comparison of input/prompt representations against model accuracy, since no models are evaluated in this paper.",
+  "models": [],
+  "headline_numbers": [
+    {
+      "finding": "Each of the 400 ARC training tasks has a generator capable of producing at least 10,000 unique verified examples; most generators have a far larger sample space.",
+      "ref": "Sec. 2, paragraph 2"
+    },
+    {
+      "finding": "Median generator: 40 lines of code, 22 DSL primitive calls, 10 calls to the random module.",
+      "ref": "Sec. 3, paragraph 1"
+    },
+    {
+      "finding": "Median verifier: 18 DSL primitive calls.",
+      "ref": "Sec. 4, paragraph 3"
+    },
+    {
+      "finding": "Approximately 1,000 verified unique examples per second can be generated for the median task.",
+      "ref": "Sec. 6, final paragraph"
+    },
+    {
+      "finding": "Verifiers fail to reproduce the original examples for 11 specific tasks total: 5 tasks (a8d7556c, 6cf79266, 469497ad, 9edfc990, e5062a87) where original examples had bugs or task logic was adapted, and 6 tasks (97a05b5b, 4290ef0e, 7e0986d6, 53b68214, 29ec7d0e, a64e4611) where exactly one original example fails verification.",
+      "ref": "Sec. 4, footnote 2"
+    },
+    {
+      "finding": "About one-third of tasks have a fixed number of symbols across examples; over half of tasks have at least 6 distinct symbol-count values; almost all tasks have at least 10 distinct pixel-count values and the vast majority have at least 10 distinct object-count values.",
+      "ref": "Sec. 5, final paragraph"
+    }
+  ],
+  "failure_modes": "unverified — missing from extraction / not applicable in the model-evaluation sense (no models are run). The paper does report generator/verifier-level limitations: (1) the 11 tasks listed in Sec. 4 footnote 2 where verifiers diverge from original ARC examples due to original bugs or logic adaptation; (2) 'there are some [generators] with relatively low sample-efficiency in terms of the percentage of generated examples that are valid' (Sec. 6); (3) generation can be slow 'due to a slow generation process itself, a small sample space resulting in more frequent duplicate examples, or slow verification' (Sec. 6); (4) the difficulty-interval mechanism is 'brittle to some degree' because degrees of freedom are often non-independent (e.g., smaller grids cap the feasible number of objects), so finely graded difficulty levels can produce empty ranges (Sec. 5).",
+  "one_shot_vs_multistep": "Not applicable — the paper contains no model inference loop, so it makes no claim about what a model can do in one forward pass versus across an interactive/multi-turn loop or with more few-shot demonstrations. Its closest analogue is a methodological framing about *training-time* sample efficiency: the motivating question it enables (Sec. 1) is 'For a given fixed number of examples, how well can the model generalize to an unseen set of examples of the same task, on average across all the training tasks?' and whether a curriculum ordering examples by difficulty (rather than uniform-random difficulty throughout training) improves sample efficiency — this is a training-curriculum question, not a single-call-vs-multi-turn prompting question.",
+  "relation_to_candidate": {
+    "position": "This paper sits entirely outside the LLM-prompting protocol axes that matter for c23: it defines no single-shot or interactive model-observation protocol at all — it is a procedural generator+verifier toolkit for the ARC grid-transformation domain. It supplies raw material (task generators with a difficulty dial, each guaranteeing at least 10,000 verified examples) rather than any evaluation methodology, output shape, or verifier-type finding for LLMs.",
+    "overlap_with_c23": "Overlap is at the level of 'family resemblance' only: both Re-ARC and c23 concern rule/transformation induction over small symbolic grids/strings where a hidden transformation must be inferred from examples and checked by an oracle verifier, and both use a tunable difficulty parameter to grade instance hardness (Re-ARC's RNG-Difficulty/PSO-Difficulty intervals, Sec. 5, are the direct analogue of c23's incremental rule-count ladder). c23's own document treats Re-ARC only as paired background for its '1D-ARC-style short-array transforms' stratum (c23.md, Literature parents), not as a source of prompting protocol or model results.",
+    "differences": "(1) Re-ARC targets 2D grid-to-grid ARC tasks (up to 30x30, 10 colors) drawn from the original 400 fixed ARC task transformations, not c23's short linear strings/token sequences with K independently composable, designer-defined latent rules (casing, positional swaps, ISL/OSL edits, command-to-action mappings). (2) Re-ARC's verifier checks grid equality for a fixed, pre-existing task-specific transformation; it does not decompose difficulty into named, independently-toggleable rule strata the way c23's ladder does. (3) Re-ARC reports zero LLM or model results — it is purely a data/tooling contribution — whereas c23 is fundamentally a model-evaluation design (exact-match / 4-way MC scoring against a reference transformer). (4) Re-ARC's difficulty dial modulates cardinalities (grid size, object count, symbol count) within one fixed transformation per task, whereas c23's 'prompt quality equals how many rules it states or induces' ladder varies the number of *composed independent rules* applied, a different difficulty axis entirely.",
+    "what_c23_adds": "c23 adds the entire LLM-facing evaluation protocol that Re-ARC lacks: a few-shot I/O demonstration + query observation format, an exact-match or 4-way-multiple-choice scoring scheme with distractors each wrong in exactly one rule, and a composable K-independent-rule ladder that produces a smooth incremental difficulty gradient across a stated/induced rule count — none of which Re-ARC specifies, since Re-ARC never puts a model in the loop at all."
+  },
+  "corpus_claim": "Re-ARC (Hodel, 2024) is a procedural ARC generator with a difficulty dial; paired with 1D-ARC it supplies c23's linearized short-array stratum.",
+  "corpus_claim_verdict": "partially-supported. The paper fully supports the 'procedural ARC generator with a difficulty dial' half of the claim: Re-ARC is exactly that — 400 task-specific generator/verifier pairs with an explicit [0,1] difficulty-interval parameter and two proposed difficulty metrics (RNG-Difficulty, PSO-Difficulty; Sec. 5). However, the extracted paper text contains no mention of '1D-ARC' anywhere (not in the abstract, six sections, or bibliography) — the pairing with 1D-ARC to produce a 'linearized short-array stratum' is not something this paper claims, states, or is even aware of; it is an external design decision made by c23's authors, not a fact assertable from this source. The claim as written attributes that pairing to the paper itself ('paired with 1D-ARC it supplies...'), which this paper does not do or discuss.",
+  "baseline_relevant": [
+    "Grid format: native ARC format preserved deliberately — max 10 symbols/colors and max 30x30 grid height/width, 'to stay at least somewhat close to the original ARC format' (Sec. 2), even though generators could technically produce larger/more-symbol grids.",
+    "Difficulty dial: a single interval parameter in [0,1] passed to every generator, controlling the uniform random sampling range for cardinalities (grid size, object count/size, number of symbols, distances, etc.); e.g., bounds [1/3,1] on a height range of 1-30 restricts sampled heights to [10,30] (Sec. 5).",
+    "Two post-hoc difficulty metrics provided for filtering/ordering after generation: RNG-Difficulty (average of the sampled RNG values used during generation — noted as 'heavily flawed') and PSO-Difficulty = (P/1800 + S/10 + O/P)/3 where P = pixel count, S = symbol count, O = object count (Sec. 5).",
+    "Volume/throughput: at least 10,000 unique verified examples guaranteed per task; ~1,000 verified unique examples/sec generated for the median task (Sec. 2, Sec. 6) — relevant for how cheaply a baseline could oversample instances at a given difficulty level.",
+    "Verification/floor caveat: verifiers are not guaranteed to match every original ARC example — 11 of 400 tasks have documented mismatches with original examples (5 due to original bugs/logic changes, 6 with exactly one non-verifying original example) — relevant if any baseline cross-checks against native ARC ground truth (Sec. 4, footnote 2).",
+    "Sample-efficiency caveat: 'there are some [generators] with relatively low sample-efficiency in terms of the percentage of generated examples that are valid,' and generation can be slow due to small sample spaces causing duplicate examples or slow verification (Sec. 6) — relevant to how many raw samples a baseline pipeline should draw per target difficulty stratum to guarantee enough valid unique instances.",
+    "Contamination/release status: code is publicly released (https://github.com/michaelhodel/re-arc, referenced in the abstract footnote) under the paper's stated terms; no explicit contamination discussion is given since this paper predates and is independent of any LLM benchmark run — it is a generator, not a fixed released eval set, so per-run resampling with fresh seeds avoids the memorized-answer-key problem that a fixed static test set would pose."
+  ],
+  "quotes": [
+    "\"This work presents code to procedurally generate examples for the ARC training tasks... For each of the 400 tasks, an example generator following the transformation logic of the original examples was created.\" (Abstract)",
+    "\"Generating new examples for an arbitrary ARC task via say a set of fixed augmentation schemes would yield only minimal diversity and, more importantly, can't work in general in the first place, as the augmentations may break examples. Hence, here, new examples are constructed from the ground up instead.\" (Sec. 2)",
+    "\"Still, each generator is capable of generating at least 10'000 unique examples, and the vast majority of the generators even have a vastly greater sample space.\" (Sec. 2)",
+    "\"Even if the generators could have been written to allow arbitrarily large grids or number of symbols, to stay at least somewhat close to the original ARC format, the number of symbols was kept at 10 and the maximum grid height and width were kept at 30.\" (Sec. 2)",
+    "\"Example difficulty here is defined by an interval within the range [0, 1], which controls the uniform random number generation used for sampling cardinalities.\" (Sec. 5)",
+    "\"Secondly, the PSO-Difficulty is defined as (P/1800 + S/10 + O/P)/3, where P is the number of pixels, S the number of symbols and O the number of objects...\" (Sec. 5)",
+    "\"For the tasks a8d7556c, 6cf79266, 469497ad, 9edfc990 and e5062a87, either the original examples contained bugs or the task logic has been slightly adapted, and for the tasks 97a05b5b, 4290ef0e, 7e0986d6, 53b68214, 29ec7d0e and a64e4611 there is each one example in the original task for which the verifier fails.\" (Sec. 4, footnote 2)",
+    "\"Still, approximately 1'000 verified unique examples per second can be generated for the median task.\" (Sec. 6)"
+  ],
+  "_verification": {
+    "date": "2026-07-22",
+    "corrections": [
+      "protocol.mode was set to 'single-shot', contradicting the protocol.description in the same object which correctly states the paper is 'not applicable' (no LLM protocol, no model calls, no prompting loop of any kind exists in this paper). Corrected protocol.mode to 'not-applicable' so the field no longer falsely implies Re-ARC defines a single-shot LLM evaluation protocol."
+    ],
+    "confidence": "high"
+  }
+}
