@@ -140,36 +140,113 @@
 </div>
 
 <div class="plane optim">
-  <div class="plane-label">High-level MIPROv2 Optimization Run <span class="sub">· external evaluation loop and completion exit</span></div>
-  <pre aria-label="MIPROv2 optimization run loop"><code>Initialization / bootstrap Steps
-              │
-              ▼
-Default candidate ── baseline_full Intent ──▶ external full evaluation
-                                                     │
-                                                     ▼
-                                           Step Result / seed study
-                                                     │
-              ┌────────────── TPE trial loop ◀───────┘
-              │
-              ▼
-Trial Step Request ──▶ candidate + minibatch Intent ──▶ external minibatch evaluation
-     ▲                                                                  │
-     │                 Step Result / append observation / update mean ◀─┘
-     │                                      │
-     │                 ┌────────────────────┴───────────────────┐
-     │                 │ more trials; no promotion boundary     │ cadence or final boundary
-     └─────────────────┘                                        ▼
-                                                   highest eligible mean combination
-                                                                │
-                                           promotion_full Intent ▼
-                                                     external full evaluation
-                                                                │
-     ┌──────── next trial ◀──── full-score Step Result / update study
-     │                                                          │
-     │                                              final trial has completed
-     │                                                          ▼
-     └────────────────────────────────────────────── Completion Step ──▶ ordered proposals
-</code></pre>
+  <div class="plane-label" id="mipro-run-diagram-title">High-level MIPROv2 Optimization Run <span class="sub">· external evaluation loop and completion exit</span></div>
+  <figure class="mipro-run-diagram" aria-labelledby="mipro-run-diagram-title" aria-describedby="mipro-run-diagram-caption">
+    <div class="mipro-run-map">
+      <div class="mipro-run-lane mipro-run-lane--optimizer">MIPROv2 algorithm / optimizer</div>
+      <div class="mipro-run-lane mipro-run-lane--whetstone">Whetstone evaluation boundary</div>
+
+      <svg class="mipro-run-connectors" viewBox="0 0 1200 800" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <defs>
+          <marker id="mipro-arrow-optimizer" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+          <marker id="mipro-arrow-whetstone" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+        </defs>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M350 122 V146"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M594 176 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 206 V218 H500 V230"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 290 V302 H150 V314"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M294 344 H306"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 344 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 374 V428 H694"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 458 V482"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer mipro-run-path--loop" d="M406 512 H68 V344 H6"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M550 542 V566"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 596 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 626 V680 H694"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer mipro-run-path--loop" d="M306 680 H38 V362 H6"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 710 V722 H550 V734"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 764 H806"></path>
+
+        <text class="mipro-run-path-label" x="700" y="164" text-anchor="middle">baseline path</text>
+        <text class="mipro-run-path-label" x="235" y="292" text-anchor="middle">seeded TPE trial loop</text>
+        <text class="mipro-run-path-label" x="750" y="332" text-anchor="middle">minibatch Intent</text>
+        <text class="mipro-run-path-label" x="190" y="500" text-anchor="middle">more trials · no promotion boundary</text>
+        <text class="mipro-run-path-label" x="665" y="552" text-anchor="middle">cadence or final boundary</text>
+        <text class="mipro-run-path-label" x="750" y="584" text-anchor="middle">promotion_full Intent</text>
+        <text class="mipro-run-path-label" x="120" y="668" text-anchor="middle">next trial</text>
+        <text class="mipro-run-path-label" x="610" y="724" text-anchor="middle">final trial completed</text>
+        <text class="mipro-run-path-label" x="750" y="752" text-anchor="middle">completion exit</text>
+      </svg>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--init">
+        <strong>Initialization / bootstrap <a class="term-ref" href="#local-optimization-step">Steps</a></strong>
+        <span>Build candidate pools and demo evidence</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--baseline">
+        <strong>Default candidate</strong>
+        <span><code>baseline_full</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--baseline-eval">
+        <strong>External full evaluation</strong>
+        <span>Ordinary Whetstone <a href="eval-run.html">Eval run</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--seed">
+        <strong><a class="term-ref" href="#local-optimization-step-result">Step Result</a> / seed study</strong>
+        <span>Baseline score enters study state</span>
+      </div>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-request">
+        <strong>Trial <a class="term-ref" href="#local-optimization-step-request">Step Request</a></strong>
+        <span>Seeded sampler chooses a combination</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-intent">
+        <strong>Candidate + <code>minibatch</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></strong>
+        <span>Optimizer proposes; it does not evaluate</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--minibatch-eval">
+        <strong>External minibatch evaluation</strong>
+        <span>Validate, materialize, execute and aggregate</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-result">
+        <strong><a class="term-ref" href="#local-optimization-step-result">Step Result</a> / append observation / update mean</strong>
+        <span>Persist measurement references and updated study state</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--boundary">
+        <strong>Promotion boundary?</strong>
+        <span>Periodic cadence or final trial boundary</span>
+      </div>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--promotion">
+        <strong>Highest eligible mean combination</strong>
+        <span><code>promotion_full</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--promotion-eval">
+        <strong>External full evaluation</strong>
+        <span>Exact target full Eval Config</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--full-result">
+        <strong>Full-score <a class="term-ref" href="#local-optimization-step-result">Step Result</a> / update study</strong>
+        <span>Continue the trial loop or complete</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--completion">
+        <strong>Completion <a class="term-ref" href="#local-optimization-step">Step</a></strong>
+        <span>Order distinct measured combinations</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--output mipro-run-node--proposals">
+        <strong>Ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a></strong>
+        <span>Terminal run output</span>
+      </div>
+    </div>
+    <figcaption class="mipro-run-caption" id="mipro-run-diagram-caption">MIPROv2 owns candidate selection and study-state transitions in the purple lane. Each Evaluation Intent crosses into the green Whetstone lane for external evaluation; its immutable Step Result returns to the optimizer. Minibatch trials loop until periodic or final promotion, then the final completed trial exits through the Completion Step to ordered proposals.</figcaption>
+  </figure>
 </div>
 
 <div class="plane">
