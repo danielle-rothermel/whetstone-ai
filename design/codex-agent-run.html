@@ -45,7 +45,7 @@
     <h3>Reused from the Eval run</h3>
     <ul>
       <li>Same LLM Call Node → LLM Call Node → Eval Node Rollout Definition</li>
-      <li>Same 4 Model Routes, displayed as (Provider Service, requested Model) while complete Provider Call Config refs/hashes define identity</li>
+      <li>Same 4 Model Routes, displayed as (Provider Service, requested Model) while complete output-affecting Provider Call Config refs/hashes contribute to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</li>
       <li>Variance source: <code>budget_ratio</code> = 0.25, 0.5, 0.75, 1.0</li>
       <li>HumanEval+ (164 tasks) @ pinned revision · 3 repeats · zstd-19</li>
       <li>Same Official Eval Config</li>
@@ -84,7 +84,7 @@
   <div class="comps">
     <div class="comp node"><b>Starting Candidates &amp; Fixed Axes</b><span class="note">templates A/B × four Model Routes and four ratios over one Rollout Definition/graph shape<hr>each route resolves to complete encoder/decoder Provider Call Config refs/hashes; each fully assigned Rollout Config gets its own concrete Graph Spec</span></div>
     <div class="comp node optim"><b>Mutation Surface</b><span class="note">encoder <code>{user_prompt_template}</code> only<hr>outside it, each proposal must match its named starting candidate — the diff check's yardstick</span></div>
-    <div class="comp node optim"><b>Tool Spec</b><span class="note">the Request serializes one concrete Spec; it references the versioned Tool Definition and configures endpoint, internal Eval Config, Reward Policy, capacity/timeout/policies, ledger namespace, idempotency and refusal</span></div>
+    <div class="comp node optim"><b>Tool Spec</b><span class="note">the Request serializes one concrete Spec; it references the versioned Tool Definition and configures endpoint, internal Eval Config, Reward Policy, capacity/timeout/policies, ledger namespace, idempotency and refusal. The Eval Config measures, but does not alter, each Rollout Variant</span></div>
     <div class="comp node optim"><b>Guidance</b><span class="note">"return exactly 4 ordered proposals, one for each named Model Route"<hr>the harness schema and diff check validate proposals; rationale remains advisory provenance, never a score</span></div>
   </div>
 </div>
@@ -93,7 +93,7 @@
   <div class="plane-label">Tool Spec: <code>evaluate_candidate</code> <span class="sub">· concrete serializable Config referencing a versioned Definition</span></div>
   <div class="comps">
     <div class="comp node"><b>Input</b><span class="note">stable call ID, one allowed Model Route, and one proposed encoder template using <code>MAX_BUDGET</code> and <code>INPUT_CODE</code></span></div>
-    <div class="comp node"><b>Materialization</b><span class="note">sets the chosen base and template at <code>budget_ratio=0.5</code> → one Rollout Config; binds the tool's Eval Config independently</span></div>
+    <div class="comp node"><b>Materialization</b><span class="note">sets the complete output-affecting configuration for the chosen base and template at <code>budget_ratio=0.5</code> → one Rollout Config identifying one Rollout Variant; binds the tool's Eval Config independently</span></div>
     <div class="comp node"><b>Cheaper Eval Config</b><span class="note">pinned 20-task subset · 1 repeat · same facts-first procedure and metrics as official evaluation<hr>its <code>eval_config_hash</code> is not inside <code>rollout_config_hash</code>; internal authority comes from its Evaluation Context</span></div>
     <div class="comp node"><b>Tool Result</b><span class="note">20 Rollout refs, Reward Policy/version, aggregate Reward, request/response evidence, usage, cost and provenance; identical call-ID replay is idempotent</span></div>
     <div class="comp node"><b>Ledger &amp; Handle</b><span class="note">Whetstone ledger key = <code>tool_spec_hash + call_id</code>; owns acceptance/refusal/completion and capacity 20 across restart. Runtime Handle is constructed from the Spec and never serialized</span></div>
@@ -133,7 +133,7 @@
       <div class="comp settled optim"><b>Diff check &amp; materialization</b><span class="note">each proposal binds exactly one allowed base and changes only encoder <code>{user_prompt_template}</code>; four ratios produce 16 Rollout Configs</span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">evaluate-all admits all 16 configs, preserving agent proposal order and then ratio order</span></div>
       <div class="comp settled"><b>Evaluator</b><span class="note">runs 16 × 164 × 3 = 7,872 Rollouts in the authorized official Evaluation Context; only attested outputs feed the plot</span></div>
-      <div class="comp settled"><b>Platform mapping</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Attempts may contain DBOS-replayed Invocations; dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>, while the Whetstone Result Store owns uniqueness</span></div>
+      <div class="comp settled"><b>Platform mapping &amp; Provider Concurrency Control</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Whetstone projects non-secret provider quota/throttle identities into Work Item labels and configures dr-platform selector capacity. It bounds concurrently ADMITTED rollout-execution Stages across workers within its pipeline-version/stage/selector/shared-DB scope and holds capacity for the full Stage. Admission also requires the mandatory default empty-selector control; see the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract and prerequisite</a>. Attempts may contain DBOS-replayed Invocations; dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>, while the Whetstone Result Store owns uniqueness</span></div>
     </div>
   </div>
 
@@ -144,14 +144,14 @@
     <div class="hflow">
       <div class="comp settled"><b>Task inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">complete Provider Call Config ref/hash is treatment; Request references it + Transcript + idempotency; nonblank accepted native text becomes Generation</span></div>
+      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">the complete Provider Call Config ref/hash is output-affecting and contributes to Rollout Variant identity; Request references it + Transcript + idempotency; nonblank accepted native text becomes Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction and retention</span></div>
       <span class="harrow">→</span>
       <div class="comp settled"><b>Eval Node</b><span class="note">Submission Text → Code Artifacts → Metric Facts/Records + integer Compressed Description Length<hr>Evaluation Procedure derives per-observation score; Aggregation reduces</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Terminality</b><span class="note">after Node retries, the terminal Result must be immutable in dr-store and atomic binding must resolve its key to that ref: unbound binds; same-ref replay succeeds idempotently. Only then is the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry is allowed only while unbound</span></div>
+      <div class="comp substrate"><b>Terminality</b><span class="note">Whetstone owns bounded semantic Node retries and durable Node/Provider Attempt fencing inside the Stage; native provider retries are 0. The terminal Result must be immutable in dr-store and atomic binding must resolve its key to that ref: unbound binds; same-ref replay succeeds idempotently. Only then is the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck</span></div>
     </div>
   </div>
 
@@ -223,7 +223,7 @@
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Submits 7,872 Work Items, one per Rollout Execution Key. After Node retries, each terminal Result is immutably persisted to dr-store and atomically bound in the Whetstone Result Store: unbound binds, and same-ref replay is idempotent. Only then does dr-platform return the bound ref as <code>output_reference</code> and mark the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED and alone permits operator retry; a different-ref conflict preserves the existing binding, fails the conflicting attempt, and permits no overwrite or retry replacement.</p>
+    <div class="what"><p>Submits 7,872 Work Items, one per Rollout Execution Key. After Whetstone's bounded semantic Node retries, durably fenced as Node/Provider Attempts inside the Stage, each terminal Result is immutably persisted to dr-store and atomically bound in the Whetstone Result Store: unbound binds, and same-ref replay is idempotent. Provider-native retry remains disabled. Only then does dr-platform return the bound ref as <code>output_reference</code> and mark the Stage SUCCEEDED. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED; operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. A different-ref conflict preserves the existing binding, fails the conflicting attempt, and permits no overwrite or retry replacement.</p>
       <div class="ledger"><b>output</b>authoritative bound refs or explicit FAILED Stages; dr-platform does not own uniqueness</div>
     </div>
   </div>

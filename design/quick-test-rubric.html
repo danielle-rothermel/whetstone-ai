@@ -40,7 +40,7 @@
 </div>
 
 <div class="callout">
-  <strong>Minimum concrete definition.</strong> Pin a generated task-family schema, generator version, dataset manifest and split identities. Declare one LLM Call Node and one Eval Node in the Rollout Definition; each fully assigned Rollout Config gets one concrete Graph Spec. Eval Config has Sampling, Evaluation Procedure and Aggregation/objectives only. Provider Call Request references Provider Call Config + Transcript + idempotency and materializes native LlmRequest without duplicate controls; only Whetstone-accepted nonblank response text becomes Generation. An Evaluation Context binds authority.
+  <strong>Minimum concrete definition.</strong> Pin a generated task-family schema, generator version, dataset manifest and split identities. Declare one LLM Call Node and one Eval Node in the Rollout Definition; each fully assigned output-affecting rollout configuration gets one concrete Graph Spec and Rollout Config, and that Rollout Config identifies one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a>. Internal and official Eval Configs measure the same Rollout Variant without changing its identity. Provider Call Config is output-affecting and contributes to that identity; Provider Call Request references it plus Transcript and idempotency and materializes native LlmRequest without duplicate controls. Only Whetstone-accepted nonblank response text becomes Generation. An Evaluation Context binds authority.
 </div>
 
 <div class="section-head" id="rationale"><h2>Rationale</h2></div>
@@ -170,15 +170,19 @@
     <ul>
       <li>Small model, short outputs, no sandbox — and no <span class="key">rate-limit bottleneck</span> at the intended concurrency.</li>
       <li>One Platform Campaign per Evaluation Campaign/context uses top-up Submission Batches. Rollout Execution Key adds <code>evaluation_context_id</code> to Rollout Key and uniquely owns its Work Item, <code>execute-rollout</code> Stage and terminal Result.</li>
-      <li>A native Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations. Automatic Node retries exhaust before the terminal Result is immutably persisted to dr-store and its Rollout Execution Key is atomically bound in the Whetstone Result Store.</li>
+      <li>A native Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations. Distinctly, Whetstone owns bounded semantic retries and durable Node/Provider Attempt fencing inside the Stage; native provider retries are 0.</li>
       <li>Assert the atomic bind contract: unbound + ref binds; the same ref replays idempotently; a different ref raises identity conflict and never overwrites the authoritative binding.</li>
-      <li>A Stage becomes SUCCEEDED only after binding resolves to that persisted Object Reference. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED, and operator retry is allowed only while unbound. A different-ref conflict fails the conflicting attempt and never authorizes overwrite or retry replacement. Deliberate re-evaluation uses a new context or Repeat.</li>
+      <li>A Stage becomes SUCCEEDED only after binding resolves to that persisted Object Reference. Failure to produce or persist the Result, or a binding/storage failure leaving the key unbound, raises FAILED. A distinct Platform Stage Attempt/operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. A different-ref conflict fails the conflicting attempt and never authorizes overwrite or retry replacement. Deliberate re-evaluation uses a new context or Repeat.</li>
       <li>dr-platform transports the authoritative bound Object Reference as <code>output_reference</code>; it does not own result uniqueness.</li>
       <li>A Graph Run Summary may index operational stage/attempt state, but it is never the Metric Record, Reward, Objective, or Rollout Result source of truth.</li>
-      <li>Selector Capacity limits Rollouts; Provider Call Limiter gates calls. Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0.</li>
+      <li>Provider Concurrency Control uses dr-platform selector capacity to bound Stage occupancy; the canonical scope and non-goals are below. Provider Execution Policy owns timeout, credentials, redaction and retention.</li>
     </ul>
     <p class="small muted space-top"><strong>Why.</strong> Wall-clock is what makes hyperparameter sweeps iterable. A cheap run that takes hours still blocks the debug loop.</p>
   </div>
+</div>
+
+<div class="callout" id="provider-concurrency-control">
+  <strong><a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a>.</strong> Whetstone configures the mandatory default empty-selector Stage capacity plus provider-specific selector capacities over non-secret provider quota/throttle identity labels. Every matching control applies. Without the default control, work remains unconfigured and therefore unadmitted. Once configured, the controls bound concurrently ADMITTED rollout-execution Stages across workers within their pipeline-version/stage/selector/shared-DB scopes, holding capacity for the full Stage. This is deliberately not exact provider-call concurrency, RPM/TPM or token limiting, a global cross-stage or cross-version quota, strict fairness, or adaptive limiting. No call-boundary limiter is planned absent demonstrated need.
 </div>
 
 <div class="callout">

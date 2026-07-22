@@ -62,7 +62,7 @@
     <ul>
       <li>openrouter, <code>deepseek/deepseek-v4-flash</code></li>
     </ul>
-    <p class="small muted space-top">Display grouping: one (Provider Service, requested Model). The complete encoder/decoder Provider Call Config Object References and Identity Hashes remain treatment identity. The other three Model Routes get independent runs.</p>
+    <p class="small muted space-top">Display grouping: one (Provider Service, requested Model). The complete encoder/decoder Provider Call Config Object References and Identity Hashes are output-affecting and contribute to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity. The other three Model Routes get independent runs.</p>
   </div>
   <div class="card optim">
     <h3>Initial Candidates &amp; Mutation Surface</h3>
@@ -98,7 +98,7 @@
 <div class="plane">
   <div class="plane-label">Rollout Definition / graph shape <span class="sub">· identical to the eval experiment's</span></div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>treatment includes the complete Provider Call Config Object Reference and Identity Hash plus prompt templates/KVs<br>output: encoder representation<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
+    <div class="comp node"><b>Encoder LLM Call Node</b><span class="note">inputs: <code>input_code</code><br>output-affecting components include the complete Provider Call Config Object Reference and Identity Hash plus prompt templates/KVs<br>output: encoder representation<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
     <span class="harrow">→</span>
     <div class="comp node"><b>Decoder LLM Call Node</b><span class="note">complete Provider Call Config Object Reference and Identity Hash plus decoder prompt are fixed outside the mutation surface</span></div>
     <span class="harrow">→</span>
@@ -106,7 +106,7 @@
   </div>
 </div>
 
-<div class="flow-arrow"><span>the harness materializes one starting treatment at ratio 0.5 below</span> <span class="glyph">▼</span></div>
+<div class="flow-arrow"><span>the harness materializes one starting Rollout Variant at ratio 0.5 below</span> <span class="glyph">▼</span></div>
 
 <div class="plane">
   <div class="plane-label">Initial Rollout Config Example <span class="sub">· candidate (template B) at budget_ratio 0.5 — one of the 2</span></div>
@@ -115,11 +115,11 @@
     <div class="comp node"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Template B<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>the mutation surface — proposals may differ from this starting candidate here and nowhere else</span></div>
     <div class="comp node"><b>Decoder Provider Call Config</b><span class="note">complete identity-bearing Object Reference and Identity Hash; same displayed route/model/temperature as encoder, with all controls/extensions covered by the Config</span></div>
     <div class="comp node"><b>Decoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = Decoder Template<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{}</code></span></div>
-    <div class="comp node"><b>Treatment Identity</b><span class="note"><code>graph_digest</code> and <code>rollout_config_hash</code> cover the Graph Spec and generation treatment only<hr>tool and official <code>eval_config_hash</code> values and Evaluation Context IDs are independent and never included in the Rollout Config</span></div>
+    <div class="comp node"><b>Rollout Variant Identity</b><span class="note"><code>graph_digest</code> and <code>rollout_config_hash</code> cover the Graph Spec and complete output-affecting rollout configuration; the Rollout Config identifies one Rollout Variant<hr>tool and official <code>eval_config_hash</code> values and Evaluation Context IDs are independent and never included in the Rollout Config</span></div>
   </div>
 </div>
 
-<div class="callout"><b>Measurement and Reward.</b> Internal Eval Configs contain Sampling (8 or 35 named tasks × 1 repeat), Evaluation Procedure and Aggregation/objectives only. Each Tool Spec separately owns its Reward Policy. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward. Provider evidence uses Provider Call Config, Provider Call Request, Provider Response and requested Model field.</div>
+<div class="callout"><b>Measurement and Reward.</b> Internal Eval Configs contain Sampling (8 or 35 named tasks × 1 repeat), Evaluation Procedure and Aggregation/objectives only. Internal and official Eval Configs measure the same Rollout Variant without changing its identity. Each Tool Spec separately owns its Reward Policy. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward. Provider evidence uses Provider Call Config, Provider Call Request, Provider Response and requested Model field.</div>
 
 <div class="section-head" id="system"><h2>Run MIPROv2, Then Official Evaluation on What It Returns</h2></div>
 
@@ -161,7 +161,7 @@
       <div class="comp settled optim"><b>Diff check &amp; materialization</b><span class="note">each returned proposal changes only encoder <code>{user_prompt_template}</code>; 3/3 pass, then fixed axes produce 12 Rollout Configs</span></div>
       <div class="comp settled optim"><b>Selection</b><span class="note">applies the frozen policy: top 2 of the ordered list proceed</span></div>
       <div class="comp settled"><b>Evaluator</b><span class="note">expands each admitted proposal across four ratios → 8 Rollout Configs; runs 8 × 164 × 3 in the authorized official Evaluation Context — only attested outputs feed the plot</span></div>
-      <div class="comp settled"><b>Platform mapping</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. A Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations; Selector Capacity and Provider Call Limiter are separate</span></div>
+      <div class="comp settled"><b>Platform mapping &amp; Provider Concurrency Control</b><span class="note">one Platform Campaign per Evaluation Campaign/context; top-up Submission Batches; one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Whetstone projects non-secret provider quota/throttle identities into Work Item labels and configures dr-platform selector capacity. It bounds concurrently ADMITTED rollout-execution Stages across workers within its pipeline-version/stage/selector/shared-DB scope and holds capacity for the full Stage. Admission also requires the mandatory default empty-selector control; see the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract and prerequisite</a>. A Platform Stage Attempt may contain multiple DBOS-replayed Stage Invocations</span></div>
     </div>
   </div>
 
@@ -174,12 +174,12 @@
       <span class="harrow">→</span>
       <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references config + Transcript + idempotency; accepted nonblank native response text becomes Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction, retention and native retries=0</span></div>
+      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials, redaction and retention</span></div>
       <span class="harrow">→</span>
       <div class="comp settled"><b>Eval Node</b><span class="note">Submission Text → Code Artifacts → Metric Facts/Records; integer Compressed Description Length is zstd-19 UTF-8 encoder bytes<hr>Evaluation Procedure derives score; Aggregation reduces</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Terminality</b><span class="note">automatic Node retries exhaust before a terminal success/exhausted-failure Result. Stage success requires immutable dr-store persistence and the Whetstone Result Store atomically binding its Rollout Execution Key to that same authoritative Object Reference: an unbound key binds, and the same-reference replay succeeds idempotently. A different reference conflicts without overwrite and cannot authorize replacement. Failure that leaves the key unbound raises Stage FAILED and permits explicit operator retry. dr-platform transports only the authoritative bound reference</span></div>
+      <div class="comp substrate"><b>Terminality</b><span class="note">Whetstone's bounded semantic Node retries exhaust under durable Node/Provider Attempt fencing inside the Stage; native provider retries are 0. Stage success requires immutable dr-store persistence and the Whetstone Result Store atomically binding its Rollout Execution Key to that same authoritative Object Reference: an unbound key binds, and the same-reference replay succeeds idempotently. A different reference conflicts without overwrite and cannot authorize replacement. Failure that leaves the key unbound raises Stage FAILED; operator retry proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. dr-platform transports only the authoritative bound reference</span></div>
     </div>
   </div>
 
@@ -209,7 +209,7 @@
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
     <div class="what"><p><strong>Stage 1 — bootstrap demo sets.</strong> Spends 48 Rollouts and deterministically assembles 3 nonempty demo sets plus empty. Build the version-1 Demo Set Identity Document for each and require four distinct full Identity Hashes; a duplicate Demo Set identity, detected Demo Set Identity Hash collision or insufficient valid pairs ends with a failed Optimization Result before official materialization.</p>
-      <div class="ledger"><b>output</b>48 internal Rollout references; treatment and Eval Config identities remain separate; cost charged to optimization</div>
+      <div class="ledger"><b>output</b>48 internal Rollout references; Rollout Variant and Eval Config identities remain separate; cost charged to optimization</div>
     </div>
   </div>
   <div class="tick optim">
@@ -253,7 +253,7 @@
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Submits 3,936 Work Items, one per Rollout Execution Key. After Node retries exhaust, the executor immutably persists the terminal Result in dr-store and asks the Whetstone Result Store to atomically bind the key to that Object Reference. Unbound plus reference binds; the same reference replays as idempotent success. Only either path resolving to that authoritative bound reference makes the Stage SUCCEEDED, and dr-platform transports only that reference. Failure that leaves the key unbound makes the Stage FAILED and permits an operator-added Stage Attempt. A different-reference conflict keeps the existing authoritative binding, cannot authorize replacement and does not make the conflicting candidate a success.</p>
+    <div class="what"><p>Submits 3,936 Work Items, one per Rollout Execution Key. After Whetstone's bounded semantic Node retries exhaust under durable Node/Provider Attempt fencing inside the Stage, the executor immutably persists the terminal Result in dr-store and asks the Whetstone Result Store to atomically bind the key to that Object Reference. Provider-native retry remains disabled. Unbound plus reference binds; the same reference replays as idempotent success. Only either path resolving to that authoritative bound reference makes the Stage SUCCEEDED, and dr-platform transports only that reference. Failure that leaves the key unbound makes the Stage FAILED; an operator-added Stage Attempt proceeds only through Whetstone's FAILED+unbound gateway and executor recheck. A different-reference conflict keeps the existing authoritative binding, cannot authorize replacement and does not make the conflicting candidate a success.</p>
       <div class="ledger"><b>output</b>3,936 officially attested Rollout Results with immutable references</div>
     </div>
   </div>
