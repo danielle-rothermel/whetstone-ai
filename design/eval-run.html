@@ -25,13 +25,13 @@
 </div>
 
 <div class="intro">
-  <p>The <a class="term-ref" href="#local-identity-optimizer">identity optimizer</a> returns unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>; the harness materializes fixed <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> plus <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Records</a> and evaluates the graphs through an authorized official context, establishing the baseline for optimization runs.</p>
+  <p>The <a class="term-ref" href="#local-identity-optimizer">identity optimizer</a> executes one pure <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a> and returns unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>; the terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> references that sole immutable Step Result. The harness then materializes fixed <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> plus <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Records</a> and evaluates the graphs through an authorized official context, establishing the baseline for optimization runs.</p>
 </div>
 
 <div class="callout">
   <b>Algorithm-local vocabulary</b> — defined here because these terms describe this baseline experiment rather than shared Whetstone ontology:
   <ul>
-    <li><span class="key" id="local-identity-optimizer">identity optimizer</span> — the optimizer that returns one unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposal</a> for each starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidate</a> without tool or LM calls.</li>
+    <li><span class="key" id="local-identity-optimizer">identity optimizer</span> — the optimizer that performs exactly one pure <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a> and returns one unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposal</a> for each starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidate</a>. Its transition needs no <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Spec</a>, tool or LM call, or <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a>.</li>
     <li><span class="key" id="local-per-task-budget-derivation">per-task budget derivation</span> — the rollout-time calculation <code>MAX_BUDGET = round(budget_ratio × chars(input_code))</code> from the static ratio/rule and concrete <a class="term-ref" href="vocab_and_defs.html#term-task">Task</a> input.</li>
   </ul>
 </div>
@@ -154,16 +154,25 @@ Use at most {MAX_BUDGET} characters.
     </div>
   </div>
 
-  <div class="flow-arrow"><span><a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a>: 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>, fixed materialization axes, <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">mutation surface</a> ∅, toolkit ∅, guidance ∅</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a>: run/Step/config identities, kind=<code>identity</code>, index 0, 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>, <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">mutation surface</a> ∅, tools ∅, prior state/history ∅, identity output contract, and complete budget</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Optimization stage <span class="sub">· the optimizer</span></div>
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> <span class="sub">· exactly one pure Step</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Identity optimizer</b><span class="note">returns 8 ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, one unchanged proposal for each starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidate</a>; zero <a class="term-ref" href="vocab_and_defs.html#term-tool-call">tool calls</a>, zero LM calls</span></div>
+      <div class="comp settled"><b>Identity <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a></b><span class="note">performs one restartable pure transition and returns 8 ordered unchanged candidates, one for each starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidate</a>; zero <a class="term-ref" href="vocab_and_defs.html#term-tool-call">Tool Calls</a>, zero LM calls, and no <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a> because no optimizer-internal measurement is needed</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a>: ordered list of 8 unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a></span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>persist one immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a>: request ref, 8 proposed/accepted unchanged candidates, empty evaluation/tool evidence, immutable empty state/history delta, zero consumed budget, remaining budget, status=<code>complete</code></span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Optimization terminalization <span class="sub">· durable run output</span></div>
+    <div class="comps">
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></b><span class="note">contains the 8 ordered unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, the sole Step Result reference, and zero-cost advisory provenance; it makes no official-evaluation claim</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> → separate official proposal validation, materialization, selection, and evaluation</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Evaluation harness <span class="sub">· runs <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a></span></div>
@@ -213,15 +222,19 @@ Use at most {MAX_BUDGET} characters.
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes one <a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used in the <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> role, 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a> and four ratios. Materialization produces 32 fully assigned <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> outputs and 32 <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Records</a>. The official harness independently binds the <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> in an authorized <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>; that <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> references the same <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned to every materialized <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>.</p></div>
+    <div class="what"><p>Freezes one <a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used in the <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> role, 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>, and four ratios. The official harness independently binds the <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> in an authorized <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>; that <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> references the same <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned to every later materialized <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Issues the <a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a> to the <a class="term-ref" href="#local-identity-optimizer">identity optimizer</a>: 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>, fixed materialization axes, <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">mutation surface</a> ∅, toolkit ∅, guidance ∅.</p></div>
+    <div class="what"><p>Starts one <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> and persists its sole immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a>: run/Step/config identities, kind <code>identity</code>, index 0, 8 starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>, <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">mutation surface</a> ∅, tools ∅, prior state/history ∅, identity output contract, and complete budget.</p></div>
   </div>
   <div class="tick">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Returns 8 ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> unchanged — zero <a class="term-ref" href="vocab_and_defs.html#term-tool-call">tool calls</a>, zero LM calls, no extras.</p></div>
+    <div class="what"><p>Performs the pure identity transition and returns 8 ordered unchanged candidates — zero <a class="term-ref" href="vocab_and_defs.html#term-tool-call">Tool Calls</a>, zero LM calls, no <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a>, and no extras.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who env">Optimization harness</div>
+    <div class="what"><p>Persists exactly one immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> with the Step Request reference, 8 proposed and accepted unchanged candidates, empty evaluation/tool evidence, immutable empty state/history delta, zero consumed budget, remaining budget, and <code>complete</code> status. It then persists one terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> containing 8 ordered unchanged <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, the sole Step Result reference, and zero-cost advisory provenance. No tool or Evaluation Intent is required for this identity transition, and official evaluation has not yet occurred.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>

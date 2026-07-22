@@ -25,7 +25,7 @@
 </div>
 
 <div class="intro">
-  <p>This page turns the shared <a href="vocab_and_defs.html">vocabulary and definitions</a> into four bounded implementation workstreams: the coordinated dr-serialize identity reset, immutable terminal storage, durable semantic retry with raw provider evidence, and <a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a>. A cross-repository breaking release sequence makes those contracts usable through versioned PyPI dependencies without compatibility shims or Git revision pins.</p>
+  <p>This page turns the shared <a href="vocab_and_defs.html">vocabulary and definitions</a> into five bounded implementation workstreams: the coordinated dr-serialize identity reset, immutable terminal storage, durable semantic retry with raw provider evidence, <a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a>, and the durable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a> protocol. A cross-repository breaking release sequence makes those contracts usable through versioned PyPI dependencies without compatibility shims or Git revision pins.</p>
 </div>
 
 <div class="section-head" id="decisions"><h2>Decisions at a Glance</h2></div>
@@ -293,6 +293,70 @@
   <strong>Provider Calls non-goals.</strong> No provider idempotency keys; exactly-once external effects; custom provider-attempt ledger; exact call-boundary limiter; RPM, TPM, or token reservation; global, cross-stage, or cross-version quotas; fairness or adaptive header limiting; credential-aware quota identity; generalized body-size, truncation, redaction, or retention policy; nested native or DBOS automatic retries; or provider-specific dr-platform logic.
 </div>
 
+<div class="section-head" id="optimization-step-workstream"><h2>Workstream 5 · Durable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Steps</a></h2></div>
+
+<p>Implement one algorithm-neutral harness around an <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>'s ordered durable Steps. Each Step consumes one immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> and becomes terminal only when one immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> is persisted. The harness owns request validation, execution-mode dispatch, external evaluation and finalization, restart, idempotency, budgets, evidence, and terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> assembly; algorithm adapters own only algorithm-specific proposal or tool-use logic.</p>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label">Durable request boundary <span class="sub">· immutable input and references</span></div>
+    <div class="comps">
+      <div class="comp node"><b>Validate identities and order</b><span class="note">Require run, Step, optimizer Config, kind, and index identities. A noninitial Step references the exact prior <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Step Result</a> and immutable state/history objects; it never reads an authoritative mutable optimizer object.</span></div>
+      <div class="comp node"><b>Validate inputs and budgets</b><span class="note">Parse candidates or pools, algorithm hyperparameters, consumed/remaining budget state, and the declared output contract before invoking an adapter.</span></div>
+      <div class="comp node"><b>Bind serialized tools</b><span class="note">Accept optional <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> only. Reject <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a>, clients, open connections, and executable closures in requests, state, or history.</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>dispatch by declared Step mode</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Algorithm-neutral execution <span class="sub">· proposal-only or tool-using</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Proposal-only</b><span class="note">COPRO and MIPROv2 adapters return candidate identities plus immutable <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intents</a>. The harness durably checkpoints that typed adapter output, then Whetstone evaluates outside the optimizer invocation under each exact target <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> and declared <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> role/policy.</span></div>
+      <div class="comp settled"><b>Tool-using</b><span class="note">GEPA and Codex adapters receive Tool Specs and construct non-serializable Runtime Tool Handles only at execution. Every accepted, refused, or completed call remains ledgered; finalization references every <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a> and item of ledger evidence ledgered for the Step.</span></div>
+      <div class="comp settled"><b>Finalize exactly once</b><span class="note">Resolve every required Evaluation Intent or Tool Result, compute accepted candidates and immutable state/history output, account consumed and remaining budgets, assign <code>continue</code>, <code>complete</code>, or <code>failed</code>, persist the Step Result, and only then follow a back-edge or terminalize.</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Schemas and reference behavior</h3>
+    <ul>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a>: run/Step/config identities; kind/index; prior Step Result/state/history refs; candidates/pools; hyperparameters and budget state; output contract; optional Tool Specs.</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a>: candidate identity; exact target Eval Config ref/hash; Evaluation Context role/policy; purpose; run/Step correlation; no score or result.</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a>: request ref; proposed/accepted candidates; resolved intent and evaluation or tool evidence refs; state/history delta or snapshot ref; budget accounting; terminal Step status.</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a>: ordered proposals, every ordered Step Result ref, and advisory provenance/cost; official evaluation follows.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Restart and idempotency</h3>
+    <ul>
+      <li>A replay resolves the immutable Step Request and any existing Step Result before invoking algorithm code or external effects.</li>
+      <li>The same request and same persisted Step Result replay idempotently; a different Result for the same Step identity conflicts and never replaces the winner.</li>
+      <li>A crash before finalization resumes from the immutable request, typed checkpointed proposal output, state/history, resolved-evaluation, and ledger references. It does not rerun a completed proposal invocation or deserialize an opaque mutable optimizer pickle as truth.</li>
+      <li>A later Step or back-edge is forbidden until the preceding Step Result is persisted. Budget state is carried forward from that Result, not recomputed from process memory.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="table-wrap space-top">
+<table>
+  <thead><tr><th>Adapter</th><th>Required mode and durable shape</th></tr></thead>
+  <tbody>
+    <tr><td>COPRO</td><td>Many proposal-only Steps. Each returns proposed candidates plus <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intents</a>; Whetstone performs exact-target external evaluation and finalizes the immutable Step Result before the next proposal round.</td></tr>
+    <tr><td>MIPROv2</td><td>Many proposal-only trial and promotion Steps. Pools, trial/promotion state, resolved evaluation evidence, and budgets advance only through immutable references in Step Requests and Results.</td></tr>
+    <tr><td>GEPA</td><td>Many structured bounded tool-using Steps. Runtime Tool Handles exist only during execution, and every Step Result references every Tool Result and item of Tool Call Ledger evidence ledgered for that Step.</td></tr>
+    <tr><td>Codex</td><td>Exactly one opaque long-running tool-using Step. Opacity is inside that execution only; its request, tool evidence, budgets, status, sole Step Result, and terminal Optimization Result remain durable and inspectable.</td></tr>
+    <tr><td>Identity optimizer</td><td>Exactly one pure Step returning unchanged candidates. It needs no Tool Spec, Runtime Tool Handle, Tool Result, or Evaluation Intent; official evaluation remains downstream of the terminal Optimization Result.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <strong>No authoritative optimizer pickle.</strong> An adapter may use transient in-process objects or persist a diagnostic snapshot, but no opaque mutable optimizer pickle may establish current Step, history, accepted candidates, budget, or restart position. Only validated immutable requests, results, and referenced state/history/evidence objects are authoritative.
+</div>
+
 <div class="section-head" id="integration-boundaries"><h2>Integration and Ownership</h2></div>
 
 <div class="flow">
@@ -328,6 +392,7 @@
     <tr><td>Canonical record storage, <a class="term-ref" href="vocab_and_defs.html#term-content-hash">Content Hash</a> verification, generic atomic binding</td><td>dr-store</td></tr>
     <tr><td><a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> → <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> <a class="term-ref" href="vocab_and_defs.html#term-object-reference">Object Reference</a> specialization</td><td>whetstone-ai <a class="term-ref" href="vocab_and_defs.html#term-result-store">Result Store</a></td></tr>
     <tr><td>Official evaluation, result authority, and terminal domain policy</td><td>whetstone-ai</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>, Step Request/Result and <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a> schemas; durable harness execution/finalization; restart/idempotency; budget/status/evidence rules; algorithm adapters; terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></td><td>whetstone-ai</td></tr>
     <tr><td>Bounded semantic retry, deterministic DBOS step orchestration, and final-result assembly</td><td>whetstone-ai</td></tr>
     <tr><td>Operator retry prechecks, executor race recheck, and <a class="term-ref" href="vocab_and_defs.html#term-result-store">Result Store</a> binding gate</td><td>whetstone-ai</td></tr>
     <tr><td>Typed transport, raw evidence capture, exact route-tuple identity, and native retry-zero support</td><td>dr-providers</td></tr>
@@ -427,6 +492,10 @@
     <p>Configure dr-platform's mandatory default empty-selector capacity. Derive collision-free labels from every exact <code>(provider, protocol, model)</code> tuple, apply all relevant labels to multi-route work, and configure a capacity for every exact-label selector. Verify all matching controls together, including full-Stage occupancy during backoff and missing-default behavior.</p>
   </div>
   <div class="step">
+    <h3>Implement the durable Optimization Step protocol</h3>
+    <p>Add the <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>, immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a>, <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a>, immutable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a>, and terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> schemas and identity/reference rules. Implement one algorithm-neutral harness for request validation, proposal-only external evaluation and finalization, tool-using execution-boundary handle construction, exactly-once Result persistence, back-edges, restart, idempotency, state/history references, budget/status/evidence accounting, and terminal assembly. Add COPRO, MIPROv2, GEPA, Codex, and identity adapters with their declared Step cardinality and modes; remove any authoritative mutable optimizer-pickle path.</p>
+  </div>
+  <div class="step">
     <h3>Consume releases and verify end to end</h3>
     <p>Publish all remaining dependency packages to PyPI, replace Git revisions with released versions, lock them, and record them in provenance. Then exercise graph terminal/output invariants, Graph/Eval identity partitioning, <a class="term-ref" href="vocab_and_defs.html#term-input-source">Node Input Source</a> validation, raw evidence, deterministic checkpoint reconstruction, ambiguous-effect behavior, retry races, binding conflicts, selector capacity, and corruption detection across repository boundaries before real runs.</p>
   </div>
@@ -484,6 +553,20 @@
   </ul>
 </div>
 
+<div class="card space-top">
+  <h3>Optimization Step protocol is complete when</h3>
+  <ul>
+    <li>Schema and identity tests cover every Optimization Step Request field group, reject Runtime Tool Handles and mutable process objects, and prove later requests resolve immutable prior Step Result, state, and history references.</li>
+    <li>Proposal-only tests prove COPRO and MIPROv2 return and durably checkpoint candidates plus immutable Evaluation Intents, Whetstone evaluates outside the optimizer invocation, restart reuses the checkpointed output without rerunning a completed proposal invocation, an Intent resolves only under its exact target Eval Config, and the final Step Result references the resolution evidence without embedding a score in the Intent.</li>
+    <li>Tool-using tests prove GEPA and Codex construct Runtime Tool Handles only at execution, ledger accepted/refused/completed calls idempotently, and reference every Tool Result and ledger entry ledgered for the Step from the immutable Step Result.</li>
+    <li>Cardinality tests require many durable COPRO proposal Steps, many MIPROv2 trial/promotion Steps, many bounded structured GEPA Steps, exactly one opaque long-running Codex Step, and exactly one pure identity Step.</li>
+    <li>Restart tests crash before adapter completion, during external Evaluation Intent resolution, after tool completion, and after Step Result persistence. Replays reuse durable evidence, never create a second Step Result, and never follow a back-edge before the prior Result exists.</li>
+    <li>Status and budget tests cover <code>continue</code>, <code>complete</code>, and <code>failed</code>; consumed plus remaining accounting advances through immutable Step Results and cannot be reconstructed from mutable process state.</li>
+    <li>The terminal Optimization Result preserves ordered proposals, every ordered Step Result reference, and advisory provenance/cost, and makes no official-evaluation claim.</li>
+    <li>No opaque mutable optimizer pickle is authoritative for state, history, candidates, budgets, current Step, or restart position.</li>
+  </ul>
+</div>
+
 <div class="grid-2 space-top">
   <div class="card">
     <h3>Retry implementation is complete when</h3>
@@ -523,7 +606,7 @@
     <li>dr-serialize, dr-graph, dr-store, dr-providers, the rebuilt dr-platform, and every other runtime dependency repository needed for real runs are public and their required packages are released on PyPI.</li>
     <li>Whetstone no longer depends on the superseded dr-platform revision or any other Git revision dependency needed by this scope.</li>
     <li>The locked environment resolves only the intended released package versions, and execution/environment provenance records those exact versions.</li>
-    <li>End-to-end checks prove the four workstreams together without importing broader Provider Calls policy into dr-providers or dr-platform.</li>
+    <li>End-to-end checks prove all five workstreams together without importing broader Provider Calls or Optimization Step policy into dr-providers or dr-platform.</li>
   </ul>
 </div>
 
