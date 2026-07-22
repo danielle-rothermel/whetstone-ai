@@ -39,6 +39,34 @@ from whetstone.envs.probes import ProbeSurface, probe_surface
 #: (cheapest/most robust first, matching the validation plan's spend order).
 ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
 
+
+@dataclass(frozen=True, slots=True)
+class TokenEstimate:
+    """The committed per-call token estimate for one env's baseline probes.
+
+    Sourced verbatim from each env's baseline-spec §5 ("Per-instance token
+    estimate") total-tokens/call row: the naive probe and the ceiling probe
+    are distinguished by every spec, so both are recorded separately. These
+    are the committed defaults the pilot's token-sanity check runs against
+    when ``--spec-estimate-tokens`` is not passed; the flag still overrides.
+    """
+
+    naive: int
+    ceiling: int
+
+
+#: Committed per-env token estimates from each baseline-spec §5 total row.
+#: c11: naive ~350 / ceiling ~800 (blended totals); c19: naive ~280 /
+#: ceiling ~1,150; c18: naive ~253 / ceiling ~650; c22: naive ~170 /
+#: ceiling ~420; c23: naive ~140 (120 in + 20 out) / ceiling ~420 (400 + 20).
+_ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
+    "c11": TokenEstimate(naive=350, ceiling=800),
+    "c19": TokenEstimate(naive=280, ceiling=1150),
+    "c18": TokenEstimate(naive=253, ceiling=650),
+    "c22": TokenEstimate(naive=170, ceiling=420),
+    "c23": TokenEstimate(naive=140, ceiling=420),
+}
+
 #: Spec-default deliberate-observation repeats per task. The envs commit no
 #: repeat count (a Repeat Plan is a whetstone execution concern, out of scope
 #: for whetstone-envs per its PLAN "Integration handoff"); the validation
@@ -98,6 +126,10 @@ class EnvSpec:
         The dotted path to the oracle entry point, folded into the Metric
         Extraction Config identity so a change of oracle wiring is visible in
         ``eval_config_hash`` / ``graph_hash``.
+    token_estimate:
+        The committed per-call :class:`TokenEstimate` (naive + ceiling) from
+        this env's baseline-spec §5, the default the pilot's token-sanity
+        check runs against absent a ``--spec-estimate-tokens`` override.
     gold_first:
         Whether the env oracle's ``score_gold`` takes ``(gold, response)``
         (``True`` -- c22) rather than the usual ``(prediction, gold)``
@@ -121,6 +153,7 @@ class EnvSpec:
     probes: ProbePair
     surface: ProbeSurface
     oracle_qualname: str
+    token_estimate: TokenEstimate
     gold_first: bool = False
     stratified_split: bool = False
 
@@ -180,6 +213,7 @@ def _load_env_spec(name: str) -> EnvSpec:
         probes=prompts.PROBES,
         surface=probe_surface(name, prompts.PROBES),
         oracle_qualname=f"whetstone_envs.{name}.oracle.score_gold",
+        token_estimate=_ENV_TOKEN_ESTIMATES[name],
         gold_first=name in _GOLD_FIRST_ENVS,
         stratified_split=name in _STRATIFIED_SPLIT_ENVS,
     )
@@ -202,6 +236,7 @@ __all__ = [
     "DEFAULT_REPEATS",
     "ENV_NAMES",
     "EnvSpec",
+    "TokenEstimate",
     "UnknownEnvError",
     "env_spec",
 ]

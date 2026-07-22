@@ -3,7 +3,7 @@
 Two subcommands per ``reports/validation-plan.md``:
 
 * ``pilot --env X [--lane L]`` -- the checklist-B pilot (~10 instances x both
-  probes x repeats {0,1,2}), writing ``validation/pilots/<env>.json``.
+  probes x repeats {0,1,2}), writing ``<root>/pilots/<env>.json``.
 * ``cell --optimizer O --env E [--lane L] [--attempt N]`` -- one full
   validation cell (baseline + ceiling official evals, optimizer run on the
   internal split with brief-documented hyperparameters scaled to pool sizes,
@@ -34,14 +34,14 @@ from whetstone.optimization.proposer import (
 )
 from whetstone.provider.driver import TransportCall
 from whetstone.runner.budget import BudgetGuard, ReserveError
-from whetstone.runner.cell import CellConfig, run_cell
+from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
 from whetstone.runner.execution_mode import (
     ExecutionMode,
     detect_execution_mode,
 )
 from whetstone.runner.ledger import Ledger
 from whetstone.runner.optimizers import OPTIMIZERS, scaling_help
-from whetstone.runner.pilot import run_pilot
+from whetstone.runner.pilot import PilotReport, run_pilot
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     CANONICAL_TASK_MODEL,
@@ -165,6 +165,21 @@ def _proposer_config(lane: str, optimizer: str) -> ProposerConfig:
     )
 
 
+#: Exit code for a pilot whose calls ALL failed (a hard plumbing failure).
+PILOT_ALL_FAILED_EXIT = 2
+
+
+def _failure_summary_line(report: PilotReport) -> str:
+    """A ``code=count code=count`` summary of the pilot's failed calls."""
+    summary = report.failure_summary()
+    if not summary:
+        return "(no failures)"
+    return " ".join(
+        f"{code}={count}"
+        for code, count in sorted(summary.items())
+    )
+
+
 def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     _require_live(args)
     route = route_for(args.lane, role="task", temperature=0.0)
@@ -179,8 +194,28 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         spec_estimate_tokens=args.spec_estimate_tokens,
     )
     path = report.write(args.root)
+    # --- Loud failure handling: a 0%-success pilot is a hard failure. ---
+    # Without this a fully-failed run (every call rejected pre-flight) would
+    # print `naive=None ceiling=None direction_ok=False` and exit 0, silently
+    # masking a plumbing blocker. Zero-success -> exit non-zero with a summary
+    # counting failures by code; partial failures -> warn but still exit 0.
+    if report.success_rate == 0.0:
+        sys.stderr.write(
+            f"PILOT FAILED: env={args.env} lane={args.lane} "
+            f"0/{report.call_count} calls succeeded -> {path}\n"
+            f"  failures by code: {_failure_summary_line(report)}\n"
+        )
+        return PILOT_ALL_FAILED_EXIT
+    if report.failed_count:
+        sys.stderr.write(
+            f"pilot warning: env={args.env} lane={args.lane} "
+            f"{report.failed_count}/{report.call_count} calls failed "
+            f"(success_rate={report.success_rate:.2f})\n"
+            f"  failures by code: {_failure_summary_line(report)}\n"
+        )
     sys.stdout.write(
         f"pilot {args.env} lane={args.lane} "
+        f"success={report.success_count}/{report.call_count} "
         f"naive={report.naive.mean_score} ceiling={report.ceiling.mean_score} "
         f"direction_ok={report.direction_ok} -> {path}\n"
     )
@@ -254,6 +289,12 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
     except ReserveError as exc:
         sys.stderr.write(f"budget reserve guard: {exc}\n")
         return 2
+    except CellBaselineFailure as exc:
+        # A zero-successful-rollout baseline is a hard plumbing failure: no
+        # cell line is recorded (see run_cell), and we exit non-zero loudly
+        # rather than reporting a null-scores cell as if it were a result.
+        sys.stderr.write(f"CELL FAILED: {exc}\n")
+        return PILOT_ALL_FAILED_EXIT
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
     sys.stdout.write(

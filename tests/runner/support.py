@@ -10,11 +10,22 @@ not) and a NO-IMPROVEMENT script (every candidate scores the same).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from dr_providers import (
+    FailureClass,
+    ProviderCallRequest,
+    ProviderInvocationEvidence,
+    ProviderTransportFailure,
+    ProviderTransportPolicy,
+    RawHttpRequest,
+)
 
 from tests.envs.support import (
     FakeTransport,
     ReplyFn,
     execution_policy,
+    transport_policy,
 )
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.registry import env_spec
@@ -39,6 +50,7 @@ __all__ = [
     "PROPOSER_MODEL",
     "SPLIT",
     "TASK_MODEL",
+    "FailingTransport",
     "FakeTransport",
     "ScriptedProposer",
     "correct_reply",
@@ -49,6 +61,42 @@ __all__ = [
     "runner_execution_policy",
     "tiny_experiment",
 ]
+
+
+@dataclass
+class FailingTransport:
+    """A transport that fails EVERY call with a fixed transport-failure code.
+
+    Models the live round-1 blocker (100% of calls rejected pre-flight, e.g.
+    ``missing_base_url``) so tests can assert the loud zero-success handling in
+    the pilot + cell commands. Records every request it served. No network.
+    """
+
+    code: str = "missing_base_url"
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+    served: list[ProviderCallRequest] = field(default_factory=list)
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        self.served.append(request)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"content-type": "json"},
+            body={"model": "test-model"},
+        )
+        failure = ProviderTransportFailure(
+            failure_class=FailureClass.PERMANENT,
+            code=self.code,
+            message=f"scripted transport failure: {self.code}",
+            retryable=False,
+        )
+        return ProviderInvocationEvidence.build(
+            request=request,
+            policy=self.policy,
+            raw_request=raw_request,
+            outcome=failure,
+        )
 
 
 def _split_fits(env, n: int) -> bool:

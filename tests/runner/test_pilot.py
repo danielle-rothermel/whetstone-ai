@@ -6,13 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from whetstone.envs.registry import env_spec
+from whetstone.envs.registry import TokenEstimate, env_spec
 from whetstone.runner.budget import CreditsSnapshot
 from whetstone.runner.pilot import PILOT_REPEATS, run_pilot
 
 from .support import (
     SPLIT,
     TASK_MODEL,
+    FailingTransport,
     FakeTransport,
     _split_fits,
     correct_reply,
@@ -125,10 +126,80 @@ def test_pilot_writes_env_json(tmp_path: Path) -> None:
         split_sizes=SPLIT,
     )
     path = report.write(tmp_path)
-    assert path == tmp_path / "validation" / "pilots" / "c11.json"
+    # --root is used exactly as given: pilots at <root>/pilots/, no extra
+    # 'validation' segment (live round-1 path-duplication fix).
+    assert path == tmp_path / "pilots" / "c11.json"
     assert path.exists()
     import json
 
     data = json.loads(path.read_text())
     assert data["env"] == "c11"
     assert "naive" in data and "ceiling" in data
+
+
+def test_pilot_all_calls_failed_zero_success_rate() -> None:
+    # Live round-1: every call fails pre-flight (missing_base_url). The pilot
+    # must report success_rate 0.0 and a failure summary keyed by the code, not
+    # a silent naive=None/ceiling=None result.
+    env = "c11"
+    tiny_experiment(env)
+    report = run_pilot(
+        env=env,
+        lane="openrouter",
+        model=TASK_MODEL,
+        transport=FailingTransport(code="missing_base_url"),
+        execution_policy=runner_execution_policy(),
+        instance_count=2,
+        pool_n_per_stratum=_pool_n(env),
+        split_sizes=SPLIT,
+    )
+    assert report.success_rate == 0.0
+    assert report.success_count == 0
+    assert report.failed_count == report.call_count == 12
+    assert report.failure_summary() == {"missing_base_url": 12}
+    assert report.naive.mean_score is None
+    assert report.ceiling.mean_score is None
+    assert report.as_dict()["failure_summary"] == {"missing_base_url": 12}
+
+
+def test_pilot_uses_committed_per_env_token_estimates() -> None:
+    # --spec-estimate-tokens defaults to None; the pilot falls back to the
+    # env's committed per-probe estimates (c11: naive 350 / ceiling 800) so the
+    # token-sanity check runs without a flag, recorded separately per probe.
+    env = "c11"
+    exp = tiny_experiment(env)
+    report = run_pilot(
+        env=env,
+        lane="openrouter",
+        model=TASK_MODEL,
+        transport=FakeTransport(reply=correct_reply(exp)),
+        execution_policy=runner_execution_policy(),
+        instance_count=2,
+        pool_n_per_stratum=_pool_n(env),
+        split_sizes=SPLIT,
+        spec_estimate_tokens=None,
+    )
+    expected = TokenEstimate(naive=350, ceiling=800)
+    assert env_spec(env).token_estimate == expected
+    assert report.naive.spec_estimate_tokens == 350
+    assert report.ceiling.spec_estimate_tokens == 800
+
+
+def test_pilot_cli_flag_overrides_committed_estimate() -> None:
+    # An explicit --spec-estimate-tokens overrides BOTH probes' committed
+    # estimates.
+    env = "c11"
+    exp = tiny_experiment(env)
+    report = run_pilot(
+        env=env,
+        lane="openrouter",
+        model=TASK_MODEL,
+        transport=FakeTransport(reply=correct_reply(exp)),
+        execution_policy=runner_execution_policy(),
+        instance_count=2,
+        pool_n_per_stratum=_pool_n(env),
+        split_sizes=SPLIT,
+        spec_estimate_tokens=999,
+    )
+    assert report.naive.spec_estimate_tokens == 999
+    assert report.ceiling.spec_estimate_tokens == 999

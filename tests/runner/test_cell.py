@@ -8,7 +8,7 @@ import pytest
 
 from whetstone.envs.registry import env_spec
 from whetstone.runner.budget import BudgetGuard, ReserveError
-from whetstone.runner.cell import CellConfig, run_cell
+from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
 
@@ -16,6 +16,7 @@ from .support import (
     PROPOSER_MODEL,
     SPLIT,
     TASK_MODEL,
+    FailingTransport,
     FakeTransport,
     ScriptedProposer,
     _split_fits,
@@ -184,6 +185,25 @@ def test_reserve_guard_refuses_canonical_below_reserve(tmp_path: Path) -> None:
             credits_fetcher=credits_fetcher([(700.0, 690.0), (700.0, 690.0)]),
         )
     # No cell line was appended (the cell never started).
+    assert ledger.cells() == []
+
+
+def test_cell_zero_success_baseline_fails_loudly(tmp_path: Path) -> None:
+    # Live round-1: when every baseline rollout fails (missing_base_url), the
+    # cell must NOT record a null-scores line -- it raises CellBaselineFailure
+    # so the CLI can exit non-zero. No ledger line is appended.
+    env = "c11"
+    tiny_experiment(env)
+    cfg = _config(
+        env,
+        optimizer="copro",
+        rollout_transport=FailingTransport(code="missing_base_url"),
+        proposer_transport=ScriptedProposer((WIN,)),
+    )
+    ledger = Ledger(root=tmp_path)
+    with pytest.raises(CellBaselineFailure, match="plumbing failure"):
+        run_cell(cfg, ledger=ledger)
+    # No cell line recorded (the failed baseline never becomes a result).
     assert ledger.cells() == []
 
 

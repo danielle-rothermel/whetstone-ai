@@ -15,7 +15,7 @@ instances x both probes (naive + ceiling) x repeats ``{0, 1, 2}`` and records:
 
 The transport is injected (a scripted fake in tests, dr-providers' real client
 in a live run), so importing/running the pilot logic makes no live paid call by
-itself. Output is written to ``validation/pilots/<env>.json``.
+itself. Output is written to ``<root>/pilots/<env>.json``.
 """
 
 from __future__ import annotations
@@ -72,6 +72,10 @@ class PilotCallRecord:
     completion_tokens: int | None
     total_tokens: int | None
     failed: bool
+    #: The failure taxonomy code for a failed call (e.g. transport ``code``
+    #: like ``"missing_base_url"``, else the semantic class name); ``""`` for a
+    #: successful call. Aggregated into the pilot's loud failure summary.
+    failure_code: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -85,6 +89,7 @@ class PilotCallRecord:
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
             "failed": self.failed,
+            "failure_code": self.failure_code,
         }
 
 
@@ -97,6 +102,13 @@ class PilotProbeSummary:
     agreement_rate: float
     call_count: int
     failed_count: int
+    token_mean_total: float | None = None
+    spec_estimate_tokens: int | None = None
+    token_vs_spec: float | None = None
+
+    @property
+    def success_count(self) -> int:
+        return self.call_count - self.failed_count
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -105,12 +117,15 @@ class PilotProbeSummary:
             "agreement_rate": self.agreement_rate,
             "call_count": self.call_count,
             "failed_count": self.failed_count,
+            "token_mean_total": self.token_mean_total,
+            "spec_estimate_tokens": self.spec_estimate_tokens,
+            "token_vs_spec": self.token_vs_spec,
         }
 
 
 @dataclass(slots=True)
 class PilotReport:
-    """The full pilot report written to ``validation/pilots/<env>.json``."""
+    """The full pilot report written to ``<root>/pilots/<env>.json``."""
 
     env: str
     lane: str
@@ -135,6 +150,40 @@ class PilotReport:
             return None
         return before - after
 
+    @property
+    def call_count(self) -> int:
+        return self.naive.call_count + self.ceiling.call_count
+
+    @property
+    def failed_count(self) -> int:
+        return self.naive.failed_count + self.ceiling.failed_count
+
+    @property
+    def success_count(self) -> int:
+        return self.call_count - self.failed_count
+
+    @property
+    def success_rate(self) -> float:
+        """Fraction of calls that succeeded (0.0 when every call failed)."""
+        if self.call_count == 0:
+            return 0.0
+        return self.success_count / self.call_count
+
+    def failure_summary(self) -> dict[str, int]:
+        """Count the failed calls by their recorded failure code.
+
+        A zero-success pilot is a hard plumbing failure; this feeds the loud
+        summary the CLI prints (and exits non-zero on) so a 100%-failed run is
+        never mistaken for a clean ``naive=None ceiling=None`` result.
+        """
+        counts: dict[str, int] = {}
+        for call in self.calls:
+            if call.failed:
+                counts[call.failure_code] = (
+                    counts.get(call.failure_code, 0) + 1
+                )
+        return counts
+
     def as_dict(self) -> dict[str, object]:
         return {
             "env": self.env,
@@ -146,6 +195,10 @@ class PilotReport:
             "direction_ok": self.direction_ok,
             "token_mean_total": self.token_mean_total,
             "token_vs_spec": self.token_vs_spec,
+            "call_count": self.call_count,
+            "failed_count": self.failed_count,
+            "success_rate": self.success_rate,
+            "failure_summary": self.failure_summary(),
             "spend_usd": self.spend_usd,
             "spend_before": (
                 None if self.spend_before is None
@@ -167,8 +220,13 @@ class PilotReport:
         }
 
     def write(self, root: Path) -> Path:
-        """Write ``<root>/validation/pilots/<env>.json``; return the path."""
-        out_dir = root / "validation" / "pilots"
+        """Write ``<root>/pilots/<env>.json``; return the path.
+
+        ``root`` is used exactly as given (it already points into the
+        validation dir): pilots land at ``<root>/pilots/`` alongside the
+        ledger's ``<root>/cells.jsonl`` -- no extra ``validation`` segment.
+        """
+        out_dir = root / "pilots"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"{self.env}.json"
         path.write_text(json.dumps(self.as_dict(), indent=2, sort_keys=True))
@@ -182,6 +240,26 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
             messages=(PromptMessage(role=MessageRole.USER, content=prompt),)
         ),
     )
+
+
+def _failure_code(result: object) -> str:
+    """Name a failed call's cause: the transport ``code``, else the class.
+
+    Prefers the causal transport failure's ``code`` (e.g.
+    ``"missing_base_url"``) so the loud CLI summary points at the true root
+    cause; falls back to the semantic failure-class name, then ``"unknown"``.
+    """
+    failure = getattr(result, "semantic_failure", None)
+    if failure is None:
+        return "unknown"
+    transport = getattr(failure, "transport_failure", None)
+    code = getattr(transport, "code", None)
+    if code:
+        return str(code)
+    failure_class = getattr(failure, "failure_class", None)
+    if failure_class is not None:
+        return getattr(failure_class, "value", str(failure_class))
+    return "unknown"
 
 
 def _agreement_rate(
@@ -208,11 +286,13 @@ def _run_probe(
     execution_policy: ProviderExecutionPolicy,
     procedure_hash: str,
     calls: list[PilotCallRecord],
+    spec_estimate_tokens: int | None = None,
 ) -> PilotProbeSummary:
     env = env_spec(experiment.env_name)
     config = experiment.rollout_definition.provider_call_config
     scores_by_instance: dict[str, list[float | None]] = {}
     all_scores: list[float] = []
+    probe_totals: list[int] = []
     failed = 0
     for instance in instances:
         task = EnvTask.from_instance(env.name, instance)
@@ -239,6 +319,7 @@ def _run_probe(
                         completion_tokens=None,
                         total_tokens=None,
                         failed=True,
+                        failure_code=_failure_code(result),
                     )
                 )
                 per_instance.append(None)
@@ -276,9 +357,19 @@ def _run_probe(
             )
             per_instance.append(float(score.value))
             all_scores.append(float(score.value))
+            if usage is not None and usage.total_tokens is not None:
+                probe_totals.append(usage.total_tokens)
         scores_by_instance[str(instance.id)] = per_instance
     mean_score = (
         sum(all_scores) / len(all_scores) if all_scores else None
+    )
+    token_mean = (
+        sum(probe_totals) / len(probe_totals) if probe_totals else None
+    )
+    token_vs_spec = (
+        token_mean / spec_estimate_tokens
+        if token_mean is not None and spec_estimate_tokens
+        else None
     )
     return PilotProbeSummary(
         probe=probe,
@@ -286,6 +377,9 @@ def _run_probe(
         agreement_rate=_agreement_rate(scores_by_instance),
         call_count=len(instances) * len(PILOT_REPEATS),
         failed_count=failed,
+        token_mean_total=token_mean,
+        spec_estimate_tokens=spec_estimate_tokens,
+        token_vs_spec=token_vs_spec,
     )
 
 
@@ -309,6 +403,12 @@ def run_pilot(
     internal split, and runs both probes x 3 temp-0 repeats through the
     injected transport, collecting token counts, agreement, direction, and
     per-call extraction spot-records.
+
+    Token sanity runs against the env's committed per-probe estimates
+    (:class:`whetstone.envs.registry.TokenEstimate`, sourced from each
+    baseline-spec §5): naive and ceiling are checked separately. A non-None
+    ``spec_estimate_tokens`` is an explicit override that applies to BOTH
+    probes (the CLI ``--spec-estimate-tokens`` flag).
     """
     experiment = build_env_experiment(
         env,
@@ -320,6 +420,18 @@ def run_pilot(
     internal = experiment.eval_configs.internal.instances
     instances = internal[:instance_count]
 
+    estimate = env_spec(env).token_estimate
+    naive_estimate = (
+        spec_estimate_tokens
+        if spec_estimate_tokens is not None
+        else estimate.naive
+    )
+    ceiling_estimate = (
+        spec_estimate_tokens
+        if spec_estimate_tokens is not None
+        else estimate.ceiling
+    )
+
     calls: list[PilotCallRecord] = []
     naive = _run_probe(
         experiment,
@@ -330,6 +442,7 @@ def run_pilot(
         execution_policy=execution_policy,
         procedure_hash=procedure_hash,
         calls=calls,
+        spec_estimate_tokens=naive_estimate,
     )
     ceiling = _run_probe(
         experiment,
@@ -340,6 +453,7 @@ def run_pilot(
         execution_policy=execution_policy,
         procedure_hash=procedure_hash,
         calls=calls,
+        spec_estimate_tokens=ceiling_estimate,
     )
     direction_ok = (
         naive.mean_score is not None
@@ -348,10 +462,13 @@ def run_pilot(
     )
     totals = [c.total_tokens for c in calls if c.total_tokens is not None]
     token_mean_total = sum(totals) / len(totals) if totals else None
+    # The blended token-vs-spec ratio uses the mean of the two per-probe
+    # estimates when both probes share the same committed estimate is not the
+    # case; a blended spec is the average of the naive + ceiling estimates.
+    blended_spec = (naive_estimate + ceiling_estimate) / 2
     token_vs_spec = (
-        token_mean_total / spec_estimate_tokens
-        if token_mean_total is not None
-        and spec_estimate_tokens
+        token_mean_total / blended_spec
+        if token_mean_total is not None and blended_spec
         else None
     )
     return PilotReport(

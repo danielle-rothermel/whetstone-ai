@@ -51,10 +51,22 @@ from whetstone.runner.optimizers import run_optimize
 from whetstone.runner.statistics import bootstrap_delta_ci
 
 __all__ = [
+    "CellBaselineFailure",
     "CellConfig",
     "CellOutcome",
     "run_cell",
 ]
+
+
+class CellBaselineFailure(RuntimeError):
+    """The baseline official eval produced zero successful rollouts.
+
+    A cell whose baseline naive candidate never once reaches the provider (or
+    is rejected on every rollout) is a hard plumbing failure, not a valid
+    ``baseline_official=null`` cell. Raising here stops the runner from
+    appending a null-scores cell line that would silently mask the blocker;
+    the CLI surfaces it as a loud non-zero exit.
+    """
 
 #: A callable returning the OpenRouter credits snapshot (injected; no network
 #: in tests). ``None`` means credits are unavailable (a non-openrouter lane).
@@ -178,17 +190,38 @@ def run_cell(
     official = official_instances(experiment)
 
     # --- 1. Baseline official eval of the naive candidate. ---
-    baseline = evaluate_split(
-        experiment,
-        candidate=naive,
-        instances=official,
-        split_role="official",
-        transport=config.rollout_transport,
-        execution_policy=config.execution_policy,
-        repeats=config.repeats,
-        store=backing,
-        execution_mode=config.execution_mode,
-    )
+    # A baseline with no successful rollout rows (every call failed pre-flight
+    # or was rejected) is a plumbing failure, not a valid null-scores cell.
+    # Raise CellBaselineFailure BEFORE recording any ledger line so the CLI
+    # exits non-zero loudly instead of appending baseline_official=null. The
+    # empty aggregate also makes the internal reduction non-computable (a bare
+    # missing-data ValueError deep in evaluate_split), so that opaque failure
+    # is caught here and re-surfaced with the plumbing-failure context.
+    planned = len(official) * config.repeats
+    try:
+        baseline = evaluate_split(
+            experiment,
+            candidate=naive,
+            instances=official,
+            split_role="official",
+            transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            repeats=config.repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+        )
+    except ValueError as exc:
+        raise CellBaselineFailure(
+            f"cell {cell_id}: baseline official eval produced no computable "
+            f"score over {planned} planned rollouts (every rollout failed). "
+            "This is a plumbing failure; no cell line recorded."
+        ) from exc
+    if baseline.aggregate.rows_present == 0:
+        raise CellBaselineFailure(
+            f"cell {cell_id}: baseline official eval produced "
+            f"0/{planned} successful rollouts (every rollout failed). This "
+            "is a plumbing failure; no cell line recorded."
+        )
 
     # --- Ceiling official eval (once per env; cached in the ledger). ---
     ceiling_cached = ledger.ceiling_for(config.env)
