@@ -57,14 +57,20 @@ def mapping_entry(
 def single_entry_mapping(
     *,
     planned_keys: tuple[str, ...],
+    result_keys: tuple[str, ...] | None = None,
 ) -> SelectedRecordMapping:
+    # ``result_keys`` defaults to the planned keys (complete evidence); pass a
+    # narrower tuple to model an incomplete record whose mapping must only
+    # attribute results to the planned keys that are actually present.
     return SelectedRecordMapping(
         entries=(
             mapping_entry(
                 record_char="1",
                 graph_hash=GRAPH_A,
                 planned_keys=planned_keys,
-                result_keys=planned_keys,
+                result_keys=(
+                    planned_keys if result_keys is None else result_keys
+                ),
                 aggregate_char="9",
             ),
         )

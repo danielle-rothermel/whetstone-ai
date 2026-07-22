@@ -208,8 +208,15 @@ class OfficialEvaluationRecord(BaseModel):
     def _validate(self) -> OfficialEvaluationRecord:
         if not self.authority:
             raise ValueError("an official record names its authority")
-        if not self.evaluation_context_id:
-            raise ValueError("evaluation_context_id must be non-empty")
+        # The evaluation_context_id MUST be a full Evaluation Context Identity
+        # Hash (the value ``EvaluationContext.evaluation_context_id()``
+        # produces), not merely a non-empty string. This closes the direct
+        # constructor path that stamped a forged, non-hash context id onto an
+        # official record: a value that is not a 64-char lowercase SHA-256 hash
+        # cannot correspond to any issued official Evaluation Context.
+        _require_full_hash(
+            self.evaluation_context_id, field="evaluation_context_id"
+        )
         _require_full_hash(self.eval_config_hash, field="eval_config_hash")
         if not self.planned_results:
             raise ValueError("an official record has >=1 planned key")
@@ -239,6 +246,11 @@ class OfficialEvaluationRecord(BaseModel):
         # The ordered mapping's planned keys MUST be a subset of the record's
         # planned keys, and its aggregate refs MUST all be declared aggregates.
         planned_keys = {p.planned_key for p in self.planned_results}
+        # The record's actual present/missing accounting: a planned key is
+        # present iff its row carries a bound ordinary Result ref.
+        present_keys = {
+            p.planned_key for p in self.planned_results if p.is_present
+        }
         declared_aggregates = set(self.aggregate_refs)
         for entry in self.selected_record_mapping.entries:
             unknown = set(entry.planned_key_set) - planned_keys
@@ -246,6 +258,20 @@ class OfficialEvaluationRecord(BaseModel):
                 raise ValueError(
                     "ordered mapping references planned keys not in the "
                     f"record's planned keys: {sorted(unknown)}"
+                )
+            # Reconcile the mapping's result attribution with the record's
+            # actual present accounting: an entry may only attribute a result
+            # to a planned key whose row is actually present (result_ref set).
+            # Otherwise the load-bearing per-graph lineage mapping would
+            # contradict the completeness accounting (attributing a result to
+            # a key the record marks missing), and plot publication stacks
+            # directly on this mapping.
+            attributed_missing = set(entry.result_key_set) - present_keys
+            if attributed_missing:
+                raise ValueError(
+                    "ordered mapping attributes a result to planned keys the "
+                    "record accounts as missing (result_ref is None): "
+                    f"{sorted(attributed_missing)}"
                 )
             if entry.aggregate_ref not in declared_aggregates:
                 raise ValueError(

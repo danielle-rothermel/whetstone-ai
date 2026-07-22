@@ -11,11 +11,14 @@ from __future__ import annotations
 import pytest
 
 from whetstone.authority import (
+    CompletenessDecision,
     EvaluationAuthority,
     OfficialEvaluationRecord,
     PlannedKeyResult,
     RecordRevision,
     RelabelingRefusedError,
+    SelectedRecordMapping,
+    SelectedRecordMappingEntry,
     UnauthorizedOfficialWriteError,
 )
 from whetstone.graph.rollout import (
@@ -25,7 +28,9 @@ from whetstone.graph.rollout import (
 
 from .support import (
     EVAL_HASH,
+    GRAPH_A,
     aggregate_ref,
+    record_ref,
     result_ref,
     single_entry_mapping,
 )
@@ -178,7 +183,7 @@ def test_certify_refuses_when_incomplete() -> None:
         planned_results=planned,
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
-            planned_keys=("k0", "k1")
+            planned_keys=("k0", "k1"), result_keys=("k0",)  # k1 missing
         ),
     )
     # An incomplete evaluation is uncertified; the missing row stays visible.
@@ -247,3 +252,155 @@ def test_official_record_carries_immutable_revision_chain() -> None:
     assert len(record.revisions) == 1
     assert record.revisions[0].ordinal == 1
     assert record.revisions[0].reason.startswith("re-certified")
+
+
+# ---------------------------------------------------------------------------
+# The ordered mapping is reconciled against the actual present/missing
+# accounting (result_key_set must be a subset of the present planned keys).
+# ---------------------------------------------------------------------------
+
+
+def _record(
+    *,
+    planned: tuple[PlannedKeyResult, ...],
+    mapping: SelectedRecordMapping,
+    evaluation_context_id: str = "e" * 64,
+    present_count: int | None = None,
+    certified: bool = False,
+) -> OfficialEvaluationRecord:
+    present = (
+        sum(1 for p in planned if p.is_present)
+        if present_count is None
+        else present_count
+    )
+    missing = len(planned) - present
+    return OfficialEvaluationRecord(
+        authority="whetstone-official",
+        evaluation_context_id=evaluation_context_id,
+        eval_config_hash=EVAL_HASH,
+        planned_results=planned,
+        aggregate_refs=(aggregate_ref("9"),),
+        completeness=CompletenessDecision(
+            planned_count=len(planned),
+            present_count=present,
+            missing_count=missing,
+            complete=missing == 0,
+            certified=certified,
+        ),
+        selection_evidence_ref=result_ref("f") if certified else None,
+        selected_record_mapping=mapping,
+    )
+
+
+def test_mapping_cannot_attribute_result_to_a_missing_planned_key() -> None:
+    # Original finding: k1 is missing (result_ref=None) yet the mandatory
+    # mapping's result_key_set=('k0','k1') attributes a result to k1. This
+    # contradicts the completeness accounting and must be refused.
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
+    )
+    bad_mapping = SelectedRecordMapping(
+        entries=(
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("1"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0", "k1"),
+                result_key_set=("k0", "k1"),  # attributes result to missing k1
+                aggregate_ref=aggregate_ref("9"),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="accounts as missing"):
+        _record(planned=planned, mapping=bad_mapping)
+
+
+def test_mapping_result_keys_matching_present_set_is_accepted() -> None:
+    # The same record but with result_key_set reflecting the actual present
+    # keys (only k0) is accepted — reconciliation passes.
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k1", result_ref=None),
+    )
+    ok_mapping = SelectedRecordMapping(
+        entries=(
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("1"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0", "k1"),
+                result_key_set=("k0",),
+                aggregate_ref=aggregate_ref("9"),
+            ),
+        )
+    )
+    record = _record(planned=planned, mapping=ok_mapping)
+    assert record.completeness.missing_count == 1
+
+
+def test_converged_entries_agree_with_record_present_set() -> None:
+    # Two selected records converge on one graph_hash. Their shared
+    # result_key_set must reconcile with the record-level present set: if it
+    # names a missing key, both converged entries are refused together.
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
+    )
+    converged = SelectedRecordMapping(
+        entries=(
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("1"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0", "k1"),
+                result_key_set=("k0", "k1"),
+                aggregate_ref=aggregate_ref("9"),
+            ),
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("2"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0", "k1"),
+                result_key_set=("k0", "k1"),
+                aggregate_ref=aggregate_ref("9"),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="accounts as missing"):
+        _record(planned=planned, mapping=converged)
+
+
+# ---------------------------------------------------------------------------
+# The evaluation_context_id is validated as a full Identity Hash, so a forged
+# non-hash context id cannot be stamped onto an Official Evaluation Record via
+# the direct constructor path.
+# ---------------------------------------------------------------------------
+
+
+def test_forged_non_hash_context_id_is_refused() -> None:
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+    )
+    with pytest.raises(ValueError, match="context_id must be a full"):
+        _record(
+            planned=planned,
+            mapping=single_entry_mapping(planned_keys=("k0",)),
+            evaluation_context_id="forged-ctx-id",
+        )
+
+
+def test_authority_issued_context_id_is_a_full_hash() -> None:
+    # The authority path produces a context id that is a full 64-char identity
+    # hash, so the record validator accepts it (the funnel and the validator
+    # agree).
+    authority = _authority()
+    context = _official_context(authority)
+    ctx_id = context.evaluation_context_id()
+    assert len(ctx_id) == 64
+    record = authority.certify(
+        context=context,
+        planned_results=(
+            PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        ),
+        aggregate_refs=(aggregate_ref("9"),),
+        selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
+        selection_evidence_ref=result_ref("f"),
+    )
+    assert record.evaluation_context_id == ctx_id

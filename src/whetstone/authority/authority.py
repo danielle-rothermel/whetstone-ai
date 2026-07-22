@@ -10,10 +10,26 @@ trusted principal and official write path* authorized to:
 * publish immutable
   :class:`~whetstone.authority.records.OfficialPlotManifest` values.
 
-The official write path is the *only* way official artifacts come to exist:
-constructing an official Evaluation Context or an Official Evaluation Record
-requires going through an :class:`EvaluationAuthority` instance. There is no
-free constructor path that stamps official status onto internal evidence.
+The official write path is the *authority-enforced* way official artifacts come
+to exist. Officialness is a plain data field (``role``/``authority`` on the
+Evaluation Context; ``authority``/``completeness.certified`` on the record),
+not a capability or signature, so the ``EvaluationAuthority`` methods are an
+enforced funnel rather than an unforgeable cryptographic boundary. The
+authority-enforced guarantees are:
+
+* the relabeling refusal (below) applies on every :meth:`certify` /
+  :meth:`publish_plot` call — internal evidence is refused there;
+* an :class:`~whetstone.authority.records.OfficialEvaluationRecord` will only
+  accept an ``evaluation_context_id`` that is a full Evaluation Context
+  Identity Hash, so a record cannot name a context id that no
+  ``EvaluationContext`` could have produced (see ``records.py``).
+
+Callers with direct model access CAN still construct an official-role
+``EvaluationContext`` or an ``OfficialEvaluationRecord`` without going through
+an authority instance; the relabeling refusal is real only on the
+``certify()`` / ``issue_official_context()`` path. Treating officialness as an
+unforgeable boundary would require a capability-held token or signing on
+construction, which this schema deliberately does not add.
 
 The load-bearing refusal — **internal evaluation can never be relabeled or
 copied to official merely because identities match** — is enforced here:
@@ -134,9 +150,11 @@ class EvaluationAuthority:
         """Refuse any internal-role context on the official write path.
 
         This is the seam that makes "internal can never be relabeled to
-        official" true by construction: an internal-role Context is rejected
-        here regardless of whether its ``eval_config_hash`` matches an official
-        run byte for byte.
+        official" true *on the authority write path*: an internal-role Context
+        is rejected here regardless of whether its ``eval_config_hash`` matches
+        an official run byte for byte. This is an enforced funnel, not a
+        cryptographic boundary — see the module docstring: direct model
+        construction of an official-role Context is not blocked here.
         """
         if context.role is not EvaluationRole.OFFICIAL:
             raise RelabelingRefusedError(

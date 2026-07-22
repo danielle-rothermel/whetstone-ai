@@ -117,7 +117,7 @@ def test_account_feeds_certification_with_missing_visible() -> None:
         planned_results=account.planned_results,
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
-            planned_keys=("k0", "k1")
+            planned_keys=("k0", "k1"), result_keys=("k0",)  # k1 missing
         ),
     )
     assert record.completeness.planned_count == 2
