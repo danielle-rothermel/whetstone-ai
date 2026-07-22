@@ -225,6 +225,78 @@ class EnvEvalConfigs:
         raise KeyError(f"no eval config for split role {split_role!r}")
 
 
+def _per_stratum_quota(total: int, n_strata: int) -> list[int]:
+    """Distribute ``total`` picks across ``n_strata`` as evenly as possible.
+
+    Each stratum gets ``total // n_strata``; the first ``total % n_strata``
+    strata (in pool order) get one extra. The result sums to ``total`` and no
+    two quotas differ by more than one, so a blocked pool is sampled evenly
+    across strata rather than skewed toward the leading blocks.
+    """
+    if n_strata <= 0:  # pragma: no cover - a pool always has >= 1 stratum
+        return []
+    base, remainder = divmod(total, n_strata)
+    return [base + (1 if i < remainder else 0) for i in range(n_strata)]
+
+
+def stratified_split(
+    pool: TaskPool,
+    internal_n: int,
+    official_n: int,
+    held_out_n: int,
+) -> PoolSplit:
+    """A per-stratum (stratified) analogue of ``TaskPool.split``.
+
+    ``TaskPool.split`` takes three *contiguous* slices in pool order, which is
+    only balanced when the pool interleaves its strata. c22's pool is
+    **blocked** (all ``n3_easy`` instances first, then all ``n3_mixed``, ...),
+    so a contiguous split would put the whole internal_eval slice in the single
+    easiest stratum and drop the hardest strata into the unused remainder tail
+    (build-report judgment call #2's balance claim fails for c22).
+
+    This builds the same three disjoint subsets but samples each stratum
+    independently: for every stratum (in first-seen pool order) it takes the
+    first ``internal_per`` instances into internal_eval, the next
+    ``official_per`` into official, and the next ``held_out_per`` into
+    held_out, where the per-stratum quotas distribute the requested totals
+    evenly across strata (:func:`_per_stratum_quota`). The result is
+    per-stratum balanced for internal / official / held_out, and held_out stays
+    disjoint from the two sampled splits.
+
+    Assumes each instance carries exactly one stratum label (true for c22);
+    the totals must not exceed what the per-stratum quotas can draw.
+    """
+    strata = pool.strata
+    n_strata = len(strata)
+    internal_q = _per_stratum_quota(internal_n, n_strata)
+    official_q = _per_stratum_quota(official_n, n_strata)
+    held_out_q = _per_stratum_quota(held_out_n, n_strata)
+
+    internal: list[Instance] = []
+    official: list[Instance] = []
+    held_out: list[Instance] = []
+    for i, label in enumerate(strata):
+        members = pool.in_stratum(label)
+        need = internal_q[i] + official_q[i] + held_out_q[i]
+        if need > len(members):
+            msg = (
+                f"stratified split needs {need} instances from stratum "
+                f"{label!r} but it has only {len(members)}"
+            )
+            raise ValueError(msg)
+        cut1 = internal_q[i]
+        cut2 = cut1 + official_q[i]
+        cut3 = cut2 + held_out_q[i]
+        internal.extend(members[:cut1])
+        official.extend(members[cut1:cut2])
+        held_out.extend(members[cut2:cut3])
+    return PoolSplit(
+        internal_eval=tuple(internal),
+        official=tuple(official),
+        held_out=tuple(held_out),
+    )
+
+
 def _split(
     env: EnvSpec,
     pool: TaskPool,
@@ -234,6 +306,8 @@ def _split(
         internal_n, official_n, held_out_n = env.default_split_sizes(pool)
     else:
         internal_n, official_n, held_out_n = split_sizes
+    if env.stratified_split:
+        return stratified_split(pool, internal_n, official_n, held_out_n)
     return pool.split(internal_n, official_n, held_out_n)
 
 

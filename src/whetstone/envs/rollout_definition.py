@@ -196,7 +196,7 @@ def initial_candidate(env: EnvSpec) -> Candidate:
     return _probe_candidate(
         env,
         candidate_id=f"{env.name}-naive",
-        template=env.probes.naive_template,
+        template=env.surface.naive_template,
     )
 
 
@@ -205,7 +205,7 @@ def ceiling_candidate(env: EnvSpec) -> Candidate:
     return _probe_candidate(
         env,
         candidate_id=f"{env.name}-ceiling",
-        template=env.probes.ceiling_template,
+        template=env.surface.ceiling_template,
     )
 
 
@@ -214,13 +214,15 @@ def render_prompt(
 ) -> str:
     """Render a candidate's template against a task's external inputs.
 
-    The candidate's Mutation-Surface template text is rendered by the env's
-    own probe renderer against the instance's public prompt inputs, producing
-    the ``task.prompt`` Graph External Input. Rendering restricts to public
-    inputs -- gold/oracle state can never be interpolated.
+    The candidate's Mutation-Surface template text is rendered by the adapter
+    probe surface (content-driven, never object identity) against the
+    instance's public prompt inputs, producing the ``task.prompt`` Graph
+    External Input. Rendering restricts to public inputs -- gold/oracle state
+    can never be interpolated -- so a mutated or JSON-round-tripped template
+    still renders (the c19 fidelity fix).
     """
     template = str(candidate.payload[MUTATION_FIELD])
-    return env.probes.render(template, instance)
+    return env.surface.render(template, instance)
 
 
 def env_task_for(env: EnvSpec, instance: Instance) -> EnvTask:

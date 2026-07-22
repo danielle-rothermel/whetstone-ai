@@ -28,18 +28,21 @@ _SPLIT = (1, 1, 1)
 
 def _eval_configs(env_name: str, *, completeness=Completeness.PROPAGATE):
     env = env_spec(env_name)
-    # One instance per stratum keeps the split trivially satisfiable; the
-    # split sizes below are per whole-pool, so pick 1 internal / 1 official /
-    # 1 held-out globally by generating enough instances.
-    pool = env.generate_pool(n_per_stratum=1)
+    # A balanced tiny (1, 1, 1) split. For a contiguous-split env one instance
+    # per stratum is enough; for a stratified-split env (c22, blocked pool)
+    # each stratum must independently hold its per-stratum quota, so size the
+    # pool to the largest single-stratum draw.
+    a = b = c = 1
+    if env.stratified_split:
+        # ceil(part / n_strata) summed over the split parts is the max any one
+        # stratum must supply; grow n_per_stratum to clear it.
+        probe = env.generate_pool(n_per_stratum=1)
+        n_strata = len(probe.strata)
+        per_stratum = sum(-(-part // n_strata) for part in (a, b, c))
+        pool = env.generate_pool(n_per_stratum=per_stratum)
+    else:
+        pool = env.generate_pool(n_per_stratum=1)
     procedure = env_procedure_config(env)
-    n = len(pool)
-    # split (a, b, c) must sum <= n; use a balanced tiny split.
-    a = 1
-    b = 1
-    c = 1
-    if a + b + c > n:  # pragma: no cover - all envs have >= 3 strata
-        a = b = c = n // 3
     return env, build_eval_configs(
         env,
         pool=pool,
@@ -129,6 +132,48 @@ def test_aggregation_is_mean_with_completeness_policy(
     assert dict(propagate.assignment)["zero_denominator"] == "not_applicable"
     # The completeness policy is identity-bearing.
     assert propagate.config_identity_hash != skip.config_identity_hash
+
+
+def _stratum_counts(instances) -> dict[str, int]:
+    from collections import Counter
+
+    counts: Counter[str] = Counter()
+    for inst in instances:
+        for label in inst.strata:
+            counts[label] += 1
+    return dict(counts)
+
+
+def test_c22_split_is_stratum_balanced_on_the_real_pool() -> None:
+    # c22's real pool is BLOCKED (all n3_easy first, then n3_mixed, ...).
+    # TaskPool.split's contiguous slicing would put the whole internal_eval
+    # slice in the single easiest stratum and drop the hardest strata into the
+    # unused remainder tail (build-report judgment call #2's balance claim).
+    # The adapter's stratified split must instead sample every stratum evenly.
+    env = env_spec("c22")
+    pool = env.generate_pool()  # the real 120-instance default pool
+    procedure = env_procedure_config(env)
+    configs = build_eval_configs(env, pool=pool, procedure=procedure)
+
+    internal = configs.internal.instances
+    official = configs.official.instances
+    n_strata = len(pool.strata)
+
+    internal_counts = _stratum_counts(internal)
+    official_counts = _stratum_counts(official)
+
+    # Every stratum is represented in BOTH internal and official (no stratum
+    # missing), and per-stratum counts are balanced (max-min <= 1) rather than
+    # concentrated in the leading strata.
+    assert set(internal_counts) == set(pool.strata)
+    assert set(official_counts) == set(pool.strata)
+    assert max(internal_counts.values()) - min(internal_counts.values()) <= 1
+    assert max(official_counts.values()) - min(official_counts.values()) <= 1
+    # The default (12, 36, 36) totals over 6 strata => exactly 2 / 6 per
+    # stratum: the small-internal / balanced-official shape the build report
+    # claims (and which contiguous slicing does NOT yield for c22).
+    assert internal_counts == dict.fromkeys(pool.strata, 12 // n_strata)
+    assert official_counts == dict.fromkeys(pool.strata, 36 // n_strata)
 
 
 def test_eval_config_for_dispatch() -> None:

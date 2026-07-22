@@ -33,6 +33,8 @@ from types import ModuleType
 
 from whetstone_envs.core import ProbePair, TaskPool
 
+from whetstone.envs.probes import ProbeSurface, probe_surface
+
 #: The five task families this adapter binds, in build/validation order
 #: (cheapest/most robust first, matching the validation plan's spend order).
 ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
@@ -47,6 +49,16 @@ DEFAULT_REPEATS = 3
 #: usual ``(prediction, gold)``. Only c22 (its oracle re-runs the constraint
 #: checkers against the response, reading the constraint stack from the gold).
 _GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22"})
+
+#: Envs whose generated pool is **blocked** by stratum (all of one stratum's
+#: instances contiguous, then the next), so ``TaskPool.split``'s contiguous
+#: slicing would skew each split toward the leading strata. c22 is blocked
+#: (its generator emits ``n_per_stratum`` instances per (constraint-count x
+#: atom-mix) cell in a fixed cell order). The other four envs interleave their
+#: strata (verified), so a contiguous split is already balanced for them.
+#: Blocked-pool envs are sampled per-stratum instead (see
+#: :func:`whetstone.envs.sampling.stratified_split`).
+_STRATIFIED_SPLIT_ENVS: frozenset[str] = frozenset({"c22"})
 
 #: c22 commits no ``default_split_sizes`` (unlike the other four). Its spec
 #: (Section 1) proposes N=20/stratum; this adapter uses the same
@@ -71,7 +83,17 @@ class EnvSpec:
         The env's ``oracle`` module. Its ``score_gold`` returns 0/1 after the
         env's shared normalization; see ``gold_first`` for the argument order.
     probes:
-        The env's naive/ceiling :class:`~whetstone_envs.core.ProbePair`.
+        The env's naive/ceiling :class:`~whetstone_envs.core.ProbePair` as
+        committed by whetstone-envs. Retained for reference / byte-fidelity
+        equivalence; the adapter renders through :attr:`surface` instead.
+    surface:
+        The adapter-side :class:`~whetstone.envs.probes.ProbeSurface`: a
+        genuinely mutable, serialization-stable ``user_prompt_template`` pair
+        plus a content-driven render. For four envs this wraps ``probes``
+        verbatim; for c19 it replaces the env's identity-sentinel ``ProbePair``
+        (which is non-functional under mutation / JSON round-trip) with real
+        ``str.format`` templates, so the Mutation Surface is genuinely mutable
+        and Result-Store-stable.
     oracle_qualname:
         The dotted path to the oracle entry point, folded into the Metric
         Extraction Config identity so a change of oracle wiring is visible in
@@ -84,14 +106,23 @@ class EnvSpec:
         gold, so its signature is ``score_gold(gold, response)``; this flag
         makes :meth:`score_gold` call the oracle with the right order while
         the adapter surface stays uniform ``score_gold(generation, gold)``.
+    stratified_split:
+        Whether this env's pool is **blocked** by stratum (``True`` only for
+        c22), so the adapter samples splits per-stratum
+        (:func:`whetstone.envs.sampling.stratified_split`) rather than via
+        ``TaskPool.split``'s contiguous slicing (which would skew a blocked
+        pool toward the leading strata). The interleaved envs keep the
+        contiguous split, which is already balanced for them.
     """
 
     name: str
     generate: ModuleType
     oracle: ModuleType
     probes: ProbePair
+    surface: ProbeSurface
     oracle_qualname: str
     gold_first: bool = False
+    stratified_split: bool = False
 
     def generate_pool(self, *, n_per_stratum: int | None = None) -> TaskPool:
         """Generate the env pool at its spec-default (or given) size."""
@@ -147,8 +178,10 @@ def _load_env_spec(name: str) -> EnvSpec:
         generate=generate,
         oracle=oracle,
         probes=prompts.PROBES,
+        surface=probe_surface(name, prompts.PROBES),
         oracle_qualname=f"whetstone_envs.{name}.oracle.score_gold",
         gold_first=name in _GOLD_FIRST_ENVS,
+        stratified_split=name in _STRATIFIED_SPLIT_ENVS,
     )
 
 
