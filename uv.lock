@@ -287,7 +287,7 @@ wheels = [
 
 [[package]]
 name = "dbos"
-version = "2.26.0"
+version = "2.27.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -297,9 +297,9 @@ dependencies = [
     { name = "typer-slim" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/aa/d5119d8772ff01e1d133bfca513d86723cdf9fc87391d4dfa9afbfcf2e5d/dbos-2.26.0.tar.gz", hash = "sha256:1be900963e7c00fdd9734a8defbc9e90acd32241d7ebea71e0a9af6c5b6090ea", size = 541758, upload-time = "2026-06-30T15:35:34.469Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/ff/27660211e9e531cc65a8d4a1f644788ce5c0a711572c7bee02f249c4b2b1/dbos-2.27.0.tar.gz", hash = "sha256:d31269094a8a1530980a3856065af7f0681f32c6ba72fb9f679d7400f6431614", size = 574037, upload-time = "2026-07-14T21:35:36.164Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/32/6a8c03e39e733b0483cf949232576800fff730a232fa5af4b62f7d3c3660/dbos-2.26.0-py3-none-any.whl", hash = "sha256:f60e57078d2f67e3938c0f9fc455a399654689d78645dd915214a442bd9474f4", size = 218086, upload-time = "2026-06-30T15:35:32.631Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/7d/dcf3cb997c001c9818dd63eb3adedd0b114d606f49d3657ae8ceb3073abf/dbos-2.27.0-py3-none-any.whl", hash = "sha256:93daed3831ea4f9266c6bf93b3f904baf836ac065c20eb9efbfc8931c9ee280d", size = 230214, upload-time = "2026-07-14T21:35:34.699Z" },
 ]
 
 [package.optional-dependencies]
@@ -330,7 +330,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?branch=main#564d61fc403620b66431eb08d109414b1f11ff0d" }
+source = { editable = "../dr-code" }
 dependencies = [
     { name = "datasets" },
     { name = "pydantic" },
@@ -338,65 +338,122 @@ dependencies = [
     { name = "zstandard" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "datasets", specifier = ">=3.0,<4" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "typer", specifier = ">=0.26.7" },
+    { name = "zstandard", specifier = ">=0.25.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
+]
+
 [[package]]
 name = "dr-graph"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-graph?branch=main#cdc08e7779454bf6c7ba92fbfa63988254427423" }
+source = { editable = "../dr-graph" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dr-serialize", editable = "../dr-serialize" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
 ]
 
 [[package]]
 name = "dr-platform"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-platform?branch=main#38207293d671e36496a347a7b3f140fe053e1f2f" }
+source = { editable = "../dr-platform" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos", extra = ["otel"] },
     { name = "dr-serialize" },
-    { name = "duckdb" },
     { name = "pydantic" },
     { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.16.2" },
+    { name = "dbos", extras = ["otel"], specifier = "==2.27.0" },
+    { name = "dr-serialize", editable = "../dr-serialize" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
 ]
 
 [[package]]
 name = "dr-providers"
 version = "0.2.0"
-source = { git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29#befbef782f249c6a517f34fb6965d4e10b74cf29" }
+source = { editable = "../dr-providers" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.121" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.26.7" },
+    { name = "typer", marker = "extra == 'serve'", specifier = ">=0.26.7" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.35" },
+]
+provides-extras = ["cli", "serve"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
+    { name = "typer", specifier = ">=0.26.7" },
+]
+
 [[package]]
 name = "dr-serialize"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-serialize?branch=main#a3b3184e07a10bf1b83bb61a66247cb3e9a2acf6" }
+source = { editable = "../dr-serialize" }
 dependencies = [
     { name = "pydantic" },
 ]
 
-[[package]]
-name = "duckdb"
-version = "1.4.5"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/45/05/9e32eb606684bbfd739a757acfa887705930b84e5a598da6bb85c48eb35f/duckdb-1.4.5.tar.gz", hash = "sha256:783779bde612172b06c250b5f34f7fc29471833545f2894aadedbffbbcc49013", size = 18424446, upload-time = "2026-06-17T10:46:36.409Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/6e/6a4eb99ccbc7e0025a9d07899402a4cb2235943f5c17596c889654744c1a/duckdb-1.4.5-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:d01a209288c3f96ffa230b6d09db2ab4c25dc936c379ca76a0a03f5d9f626877", size = 28967514, upload-time = "2026-06-17T10:45:35.084Z" },
-    { url = "https://files.pythonhosted.org/packages/c3/00/0d5d0f200ec6f1c6bdd08d3568aa6b33b7b05fd7cb0b69aa234b37484251/duckdb-1.4.5-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:e8345293e882459bc628eb8279f86f88e2eaf3e5512aaba3c86ae68530c1ca22", size = 15388459, upload-time = "2026-06-17T10:45:38.137Z" },
-    { url = "https://files.pythonhosted.org/packages/3a/2e/5ec931079f5ac0cd06d5b07cf5f0fdcd2b2b8fff26a7fc5d59c1767c1036/duckdb-1.4.5-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:b7d36ffe6f2f318d2596b3fc8890d33feafda82058768d1be36434842ee1a458", size = 13705203, upload-time = "2026-06-17T10:45:41.137Z" },
-    { url = "https://files.pythonhosted.org/packages/60/94/8070360dde385797350c3b129381c4439e144b3d6a04271d505bf28e80b2/duckdb-1.4.5-cp313-cp313-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:414d50b59864582cf00e503c316d7ca5a8577ee628c62fc203993eba2ad51a69", size = 18477206, upload-time = "2026-06-17T10:45:44.044Z" },
-    { url = "https://files.pythonhosted.org/packages/b4/ef/408b94919c4b3674aed78bcc3d82bfccf32a2c6b1436f633ebb098d1542e/duckdb-1.4.5-cp313-cp313-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:a3569583e12d61f9b8446ca8a0e4ee25c2fe9b04c2b010c2e3bad26fc3d65882", size = 20482742, upload-time = "2026-06-17T10:45:47.126Z" },
-    { url = "https://files.pythonhosted.org/packages/cd/eb/5921b7d628749629838549b0e6d0b24cdc1516cfad279d50267743f9bb31/duckdb-1.4.5-cp313-cp313-win_amd64.whl", hash = "sha256:095084610af93d4b5c88f80e1691b380ea82c0d338452bcd4c77e8a3fa54047d", size = 12279386, upload-time = "2026-06-17T10:45:50.162Z" },
-    { url = "https://files.pythonhosted.org/packages/8d/b6/6be43fcdac3d3fd6f726e1fdc032d6ee1a17b9c019dadbc265cbaf8650ae/duckdb-1.4.5-cp313-cp313-win_arm64.whl", hash = "sha256:6f2ddc1267024a45bbcf011955353a4627199ef0d0b59815c9187edf03aaa45d", size = 13035812, upload-time = "2026-06-17T10:45:52.84Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/da/9b264e0590c7eba5201324109b92288b352aa976fe2767b4fc3888e04678/duckdb-1.4.5-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:d840ec4e17674287adf8a6aa55ca923d8f437ef1ab8ac94d45295bcf4013f9dd", size = 28982957, upload-time = "2026-06-17T10:45:56.054Z" },
-    { url = "https://files.pythonhosted.org/packages/d0/d3/cc3461b6b933895025bdc129d22e6484cc0a0ce3cd4b6f7fa3c01ff97533/duckdb-1.4.5-cp314-cp314-macosx_10_15_x86_64.whl", hash = "sha256:b80258133bafe9647e81e4e301987d0885cd977e0eee7b03949f23c0c8a548c1", size = 15392703, upload-time = "2026-06-17T10:45:59.142Z" },
-    { url = "https://files.pythonhosted.org/packages/85/d7/77824a1fe0c73fe8190d940085950d8fd1afb0df789342182234964e0383/duckdb-1.4.5-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:81a95990020595a02aa157dc4c00a1d3eff25dc3c131e891d11ffee55ba6213c", size = 13708317, upload-time = "2026-06-17T10:46:01.795Z" },
-    { url = "https://files.pythonhosted.org/packages/8e/82/b71c51548a675d383b5f32fcc13386d2c4e364b86a89c8374037691de18e/duckdb-1.4.5-cp314-cp314-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:52f429653701676df74ccfbfb05baf9ee8cf46d830353574872d053142d6b018", size = 18480349, upload-time = "2026-06-17T10:46:04.554Z" },
-    { url = "https://files.pythonhosted.org/packages/38/d6/3d7a50c956fb9b7fccc5ca936daf55b8d52ffcfdd47bbebc401138da824c/duckdb-1.4.5-cp314-cp314-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:64fe5e7ec74696788ce1e4157d1b70e45806756234c22c1a59bfcd28de1cae7b", size = 20488575, upload-time = "2026-06-17T10:46:07.688Z" },
-    { url = "https://files.pythonhosted.org/packages/38/0a/9c8a286cdc0c2930b239aa849f647fed18e22582463110af160ff02dee36/duckdb-1.4.5-cp314-cp314-win_amd64.whl", hash = "sha256:d95061ccce933d43e6d9d20bb527ec30bf9acfdf6950e7f6fb61f86b2ab93621", size = 12782419, upload-time = "2026-06-17T10:46:10.924Z" },
-    { url = "https://files.pythonhosted.org/packages/ad/6d/0dbbb910abb04e2e1df8f923c552c6f99869af1614cd6ef646f5ec00b63e/duckdb-1.4.5-cp314-cp314-win_arm64.whl", hash = "sha256:9250c9315dcc5519da85fc9f7a26432f87d2b95b57513e5438a682118667b92b", size = 13494758, upload-time = "2026-06-17T10:46:13.68Z" },
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.13.4" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
 ]
 
 [[package]]
@@ -1678,11 +1735,11 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?branch=main" },
-    { name = "dr-graph", git = "https://github.com/danielle-rothermel/dr-graph?branch=main" },
-    { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?branch=main" },
-    { name = "dr-providers", git = "https://github.com/danielle-rothermel/dr-providers?rev=befbef782f249c6a517f34fb6965d4e10b74cf29" },
-    { name = "dr-serialize", git = "https://github.com/danielle-rothermel/dr-serialize?branch=main" },
+    { name = "dr-code", editable = "../dr-code" },
+    { name = "dr-graph", editable = "../dr-graph" },
+    { name = "dr-platform", editable = "../dr-platform" },
+    { name = "dr-providers", editable = "../dr-providers" },
+    { name = "dr-serialize", editable = "../dr-serialize" },
 ]
 
 [package.metadata.requires-dev]
