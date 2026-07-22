@@ -46,6 +46,9 @@ dr-serialize = { path = "../dr-serialize", editable = true }
 dr-store = { path = "../dr-store", editable = true }
 whetstone-envs = { path = "../whetstone-envs", editable = true }
 
+[project.scripts]
+whetstone-validate = "whetstone.runner.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
