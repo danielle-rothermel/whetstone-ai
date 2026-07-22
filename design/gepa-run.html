@@ -25,209 +25,248 @@
 </div>
 
 <div class="intro">
-  <p>GEPA uses a reflection LM to evolve encoder templates from bounded projections of referenced <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a>; on success it returns four ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, while official evaluation remains authoritative.</p>
+  <p>GEPA uses a <a class="term-ref" href="#gepa-reflection-lm">reflection LM</a> to evolve encoder templates from <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a> of referenced <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a>; on success it returns four ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, while official evaluation remains authoritative.</p>
 </div>
 
 <p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the eval design.</p>
 
 <div class="callout"><b>Algorithm-local vocabulary</b> — defined here because these terms are specific to this optimizer, not shared Whetstone ontology terms:
   <ul>
-    <li><b>proposal catalog</b> — optimizer-owned, append-only index of every canonical, valid, unique proposal evaluated in the run, including proposals later rejected, dominated or evicted. Needed: final return fallback must not depend on active archive membership.</li>
-    <li><b>archive</b> — the capacity-32 active index over Proposal Catalog entries and their persisted Tool Result/Rollout references, with derived per-task Objective vectors. Needed: GEPA's parent selection and nondominated-first return ranking read it; eviction removes only active membership.</li>
-    <li><b>parent / child</b> — the candidate a mutation starts from and the candidate it produces. Needed: describes lineage during evolution.</li>
-    <li><b>reflection LM</b> — the optimizer-owned LM that reads rollout traces and writes a mutated encoder template. Needed: distinguishes it from the encoder and decoder LMs inside rollouts.</li>
-    <li><b>bounded Rollout Trace projection</b> — a versioned, size-limited selection of preprocessing and code-test facts resolved from Rollout references; it records truncation and never replaces the source results. Needed: it is GEPA's reflective evidence.</li>
-    <li><b>per-task frontier</b> — the candidates whose archive row is best on at least one task; parents are sampled from it. Needed: must stay distinct from the plot's pareto front.</li>
-    <li><b>minibatch</b> — the 3-task sample a tool evaluates one candidate on per iteration. Needed: names the reflective evidence's scope.</li>
+    <li><b><dfn class="term-name" id="gepa-proposal-catalog">proposal catalog</dfn></b> — optimizer-owned, append-only index of every canonical, valid, unique proposal evaluated in the run, including proposals later rejected, dominated or evicted. Needed: final return fallback must not depend on <a class="term-ref" href="#gepa-archive">active archive</a> membership.</li>
+    <li><b><dfn class="term-name" id="gepa-archive">archive</dfn></b> — the capacity-32 active index over <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a> entries and their persisted <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>/Rollout references, with derived per-task Objective vectors. Needed: GEPA's <a class="term-ref" href="#gepa-parent">parent</a> selection and <a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a> return ranking read it; eviction removes only active membership.</li>
+    <li><b><dfn class="term-name" id="gepa-archive-policy">archive policy</dfn></b> — identity-bearing optimizer configuration fixing <a class="term-ref" href="#gepa-archive">archive</a> <a class="term-ref" href="#gepa-param-archive-capacity"><code>archive_capacity = 32</code></a>, dominance/equality/incomparability handling, nondominated preservation, deterministic eviction order, and return ordering; the <a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a> carries its immutable reference and hash.</li>
+    <li><b><dfn class="term-name" id="gepa-archive-nondominated-set">archive nondominated set</dfn></b> — <a class="term-ref" href="#gepa-archive">active archive</a> entries not dominated on the fixed correctness-maximizing and compression-minimizing objective population; it supplies the <a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a> return ranking.</li>
+    <li><b><dfn class="term-name" id="gepa-parent">parent</dfn> / <dfn class="term-name" id="gepa-child">child</dfn></b> — the candidate a mutation starts from and the candidate it produces. Needed: describes lineage during evolution.</li>
+    <li><b><dfn class="term-name" id="gepa-reflection-lm">reflection LM</dfn></b> — the optimizer-owned LM that reads <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a> and writes a mutated encoder template. Needed: distinguishes it from the encoder and decoder LMs inside rollouts.</li>
+    <li><b><dfn class="term-name" id="gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</dfn></b> — a versioned, size-limited selection of preprocessing and code-test facts resolved from Rollout references; it records truncation and never replaces the source results. Rollout Trace is page-local shorthand for this projection, not a normative Trace or Result. Needed: it is GEPA's reflective evidence.</li>
+    <li><b><dfn class="term-name" id="gepa-per-task-frontier">per-task frontier</dfn></b> — the candidates whose <a class="term-ref" href="#gepa-archive">archive</a> row is best on at least one task; <a class="term-ref" href="#gepa-parent">parents</a> are sampled from it. Needed: must stay distinct from the plot's Pareto Front.</li>
+    <li><b><dfn class="term-name" id="gepa-minibatch">minibatch</dfn></b> — the 3-task sample a tool evaluates one candidate on per iteration. Needed: names the reflective evidence's scope.</li>
   </ul>
+</div>
+
+<div class="section-head" id="hyperparameters"><h2>Algorithm Hyperparameter Registry</h2></div>
+
+<p class="small muted">Only the first group controls GEPA's search behavior. The remaining names make example evaluation settings, output cardinalities, and derived totals explicit without promoting them into algorithm hyperparameters.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Classification</th><th>Canonical name</th><th>Example value</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr class="term-group"><th colspan="4" scope="colgroup">GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-archive-capacity"><code>archive_capacity</code></dfn></td><td><code>32</code></td><td>Maximum active archive membership; eviction never deletes proposal catalog history.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-minibatch-size"><code>minibatch_size</code></dfn></td><td><code>3</code> tasks</td><td>Task sample used for each bounded Rollout Trace projection.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls</code></dfn></td><td><code>8</code></td><td>Global cap on reflection LM calls, including invalid or duplicate outputs.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-max-reflection-attempts-per-iteration"><code>max_reflection_attempts_per_iteration</code></dfn></td><td><code>3</code></td><td>Per-iteration retry bound within the global reflection LM call cap.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts</code></dfn></td><td><code>400</code></td><td>Hard budget guard for optimization Rollouts, distinct from the smaller example-derived plan.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Eval Config and example experimental settings — not GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Example setting</td><td><dfn id="gepa-setting-initial-candidate-count"><code>initial_candidate_count</code></dfn></td><td><code>2</code></td><td>Templates A and B used to seed this walkthrough.</td></tr>
+    <tr><td>Internal Eval Config setting</td><td><dfn id="gepa-setting-objective-task-count"><code>objective_task_count</code></dfn></td><td><code>24</code></td><td>Fixed task population used for parent/child objective comparison.</td></tr>
+    <tr><td>Internal Eval Config setting</td><td><dfn id="gepa-setting-optimization-repeat-count"><code>optimization_repeat_count</code></dfn></td><td><code>1</code></td><td>Repeat count for internal objective and diagnostic evaluation.</td></tr>
+    <tr><td>Example fixed-axis setting</td><td><dfn id="gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio</code></dfn></td><td><code>0.5</code></td><td>Budget ratio used by optimization tools in this walkthrough.</td></tr>
+    <tr><td>Official Eval Config setting</td><td><dfn id="gepa-setting-official-task-count"><code>official_task_count</code></dfn></td><td><code>164</code></td><td>Pinned HumanEval+ task count for official evaluation.</td></tr>
+    <tr><td>Official Eval Config setting</td><td><dfn id="gepa-setting-official-repeat-count"><code>official_repeat_count</code></dfn></td><td><code>3</code></td><td>Repeat count for official evaluation.</td></tr>
+    <tr><td>Example Variance Source</td><td><dfn id="gepa-setting-budget-ratio-values"><code>budget_ratio_values</code></dfn></td><td><code>(0.25, 0.5, 0.75, 1.0)</code></td><td>Four fixed-axis selections expanded after proposal validation.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Output and selection cardinalities — not GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Optimization Result contract</td><td><dfn id="gepa-contract-proposal-return-count"><code>proposal_return_count</code></dfn></td><td><code>4</code></td><td>Required ordered Optimization Proposal count on success.</td></tr>
+    <tr><td>Example Selection Policy</td><td><dfn id="gepa-contract-official-selection-count"><code>official_selection_count</code></dfn></td><td><code>3</code></td><td>Returned proposal groups selected for official evaluation.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Derived totals — formulas, not parameters</th></tr>
+    <tr><td>Derived</td><td><dfn id="gepa-derived-materialization-count"><code>materialization_count</code></dfn></td><td><code>proposal_return_count × len(budget_ratio_values) = 4 × 4 = 16</code></td><td>Graph Config and Materialization Record pairs emitted before selection.</td></tr>
+    <tr><td>Derived upper bound</td><td><dfn id="gepa-derived-max-admitted-graph-count"><code>max_admitted_graph_count</code></dfn></td><td><code>official_selection_count × len(budget_ratio_values) = 3 × 4 = 12</code></td><td>Maximum distinct admitted Graph Hashes before convergence lowers <code>D</code>.</td></tr>
+    <tr><td>Derived</td><td><dfn id="gepa-derived-official-rollout-count"><code>official_rollout_count</code></dfn></td><td><code>D × official_task_count × official_repeat_count</code>; at <code>D=12</code>, <code>5,904</code></td><td>Official Rollout count after selected Graph Hash deduplication.</td></tr>
+    <tr><td>Derived example maximum</td><td><dfn id="gepa-derived-planned-optimization-rollout-count"><code>planned_optimization_rollout_count</code></dfn></td><td><code>2 × 24 + 8 × (3 + 24 + 3) = 288</code></td><td>Successful all-valid example plan; below the hard <code>max_optimization_rollouts = 400</code> guard.</td></tr>
+  </tbody>
+</table>
 </div>
 
 <div class="section-head" id="target"><h2>Example Setup</h2></div>
 
 <div class="grid-4">
   <div class="card optim">
-    <h3>Mutation Surface &amp; Initial Candidates</h3>
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">Mutation Surface</a> &amp; <a class="term-ref" href="vocab_and_defs.html#term-initial-candidate">Initial Candidates</a></h3>
     <ul>
-      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder LLM Call Node — nothing else may change</li>
+      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> — nothing else may change</li>
       <li>Initial candidates: encoder Templates <strong>A</strong> and <strong>B</strong> (full text in the <a href="eval-run.html#target">eval doc</a>)</li>
-      <li>One GEPA run per Model Route — the same 4 routes as the eval experiment; each route resolves to a complete output-affecting Provider Call Config identity that contributes to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</li>
+      <li>One GEPA run per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a> — the same 4 routes as the eval experiment; each route resolves to a complete output-affecting <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> identity that contributes to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</li>
     </ul>
     <p class="small muted space-top">This walkthrough follows (openrouter, <code>deepseek/deepseek-v4-flash</code>).</p>
   </div>
   <div class="card optim">
     <h3>Toolkit</h3>
     <ul>
-      <li><code>evaluate_minibatch</code> — 3 tasks × 1 repeat at ratio 0.5; returns Rollout references plus a bounded Whetstone Rollout Trace projection</li>
-      <li><code>evaluate_subset</code> — 24 tasks × 1 repeat at ratio 0.5; returns Rollout references and Objective vectors</li>
+      <li><code>evaluate_minibatch</code> — <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> tasks × <a class="term-ref" href="#gepa-setting-optimization-repeat-count"><code>optimization_repeat_count = 1</code></a> at <a class="term-ref" href="#gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio = 0.5</code></a>; returns Rollout references plus a <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a></li>
+      <li><code>evaluate_subset</code> — <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> tasks × <a class="term-ref" href="#gepa-setting-optimization-repeat-count"><code>optimization_repeat_count = 1</code></a> at <a class="term-ref" href="#gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio = 0.5</code></a>; returns Rollout references and Objective vectors</li>
     </ul>
-    <p class="small muted space-top">Each Tool Spec Config references a versioned Tool Definition and supplies endpoint, internal Eval Config, Reward Policy, capacity/timeout/policy refs, ledger namespace, idempotency and refusal rules. The Optimization Request serializes those Specs plus an identity-bearing <code>archive_policy_ref/hash</code> whose capacity is 32; runtime Handles do not serialize. Whetstone Tool Call Ledgers keyed by <code>tool_spec_hash + call_id</code> own acceptance/refusal/completion/capacity across retry and restart.</p>
+    <p class="small muted space-top">Each <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Spec</a> references a versioned <a class="term-ref" href="vocab_and_defs.html#term-tool-definition">Tool Definition</a> and supplies endpoint, internal <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a>, <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>, capacity/timeout/policy refs, ledger namespace, idempotency and refusal rules. The <a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a> serializes those <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> plus an identity-bearing <code>archive_policy_ref/hash</code> whose capacity is 32; <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> do not serialize. Whetstone <a class="term-ref" href="vocab_and_defs.html#term-tool-call-ledger">Tool Call Ledgers</a> keyed by <code>tool_spec_hash + call_id</code> own acceptance/refusal/completion/capacity across retry and restart.</p>
   </div>
   <div class="card optim">
     <h3>Optimization Budget &amp; Return</h3>
     <ul>
-      <li>Up to 8 reflection LM calls across reflective mutation attempts</li>
-      <li>Caps: 400 optimization rollouts · 8 reflection LM calls</li>
-      <li>Return: exactly 4 ordered Optimization Proposals, or a failed Optimization Result with no official materialization</li>
+      <li><a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a> across reflective mutation attempts</li>
+      <li>Hard budget: <a class="term-ref" href="#gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts = 400</code></a></li>
+      <li>Return: <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, or a failed <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> with no official materialization</li>
     </ul>
-    <p class="small muted space-top">Guidance: "evolve the encoder user prompt template toward the correctness–compression front."</p>
+    <p class="small muted space-top">Guidance: "evolve the encoder user prompt template toward the <a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a>."</p>
   </div>
   <div class="card">
-    <h3>Official Evaluation</h3>
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a></h3>
     <ul>
-      <li>Unchanged from the eval design: HumanEval+ (164) @ pinned revision · 3 repeats · zstd-19 ÷ reference length</li>
-      <li>Variance source: budget ratios 0.25 / 0.5 / 0.75 / 1.0</li>
-      <li>Selection: officially evaluate the top 3 returned candidates</li>
+      <li>Unchanged from the eval design: HumanEval+ <a class="term-ref" href="#gepa-setting-official-task-count"><code>official_task_count = 164</code></a> @ pinned revision · <a class="term-ref" href="#gepa-setting-official-repeat-count"><code>official_repeat_count = 3</code></a> · zstd-19 ÷ reference length</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-variance-source">Variance Source</a>: <a class="term-ref" href="#gepa-setting-budget-ratio-values"><code>budget_ratio_values = (0.25, 0.5, 0.75, 1.0)</code></a></li>
+      <li>Selection: <a class="term-ref" href="#gepa-contract-official-selection-count"><code>official_selection_count = 3</code></a> returned candidate groups</li>
     </ul>
-    <p class="small muted space-top"><code>D × 164 × 3</code> official rollouts, where <code>D≤12</code>; 5,904 only in the explicit nonconvergent example.</p>
+    <p class="small muted space-top"><a class="term-ref" href="#gepa-derived-official-rollout-count"><code>official_rollout_count = D × official_task_count × official_repeat_count</code></a>, where <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D ≤ max_admitted_graph_count = 12</code></a>; <code>5,904</code> only in the explicit nonconvergent example.</p>
   </div>
 </div>
 
 <div class="section-head" id="specified"><h2>Run Configurations</h2></div>
 
 <div class="plane">
-  <div class="plane-label">Graph Definition used as Rollout Definition <span class="sub">· one artifact/identity, identical to the eval design</span></div>
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> <span class="sub">· one artifact/identity, identical to the eval design</span></div>
   <div class="hflow">
-    <div class="comp node"><b>Encoder LLM Call Node (Config)</b><span class="note">output-affecting components include complete Provider Call Config ref/hash and templates/KVs<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
+    <div class="comp node"><b>Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> (Config)</b><span class="note">output-affecting components include complete <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> ref/hash and templates/KVs<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Decoder LLM Call Node (Config)</b><span class="note">complete Provider Call Config and prompt are fixed outside the mutation surface</span></div>
+    <div class="comp node"><b>Decoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> (Config)</b><span class="note">complete <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> and prompt are fixed outside the mutation surface</span></div>
     <span class="harrow">→</span>
-    <div class="comp node"><b>Eval Node (Config) · terminal role</b><span class="note">static Evaluation Procedure Config ref/hash is included in Graph Config identity; facts first: Submission Text, Preprocessing Trace, Code Artifact refs, Metric Facts/Records and integer Compressed Description Length<hr>the procedure derives per-observation score; Aggregation reduces. This sole sink's ordinary validated Node Output becomes Graph Output unchanged on success</span></div>
+    <div class="comp node"><b><a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a> (Config) · terminal role</b><span class="note">static <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> ref/hash is included in <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> identity; facts first: <a class="term-ref" href="vocab_and_defs.html#term-submission-text">Submission Text</a>, <a class="term-ref" href="vocab_and_defs.html#term-preprocessing-trace">Preprocessing Trace</a>, <a class="term-ref" href="vocab_and_defs.html#term-code-artifact">Code Artifact</a> refs, <a class="term-ref" href="vocab_and_defs.html#term-metric-fact">Metric Facts</a>/Records and integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a><hr>the procedure derives per-observation score; Aggregation reduces. This sole sink's ordinary validated <a class="term-ref" href="vocab_and_defs.html#term-node-output">Node Output</a> becomes <a class="term-ref" href="vocab_and_defs.html#term-graph-output">Graph Output</a> unchanged on success</span></div>
   </div>
 </div>
 
-<div class="flow-arrow"><span>a child candidate differs from its parent in exactly one variable</span> <span class="glyph">▼</span></div>
+<div class="flow-arrow"><span>a <a class="term-ref" href="#gepa-child">child</a> candidate differs from its <a class="term-ref" href="#gepa-parent">parent</a> in exactly one variable</span> <span class="glyph">▼</span></div>
 
 <div class="plane optim">
-  <div class="plane-label">Graph Config Example <span class="sub">· child candidate G5 (evolved template) at budget_ratio 0.5</span></div>
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> Example <span class="sub">· <a class="term-ref" href="#gepa-child">child</a> candidate G5 (evolved template) at budget_ratio 0.5</span></div>
   <div class="comps">
-    <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the reflection LM at iteration 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
-    <div class="comp node"><b>Inherited Configuration Assignments</b><span class="note">the output-affecting Graph Config components, including encoder + decoder Provider Call Config refs/hashes, temperature, decoder prompt, and the Eval Node's Evaluation Procedure Config ref/hash, are byte-identical to the parent outside <code>{user_prompt_template}</code>; the resulting Graph Config is one Rollout Variant<hr>Eval Sampling/Aggregation, Evaluation Context, and materialization lineage are independent of Rollout Variant identity</span></div>
+    <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the <a class="term-ref" href="#gepa-reflection-lm">reflection LM</a> at iteration 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
+    <div class="comp node"><b>Inherited Configuration Assignments</b><span class="note">the output-affecting <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> components, including encoder + decoder <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> refs/hashes, temperature, decoder prompt, and the <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>'s <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> ref/hash, are byte-identical to the <a class="term-ref" href="#gepa-parent">parent</a> outside <code>{user_prompt_template}</code>; the resulting <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> is one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a><hr>Eval Sampling/Aggregation, <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>, and materialization lineage are independent of <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</span></div>
   </div>
 </div>
 
-<div class="callout"><b>Measurement and Reward.</b> The objective Tool Spec fixes one 24-task Internal Eval Config for every parent/child comparison. A separate 3-task diagnostic trace projection never changes that objective population. Eval Config remains Sampling + Evaluation Procedure + Aggregation/objectives and must reference the identical Evaluation Procedure Config assigned statically to the Graph's Eval Node; Tool Spec owns Reward Policy. Internal and official evaluation here use the same facts-first Procedure Config, so matching Graph Configs retain the same <code>graph_hash</code>; Sampling/Aggregation changes only <code>eval_config_hash</code>, while a Procedure Config change changes both hashes. Authority and realized-environment attestation remain Evaluation Context. Official evaluation computes Objective Vectors/Aggregates, never Reward. Provider evidence retains least-processed request and response or failure bodies alongside normalized usage, cost and diagnostics.</div>
+<div class="callout"><b>Measurement and Reward.</b> The objective <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Spec</a> fixes one <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> <a class="term-ref" href="vocab_and_defs.html#term-internal-eval-config">Internal Eval Config</a> for every <a class="term-ref" href="#gepa-parent">parent</a>/<a class="term-ref" href="#gepa-child">child</a> comparison. A separate <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a> never changes that objective population. <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> remains Sampling + Evaluation Procedure + Aggregation/objectives and must reference the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned statically to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>; <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Spec</a> owns <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>. Internal and official evaluation here use the same facts-first Procedure Config, so matching <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> retain the same <code>graph_hash</code>; Sampling/Aggregation changes only <code>eval_config_hash</code>, while a Procedure Config change changes both hashes. Authority and realized-environment attestation remain <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>. Official evaluation computes <a class="term-ref" href="vocab_and_defs.html#term-objective-vector">Objective Vectors</a>/Aggregates, never Reward. Provider evidence retains least-processed request and response or failure bodies alongside normalized usage, cost and diagnostics.</div>
 
-<div class="section-head" id="system"><h2>Run GEPA, Then Official Evaluation on the Returned Candidates</h2></div>
+<div class="section-head" id="system"><h2>Run GEPA, Then <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a> on the Returned Candidates</h2></div>
 
 <div class="flow">
   <div class="plane">
     <div class="plane-label">Experiment design <span class="sub">· all frozen data, all hashed</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Starting candidates &amp; materializer</b><span class="note">one graph shape; each complete search or official assignment emits one Graph Config plus one Materialization Record; 4 valid proposals × 4 ratios → 16 materializations before selection</span></div>
-      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder LLM Call Node — declared, diff-checkable</span></div>
-      <div class="comp settled optim"><b>Tool Specs &amp; archive policy</b><span class="note">objective evaluation + diagnostic projection Specs and the identity-bearing capacity-32 archive policy ref/hash serialize in the request; the harness constructs Handles and ledgers</span></div>
-      <div class="comp settled optim"><b>Budget &amp; selection</b><span class="note">400 optimization Rollouts · at most 8 reflection calls, including invalid/duplicate attempts · return exactly 4 or fail; officially evaluate top 3 only after success</span></div>
-      <div class="comp settled"><b>Official Evaluation Context</b><span class="note">binds the 164-task, 3-repeat Eval Config, authorized write path and realized-environment attestation; matching hashes never confer officialness</span></div>
+      <div class="comp settled"><b>Starting candidates &amp; materializer</b><span class="note">one graph shape; each complete search or official assignment emits one <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> plus one <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a>; <a class="term-ref" href="#gepa-derived-materialization-count"><code>materialization_count = proposal_return_count × len(budget_ratio_values) = 4 × 4 = 16</code></a> before selection</span></div>
+      <div class="comp settled optim"><b>Mutation surface</b><span class="note"><code>{user_prompt_template}</code> on the Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> — declared, diff-checkable</span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> &amp; <a class="term-ref" href="#gepa-archive-policy">archive policy</a></b><span class="note">objective evaluation + <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a> <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> and the identity-bearing capacity-32 <a class="term-ref" href="#gepa-archive-policy">archive policy</a> ref/hash serialize in the request; the harness constructs <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> and ledgers</span></div>
+      <div class="comp settled optim"><b>Budget &amp; selection</b><span class="note"><a class="term-ref" href="#gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts = 400</code></a> · <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>, including invalid/duplicate outputs · <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> or fail; <a class="term-ref" href="#gepa-contract-official-selection-count"><code>official_selection_count = 3</code></a> only after success</span></div>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a> Context</b><span class="note">binds the 164-task, 3-repeat <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a>, authorized write path and realized-environment attestation; matching hashes never confer officialness</span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span><code>OptimizationRequest</code>: starting candidates, fixed axes, mutation surface, Tool Specs, guidance, budget</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a>: starting candidates, fixed axes, mutation surface, <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a>, guidance, budget</span> <span class="glyph">▼</span></div>
 
   <div class="plane optim">
     <div class="plane-label">Optimization stage <span class="sub">· the GEPA optimizer</span></div>
     <div class="comps">
-      <div class="comp settled optim"><b>Proposal Catalog</b><span class="note">append-only index of every canonical, valid, unique evaluated proposal, including rejected, dominated and evicted entries; rows reference authoritative bound Tool Results and Rollouts</span></div>
-      <div class="comp settled optim"><b>Active Archive · capacity 32</b><span class="note">indexes catalog entries and per-task vectors for parent selection; deterministic eviction removes active membership only, never catalog history</span></div>
-      <div class="comp settled optim"><b>Parent sampler</b><span class="note">computes the per-task frontier over the archive; stochastic pick preserves diversity — not greedy best</span></div>
-      <div class="comp settled optim"><b>Reflection LM</b><span class="note">reads the parent plus a size-bounded Whetstone projection; every request counts toward the cap of 8. Canonicalize and validate its template; invalid/duplicate outputs are recorded and retried with deterministic iteration/attempt nonce, at most 3 attempts per iteration</span></div>
-      <div class="comp settled optim"><b>Child assembler</b><span class="note">child proposal = the parent's output-affecting values with only <code>{user_prompt_template}</code> changed; tools and the harness materialize configs</span></div>
-      <div class="comp settled optim"><b>Catalog &amp; archive update</b><span class="note">after objective evaluation, append the valid unique child to the catalog. Compare on the same fixed 24 tasks: child dominates → replace parent in active archive; parent dominates or equals → reject from active archive; incomparable → retain both</span></div>
-      <div class="comp settled optim"><b>Bounded eviction</b><span class="note">capacity exactly 32; preserve nondominated active entries as capacity permits, then evict deterministic worst by pass rate ascending, compression descending, proposal ID descending. Evicted entries remain in the catalog</span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a></b><span class="note">append-only index of every canonical, valid, unique evaluated proposal, including rejected, dominated and evicted entries; rows reference authoritative bound <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> and Rollouts</span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="#gepa-archive">Active Archive</a> · <a class="term-ref" href="#gepa-param-archive-capacity"><code>archive_capacity = 32</code></a></b><span class="note">indexes <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> entries and per-task vectors for <a class="term-ref" href="#gepa-parent">parent</a> selection; deterministic eviction removes active membership only, never <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> history</span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="#gepa-parent">Parent</a> sampler</b><span class="note">computes the <a class="term-ref" href="#gepa-per-task-frontier">per-task frontier</a> over the <a class="term-ref" href="#gepa-archive">archive</a>; stochastic pick preserves diversity — not greedy best</span></div>
+      <div class="comp settled optim"><b>Reflection LM</b><span class="note">reads the <a class="term-ref" href="#gepa-parent">parent</a> plus a <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a>; every request counts toward <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>. Canonicalize and validate its template; invalid/duplicate outputs are recorded and retried with a deterministic iteration/attempt nonce, bounded by <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-iteration"><code>max_reflection_attempts_per_iteration = 3</code></a></span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="#gepa-child">Child</a> assembler</b><span class="note"><a class="term-ref" href="#gepa-child">child</a> proposal = the <a class="term-ref" href="#gepa-parent">parent</a>'s output-affecting values with only <code>{user_prompt_template}</code> changed; tools and the harness materialize configs</span></div>
+      <div class="comp settled optim"><b><a class="term-ref" href="#gepa-proposal-catalog">Catalog</a> &amp; <a class="term-ref" href="#gepa-archive">archive</a> update</b><span class="note">after objective evaluation, append the valid unique <a class="term-ref" href="#gepa-child">child</a> to the <a class="term-ref" href="#gepa-proposal-catalog">catalog</a>. Compare on the same fixed 24 tasks: <a class="term-ref" href="#gepa-child">child</a> dominates → replace <a class="term-ref" href="#gepa-parent">parent</a> in <a class="term-ref" href="#gepa-archive">active archive</a>; <a class="term-ref" href="#gepa-parent">parent</a> dominates or equals → reject from <a class="term-ref" href="#gepa-archive">active archive</a>; incomparable → retain both</span></div>
+      <div class="comp settled optim"><b>Bounded eviction</b><span class="note"><a class="term-ref" href="#gepa-param-archive-capacity"><code>archive_capacity = 32</code></a>; preserve nondominated active entries as capacity permits, then evict deterministic worst by pass rate ascending, compression descending, proposal ID descending. Evicted entries remain in the <a class="term-ref" href="#gepa-proposal-catalog">catalog</a></span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>during the loop: stable-ID <code>evaluate_minibatch</code> / <code>evaluate_subset</code> calls</span> <span class="glyph">▼</span><span class="glyph">▲</span> <span>Tool Results with Rollout refs + bounded trace projections</span></div>
-  <div class="flow-arrow"><span>at the end: exactly 4 ordered proposals, or a failed <code>OptimizationResult</code> when the catalog has fewer than 4 after 8 reflection calls; failure permits no official materialization</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span>during the loop: stable-ID <code>evaluate_minibatch</code> / <code>evaluate_subset</code> calls</span> <span class="glyph">▼</span><span class="glyph">▲</span> <span><a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> with Rollout refs + <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a></span></div>
+  <div class="flow-arrow"><span>at the end: exactly 4 ordered proposals, or a failed <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> when the <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> has fewer than 4 after 8 <a class="term-ref" href="#gepa-reflection-lm">reflection LM calls</a>; failure permits no official materialization</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Evaluation harness <span class="sub">· serves tools during the run; runs official evaluation after it</span></div>
     <div class="comps">
-      <div class="comp settled optim"><b>Tool service</b><span class="note">executes stable call IDs under internal Evaluation Contexts; results remain internal by authority, regardless of hash equality</span></div>
-      <div class="comp settled optim"><b>Validation &amp; materialization</b><span class="note">the harness validates all 4 proposals, then expands every valid proposal over four fixed ratios → 16 Graph Config/Materialization Record pairs</span></div>
-      <div class="comp settled optim"><b>Selection &amp; deduplication</b><span class="note">the top-3 Selection Policy selects 12 ordered Materialization Record slots, then deduplicates the selected records by full <code>graph_hash</code> to <code>D ≤ 12</code> admitted graphs. The other 4 records persist unselected</span></div>
+      <div class="comp settled optim"><b>Tool service</b><span class="note">executes stable call IDs under internal <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Contexts</a>; results remain internal by authority, regardless of hash equality</span></div>
+      <div class="comp settled optim"><b>Validation &amp; materialization</b><span class="note">the harness validates all 4 proposals, then expands every valid proposal over four fixed ratios → 16 <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs</span></div>
+      <div class="comp settled optim"><b>Selection &amp; deduplication</b><span class="note">the top-3 <a class="term-ref" href="vocab_and_defs.html#term-selection-policy">Selection Policy</a> selects 12 ordered <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> slots, then deduplicates the selected records by full <code>graph_hash</code> to <code>D ≤ 12</code> admitted graphs. The other 4 records persist unselected</span></div>
       <div class="comp settled"><b>Evaluator</b><span class="note">runs exactly <code>D × 164 × 3</code> Rollouts; the explicit nonconvergent example has <code>D=12</code> and 5,904</span></div>
-      <div class="comp settled"><b>Platform mapping &amp; Provider Concurrency Control</b><span class="note">one Work Item/<code>execute-rollout</code> Stage per Rollout Execution Key. Whetstone derives collision-free labels from every exact <code>(provider, protocol, model)</code> identity and applies all relevant labels to multi-route work. Mandatory empty-selector and exact-label capacities all apply for the full ADMITTED Stage, including backoff; dr-platform supplies only generic enforcement. See the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract</a></span></div>
+      <div class="comp settled"><b>Platform mapping &amp; <a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a></b><span class="note">one <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Item</a>/<code>execute-rollout</code> Stage per <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a>. Whetstone derives collision-free labels from every exact <code>(provider, protocol, model)</code> identity and applies all relevant labels to multi-route work. Mandatory empty-selector and exact-label capacities all apply for the full ADMITTED Stage, including backoff; dr-platform supplies only generic enforcement. See the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract</a></span></div>
     </div>
   </div>
 
-  <div class="flow-arrow"><span>Rollout Key = (<code>graph_hash</code>, <code>eval_config_hash</code>, task, repeat); Rollout Execution Key adds context ID</span> <span class="glyph">▼</span></div>
+  <div class="flow-arrow"><span><a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Key</a> = (<code>graph_hash</code>, <code>eval_config_hash</code>, task, repeat); <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> adds context ID</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
     <div class="plane-label">Rollout execution <span class="sub">· graph nodes inside one execute-rollout Platform Stage</span></div>
     <div class="hflow">
-      <div class="comp settled"><b>Graph External Inputs</b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code; runtime values remain outside Graph Config identity</span></div>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-external-input">Graph External Inputs</a></b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code; runtime values remain outside <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> identity</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Encoder LLM Call Node</b><span class="note">Provider Call Request references config + Transcript; accepted nonblank native text becomes Generation</span></div>
+      <div class="comp settled"><b>Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note"><a class="term-ref" href="vocab_and_defs.html#term-provider-call-request">Provider Call Request</a> references config + Transcript; accepted nonblank native text becomes Generation</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Decoder LLM Call Node</b><span class="note">Provider Execution Policy owns timeout, credentials and native retries=0. dr-providers retains least-processed request and response or failure bodies without authorization or credential material</span></div>
+      <div class="comp settled"><b>Decoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note"><a class="term-ref" href="vocab_and_defs.html#term-provider-execution-policy">Provider Execution Policy</a> owns timeout, credentials and native retries=0. dr-providers retains least-processed request and response or failure bodies without authorization or credential material</span></div>
       <span class="harrow">→</span>
-      <div class="comp settled"><b>Eval Node · sole terminal role</b><span class="note">uses its statically assigned Evaluation Procedure Config; Submission Text → Code Artifacts → Metric Facts/Records; integer Compressed Description Length from zstd-19 UTF-8 encoder bytes<hr>its ordinary validated Node Output becomes Graph Output unchanged on success</span></div>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a> · sole terminal role</b><span class="note">uses its statically assigned <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a>; <a class="term-ref" href="vocab_and_defs.html#term-submission-text">Submission Text</a> → <a class="term-ref" href="vocab_and_defs.html#term-code-artifact">Code Artifacts</a> → <a class="term-ref" href="vocab_and_defs.html#term-metric-fact">Metric Facts</a>/Records; integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a> from zstd-19 UTF-8 encoder bytes<hr>its ordinary validated <a class="term-ref" href="vocab_and_defs.html#term-node-output">Node Output</a> becomes <a class="term-ref" href="vocab_and_defs.html#term-graph-output">Graph Output</a> unchanged on success</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">this valid graph has exactly one sink Node; terminal is its role, not a Node Type. DBOS checkpoints retry-disabled Provider Call Attempt observations; replay reconstructs Node Outcomes and the Graph Run Result. That logical Result contains Graph Run identity, Graph External Inputs, terminal Outcome, relevant Provider Call Attempt records or references and provenance, and per-Node Outcomes, execution order and evidence. It has no Platform Stage state or separate persistence path: it is nested in the one immutable authoritative Rollout Result whose atomic binding closes the Stage; FAILED+unbound gates operator retry</span></div>
+      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">this valid graph has exactly one sink Node; terminal is its role, not a Node Type. DBOS checkpoints retry-disabled <a class="term-ref" href="vocab_and_defs.html#term-provider-call-attempt">Provider Call Attempt</a> observations; replay reconstructs <a class="term-ref" href="vocab_and_defs.html#term-node-outcome">Node Outcomes</a> and the <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a>. That logical Result contains <a class="term-ref" href="vocab_and_defs.html#term-graph-run">Graph Run</a> identity, <a class="term-ref" href="vocab_and_defs.html#term-external-input">Graph External Inputs</a>, terminal Outcome, relevant <a class="term-ref" href="vocab_and_defs.html#term-provider-call-attempt">Provider Call Attempt</a> records or references and provenance, and per-Node Outcomes, execution order and evidence. It has no Platform Stage state or separate persistence path: it is nested in the one immutable authoritative <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> whose atomic binding closes the Stage; FAILED+unbound gates operator retry</span></div>
     </div>
   </div>
 
   <div class="flow-arrow"><span><code>D × 164 × 3</code> official rollout results flow to aggregation; 5,904 only in the explicit nonconvergent example</span> <span class="glyph">▼</span></div>
 
   <div class="plane">
-    <div class="plane-label">Rollout Results &amp; analysis <span class="sub">· immutable facts, then derived views</span></div>
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> &amp; analysis <span class="sub">· immutable facts, then derived views</span></div>
     <div class="comps">
-      <div class="comp settled"><b>Official Rollout Results</b><span class="note">one authoritative binding per Rollout Execution Key; each contains its Graph Run Result as nested execution evidence. A different-ref identity conflict never overwrites it, marks the conflicting attempt successful, or authorizes retry replacement. Deliberate re-evaluation uses a new context or Repeat</span></div>
-      <div class="comp settled"><b>Aggregation</b><span class="note">exactly <code>D</code> Rollout Aggregates by distinct admitted Graph Hash; eligible A/B aggregates may be reused only with matching Rollout Keys, official attestation and environment compatibility</span></div>
-      <div class="comp settled"><b>Analysis</b><span class="note">5 candidate curves per Model Route; pareto front — views derived from official rollout results, never stored as truth</span></div>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-official-rollout-result">Official Rollout Results</a></b><span class="note">one authoritative binding per <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a>; each contains its <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a> as nested execution evidence. A different-ref identity conflict never overwrites it, marks the conflicting attempt successful, or authorizes retry replacement. Deliberate re-evaluation uses a new context or Repeat</span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">exactly <code>D</code> <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a> by distinct admitted <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>; eligible A/B aggregates may be reused only with matching Rollout Keys, official attestation and environment compatibility</span></div>
+      <div class="comp settled"><b>Analysis</b><span class="note">5 candidate curves per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>; Pareto Front — views derived from official rollout results, never stored as truth</span></div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="run"><h2>Full run walkthrough: seed the catalog/archive, spend eight reflection calls, return the front</h2></div>
+<div class="section-head" id="run"><h2>Full run walkthrough: seed the <a class="term-ref" href="#gepa-proposal-catalog">catalog</a>/<a class="term-ref" href="#gepa-archive">archive</a>, spend eight <a class="term-ref" href="#gepa-reflection-lm">reflection LM calls</a>, return the <a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a></h2></div>
 
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes candidates, axes, mutation surface, concrete objective/diagnostic Tool Specs, and the identity-bearing archive policy ref/hash with capacity 32. Specs reference versioned Definitions and own Eval Config, Reward Policy, endpoint, ledger and capacity/refusal configuration.</p></div>
+    <div class="what"><p>Freezes candidates, axes, mutation surface, concrete objective/diagnostic <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a>, and the identity-bearing <a class="term-ref" href="#gepa-archive-policy">archive policy</a> ref/hash with capacity 32. <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> reference versioned <a class="term-ref" href="vocab_and_defs.html#term-tool-definition">Tool Definitions</a> and own <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a>, <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>, endpoint, ledger and capacity/refusal configuration.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Issues the <code>OptimizationRequest</code> with Tool Specs; the harness constructs non-serializable Handles and binds Whetstone Tool Call Ledgers.</p></div>
+    <div class="what"><p>Issues the <a class="term-ref" href="vocab_and_defs.html#term-optimization-request">Optimization Request</a> with <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a>; the harness constructs non-serializable <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> and binds Whetstone <a class="term-ref" href="vocab_and_defs.html#term-tool-call-ledger">Tool Call Ledgers</a>.</p></div>
   </div>
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>Seeds the Proposal Catalog and active archive: <code>evaluate_subset</code> on Templates A and B at ratio 0.5 — 48 objective rollouts. Both contain the two canonical, valid, unique proposals and their rows of 24 per-task scores.</p>
-      <div class="ledger"><b>output</b>48 internal Rollout references under the subset tool's Eval Config and Evaluation Context</div>
+    <div class="what"><p>Seeds the <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a> and <a class="term-ref" href="#gepa-archive">active archive</a>: <code>evaluate_subset</code> on Templates A and B at ratio 0.5 — 48 objective rollouts. Both contain the two canonical, valid, unique proposals and their rows of 24 per-task scores.</p>
+      <div class="ledger"><b>output</b>48 internal Rollout references under the subset tool's <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> and <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a></div>
     </div>
   </div>
 </div>
 
 <div class="repeat">
-  <div class="repeat-label">Evolution loop · at most 8 reflection calls; at most 3 deterministic attempts per iteration</div>
+  <div class="repeat-label">Evolution loop · <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>; <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-iteration"><code>max_reflection_attempts_per_iteration = 3</code></a></div>
   <div class="run">
     <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
-      <div class="what"><p>Computes the <span class="key">per-task frontier</span> over the archive — a candidate survives if its row is best on at least one task — and stochastically samples a parent P from it. Diversity pressure, not greedy best. Zero rollouts spent.</p></div>
+      <div class="what"><p>Computes the <span class="key"><a class="term-ref" href="#gepa-per-task-frontier">per-task frontier</a></span> over the <a class="term-ref" href="#gepa-archive">archive</a> — a candidate survives if its row is best on at least one task — and stochastically samples a <a class="term-ref" href="#gepa-parent">parent</a> P from it. Diversity pressure, not greedy best. Zero rollouts spent.</p></div>
     </div>
     <div class="tick optim">
       <div class="who env">Evaluation harness</div>
-      <div class="what"><p>Loads P's archived Objective Vector over the fixed 24-task Internal Eval Config and serves a 3-task diagnostic projection for reflection. The diagnostic subset never supplies acceptance objectives.</p>
-        <div class="ledger"><b>output</b>3 Rollout refs plus bounded trace projections: encoder/Submission refs, preprocessing causes, selected candidate test facts; truncation and projection version recorded</div>
+      <div class="what"><p>Loads P's archived <a class="term-ref" href="vocab_and_defs.html#term-objective-vector">Objective Vector</a> over the fixed 24-task <a class="term-ref" href="vocab_and_defs.html#term-internal-eval-config">Internal Eval Config</a> and serves a 3-task diagnostic projection for reflection. The diagnostic subset never supplies acceptance objectives.</p>
+        <div class="ledger"><b>output</b>3 Rollout refs plus <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a>: encoder/Submission refs, preprocessing causes, selected candidate test facts; truncation and projection version recorded</div>
       </div>
     </div>
     <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
-      <div class="what"><p>The <span class="key">reflection LM</span> reads P's template plus bounded trace projections and writes a template. The harness canonicalizes and validates it against the template-only mutation surface and the Proposal Catalog. Invalid or duplicate output is recorded with full request/response evidence and retried using a deterministic <code>(iteration, attempt)</code> nonce, at most 3 attempts in that iteration and never beyond the global cap of 8 calls. Every call consumes the reflection cap; invalid/duplicate attempts consume no Rollouts. A valid unique child inherits every output-affecting value except <code>{user_prompt_template}</code>.</p>
-        <div class="ledger"><b>output</b>one persisted reflection attempt; valid unique template or explicit invalid/duplicate reason</div>
+      <div class="what"><p>The <span class="key"><a class="term-ref" href="#gepa-reflection-lm">reflection LM</a></span> reads P's template plus <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a> and writes a template. The harness canonicalizes and validates it against the template-only mutation surface and the <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a>. Invalid or duplicate output is recorded with full request/response evidence and retried using a deterministic <code>(iteration, attempt)</code> nonce, at most 3 attempts in that iteration and never beyond the global cap of 8 calls. Every call consumes the reflection cap; invalid/duplicate attempts consume no Rollouts. A valid unique <a class="term-ref" href="#gepa-child">child</a> inherits every output-affecting value except <code>{user_prompt_template}</code>.</p>
+        <div class="ledger"><b>output</b>one persisted <a class="term-ref" href="#gepa-reflection-lm">reflection LM call</a> evidence; valid unique template or explicit invalid/duplicate reason</div>
       </div>
     </div>
     <div class="tick optim">
       <div class="who env">Evaluation harness</div>
-      <div class="what"><p>Only for a valid unique child, evaluates the same fixed 24-task objective population and the same 3 diagnostic task IDs, then appends the child to the Proposal Catalog. Child dominates → replace parent in the active archive; parent dominates or equals → reject child from active membership; incomparable → retain both. Rejected/dominated children remain cataloged.</p>
-        <div class="ledger"><b>output</b>24 objective Rollout refs + 3 diagnostic refs; catalog entry and deterministic active-archive verdict</div>
+      <div class="what"><p>Only for a valid unique <a class="term-ref" href="#gepa-child">child</a>, evaluates the same fixed 24-task objective population and the same 3 diagnostic task IDs, then appends the <a class="term-ref" href="#gepa-child">child</a> to the <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a>. <a class="term-ref" href="#gepa-child">Child</a> dominates → replace <a class="term-ref" href="#gepa-parent">parent</a> in the <a class="term-ref" href="#gepa-archive">active archive</a>; <a class="term-ref" href="#gepa-parent">parent</a> dominates or equals → reject <a class="term-ref" href="#gepa-child">child</a> from active membership; incomparable → retain both. Rejected/dominated <a class="term-ref" href="#gepa-child">children</a> remain cataloged.</p>
+        <div class="ledger"><b>output</b>24 objective Rollout refs + 3 diagnostic refs; <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> entry and deterministic active-archive verdict</div>
       </div>
     </div>
     <div class="tick optim">
       <div class="who optimizer">Optimizer</div>
-      <div class="what"><p>Applies the active-archive verdict, then enforces capacity 32: preserve nondominated entries as space permits and evict deterministic worst by (pass ascending, compression descending, proposal ID descending). Eviction never deletes a Proposal Catalog entry.</p>
-        <div class="ledger"><b>output</b>capacity-32 active archive plus append-only catalog, both indexing immutable Tool Results</div>
+      <div class="what"><p>Applies the active-archive verdict, then enforces capacity 32: preserve nondominated entries as space permits and evict deterministic worst by (pass ascending, compression descending, proposal ID descending). Eviction never deletes a <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a> entry.</p>
+        <div class="ledger"><b>output</b>capacity-32 <a class="term-ref" href="#gepa-archive">active archive</a> plus append-only <a class="term-ref" href="#gepa-proposal-catalog">catalog</a>, both indexing immutable <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a></div>
       </div>
     </div>
   </div>
@@ -236,29 +275,29 @@
 <div class="run">
   <div class="tick optim">
     <div class="who optimizer">Optimizer</div>
-    <div class="what"><p>After the eighth reflection call, returns exactly 4 unique proposals: first the active archive's nondominated entries ordered by pass descending, compression ascending, proposal ID ascending; then, if needed, one pass over not-yet-selected Proposal Catalog entries in that same total order. The successful planned maximum is ≈288 Rollouts: 48 seed objective Rollouts + 8 × (3 parent diagnostic + 24 child objective + 3 child diagnostic). Invalid/duplicate reflection calls add no Rollouts. If fewer than 4 catalog entries exist, returns a failed Optimization Result and the harness performs no official materialization.</p></div>
+    <div class="what"><p>After <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>, returns <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> unique proposals: first the <a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a> ordered by pass descending, compression ascending, proposal ID ascending; then, if needed, one pass over not-yet-selected <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a> entries in that same total order. The all-valid example derives <a class="term-ref" href="#gepa-derived-planned-optimization-rollout-count"><code>planned_optimization_rollout_count = initial_candidate_count × objective_task_count + max_reflection_lm_calls × (minibatch_size + objective_task_count + minibatch_size) = 2 × 24 + 8 × (3 + 24 + 3) = 288</code></a>, below the hard <a class="term-ref" href="#gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts = 400</code></a>. Invalid/duplicate <a class="term-ref" href="#gepa-reflection-lm">reflection LM calls</a> add no Rollouts. If fewer than <code>proposal_return_count</code> <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> entries exist, returns a failed <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> and the harness performs no official materialization.</p></div>
   </div>
   <div class="tick optim">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Validates all 4 proposals, expands every valid proposal over 4 ratios → 16 Graph Config outputs and 16 Materialization Records, and preserves optimizer order as selection input. The Selection Policy selects the top 3 proposal groups as 12 ordered record slots, then deduplicates the selected records by full Graph Hash to <code>D ≤ 12</code> admitted graphs. The fourth proposal's 4 record slots persist unselected; they are not officially evaluated and need no selected official-lineage mapping. Official Evaluation Records and Official Plot Manifests MUST preserve the ordered mapping from every selected Materialization Record reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference, including when multiple selected records share one graph and aggregate.</p></div>
+    <div class="what"><p>Validates all 4 proposals, expands every valid proposal over 4 ratios → 16 <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> outputs and 16 <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Records</a>, and preserves optimizer order as selection input. The <a class="term-ref" href="vocab_and_defs.html#term-selection-policy">Selection Policy</a> selects the top 3 proposal groups as 12 ordered record slots, then deduplicates the selected records by full <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a> to <code>D ≤ 12</code> admitted graphs. The fourth proposal's 4 record slots persist unselected; they are not officially evaluated and need no selected official-lineage mapping. <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Records</a> and <a class="term-ref" href="vocab_and_defs.html#term-official-plot-manifest">Official Plot Manifests</a> MUST preserve the ordered mapping from every selected <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference, including when multiple selected records share one graph and aggregate.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Submits exactly <code>D × 164 × 3</code> Work Items with no duplicate Rollout Execution Keys; the explicit nonconvergent example has <code>D=12</code> and 5,904. Every logical provider attempt runs in one <code>@DBOS.step(retries_allowed=False)</code> with native retries zero; DBOS checkpoints completed typed observations and replay reconstructs Node Outcomes and the Graph Run Result. dr-store persists one immutable Rollout Result containing that nested evidence, not an attempt ledger or a separate Graph Run Result, and atomic binding remains authoritative.</p>
+    <div class="what"><p>Submits exactly <a class="term-ref" href="#gepa-derived-official-rollout-count"><code>official_rollout_count = D × official_task_count × official_repeat_count</code></a> <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Items</a> with no duplicate Rollout Execution Keys; the explicit nonconvergent example has <code>D = max_admitted_graph_count = 12</code> and <code>official_rollout_count = 12 × 164 × 3 = 5,904</code>. Every <a class="term-ref" href="vocab_and_defs.html#term-provider-call-attempt">Provider Call Attempt</a> runs in one <code>@DBOS.step(retries_allowed=False)</code> with native retries zero; DBOS checkpoints completed typed observations and replay reconstructs <a class="term-ref" href="vocab_and_defs.html#term-node-outcome">Node Outcomes</a> and the <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a>. dr-store persists one immutable <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> containing that nested evidence, not an attempt ledger or a separate <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a>, and atomic binding remains authoritative.</p>
       <div class="ledger"><b>output</b>authoritative bound refs or explicit FAILED Stages; dr-platform does not own uniqueness</div>
     </div>
   </div>
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates complete official Results: Average Binary Test Pass Rate and Mean Compression Ratio derived from integer Compressed Description Length. In the nonconvergent case, the 3 newly evaluated evolved proposals produce 12 Rollout Aggregates (3 × 4 ratios); 8 eligible A/B baseline aggregates (2 × 4 ratios) are reused only when Rollout Keys, official attestation and environment compatibility match.</p>
+    <div class="what"><p>Aggregates complete official Results: <a class="term-ref" href="vocab_and_defs.html#term-average-binary-test-pass-rate">Average Binary Test Pass Rate</a> and <a class="term-ref" href="vocab_and_defs.html#term-mean-compression-ratio">Mean Compression Ratio</a> derived from integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a>. In the nonconvergent case, the 3 newly evaluated evolved proposals produce 12 <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a> (3 × 4 ratios); 8 eligible A/B baseline aggregates (2 × 4 ratios) are reused only when Rollout Keys, official attestation and environment compatibility match.</p>
       <div class="ledger"><b>output</b>exactly <code>D</code> new aggregates plus eligible distinct-hash baselines; 20 total in the explicit nonconvergent example</div>
     </div>
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: five curves per Model Route, and only official results</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot: five curves per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, and only official results</h2></div>
 
-<p>Per Model Route, eligible A/B baselines and three evolved templates retain separately attributable ratio slots, while converged slots share the planned/result-key set and Rollout Aggregate for their Graph Hash. The resulting distinct-hash aggregates are each averaged over 164 tasks × 3 repeats; in the explicit nonconvergent example they form <span class="key">five candidate curves</span> with four aggregates each. The natural readings are whether evolution beat the starting templates and how the official Pareto front moves. Internal Tool Results never appear here; their Evaluation Contexts lack official authority.</p>
+<p>Per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, eligible A/B baselines and three evolved templates retain separately attributable ratio slots, while converged slots share the planned/result-key set and <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregate</a> for their <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>. The resulting distinct-hash aggregates are each averaged over 164 tasks × 3 repeats; in the explicit nonconvergent example they form <span class="key">five candidate curves</span> with four aggregates each. The natural readings are whether evolution beat the starting templates and how the official Pareto Front moves. Internal <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> never appear here; their <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Contexts</a> lack official authority.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 
@@ -266,40 +305,40 @@
   <div class="card optim">
     <h3>Three fronts, only one is a result</h3>
     <ul>
-      <li>The <span class="key">per-task frontier</span> steers parent sampling — diversity machinery</li>
-      <li>The archive's <span class="key">correctness×compression front</span> ranks the return — selection machinery</li>
-      <li>The plot's <span class="key">pareto front</span> is computed from official rollout aggregates — the only front that is a result</li>
+      <li>The <span class="key"><a class="term-ref" href="#gepa-per-task-frontier">per-task frontier</a></span> steers <a class="term-ref" href="#gepa-parent">parent</a> sampling — diversity machinery</li>
+      <li>The <a class="term-ref" href="#gepa-archive">archive</a>'s <span class="key"><a class="term-ref" href="#gepa-archive-nondominated-set">archive nondominated set</a></span> ranks the return — selection machinery</li>
+      <li>The plot's <span class="key">Pareto Front</span> is computed from official rollout aggregates — the only front that is a result</li>
     </ul>
   </div>
   <div class="card optim">
-    <h3>Internal Evaluation vs Official Evaluation</h3>
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">Internal Evaluation</a> vs <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a></h3>
     <ul>
-      <li>Tool and official measurement policies have independent <code>eval_config_hash</code> identities. Their identical Evaluation Procedure Config is included in <code>graph_hash</code>; only Sampling/Aggregation remain outside it</li>
-      <li>Officialness comes only from the authorized Evaluation Context and write path; reuse also requires official attestation and a compatible environment</li>
+      <li>Tool and official measurement policies have independent <code>eval_config_hash</code> identities. Their identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> is included in <code>graph_hash</code>; only Sampling/Aggregation remain outside it</li>
+      <li>Officialness comes only from the authorized <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> and write path; reuse also requires official attestation and a compatible environment</li>
       <li>Whether the 24-task subset may overlap the official 164 is left to experimental designers</li>
     </ul>
   </div>
   <div class="card optim">
-    <h3>The catalog and archive are optimizer state</h3>
+    <h3>The <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> and <a class="term-ref" href="#gepa-archive">archive</a> are optimizer state</h3>
     <ul>
-      <li>The append-only Proposal Catalog keeps every valid unique evaluated proposal; the capacity-32 active archive controls parent sampling and may evict catalog entries from active membership</li>
-      <li>Both in-memory indexes resolve Tool Results through terminal Tool Call Ledger entries; the ledger owns each Tool Result's completion and reference, and Tool Results plus referenced Rollout Results remain immutable in dr-store</li>
-      <li>The Result Store separately owns only the authoritative Rollout Execution Key → Rollout Result Object Reference binding</li>
+      <li>The append-only <a class="term-ref" href="#gepa-proposal-catalog">Proposal Catalog</a> keeps every valid unique evaluated proposal; the capacity-32 <a class="term-ref" href="#gepa-archive">active archive</a> controls <a class="term-ref" href="#gepa-parent">parent</a> sampling and may evict <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> entries from active membership</li>
+      <li>Both in-memory indexes resolve <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> through terminal <a class="term-ref" href="vocab_and_defs.html#term-tool-call-ledger">Tool Call Ledger</a> entries; the ledger owns each <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>'s completion and reference, and <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> plus referenced <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> remain immutable in dr-store</li>
+      <li>The <a class="term-ref" href="vocab_and_defs.html#term-result-store">Result Store</a> separately owns only the authoritative <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> → <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> <a class="term-ref" href="vocab_and_defs.html#term-object-reference">Object Reference</a> binding</li>
     </ul>
   </div>
   <div class="card optim">
     <h3>Candidate = one plotted line</h3>
     <ul>
-      <li>A child inherits everything outside the mutation surface from its parent</li>
-      <li>Each proposal emits 4 Graph Config/Materialization Record pairs — the fixed ratio axis unrolled into its curve</li>
+      <li>A <a class="term-ref" href="#gepa-child">child</a> inherits everything outside the mutation surface from its <a class="term-ref" href="#gepa-parent">parent</a></li>
+      <li>Each proposal emits 4 <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs — the fixed ratio axis unrolled into its curve</li>
       <li>Ordered multi-return: 4 candidates back, the frozen selection policy decides how many go on</li>
     </ul>
   </div>
   <div class="card optim">
     <h3>Versus reference GEPA</h3>
     <ul>
-      <li>Kept: reflective mutation from real failures and diverse parent sampling; archive update now uses explicit dominance/equality/incomparability on one fixed objective population</li>
-      <li>Ours: bounded trace projections resolve from immutable Rollout references; concrete Tool Specs bind internal measurement and Reward Policy</li>
+      <li>Kept: reflective mutation from real failures and diverse <a class="term-ref" href="#gepa-parent">parent</a> sampling; <a class="term-ref" href="#gepa-archive">archive</a> update now uses explicit dominance/equality/incomparability on one fixed objective population</li>
+      <li>Ours: <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a> resolve from immutable Rollout references; concrete <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a> bind internal measurement and <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a></li>
       <li>dspy's GEPA is reference-only, never a dependency</li>
     </ul>
   </div>
