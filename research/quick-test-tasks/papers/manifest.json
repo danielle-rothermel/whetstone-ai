@@ -1,0 +1,1409 @@
+{
+ "_comment": "Paper-acquisition manifest. Seeded 2026-07-22 by the fallback-chain probe (7 papers: 5 c19 pilot + 2 stress cases). Workflow 1 (acquire) owns and extends this file corpus-wide; Workflow 2 (analyze) reads it and must treat quality grades as coverage contracts. verbatim=false means the file preserves facts/structure but not the authors' prose and should be re-extracted before quote-level verification.",
+ "fetch_date": "2026-07-22",
+ "papers": [
+  {
+   "file": "2505.24306-gridroute.md",
+   "title": "GridRoute: A Benchmark for LLM-Based Route Planning with Cardinal Movement in Grid Environments",
+   "authors": "Li, Tao, Wen, Sun, Gong, Zhang, Xu, Zhang, Ji",
+   "venue": "arXiv preprint (cs.AI), v2 2025-08-13; code github.com/LinChance/GridRoute",
+   "serves": [
+    "c19"
+   ],
+   "route": "arxiv-html + raw curl/bs4 (WebFetch summarized)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 9250,
+   "notes": "Abs-page summary omitted author Hongli Zhang; raw v2 HTML byline (9 authors) used as source of truth. Figures caption-only.",
+   "key": "2505.24306",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W4414856918",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2407.01892",
+   "file": "2407.01892-grasp.md",
+   "title": "GRASP: A Grid-Based Benchmark for Evaluating Commonsense Spatial Reasoning",
+   "authors": "Zhisheng Tang, Mayank Kejriwal (University of Southern California, Information Sciences Institute, Marina del Rey, CA, USA)",
+   "venue": "arXiv preprint (cs.AI, cs.CL); v1 2024-07-02, v2 2025-01-17 (latest); no formal journal/conference venue on arXiv; LaTeX source uses Springer Nature Scientific Reports (wlscirep) class but no accepted-venue record found",
+   "tier": "full",
+   "route": "Route 4 (e-print LaTeX source): curl -sL https://arxiv.org/e-print/2407.01892, gzip/tar extracted, main file sample.tex (649 lines) plus sample.bbl (178 lines, fully typeset bibliography, 34 entries) ",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 11846,
+   "notes": "REDO of a prior non-verbatim synthesis file, now overwritten with true verbatim extraction. Route taken: went straight to Route 4 (e-print) per task instructions since prior probe already confirmed HTML/WebFetch routes return only AI summaries. curl -sL https://arxiv.org/e-print/2407.01892 returned a gzip tarball (~5.9MB); extracted to find sample.tex (main LaTeX, 649 lines), sample.bbl (formatted bibliography, 34 \\bibitem entries), sample.bib (raw BibTeX superset with uncited extras), and 12 image files (benchmark_construction.png, results.png/result.png, supp1.png, supp2.png, temp1-7.png) which could not be transcribed as text (captions and surrounding prose preserved instead, explicitly marked as image-only in file). Body text fully de-LaTeXed: stripped \\cite{}/\\ref{}/\\textit/\\textbf/\\hl formatting commands while preserving all authorial sentences verbatim, including Abstract, unn-lab",
+   "serves": [
+    "c19"
+   ],
+   "citations": {
+    "openalex_id": "W4400373241",
+    "cited_by": 3,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 2
+     },
+     {
+      "year": 2024,
+      "count": 1
+     }
+    ],
+    "since_2025": 2,
+    "match": "high"
+   }
+  },
+  {
+   "file": "2505.12135-llm-babybench.md",
+   "title": "LLM-BabyBench: Understanding and Evaluating Grounded Planning and Reasoning in LLMs",
+   "authors": "Choukrani, Malek, Orel, Xie, Iklassov, Tak\u00e1\u010d, Lahlou",
+   "venue": "arXiv preprint, v1 2025-05-17",
+   "serves": [
+    "c19"
+   ],
+   "route": "arxiv-html + raw curl/bs4 (WebFetch summarized)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 21150,
+   "notes": "Three splits confirmed: Predict, Plan, Decompose. Appendix D math garbled but recoverable; tables linearized.",
+   "key": "2505.12135",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W4417300385",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "file": "2507.20395-mazeeval.md",
+   "title": "MazeEval: A Benchmark for Testing Sequential Decision-Making in Language Models",
+   "authors": "Einarsson (single author)",
+   "venue": "arXiv preprint, v1 2025-07-27",
+   "serves": [
+    "c19"
+   ],
+   "route": "WebFetch of arxiv-html (raw curl returned JS shell)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 4200,
+   "notes": "CORPUS CORRECTION: single author, not 'Einarsson et al.'. Reference list not itemized (JS-rendered page). 8 models, English/Icelandic, O3 standout.",
+   "key": "2507.20395",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W7077074212",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "file": "2604.10690-spatial-world-models.md",
+   "title": "Do LLMs Build Spatial World Models? Evidence from Grid-World Maze Tasks",
+   "authors": "Li (Notre Dame), Zhu, Das, Dube (Columbia/MQube)",
+   "venue": "arXiv preprint, v1 2026-04-12",
+   "serves": [
+    "c19"
+   ],
+   "route": "arxiv-html + raw curl/custom parser (WebFetch summaries drifted between calls)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 8500,
+   "notes": "CORPUS CORRECTION: title includes 'Evidence from'. Models: Gemini-2.5-Flash, GPT-5-mini, Claude-Haiku-4.5, DeepSeek-Chat. 80-86% adjacency-list vs 16-34% visual-grid. Appendix A.7 judge-prompt JSON block missing from HTML (flagged, not fabricated).",
+   "key": "2604.10690",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W7154287527",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "file": "2606.04751-falsifybench.md",
+   "title": "FalsifyBench: Evaluating Inductive Reasoning in LLMs with Rule Discovery Games",
+   "authors": "Bertolazzi, Tentori, Bernardi",
+   "venue": "arXiv preprint, v1 2026-06-03, CC BY 4.0",
+   "serves": [
+    "c23"
+   ],
+   "route": "arxiv-html + raw curl/html.parser (stress case; WebFetch summarized)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 11500,
+   "notes": "Stress case passed: June 2026 paper fully recoverable. Verbatim prompts and game traces captured.",
+   "key": "2606.04751",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W7163578266",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "file": "2603.04738-if-rewardbench.md",
+   "title": "IF-RewardBench: Benchmarking Judge Models for Instruction-Following Evaluation",
+   "authors": "Wen, Niu, Wang, Ling, Zhang, Ke, Wang, Huang (CoAI/Tsinghua, Zhipu, UESTC)",
+   "venue": "ACL 2026; arXiv v2 2026-04-16",
+   "serves": [
+    "c22"
+   ],
+   "route": "arxiv-html + raw curl/bs4 (stress case; WebFetch summarized)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 17300,
+   "notes": "Stress case passed. 842 instructions / 6,011 responses / 16 LLMs confirmed in Tables 1-2. Minor list-paragraph duplication artifacts.",
+   "key": "2603.04738",
+   "tier": "full",
+   "citations": {
+    "openalex_id": "W7134065747",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2210.01240",
+   "file": "2210.01240-prontoqa.md",
+   "title": "Language Models Are Greedy Reasoners: A Systematic Formal Analysis of Chain-of-Thought",
+   "authors": "Abulhair Saparov, He He (New York University)",
+   "venue": "ICLR 2023 (published as conference paper); arXiv v4 (2 Mar 2023), also v1 (3 Oct 2022), v2 (25 Jan 2023), v3 (26 Jan 2023)",
+   "tier": "full",
+   "route": "LaTeX source (step 4 of acquisition chain). Step 1 (WebFetch abstract page) confirmed metadata. Step 2 (arxiv.org/html/2210.01240 and v1-v4 suffixes) returned only a ~7.9KB JS client shell with no bod",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 8631,
+   "notes": "Routes tried: (1) WebFetch on arxiv.org/abs/2210.01240 succeeded for metadata only (title, authors, versions v1-v4, \"Published as a conference paper at ICLR 2023\" all confirmed and used only for header, not body). (2) curl on arxiv.org/html/2210.01240 and versioned suffixes (v1-v4) all returned identical ~7.9-7.9KB JS-shell pages with no real content \u2014 rejected per protocol. (3) curl + ar5iv.labs.arxiv.org/html/2210.01240 returned a LaTeXML-generated page titled \"Untitled Document\" with an empty <body> tag (LaTeXML failed to render this paper, likely due to heavy TikZ/algorithm2e/custom macro usage) \u2014 rejected. (4) Fallback to LaTeX source succeeded: downloaded e-print tarball (2.35MB gzip), extracted, found single monolithic .tex file (iclr2023_conference.tex, no separate \\input files for body text \u2014 only \\includegraphics figure references), and manually parsed/transcribed the full pros",
+   "citations": {
+    "openalex_id": "W4302305823",
+    "cited_by": 39,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     },
+     {
+      "year": 2025,
+      "count": 5
+     },
+     {
+      "year": 2024,
+      "count": 10
+     },
+     {
+      "year": 2023,
+      "count": 23
+     }
+    ],
+    "since_2025": 6,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2305.15269",
+   "file": "2305.15269-prontoqa-ood.md",
+   "title": "Testing the General Deductive Reasoning Capacity of Large Language Models Using OOD Examples",
+   "authors": "Abulhair Saparov, Richard Yuanzhe Pang, Vishakh Padmakumar, Nitish Joshi, Seyed Mehran Kazemi, Najoung Kim, He He",
+   "venue": "NeurIPS 2023 (published as a conference paper); arXiv v1 24 May 2023, v2 20 Oct 2023, v3 3 Nov 2023; cs.CL, cs.AI",
+   "tier": "full",
+   "route": "arxiv.org/html v2 (LaTeXML HTML) via curl + local BeautifulSoup parse; cross-checked against ar5iv.labs.arxiv.org/html for consistency",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 12143,
+   "notes": "Routes tried in order: (1) WebFetch on https://arxiv.org/abs/2305.15269 confirmed metadata (title, 7 authors, NeurIPS 2023 venue, v1/v2/v3 dates) \u2014 used for metadata only, cross-verified against a direct curl of the abs page HTML (author byline and Comments field matched exactly, no drift). (2) Primary body route: curl -sL https://arxiv.org/html/2305.15269 and the v3 suffix each returned only a ~7.9KB JS client shell (unusable); the v2 suffix (https://arxiv.org/html/2305.15269v2) returned a full ~1.06MB LaTeXML-generated HTML document with genuine body text \u2014 this was used as the extraction source. Parsed locally with python3 + BeautifulSoup (html.parser), walking the article DOM to extract title, authors, abstract, all numbered sections (1 Introduction through 5 Conclusion, plus Reproducibility statement, Acknowledgements, References, and Appendix A with subsections A.1-A.7), preserving",
+   "citations": {
+    "openalex_id": "W4378510422",
+    "cited_by": 17,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 6
+     },
+     {
+      "year": 2024,
+      "count": 7
+     },
+     {
+      "year": 2023,
+      "count": 4
+     }
+    ],
+    "since_2025": 6,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2308.07336",
+   "file": "2308.07336-fld.md",
+   "title": "Learning Deductive Reasoning from Synthetic Corpus based on Formal Logic",
+   "authors": "Terufumi Morishita, Gaku Morio, Atsuki Yamaguchi, Yasuhiro Sogawa",
+   "venue": "Proceedings of the 40th International Conference on Machine Learning (ICML 2023), PMLR 202:25254-25274",
+   "tier": "full",
+   "route": "4 (e-print LaTeX source, curl https://arxiv.org/e-print/2308.07336 \u2192 gzip tar containing single icml2023.tex + icml2023.bbl, no sub-files; de-LaTeXed by hand)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 15817,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt (ar5iv HTML render) was graded \"partial\" and explicitly disclosed that it was NOT a sentence-by-sentence transcript: it paraphrased/omitted \"some appendix procedural details in F.1/F.2 and some background-section sentences,\" compressed several Section 8 sentences, described truth tables only via captions rather than reproducing the truth-value data, and skipped whole appendix paragraphs (LogicNLI discussion in Related Work, the \"Proof Generation Models\" closing paragraph, the Natural Language Assignment grammatical-heuristics list in Appendix E, and essentially all of Appendix F.1/F.2's per-aspect corpus-construction detail and hyperparameter tables).\n\nFixed: re-fetched via Route 4 (e-print LaTeX source, arxiv.org/e-print/2308.07336, which resolved to v3, 2023-11-14) since ar",
+   "citations": {
+    "openalex_id": "W4385889764",
+    "cited_by": 2,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 1
+     },
+     {
+      "year": 2024,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2411.12498",
+   "file": "2411.12498-fld-star.md",
+   "title": "Enhancing Reasoning Capabilities of LLMs via Principled Synthetic Logic Corpus",
+   "authors": "Terufumi Morishita, Gaku Morio, Atsuki Yamaguchi, Yasuhiro Sogawa",
+   "venue": "NeurIPS 2024 (per arXiv Comments field); v1 2024-11-19, v2 2024-12-23",
+   "tier": "full",
+   "route": "Step 2 of acquisition chain: curl -sL https://arxiv.org/html/2411.12498 (resolved to v2 LaTeXML HTML, ~1.4MB) parsed locally with python3 + BeautifulSoup (html.parser), walking the DOM to preserve hea",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 22690,
+   "notes": "Routes tried: only Step 2 (raw curl of arxiv.org/html/2411.12498) was needed \u2014 it returned a full LaTeXML-generated HTML page with real body text on the first attempt, so ar5iv, e-print/LaTeX-source, and PDF fallbacks were never invoked. Extraction: custom BeautifulSoup DOM walker (not a canned library conversion) recovering Sections 1-7, Acknowledgement, References (135 bibliography entries), Appendices A-F, and the NeurIPS Paper Checklist, all in reading order with heading hierarchy preserved. Self-check: 3 sentences from different sections (Introduction x2, Appendix A.2 Related Work) verified as exact substrings of BeautifulSoup's plain-text rendering of the raw HTML \u2014 all 3 passed, confirming verbatim (non-paraphrased) extraction.\n\nKnown extraction artifacts (documented in the file's own header, not silently fixed): (1) LaTeXML duplicates math/equation content as parallel Unicode-pla",
+   "citations": {
+    "openalex_id": "W4404573983",
+    "cited_by": 2,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 2
+     }
+    ],
+    "since_2025": 2,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2505.14615",
+   "file": "2505.14615-satbench.md",
+   "title": "SATBench: Benchmarking LLMs' Logical Reasoning via Automated Puzzle Generation from SAT Formulas",
+   "authors": "Anjiang Wei, Yuheng Wu, Yingjia Wan, Tarun Suresh, Huanmi Tan, Zhanke Zhou, Sanmi Koyejo, Ke Wang, Alex Aiken",
+   "venue": "arXiv preprint (v1: 2025-05-20; v2: 2025-09-22). EMNLP 2025 acceptance cited in task brief is NOT confirmable from arXiv HTML/abs metadata \u2014 no journal-ref/acceptance line present; flagged as discrepancy.",
+   "tier": "full",
+   "route": "curl -sL https://arxiv.org/html/2505.14615v2 (v2 LaTeXML HTML, 392,539 bytes) -> local python3 html.parser full-document parse (body + all appendices) -> line-by-line re-verification against raw sourc",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 8697,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt (graded partial) had fetched the correct source (v2 LaTeXML HTML, 392KB) successfully but then deliberately withheld nearly all body prose \"per copyright constraints,\" providing only the abstract, a section-heading outline, and ~6 short quoted sentences. It completely omitted: most of Sections 3 (Method), 4 (Experimental Setup), 5 (Results incl. full Tables 2-6), 6 (Discussion, incl. the SAT-vs-formula ablation and prompting/fine-tuning improvement experiments), and \u2014 most importantly \u2014 the ENTIRE Appendix (A: worked puzzle example; B: all three prompt templates for LLM validation, SAT/UNSAT evaluation, and trace evaluation; C: all four worked error-analysis examples for Satisfiability Bias/Context Inconsistency/Condition Omission/Spurious Priors), even though this content wa",
+   "citations": {
+    "openalex_id": "W4415024510",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2501.14851",
+   "file": "2501.14851-justlogic.md",
+   "title": "JustLogic: A Comprehensive Benchmark for Evaluating Deductive Reasoning in Large Language Models",
+   "authors": "Michael K. Chen (Raffles Institution, Singapore); Xikun Zhang (NTU College of Computing & Data Science); Dacheng Tao (NTU College of Computing & Data Science)",
+   "venue": "ICML 2025 (per LaTeX source icml2025.sty [accepted] option); arXiv preprint cs.CL/cs.AI/cs.LG/cs.LO",
+   "tier": "full",
+   "route": "4 (e-print LaTeX source, arxiv.org/e-print/2501.14851) \u2014 arxiv.org/html routes all 404'd and ar5iv fatally failed LaTeXML conversion",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 10646,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt diagnosis confirmed accurate: the previous file's own header stated verbatim: false and explicitly described the body as \"a faithful paraphrase/summary\" of the LaTeX source rather than the authors' actual prose \u2014 that is precisely the substitution flagged as unacceptable for this corpus.\n\nWhat I fixed: re-fetched the e-print LaTeX source fresh (same route 4 as before, since arxiv.org/html 404s on all versions and ar5iv fatally fails LaTeXML conversion \u2014 both reconfirmed this session), then re-transcribed the ENTIRE paper verbatim: full abstract, all 6 main-body sections (Introduction, Related Work incl. both subsections, Dataset Construction incl. all 3 construction steps + complexity + future-proofing subsections, Experimental Setup, Results incl. all 3 result subsections, C",
+   "citations": {
+    "openalex_id": "W4406879608",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2406.17169",
+   "file": "2406.17169-multi-logieval.md",
+   "title": "Multi-LogiEval: Towards Evaluating Multi-Step Logical Reasoning Ability of Large Language Models",
+   "authors": "Nisarg Patel, Mohith Kulkarni, Mihir Parmar, Aashna Budhiraja, Mutsumi Nakamura, Neeraj Varshney, Chitta Baral (Arizona State University)",
+   "venue": "EMNLP 2024 Main Conference (accepted, per arXiv abstract page comments); arXiv v1 2024-06-24, v2 2024-10-04, v3 2024-10-07",
+   "tier": "full",
+   "route": "Step 2 primary route succeeded: curl -sL https://arxiv.org/html/2406.17169 returned LaTeXML-generated HTML (v3, generated 2024-10-07) with full body text; parsed locally with Python BeautifulSoup (htm",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 9124,
+   "notes": "Metadata confirmed via WebFetch on https://arxiv.org/abs/2406.17169: title, all 7 authors (Patel, Kulkarni, Parmar equal contribution; Budhiraja, Nakamura, Varshney, Baral), venue (EMNLP 2024 Main), and submission history (v1 2024-06-24, v2 2024-10-04, v3 2024-10-07) all match the candidate citation exactly \u2014 NO DISCREPANCIES found vs. the expected citation for c18. Routes tried: (1) WebFetch abs page for metadata only \u2014 succeeded, matched expectations; (2) curl https://arxiv.org/html/2406.17169 \u2014 succeeded on first try, returned full LaTeXML HTML (1.35MB) with complete article body, all sections, tables, and references; no need for ar5iv, e-print, or PDF fallbacks. Extraction: parsed with BeautifulSoup, walking the <article> tag to preserve h1-h4 headings, paragraph text, table structures (with captions), and reference list. Self-check performed: 3 sentences pulled from distinct section",
+   "citations": {
+    "openalex_id": "W4400064712",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2511.03080",
+   "file": "2511.03080-polynorm.md",
+   "title": "PolyNorm: Few-Shot LLM-Based Text Normalization for Text-to-Speech",
+   "authors": "Michel Wong, Ali Alshehri, Sophia Kao, Haotian He (Apple)",
+   "venue": "arXiv preprint (v1, 2025-11-05); comments field per abs-page metadata: EMNLP 2025 Industry Track",
+   "tier": "full",
+   "route": "Route 2: curl -sL https://arxiv.org/html/2511.03080 (LaTeXML HTML, v1) parsed locally with Python 3 + BeautifulSoup html.parser",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 4797,
+   "notes": "Routes tried: (1) WebFetch on https://arxiv.org/abs/2511.03080 succeeded, used only for metadata per instructions - it reported title, authors, abstract summary, and venue \"EMNLP 2025 Industry Track\". (2) curl -sL https://arxiv.org/html/2511.03080 succeeded on first attempt - returned full LaTeXML-generated HTML (~120KB) with real body text, section structure, 6 tables, 1 figure, footnotes, and complete bibliography. No fallback routes (ar5iv, e-print LaTeX, PDF) were needed. Extraction: installed beautifulsoup4 (pip install --break-system-packages, not preinstalled) and wrote a custom parser walking the article's section tree in document order; rendered paragraphs, tables (pipe-delimited rows with captions), figure caption, and footnotes (de-duplicated into an endnotes list, with inline [fnN] markers replacing in-place duplicated footnote text). Self-check: verified 3 verbatim sentences",
+   "citations": {
+    "openalex_id": "W7104290477",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2505.20139",
+   "file": "2505.20139-structeval.md",
+   "title": "StructEval: Benchmarking LLMs' Capabilities to Generate Structural Outputs",
+   "authors": "Jialin Yang, Dongfu Jiang, Lipeng He, Sherman Siu, Yuxuan Zhang, Disen Liao, Zhuofeng Li, Huaye Zeng, Yiming Jia, Haozhe Wang, Benjamin Schneider, Chi Ruan, Wentao Ma, Zhiheng Lyu, Yifei Wang, Yi Lu, Quy Duc Do, Ziyan Jiang, Ping Nie, Wenhu Chen",
+   "venue": "arXiv preprint (cs.SE/cs.AI/cs.CL); v1 2025-05-26, v2 2026-01-19, v3 2026-04-02 (fetched version); no peer-reviewed venue listed",
+   "tier": "full",
+   "route": "Step 2 of acquisition chain: curl -sL https://arxiv.org/html/2505.20139 (LaTeXML HTML, v3) -> isolated <article class=\"ltx_document\"> -> parsed locally with python3 html.parser (bs4 not installed)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 3800,
+   "notes": "Routes tried: (1) WebFetch on arxiv.org/abs for metadata only - confirmed title/authors/versions, used only for header, not body. (2) curl -sL arxiv.org/html/2505.20139 succeeded on first try - full LaTeXML HTML (~417KB) with complete article body; parsed locally with python3 html.parser (BeautifulSoup unavailable in env, not installed per sandbox constraints). No need to fall back to ar5iv, e-print, or PDF routes. Extraction is genuinely full-text: complete Abstract, Sections 1-6, Limitations, Acknowledgement, and full Appendix A (A.1-A.4) with all 14 tables and 8 figure captions preserved with real cell data. Self-check: 3 sentences from different sections (Results/error-analysis Sec 4.2, Related Work Sec 5.2, Acknowledgement) verified as exact substrings in the raw fetched HTML source. Discrepancies for corpus correction: (1) Internal paper inconsistency preserved verbatim - Abstract ",
+   "citations": {
+    "openalex_id": "W4414588192",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2501.10868",
+   "file": "2501.10868-jsonschemabench.md",
+   "title": "JSONSchemaBench: A Rigorous Benchmark of Structured Outputs for Language Models",
+   "authors": "Saibo Geng, Hudson Cooper, Micha\u0142 Moskal, Samuel Jenkins, Julian Berman, Nathan Ranchin, Robert West, Eric Horvitz, Harsha Nori (EPFL / Microsoft / JSON Schema)",
+   "venue": "arXiv preprint, cs.CL (cross-listed cs.AI); v1 2025-01-18, v2 2025-02-10, v3 2025-02-27 (this extraction is v3)",
+   "tier": "full",
+   "route": "Step 2 of acquisition chain: raw curl of https://arxiv.org/html/2501.10868 (redirects to v3 LaTeXML HTML, base href /html/2501.10868v3/), confirmed genuine ~404,786-byte full-body document, parsed loc",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 9245,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt diagnosis: the file did not actually exist on disk despite the task description saying it did (find/ls confirmed no file at the target path or anywhere in papers/ matching 2501.10868) \u2014 so the \"prior attempt\" that fetched 404KB of real HTML and then never wrote the output file left literally nothing behind to inspect; this redo built the extraction from scratch rather than repairing an existing header.\n\nWhat I did: curled https://arxiv.org/html/2501.10868 directly (no version suffix needed \u2014 it 200s and serves v3's LaTeXML HTML, base href confirms v3, matching the target's \"v3 2025-02-27\"), confirmed via byte count (404,786 bytes matching the hint) and content sniffing (title tag, 'Abstract' string present, not a JS shell) that this was the real rendered body. Parsed with Bea",
+   "citations": {
+    "openalex_id": "W4406733450",
+    "cited_by": 3,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 2
+     },
+     {
+      "year": 2025,
+      "count": 1
+     }
+    ],
+    "since_2025": 3,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2404.03868",
+   "file": "2404.03868-edc.md",
+   "title": "Extract, Define, Canonicalize: An LLM-based Framework for Knowledge Graph Construction",
+   "authors": "Bowen Zhang, Harold Soh (National University of Singapore / Smart Systems Institute)",
+   "venue": "Proceedings of the 2024 Conference on Empirical Methods in Natural Language Processing (EMNLP 2024)",
+   "tier": "full",
+   "route": "Direct curl of https://arxiv.org/html/2404.03868v1 (LaTeXML HTML, ~213KB full render), parsed locally with Python/BeautifulSoup. The unsuffixed /html/2404.03868 and /html/2404.03868v2 endpoints return",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 7413,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt was flagged as partial/non-verbatim: it explicitly summarized/paraphrased Sections 1-5 (e.g. \"Knowledge graphs (KGs) structure information as entities...\" instead of quoting the source), declined to transcribe \u00a74.2 Results, \u00a75 Conclusion in full, and both Appendices (citing \"copyright-safe-handling policy\"), and extracted zero of the 7 numbered results tables. Fixed: re-fetched v1 HTML directly (confirmed full ~213KB LaTeXML render vs JS-shell for v2/unsuffixed), parsed the full <article> body with BeautifulSoup, and reproduced the ENTIRE verbatim prose from Abstract through \u00a75 Conclusion plus Appendix A and Appendix B (all paragraphs, in original order, confirmed via string search against the raw HTML), plus all 7 numbered data tables (Tables 1-7) as verbatim numeric grids. ",
+   "citations": {
+    "openalex_id": "W4394591548",
+    "cited_by": 10,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 4
+     },
+     {
+      "year": 2025,
+      "count": 3
+     },
+     {
+      "year": 2024,
+      "count": 3
+     }
+    ],
+    "since_2025": 8,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2507.21340",
+   "file": "2507.21340-structtext.md",
+   "title": "StructText: A Synthetic Table-to-Text Approach for Benchmark Generation with Multi-Dimensional Evaluation",
+   "authors": "Satyananda Kashyap, Sola Shirai, Nandana Mihindukulasooriya, Horst Samulowitz (IBM Research)",
+   "venue": "v1 only (28 Jul 2025); VLDB 2025 Workshop: Tabular Data Analysis (TaDA); cs.CL primary, cross-listed cs.AI/cs.DB/cs.IR; CC BY-NC-ND 4.0",
+   "tier": "full",
+   "route": "Step 2 of chain: curl -sL https://arxiv.org/html/2507.21340 returned full LaTeXML HTML (~138KB) with complete rendered body text; parsed locally with Python html.parser. WebFetch used only for abs-pag",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 8861,
+   "notes": "Routes tried: (1) WebFetch on arxiv.org/abs page for metadata only \u2014 confirmed exact title, 4 authors, single v1 submission 28 Jul 2025, no venue beyond the in-paper VLDB Workshop TaDA 2025 self-citation. (2) curl on https://arxiv.org/html/2507.21340 succeeded immediately with a full LaTeXML-rendered HTML document containing complete body text (abstract through references, all 8 sections, 4 tables, 5 figure captions) \u2014 no need to fall back to ar5iv, e-print source, or PDF. Extraction done via custom Python html.parser script (no BeautifulSoup available in environment) that walked the <article> DOM, preserving paragraph/section/table/figure boundaries; output cleaned of whitespace artifacts only, wording unchanged. Self-check: verified 3 sentences from Introduction, Section 3.2 (Numerical/Temporal Accuracy), and Section 6.1 (Results) against the raw parsed source text file \u2014 all matched e",
+   "citations": {
+    "openalex_id": "W6891913475",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2602.14743",
+   "file": "2602.14743-c11-unidentified.md",
+   "title": "LLMStructBench: Benchmarking Large Language Model Structured Data Extraction",
+   "authors": "S\u00f6nke Tenckhoff, Mario Koddenbrock, Erik Rodner (KI-Werkstatt / FB2, University of Applied Sciences Berlin / HTW Berlin)",
+   "venue": "arXiv preprint (cs.CL, cross-listed cs.LG); no journal/conference venue in comments; v1 only, submitted 16 Feb 2026",
+   "tier": "full",
+   "route": "Route 2 (primary): raw curl of https://arxiv.org/html/2602.14743 succeeded on first try \u2014 LaTeXML-generated HTML (452KB) with full body text, confirmed via presence of ltx_page_content/ltx_authors cla",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 9527,
+   "notes": "IDENTITY VERIFIED: arXiv id 2602.14743 resolves to a real, very recently posted paper: \"LLMStructBench: Benchmarking Large Language Model Structured Data Extraction\" by S\u00f6nke Tenckhoff, Mario Koddenbrock, and Erik Rodner (KI-Werkstatt / FB2, HTW Berlin), submitted 16 Feb 2026 (v1, only version), cs.CL cross-listed cs.LG, no venue/journal-ref in comments (appears to be an arXiv-only preprint at fetch time). This is 2024+ (in fact 2026) and squarely on-topic for the benchmark-design project: it introduces a 995-example, 5-use-case benchmark for evaluating 22 open-weight LLMs (Qwen3, Phi, Gemma3, Deepseek-R1, Llama3 families) plus GPT-4o on natural-language-to-JSON structured extraction, across 5 prompting strategies (J/P/PJ/J+/PJ+), with a novel micro-averaged F1 metric (fuzzy/coercible value credit) and a document-level validity (DOC_micro) metric, finding prompting strategy and model-fam",
+   "citations": {
+    "openalex_id": "W7129535741",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2311.07911",
+   "file": "2311.07911-ifeval.md",
+   "title": "Instruction-Following Evaluation for Large Language Models",
+   "authors": "Jeffrey Zhou, Tianjian Lu, Swaroop Mishra, Siddhartha Brahma, Sujoy Basu, Yi Luan, Denny Zhou, Le Hou",
+   "venue": "arXiv preprint, cs.CL (cross-listed cs.AI, cs.LG); v1 only, 14 Nov 2023; no peer-reviewed venue listed",
+   "tier": "full",
+   "route": "Step 3 fallback: ar5iv.labs.arxiv.org/html/2311.07911 (LaTeXML HTML), parsed locally with BeautifulSoup into verbatim structured text. Step 2 (arxiv.org/html/2311.07911 and v1/v2/v3 suffixes) all retu",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 24497,
+   "notes": "Routes tried in order: (1) WebFetch on arxiv.org/abs/2311.07911 for metadata only \u2014 confirmed exact title, 8 authors, v1-only submission (14 Nov 2023, 211KB), cs.CL/cs.AI/cs.LG cross-list; used only for metadata per instructions, not as body source. (2) curl on arxiv.org/html/2311.07911 plus v1/v2/v3 suffixes \u2014 all four returned a ~7.7-7.9KB near-empty JS client shell with no article content, so this route was abandoned without falling back to WebFetch on it (curl output was unambiguously a shell, not a borderline case). (3) curl + BeautifulSoup parse of ar5iv.labs.arxiv.org/html/2311.07911 \u2014 SUCCEEDED, returned 352KB of LaTeXML-rendered HTML with full article body. Wrote a custom Python walker (BeautifulSoup, html.parser) that preserves heading hierarchy, paragraph text, table captions + cell contents (rendered as pipe-delimited rows), figure captions (flagged inline as [FIGURE: ...] si",
+   "citations": {
+    "openalex_id": "W4388718089",
+    "cited_by": 30,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 7
+     },
+     {
+      "year": 2025,
+      "count": 15
+     },
+     {
+      "year": 2024,
+      "count": 8
+     }
+    ],
+    "since_2025": 22,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2307.08689",
+   "file": "2307.08689-collie.md",
+   "title": "Collie: Systematic Construction of Constrained Text Generation Tasks",
+   "authors": "Shunyu Yao, Howard Chen, Austin W. Hanjie, Runzhe Yang, Karthik Narasimhan (Princeton University)",
+   "venue": "Cited by task as ICLR 2024; arXiv abstract page itself shows no journal-ref/acceptance comment (only \"18 pages, 12 figures\"), single version v1 (17 Jul 2023), subjects cs.CL/cs.AI/cs.LG, CC BY 4.0",
+   "tier": "full",
+   "route": "Step 3 (ar5iv.labs.arxiv.org/html/2307.08689, LaTeXML-generated HTML) via raw curl + local Python (BeautifulSoup) parse. Step 2 (arxiv.org/html/2307.08689 and v1/v2/v3 suffixes) failed \u2014 returned only",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 10563,
+   "notes": "Routes tried in order: (1) WebFetch on arxiv.org/abs page for metadata only \u2014 confirmed title/authors/abstract, single v1 submission 17 Jul 2023. (2) curl arxiv.org/html/2307.08689 and v1/v2/v3 suffixes \u2014 all returned empty ~7.7-7.9KB JS-shell pages with no body text; abandoned. (3) curl ar5iv.labs.arxiv.org/html/2307.08689 \u2014 succeeded, returned 405KB of LaTeXML-generated HTML with full body. Parsed locally with Python+BeautifulSoup (html.parser), walking the DOM in document order and emitting headings (h1-h6), paragraphs (div.ltx_para and the abstract's stray p.ltx_p), figure/table captions (figure tags, splitting ltx_table vs plain figures), table cell contents (tr/td/th joined with \" | \"), and bibliography entries (li.ltx_bibitem). Did not need to fall back to LaTeX source or PDF. Extracted: full abstract, Sections 1-6, Acknowledgements, References (all 38 entries), Code Availability,",
+   "citations": {
+    "openalex_id": "W4384648604",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2024,
+      "count": 1
+     }
+    ],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2507.02833",
+   "file": "2507.02833-ifbench.md",
+   "title": "Generalizing Verifiable Instruction Following",
+   "authors": "Valentina Pyatkin, Saumya Malik, Victoria Graf, Hamish Ivison, Shengyi Huang, Pradeep Dasigi, Nathan Lambert, Hannaneh Hajishirzi (Allen Institute for Artificial Intelligence; University of Washington)",
+   "venue": "arXiv preprint; per arXiv page comments, accepted to NeurIPS 2025 Datasets & Benchmarks Track (11 pages). Versions: v1 2025-07-03, v2 2025-08-04, v3 2025-11-11 (v3 HTML used for extraction).",
+   "tier": "full",
+   "route": "Primary body route (step 2 of chain): curl -sL https://arxiv.org/html/2507.02833 returned real LaTeXML-generated HTML (200 OK, ~178KB, generator tag confirms LaTeXML v0.8.8, base href points to v3). P",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 7900,
+   "notes": "Routes tried: (1) WebFetch on arXiv abstract page for metadata only \u2014 confirmed title/authors/versions/venue, used only as metadata source per instructions. (2) curl on arxiv.org/html/2507.02833 succeeded directly (no v1/v2/v3 suffix needed; server redirected to v3 content) \u2014 this was the primary and only body-extraction route needed; parsed with BeautifulSoup html.parser preserving section structure (Abstract, Sections 1-7, Acknowledgements, Appendices A-G), all table contents (Tables 1-9), all figure captions (Figures 1-9), and footnotes 1-4. Steps 3 (ar5iv), 4 (LaTeX e-print), 5 (PDF) were not needed since step 2 succeeded with full-text quality.\n\nExtraction issues: (a) No bibliography/references section was present in the served LaTeXML HTML (no ltx_bibliography element found) \u2014 in-text citation keys (e.g. zhou2023instruction, lambert2024t) are preserved verbatim as bracketed keys bu",
+   "citations": {
+    "openalex_id": "W4417156119",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2407.03978",
+   "file": "2407.03978-complexbench.md",
+   "title": "Benchmarking Complex Instruction-Following with Multiple Constraints Composition (ComplexBench)",
+   "authors": "Bosi Wen, Pei Ke, Xiaotao Gu, Lindong Wu, Hao Huang, Jinfeng Zhou, Wenchuang Li, Binxin Hu, Wendy Gao, Jiaxin Xu, Yiming Liu, Jie Tang, Hongning Wang, Minlie Huang",
+   "venue": "NeurIPS 2024 Datasets and Benchmarks Track (arXiv v3, 31 Oct 2024)",
+   "tier": "full",
+   "route": "curl -sL -A \"Mozilla/5.0\" https://arxiv.org/html/2407.03978v3 (LaTeXML HTML, 633,685 bytes) parsed locally with Python html.parser into plain text (~112,900 chars)",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 6800,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt: fetched the full ~117K-char body successfully via the same HTML route but then discarded the actual prose and wrote a paraphrased summary instead, only quoting the Abstract verbatim (self-labeled \"Verbatim: no (deliberately)\" \u2014 a policy misstep, not a retrieval failure). This re-extraction re-fetched https://arxiv.org/html/2407.03978v3 with curl, re-parsed it locally, and this time stored the authors' actual verbatim prose for: Abstract, Sections 1-6 (Introduction, Related Work, Framework, Construction, Experiments, Conclusion/Acknowledgements) in full, and Appendices A (Limitations), B (Author Statement/License), C (Task Distribution), D (Constraint Dimension definitions), H (English Translation note), and I's prose (I.1/I.2 analysis text) in full, plus all numeric result T",
+   "citations": {
+    "openalex_id": "W4400434242",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2310.20410",
+   "file": "2310.20410-followbench.md",
+   "title": "FollowBench: A Multi-level Fine-grained Constraints Following Benchmark for Large Language Models",
+   "authors": "Yuxin Jiang, Yufei Wang, Xingshan Zeng, Wanjun Zhong, Liangyou Li, Fei Mi, Lifeng Shang, Xin Jiang, Qun Liu, Wei Wang (HKUST(GZ)/HKUST and Huawei Noah's Ark Lab)",
+   "venue": "arXiv preprint; v1 31 Oct 2023, v2 14 Nov 2023, v3 5 June 2024 \"ACL 2024 main camera-ready version\" (per arXiv comments field)",
+   "tier": "full",
+   "route": "Step 2 primary route succeeded: curl -sL https://arxiv.org/html/2310.20410 returned full LaTeXML-generated HTML (~517KB) with real body text; parsed locally with Python html.parser into structured ver",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 11658,
+   "notes": "Routes tried: only Step 2 was needed (arxiv.org/html direct curl succeeded on first attempt with full LaTeXML body). Extraction covered Abstract, Intro, Related Work, full \u00a73 Data Construction (all 6 constraint-category subsections + Data Quality Control), \u00a73.2 Evaluation Protocol (HSR/SSR/CSL formulas), full Experiments (\u00a74.1-4.3), full Analysis (\u00a75.1-5.4), Conclusion, Limitations, Ethics Statement, Acknowledgments, and Appendices A-D (Data Generation Process per constraint category, Tables 7-11 fully captured with all cell data, Case Study Tables 13-14 verbatim, FollowBench-zh Appendix D with Table 15/16 data). One genuine extraction gap: Table 12 (Mixed Constraints per-level results) caption was captured but cell data was not present in the HTML->text dump at that location (likely a parser artifact at a table boundary) \u2014 flagged explicitly inline in the file rather than filled in. Bib",
+   "citations": {
+    "openalex_id": "W4388184732",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2401.03601",
+   "file": "2401.03601-infobench.md",
+   "title": "InFoBench: Evaluating Instruction Following Ability in Large Language Models",
+   "authors": "Yiwei Qin, Kaiqiang Song, Yebowen Hu, Wenlin Yao, Sangwoo Cho, Xiaoyang Wang, Xuansheng Wu, Fei Liu, Pengfei Liu, Dong Yu",
+   "venue": "arXiv preprint 2401.03601 (v1, submitted 7 Jan 2024); cs.CL/cs.AI; expected venue per task citation is Findings of ACL 2024 \u2014 not independently confirmed via arXiv abs page comments field in this fetch, but consistent with public record",
+   "tier": "full",
+   "route": "Step 2 of acquisition chain: curl -sL https://arxiv.org/html/2401.03601 succeeded immediately (LaTeXML-generated HTML, real body text, ~248KB). Parsed locally with python3 + BeautifulSoup (html.parser",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 12783,
+   "notes": "Routes tried: (1) WebFetch on arxiv.org/abs/2401.03601 for metadata only \u2014 confirmed title, authors, abstract, v1 submission date (7 Jan 2024 23:01:56 UTC, 508KB), categories cs.CL/cs.AI; this AI-summarized output was used only for metadata cross-check, never as body text. (2) curl -sL https://arxiv.org/html/2401.03601 succeeded on the very first try, returning full LaTeXML HTML (248,906 bytes) with complete body content \u2014 no need to try v1/v2/v3 suffixes, ar5iv fallback, e-print/LaTeX fallback, or PDF fallback (steps 3-5 were not needed). Parsed with BeautifulSoup: math tags replaced with their alttext (raw LaTeX source, e.g. \"N^{2}\", \"\\textsc{DRFR}=\\frac{...}{...}\") to preserve the authors' original formula notation rather than paraphrasing; tables rendered as pipe-delimited rows; figure/table captions preserved with [CAPTION] markers; footnotes preserved inline near their reference po",
+   "citations": {
+    "openalex_id": "W4390722548",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2502.04498",
+   "file": "2502.04498-vff.md",
+   "title": "Verifiable Format Control for Large Language Model Generations (VFF)",
+   "authors": "Zhaoyang Wang, Jinqi Jiang, Huichi Zhou, Wenhao Zheng, Xuchao Zhang, Chetan Bansal, Huaxiu Yao",
+   "venue": "arXiv preprint (cs.CL), v1 6 Feb 2025; to appear at Findings of NAACL 2025",
+   "tier": "full",
+   "route": "curl -sL https://arxiv.org/html/2502.04498v1 (full v1 LaTeXML HTML render, 314KB) parsed locally with python3 + BeautifulSoup, walking the article DOM in document order to extract headings, paragraphs",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 6600,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt had already fetched the correct v1 full LaTeXML HTML (314KB) but deliberately substituted its own condensed summaries for the actual prose of every major section (Introduction, Related Work, Method, Experiment, Analysis, Conclusion, Limitations, Ethics Statement), keeping only the abstract, captions, table data, and a few short quoted sentences verbatim -- an explicit copyright-scope decision, per its own header. Fix: re-fetched the same v1 HTML and wrote a DOM-order walker (BeautifulSoup) that emits every heading, every ltx_para paragraph, every figure/table caption, and every table row verbatim. The rewritten file now contains the complete verbatim running prose of all eight main sections plus Limitations, Ethics Statement, and Appendix A (A.1, A.2), all 8 tables' full cell",
+   "citations": {
+    "openalex_id": "W4407308972",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2505.16234",
+   "file": "2505.16234-lifebench.md",
+   "title": "LIFEBench: Evaluating Length Instruction Following in Large Language Models",
+   "authors": "Wei Zhang, Zhenhong Zhou, Kun Wang, Junfeng Fang, Yuanhe Zhang, Rui Wang, Ge Zhang, Xavier Li, Li Sun, Lingjuan Lyu, Yang Liu, Sen Su (12 authors; BUPT, NTU, NUS, M-A-P, NCEPU, Sony AI)",
+   "venue": "NeurIPS 2025 (arXiv 2505.16234)",
+   "tier": "full",
+   "route": "e-print LaTeX source (curl https://arxiv.org/e-print/2505.16234), gzip tar extracted, all \\input-ed .tex files (main body sections/ + full appendix/ directory of 14 files + supporting tables/ and figu",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 31538,
+   "notes": "REMEDIATED 2026-07-22: Prior attempt (partial/verbatim) captured the main body (Abstract + Sections 1-6) verbatim from the LaTeX e-print source but left the ~75-page appendix as an unreproduced table-of-contents stub only (\"Appendix (structure only \u2014 not fully transcribed)\"), listing the 14 appendix filenames without transcribing any of their content. This was the main gap causing the \"partial\" flag.\n\nFix applied this pass: re-downloaded and re-extracted the same arXiv e-print source (https://arxiv.org/e-print/2505.16234, gzip tar), confirmed the main body was unchanged, then read and fully de-LaTeXed all 14 appendix .tex files plus their supporting table/figure .tex includes: (A) Comparison with Existing Benchmarks [+ bench_comparasion table], (B) Details of LIFEBench [Length-Paradigm mapping table, full Data C",
+   "citations": {
+    "openalex_id": "W6948392775",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2604.04443",
+   "file": "2604.04443-deonticbench.md",
+   "title": "DeonticBench: A Benchmark for Reasoning over Rules",
+   "authors": "Guangyao Dou, Luis Brena, Akhil Deo, William Jurayj, Jingyu Zhang, Nils Holzenberger, Benjamin Van Durme",
+   "venue": "arXiv preprint (cs.CL), submitted 6 April 2026, v1; LaTeX source uses colm2026_conference.sty (styled for COLM 2026) but no formal venue/acceptance is confirmed on the arXiv abstract page itself",
+   "tier": "full",
+   "route": "Step 4: LaTeX source (arxiv.org/e-print/2604.04443) \u2014 downloaded gzip/tar, extracted, read main file colm2026_conference.tex (1315 lines) plus all \\input-ed table files under Figures/final_figures_for",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 11243,
+   "notes": "Routes tried in order: (1) WebFetch on arxiv.org/abs/2604.04443 succeeded and confirmed metadata (title, authors, abstract) matching expected citation exactly, used only for metadata per instructions. (2) curl on https://arxiv.org/html/2604.04443 and /v1 returned an arXiv \"No HTML for '2604.04443' \u2014 HTML is not available for the source\" placeholder page (~7.9KB), no body text; did not attempt WebFetch fallback on this since it was clearly a non-content shell. (3) curl on https://ar5iv.labs.arxiv.org/html/2604.04443 returned a stub \"Untitled Document\" LaTeXML page with no rendered body (~8.3KB). (4) Fell back to LaTeX e-print source (arxiv.org/e-print/2604.04443), which succeeded fully: downloaded gzip tarball, extracted with tar, found main file colm2026_conference.tex plus bib/sty/bst support files and a Figures/ directory. Read the entire main .tex (1315 lines) plus all separately-inpu",
+   "citations": {
+    "openalex_id": "W7151234278",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2404.13208",
+   "file": "2404.13208-instruction-hierarchy.md",
+   "title": "The Instruction Hierarchy: Training LLMs to Prioritize Privileged Instructions",
+   "authors": "Eric Wallace, Kai Xiao, Reimar Leike, Lilian Weng, Johannes Heidecke, Alex Beutel (OpenAI; Kai Xiao and Reimar Leike marked equal contribution)",
+   "venue": "arXiv preprint, cs.CR (cross-listed cs.CL, cs.LG); v1 only, 19 Apr 2024; no journal-ref/peer-reviewed venue listed",
+   "tier": "full",
+   "route": "Step 2 primary route: curl -sL https://arxiv.org/html/2404.13208 returned full LaTeXML-generated HTML (139KB) with complete article structure; parsed locally with Python/BeautifulSoup. Metadata cross-",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 6965,
+   "notes": "Routes tried: (1) WebFetch on arxiv.org/abs page for metadata only \u2014 confirmed title, 6 authors, abstract, v1-only submission, cs.CR/cs.CL/cs.LG categories, no venue/journal-ref. (2) curl -sL https://arxiv.org/html/2404.13208 succeeded on first try \u2014 returned genuine LaTeXML HTML with full article body (title, authors, abstract, 6 numbered sections with subsections, references, Appendix A, Appendix B). No need to fall back to ar5iv, e-print/LaTeX source, or PDF. Extraction: wrote a recursive BeautifulSoup parser walking ltx_section/ltx_subsection containers, paragraphs, lists, and figures. Three tables (Table 1, Table 2, Table 3) are LaTeXML-rendered as SVG images with embedded foreignObject text layers rather than HTML <table> elements \u2014 recovered their text via get_text() on the SVG container (verified content is the actual authors' example prompts/outputs, not fabricated). Five true i",
+   "citations": {
+    "openalex_id": "W4395064792",
+    "cited_by": 8,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 2
+     },
+     {
+      "year": 2025,
+      "count": 5
+     },
+     {
+      "year": 2024,
+      "count": 1
+     }
+    ],
+    "since_2025": 7,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2502.15823",
+   "file": "2502.15823-inductionbench.md",
+   "title": "InductionBench: LLMs Fail in the Simplest Complexity Class",
+   "authors": "Wenyue Hua, Tyler Wong, Sun Fei, Liangming Pan, Adam Jardine, William Yang Wang",
+   "venue": "ACL 2025 main conference (long paper), ACL Anthology 2025.acl-long.1287; arXiv v4 (2025-05-13), cs.LG",
+   "tier": "full",
+   "route": "ar5iv HTML render (https://ar5iv.labs.arxiv.org/html/2502.15823), parsed locally with BeautifulSoup/html.parser, preserving math as LaTeX strings, table rows, captions, definitions, and footnotes. Pri",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 14791,
+   "notes": "Routes tried in order: (1) WebFetch on arxiv.org/abs/2502.15823 for metadata only \u2014 confirmed title/authors/versions/abstract, flagged as summarization-only per instructions, not used as body text. (2) curl on arxiv.org/html/2502.15823 and v1/v4 suffixes \u2014 all returned arXiv's LaTeXML \"No HTML for '2502.15823'... HTML is not available for the source\" error page (149 lines, no body), rejected. (3) curl on ar5iv.labs.arxiv.org/html/2502.15823 \u2014 SUCCESS, returned full LaTeXML-rendered HTML (765KB) with complete body text, tables, definitions, references, and appendix. Parsed this with a custom BeautifulSoup script that walks ltx_section elements in document order, converts <math> nodes to their LaTeX annotation source ($...$), renders tables as pipe-delimited rows tagged [TABLE]/[/TABLE], captions tagged [CAPTION], and bibliography items as a list \u2014 yielding ~14,791 words of verbatim body t",
+   "citations": {
+    "openalex_id": "W4416042265",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "1908.08351",
+   "file": "1908.08351-pcfg-set.md",
+   "title": "Compositionality decomposed: how do neural networks generalise?",
+   "authors": "Dieuwke Hupkes, Verna Dankers, Mathijs Mul, Elia Bruni",
+   "venue": "Journal of Artificial Intelligence Research (JAIR), vol. 67, 2020 (submitted 08/2019, published 02/2020 per jairheading macro); arXiv v1 22 Aug 2019, v2 23 Feb 2020",
+   "tier": "full",
+   "route": "4 (LaTeX source via arxiv.org/e-print) after routes 2 and 3 failed as expected",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 19120,
+   "notes": "Routes tried in order: (1) WebFetch of arxiv.org/abs page succeeded for metadata only \u2014 confirmed title, authors, JAIR venue, v1/v2 dates; no discrepancy vs expected citation \"Hupkes et al., JAIR 2020\". (2) curl of arxiv.org/html/1908.08351 returned arXiv's standard \"No HTML for '1908.08351'\" placeholder \u2014 confirmed by grep, as anticipated for a pre-native-HTML 2019 submission. (3) curl of ar5iv.labs.arxiv.org/html/1908.08351 rendered but LaTeXML hit a fatal conversion error (\"Conversion to HTML had a Fatal error and exited abruptly\"); body contained only one stray footnote fragment, unusable as primary source. (4) curl of arxiv.org/e-print/1908.08351 succeeded: gzip tarball containing 34 modular .tex files (main.tex plus per-section includes: abstract, introduction, related_work, compositional_tests + 5 test-theory files [systematicity/productivity/substitutivity/localism/overgeneralisa",
+   "citations": {
+    "openalex_id": "W3022131108",
+    "cited_by": 16,
+    "by_year": [
+     {
+      "year": 2021,
+      "count": 8
+     },
+     {
+      "year": 2020,
+      "count": 6
+     },
+     {
+      "year": 2019,
+      "count": 2
+     }
+    ],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2404.07353",
+   "file": "2404.07353-re-arc.md",
+   "title": "Addressing the Abstraction and Reasoning Corpus via Procedural Example Generation",
+   "authors": "Michael Hodel (Institute of Neuroinformatics, University of Zurich and ETH Zurich)",
+   "venue": "arXiv preprint 2404.07353, v1 only (10 Apr 2024), cs.LG/cs.AI, CC BY 4.0",
+   "tier": "full",
+   "route": "Step 2 (primary body route): curl -sL https://arxiv.org/html/2404.07353 returned LaTeXML-generated HTML with full body text; parsed locally with python3 + BeautifulSoup (html.parser) extracting title,",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 1750,
+   "notes": "Routes tried: Step 1 WebFetch of arxiv.org/abs page succeeded and confirmed metadata (title, single author Michael Hodel, v1 only submitted 10 Apr 2024 21:16:59 UTC, 7KB source, cs.LG/cs.AI, CC BY 4.0, no journal-ref). Step 2 primary body route succeeded on first try: curl -sL https://arxiv.org/html/2404.07353 (and v1 suffix, identical content) returned a full LaTeXML HTML render (~32KB) with complete body text inside an &lt;article&gt; tag; v2 suffix returned a much smaller stub (7.7KB, likely a redirect/placeholder since no v2 exists). Parsed with BeautifulSoup html.parser, extracting the h1 title, ltx_authors, ltx_dates, ltx_abstract, all 6 &lt;section&gt; elements (Motivation, Task Generalization, Example Generation, Example Verification, Example Difficulty, Limitations) plus the bibliography section, in document order. No fallback to ar5iv, LaTeX source, or PDF was necessary. Extrac",
+   "citations": {
+    "openalex_id": "W4394780889",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2502.09933",
+   "file": "2502.09933-mir-bench.md",
+   "title": "MIR-Bench: Can Your LLM Recognize Complicated Patterns via Many-Shot In-Context Reasoning?",
+   "authors": "Kai Yan, Zhan Ling, Kang Liu, Yifan Yang, Ting-Han Fan, Lingfeng Shen, Zhengyin Du, Jiecao Chen",
+   "venue": "NeurIPS 2025 Datasets &amp; Benchmarks Track (arXiv v5, camera-ready, 23 Oct 2025; original submission v1 14 Feb 2025)",
+   "tier": "full",
+   "route": "Step 2 of acquisition chain: curl -sL https://arxiv.org/html/2502.09933 returned genuine LaTeXML HTML (v5) with full body text; parsed locally with python3 + BeautifulSoup (html.parser), walking DOM i",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 21032,
+   "notes": "Routes tried: WebFetch on arxiv.org/abs page for metadata only (used only for venue-comment metadata, not body text, per instructions). Primary body route (Step 2, curl + BeautifulSoup on arxiv.org/html/2502.09933) succeeded immediately with a full LaTeXML render (v5, ~540KB) \u2014 no need to fall back to ar5iv, LaTeX source, or PDF. First-pass extraction script had a bug where nested multi-panel figures (ltx_figure containing ltx_figure_panel sub-figures, e.g. Figure 2, 4, 5, 6, 11) only captured the first sub-panel's image+caption and skipped the rest plus the outer figure's final caption; this was caught and fixed by rewriting the figure-handling logic to recursively walk div wrappers (ltx_flex_figure/ltx_flex_cell) and process every nested figure panel in order \u2014 re-diffed old vs new extraction to confirm the fix only ADDED missing figure/table captions (strict superset, no content lost)",
+   "citations": {
+    "openalex_id": "W4407679563",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2410.10998",
+   "file": "2410.10998-wilt.md",
+   "title": "WILT: A Multi-turn, Memorization-Robust Inductive Logic Benchmark for LLMs",
+   "authors": "Eryk Banatt, Jonathan Cheng, Skanda Vaidyanath, Tiffany Hwu (Riot Games)",
+   "venue": "arXiv preprint, v1 only (submitted 2024-10-14); cited elsewhere as submitted to ICLR 2025 (no journal-ref present in arXiv metadata to independently confirm acceptance)",
+   "tier": "full",
+   "route": "Step 2 primary route: curl -sL https://arxiv.org/html/2410.10998 returned full LaTeXML HTML (only v1 exists; v2/v3 return 404 on arxiv.org/abs). Parsed locally with python3 + BeautifulSoup (html.parse",
+   "quality": "full-text",
+   "verbatim": true,
+   "body_words": 11853,
+   "notes": "Routes tried: (1) WebFetch abstract page for metadata only \u2014 confirmed title, 4 authors (Eryk Banatt, Jonathan Cheng, Skanda Vaidyanath, Tiffany Hwu), abstract, v1 submitted 2024-10-14T18:29:13Z, \"submitted to ICLR 2025\" per WebFetch summary. (2) curl https://arxiv.org/html/2410.10998 succeeded on first try \u2014 full LaTeXML HTML body (~480KB), no need for ar5iv/e-print/PDF fallbacks. Extraction quality is full-text and complete: Abstract, Sections 1-5 (Introduction, WILT task spec, Related Work, Experiments 4.1-4.4 with Tables 1-3 and figure captions, Conclusion), full References list (~40 entries), Appendix A (Experimental Details, Prompts, Test Case Novelty, Response Complexity, Lite Split Results, Test Descriptions), Appendix B (Failure Case Examples), and Appendix C (Full Conversation Examples including a complete llama3-8b doom-loop transcript with code blocks). Extraction issues (min",
+   "citations": {
+    "openalex_id": "W4403573139",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "1502.05698-babi",
+   "file": "1502.05698-babi.md",
+   "title": "Towards AI-Complete Question Answering: A Set of Prerequisite Toy Tasks",
+   "authors": "Jason Weston, Antoine Bordes, Sumit Chopra, Alexander M. Rush, Bart van Merri\u00ebnboer, Armand Joulin, Tomas Mikolov",
+   "venue": "arXiv preprint (2015)",
+   "tier": "context",
+   "route": "arxiv.org/abs raw HTML fetch (curl)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 140,
+   "notes": "Matches expected citation exactly; bAbI paper.",
+   "citations": {
+    "openalex_id": "W1525961042",
+    "cited_by": 727,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 11
+     },
+     {
+      "year": 2024,
+      "count": 22
+     },
+     {
+      "year": 2023,
+      "count": 43
+     },
+     {
+      "year": 2022,
+      "count": 38
+     },
+     {
+      "year": 2021,
+      "count": 81
+     },
+     {
+      "year": 2020,
+      "count": 83
+     },
+     {
+      "year": 2019,
+      "count": 120
+     },
+     {
+      "year": 2018,
+      "count": 118
+     },
+     {
+      "year": 2017,
+      "count": 93
+     },
+     {
+      "year": 2016,
+      "count": 87
+     },
+     {
+      "year": 2015,
+      "count": 31
+     }
+    ],
+    "since_2025": 11,
+    "match": "high"
+   }
+  },
+  {
+   "key": "1612.03969-entnet",
+   "file": "1612.03969-entnet.md",
+   "title": "Tracking the World State with Recurrent Entity Networks",
+   "authors": "Mikael Henaff, Jason Weston, Arthur Szlam, Antoine Bordes, Yann LeCun",
+   "venue": "ICLR 2017 (arXiv preprint 1612.03969)",
+   "tier": "context",
+   "route": "arxiv.org/abs raw HTML fetch (curl)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 168,
+   "notes": "Matches expected citation exactly.",
+   "citations": {
+    "openalex_id": "W2563734883",
+    "cited_by": 157,
+    "by_year": [
+     {
+      "year": 2023,
+      "count": 1
+     },
+     {
+      "year": 2022,
+      "count": 1
+     },
+     {
+      "year": 2021,
+      "count": 30
+     },
+     {
+      "year": 2020,
+      "count": 33
+     },
+     {
+      "year": 2019,
+      "count": 42
+     },
+     {
+      "year": 2018,
+      "count": 32
+     },
+     {
+      "year": 2017,
+      "count": 18
+     }
+    ],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2305.02363-entity-tracking",
+   "file": "2305.02363-entity-tracking.md",
+   "title": "Entity Tracking in Language Models",
+   "authors": "Najoung Kim, Sebastian Schuster",
+   "venue": "ACL 2023 (arXiv preprint 2305.02363)",
+   "tier": "context",
+   "route": "arxiv.org/abs raw HTML fetch (curl)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 156,
+   "notes": "Matches expected citation exactly.",
+   "citations": {
+    "openalex_id": "W4372272147",
+    "cited_by": 1,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     }
+    ],
+    "since_2025": 1,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2002.05867-ruletaker",
+   "file": "2002.05867-ruletaker.md",
+   "title": "Transformers as Soft Reasoners over Language",
+   "authors": "Peter Clark, Oyvind Tafjord, Kyle Richardson",
+   "venue": "IJCAI 2020 (arXiv preprint 2002.05867)",
+   "tier": "context",
+   "route": "arxiv.org/abs raw HTML fetch (curl)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 157,
+   "notes": "Matches expected citation exactly; RuleTaker paper.",
+   "citations": {
+    "openalex_id": "W3006188107",
+    "cited_by": 16,
+    "by_year": [
+     {
+      "year": 2023,
+      "count": 1
+     },
+     {
+      "year": 2022,
+      "count": 2
+     },
+     {
+      "year": 2021,
+      "count": 5
+     },
+     {
+      "year": 2020,
+      "count": 8
+     }
+    ],
+    "since_2025": 0,
+    "match": "medium"
+   }
+  },
+  {
+   "key": "2209.00840-folio",
+   "file": "2209.00840-folio.md",
+   "title": "FOLIO: Natural Language Reasoning with First-Order Logic",
+   "authors": "Simeng Han, Hailey Schoelkopf, Yilun Zhao, Zhenting Qi, Martin Riddell, Wenfei Zhou, James Coady, David Peng, Yujie Qiao, Luke Benson, Lucy Sun, Alex Wardle-Solano, Hannah Szabo, Ekaterina Zubova, Matthew Burtell, Jonathan Fan, Yixin Liu, Brian Wong, Malcolm Sailor, Ansong Ni, Linyong Nan, Jungo Kasai, Tao Yu, Rui Zhang, Alexander R. Fabbri, Wojciech Kryscinski, Semih Yavuz, Ye Liu, Xi Victoria Lin, Shafiq Joty, Yingbo Zhou, Caiming Xiong, Rex Ying, Arman Cohan, Dragomir Radev",
+   "venue": "EMNLP 2024 (arXiv preprint 2209.00840)",
+   "tier": "context",
+   "route": "arxiv.org/abs raw HTML fetch (curl)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 163,
+   "notes": "Matches expected citation; arXiv originally posted 2022, last revised 2024, consistent with EMNLP 2024 publication.",
+   "citations": {
+    "openalex_id": "W4294753225",
+    "cited_by": 31,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 5
+     },
+     {
+      "year": 2024,
+      "count": 10
+     },
+     {
+      "year": 2023,
+      "count": 16
+     }
+    ],
+    "since_2025": 4,
+    "match": "high"
+   }
+  },
+  {
+   "key": "proofwriter",
+   "file": "proofwriter.md",
+   "title": "ProofWriter: Generating Implications, Proofs, and Abductive Statements over Natural Language",
+   "authors": "Oyvind Tafjord, Bhavana Dalvi Mishra, Peter Clark",
+   "venue": "Findings of ACL-IJCNLP 2021",
+   "tier": "context",
+   "route": "arxiv (2012.13048) abstract, ACL Anthology page metadata for title/authors/venue",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 178,
+   "notes": "ACL Anthology page HTML did not expose visible abstract text (empty editable abstract field); verbatim abstract taken from the identical arXiv preprint. No discrepancy in title vs expected citation.",
+   "citations": {
+    "openalex_id": "W3115201256",
+    "cited_by": 7,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 1
+     },
+     {
+      "year": 2024,
+      "count": 1
+     },
+     {
+      "year": 2022,
+      "count": 3
+     },
+     {
+      "year": 2021,
+      "count": 2
+     }
+    ],
+    "since_2025": 1,
+    "match": "medium"
+   }
+  },
+  {
+   "key": "logicnli",
+   "file": "logicnli.md",
+   "title": "Diagnosing the First-Order Logical Reasoning Ability Through LogicNLI",
+   "authors": "Jidong Tian, Yitian Li, Wenqing Chen, Liqiang Xiao, Hao He, Yaohui Jin",
+   "venue": "EMNLP 2021",
+   "tier": "context",
+   "route": "Semantic Scholar API record matched to ACL Anthology ID 2021.emnlp-main.303 (ACL page had no visible abstract text)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 95,
+   "notes": "No arXiv version exists for this paper. Title/authors/venue verified exactly against ACL Anthology metadata and expected citation.",
+   "citations": {
+    "openalex_id": "W3212781905",
+    "cited_by": 21,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 1
+     },
+     {
+      "year": 2025,
+      "count": 3
+     },
+     {
+      "year": 2024,
+      "count": 7
+     },
+     {
+      "year": 2023,
+      "count": 6
+     },
+     {
+      "year": 2022,
+      "count": 4
+     }
+    ],
+    "since_2025": 4,
+    "match": "medium"
+   }
+  },
+  {
+   "key": "rulebert",
+   "file": "rulebert.md",
+   "title": "RuleBERT: Teaching Soft Rules to Pre-Trained Language Models",
+   "authors": "Mohammed Saeed, Naser Ahmadi, Preslav Nakov, Paolo Papotti",
+   "venue": "EMNLP 2021",
+   "tier": "context",
+   "route": "arxiv (2109.13006) abstract, ACL Anthology page metadata for title/authors/venue",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 163,
+   "notes": "ACL Anthology page HTML did not expose visible abstract text; verbatim abstract taken from the identical arXiv preprint. No discrepancy vs expected citation.",
+   "citations": {
+    "openalex_id": "W3201662444",
+    "cited_by": 10,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 2
+     },
+     {
+      "year": 2024,
+      "count": 3
+     },
+     {
+      "year": 2023,
+      "count": 3
+     },
+     {
+      "year": 2022,
+      "count": 2
+     }
+    ],
+    "since_2025": 2,
+    "match": "medium"
+   }
+  },
+  {
+   "key": "1711.00350-scan",
+   "file": "1711.00350-scan.md",
+   "title": "Generalization without Systematicity: On the Compositional Skills of Sequence-to-Sequence Recurrent Networks",
+   "authors": "Brenden M. Lake, Marco Baroni",
+   "venue": "arXiv preprint 1711.00350 / ICML 2018",
+   "tier": "context",
+   "route": "arxiv abstract page",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 163,
+   "notes": "No discrepancies vs expected citation.",
+   "citations": {
+    "openalex_id": "W2789352267",
+    "cited_by": 77,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 8
+     },
+     {
+      "year": 2024,
+      "count": 7
+     },
+     {
+      "year": 2023,
+      "count": 20
+     },
+     {
+      "year": 2022,
+      "count": 19
+     },
+     {
+      "year": 2021,
+      "count": 9
+     },
+     {
+      "year": 2020,
+      "count": 9
+     },
+     {
+      "year": 2019,
+      "count": 5
+     }
+    ],
+    "since_2025": 8,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2010.05465-cogs",
+   "file": "2010.05465-cogs.md",
+   "title": "COGS: A Compositional Generalization Challenge Based on Semantic Interpretation",
+   "authors": "Najoung Kim, Tal Linzen",
+   "venue": "arXiv preprint 2010.05465 / EMNLP 2020",
+   "tier": "context",
+   "route": "arxiv abstract page",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 126,
+   "notes": "No discrepancies vs expected citation.",
+   "citations": {
+    "openalex_id": "W3092866762",
+    "cited_by": 8,
+    "by_year": [
+     {
+      "year": 2025,
+      "count": 2
+     },
+     {
+      "year": 2024,
+      "count": 1
+     },
+     {
+      "year": 2022,
+      "count": 1
+     },
+     {
+      "year": 2021,
+      "count": 3
+     },
+     {
+      "year": 2020,
+      "count": 1
+     }
+    ],
+    "since_2025": 2,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2310.15040-slog",
+   "file": "2310.15040-slog.md",
+   "title": "SLOG: A Structural Generalization Benchmark for Semantic Parsing",
+   "authors": "Bingzhi Li, Lucia Donatelli, Alexander Koller, Tal Linzen, Yuekun Yao, Najoung Kim",
+   "venue": "EMNLP 2023 (arXiv:2310.15040)",
+   "tier": "context",
+   "route": "arxiv abstract page (curl raw HTML, citation_ meta tags + blockquote)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 140,
+   "notes": "Matches expected citation. Confirms correct arXiv id 2310.15040; corpus previously had malformed id 2604.26157 for this work \u2014 flagged as discrepancy/correction.",
+   "citations": {
+    "openalex_id": "W4387929709",
+    "cited_by": 0,
+    "by_year": [],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2205.10782-instruction-induction",
+   "file": "2205.10782-instruction-induction.md",
+   "title": "Instruction Induction: From Few Examples to Natural Language Task Descriptions",
+   "authors": "Or Honovich, Uri Shaham, Samuel R. Bowman, Omer Levy",
+   "venue": "ACL 2023 (arXiv:2205.10782)",
+   "tier": "context",
+   "route": "arxiv abstract page (curl raw HTML)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 153,
+   "notes": "Matches expected citation exactly, no discrepancies.",
+   "citations": {
+    "openalex_id": "W4281493460",
+    "cited_by": 6,
+    "by_year": [
+     {
+      "year": 2024,
+      "count": 3
+     },
+     {
+      "year": 2023,
+      "count": 3
+     }
+    ],
+    "since_2025": 0,
+    "match": "high"
+   }
+  },
+  {
+   "key": "2211.01910-ape",
+   "file": "2211.01910-ape.md",
+   "title": "Large Language Models Are Human-Level Prompt Engineers",
+   "authors": "Yongchao Zhou, Andrei Ioan Muresanu, Ziwen Han, Keiran Paster, Silviu Pitis, Harris Chan, Jimmy Ba",
+   "venue": "ICLR 2023 (arXiv:2211.01910)",
+   "tier": "context",
+   "route": "arxiv abstract page (curl raw HTML)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 183,
+   "notes": "Matches expected citation (APE) exactly, no discrepancies.",
+   "citations": {
+    "openalex_id": "W4308244910",
+    "cited_by": 297,
+    "by_year": [
+     {
+      "year": 2026,
+      "count": 4
+     },
+     {
+      "year": 2025,
+      "count": 80
+     },
+     {
+      "year": 2024,
+      "count": 108
+     },
+     {
+      "year": 2023,
+      "count": 105
+     }
+    ],
+    "since_2025": 84,
+    "match": "high"
+   }
+  },
+  {
+   "key": "pmlr-list-functions",
+   "file": "pmlr-list-functions.md",
+   "title": "A large-scale benchmark for few-shot program induction and synthesis",
+   "authors": "Ferran Alet, Javier Lopez-Contreras, James Koppel, Maxwell Nye, Armando Solar-Lezama, Tomas Lozano-Perez, Leslie Kaelbling, Joshua Tenenbaum",
+   "venue": "PMLR / ICML 2021, v139",
+   "tier": "context",
+   "route": "pmlr landing page (curl raw HTML, extracted abstract from embedded BibTeX block)",
+   "quality": "abstract-only",
+   "verbatim": true,
+   "body_words": 137,
+   "notes": "Matches expected citation (List Functions). Abstract extracted from BibTeX field rather than a <div class=abstract> since PMLR page structure embeds it in BibTeX; verified verbatim against raw source.",
+   "citations": {
+    "openalex_id": "W3167634474",
+    "cited_by": 8,
+    "by_year": [
+     {
+      "year": 2023,
+      "count": 1
+     },
+     {
+      "year": 2021,
+      "count": 6
+     },
+     {
+      "year": 2020,
+      "count": 1
+     }
+    ],
+    "since_2025": 0,
+    "match": "medium"
+   }
+  }
+ ]
+}

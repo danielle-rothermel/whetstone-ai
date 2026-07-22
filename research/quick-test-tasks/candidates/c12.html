@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking. */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c12 Sigil-Schema Field Extraction &amp; Dialect Routing</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER -->
+<div class="cand-head">
+  <h1><span class="cand-id">c12</span>Sigil-Schema Field Extraction &amp; Dialect Routing</h1>
+  <span class="badge ranked">RANKED #20</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">structured field extraction under invented markups</span> — sigil-tagged records and header-signaled dialects where the model returns one normalized field per instance.</div>
+
+<!-- (2) VERDICT BOX -->
+<div class="verdict">
+  <p><strong>Officially ranked #20 of 20 in round 2 — the bottom of the ranked field.</strong>
+  This was a round-1 finalist: it earned a top rubric score and cleared both adversarial lenses
+  (measurement was refuted-as-specified but rescued by a stratum redesign), so on design merit it
+  stood with the strongest candidates. The implementation-aware rescore is what sank it. Discovery
+  found <span class="key">no plausibly reusable codebase</span> — every candidate repo was a frozen
+  dataset, LLM-driven, or the wrong task shape — which zeroes the double-weighted reuse axis. On top
+  of that, its round-1 rescue demanded the <span class="key">most stratum surgery</span> of any
+  finalist (removing the arithmetic checksum stratum, redesigning the fixed-width columns), and its
+  per-instance single-token failures are the least individually diagnostic in the set — diagnosis
+  lives at the batch level, not the example. With no codebase to inherit and the heaviest
+  from-scratch build, the round-2 guidance is explicit: do not invest.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">4/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES -->
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Extract one house-normalized field from a record in an invented markup</h3>
+    <p>The generator emits synthetic records written in invented markups — <span class="key">sigil-tagged
+    fields</span>, fixed-width columns with implied decimals, custom-escaped delimiters, or one of several
+    <span class="key">dialects</span> signaled by a header token — and each instance asks for exactly ONE
+    field, returned in <span class="key">normalized house form</span> (integer-cents to decimal, dotted enum
+    code via most-specific-wins). Output is a single short token, scored by exact match against the
+    generator's own record, with strictly one field per instance so no intra-example partial credit leaks
+    in. The latent rules — sigil-to-field map, per-dialect conventions, column widths, escape handling,
+    per-field normalization, enum precedence — are each stratified across the pool, so pool accuracy is
+    meant to climb as a prompt captures more rules. Sigils, widths, delimiters, and enum vocabularies are
+    randomized per run, making the pool contamination-proof and resistant to one-shot guessing.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Seeded conditions (from the round-1 corpus): dialect <code>VEL</code>; <code>ᚠ</code>
+    marks unit price with the implied decimal at 3 places this run; <code>ᚷ</code> marks a date; a second
+    money-shaped field <code>ᚢ</code> is a same-type distractor.</p>
+<pre><code>Record: ⟦hdr:VEL⟧ ᚠ7203 ᚢ1150 ᚷ0925
+Query:  unit price, in house form.
+
+Gold:   7.203
+        — the sigil map picks ᚠ over the same-type
+          distractor ᚢ; this run's implied-decimal
+          position is 3.
+
+Naive extraction answers 7203 or 72.03  →  0.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE -->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2404.03868">EDC: Extract, Define, Canonicalize</a> (Zhang &amp; Soh, EMNLP 2024)</span> — its post-hoc <em>canonicalize</em> step is the model for c12's per-field normalization into a fixed house form.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2507.21340">StructText</a> (Kashyap et al., arXiv 2025)</span> — a synthetic table-to-text benchmark generator; c12 reverses it, generating records from structured data so field extraction can be scored against ground truth.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2505.20139">StructEval</a> (Yang et al., arXiv 2025)</span> — its non-renderable (JSON/YAML/CSV) slice is the format-fidelity reference for the house-form output; the round-1 corpus mis-attributed this slice to StructText, corrected here.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Glyph-Ledger / Fixed-Width / Multi-Schema Router extraction seeds</a> — the merge (origin: both) folded in seven brainstorm variants: Glyph-Ledger Field Extraction, Positional Fixed-Width Decoder, Escaped-Delimiter CSV, Multi-Schema Router Extraction, Enum-Canonicalization With Hierarchy, Unit-and-Sign Normalizer, Protocol Bitmask.</li>
+      <li><a href="../candidates-merged.html#c12">candidates-merged · c12</a> — rewrote every multi-field pipe-output variant as a single-field query and balanced the dialect mix so per-dialect rule capture shows as pool-level steps.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D2 · Interval-Overlap Field Selection — <span class="why">only 2–3 boundary/tie conventions, enumerable in one prompt; its boundary-convention flavor was absorbed into c12/c13 strata rather than kept as a cluster</span>.</li>
+    <li>Checksum VALID/INVALID stratum (dropped in adaptation) — <span class="why">broke three criteria at once: a 50% guess floor, zero-bit binary failures a reflection LM cannot learn from, and an arithmetic ceiling a cheap model cannot reach; replaced by a non-arithmetic comparison/lookup rule</span>.</li>
+    <li>Character-offset fixed-width strata (redesigned) — <span class="why">exact character counting fights BPE tokenization, so the fix rebuilt these around field order plus an invented padding glyph</span>.</li>
+    <li class="unverified">DTBench / ExtractBench / LLMStructBench (literature, motivation-only) — <span class="why">listed as motivation but provenance-unverified; no canonical venue could be located, and the LLMStructBench-style "prompting beats model size" finding is flagged not-to-be-cited publicly — treat as placeholders</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH -->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2505.20139">StructEval: Benchmarking LLMs' Capabilities to Generate Structural Outputs</a> (Yang et al., arXiv 2025)</span> — a major 2025 structured-output benchmark showing even o1-mini reaches only about three-quarters accuracy, corroborating c12's headroom claim for format-constrained extraction.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2501.10868">JSONSchemaBench</a> (Geng et al., arXiv 2025)</span> — a rigorous 2025 structured-output/constrained-decoding benchmark over ten thousand schemas; directly relevant to c12's schema-routed single-field extraction and exact-match scoring (its primary home in this atlas is the sibling candidate c11).</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES -->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Earned a top rubric score and stood among the seven verified finalists; per-run randomized sigils/widths/vocabularies are contamination-proof and resist one-shot prompts, and one field per instance keeps scoring cleanly binary.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The top score masked a measurement story refuted as specified — the raw spec included checksum, character-offset, and fixed-decimal strata that failed the criteria and had to be surgically removed.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Survived at major-but-not-refuted: the spec-dump reference prompt defines a reachable ceiling and the latent rules genuinely stratify, so a gap-recovery ladder exists in principle.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>A semantic type-matching prompt solves the sigil stratum for free unless every record carries ≥2 same-type distractors, and COPRO's score-only proposer cannot reach per-run randomized rules, so the optimizer axis must be scoped to plumbing validation.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Once the offending strata are removed, the single-token exact-match design is deterministic and hand-verifiable, and the example shows a clean naive-miss versus gold separation.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Refuted as specified at major severity — cents-to-decimal at a fixed position is world knowledge, not latent headroom, and single-token failures are the least individually diagnostic in the set: diagnosis reads at the batch level, not the example.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The target task shape is simple (one sampler, one short-token oracle) and the exact-match scorer is trivial once the record format is fixed.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No reusable codebase exists — every discovered repo was frozen, LLM-driven, or the wrong shape — so the whole generator is a from-scratch build, and it carried the most stratum surgery of the finalists, landing its total at the bottom.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Structured extraction and format-constrained output are live 2025 topics — StructEval and JSONSchemaBench both show real headroom even for strong models, so the phenomenon is current and publishable.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The currency lives mostly in sibling candidates (JSONSchemaBench's home is c11), and three of c12's motivating benchmarks are provenance-unverified placeholders that cannot be cited, thinning the citable support specific to this candidate.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION -->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Build the record generator from scratch</h3><p>No reusable repo exists, so the seeded generator over sigil-tagged, fixed-width, escaped-delimiter, and header-dialect record families is entirely new code — the load-bearing and most expensive component.</p></div>
+  <div class="step"><h3>Excise and replace the refuted strata</h3><p>Drop or replace the checksum stratum with a non-arithmetic comparison/lookup rule; redesign fixed-width strata around field order plus an invented padding glyph (short ≤4-char widths, distinctive pad runs) instead of character counting.</p></div>
+  <div class="step"><h3>Harden distractors and normalization</h3><p>Mandate ≥2 same-type distractor fields per record so type-matching cannot short-circuit the sigil stratum, and randomize the implied-decimal position per run (2/3/4 places) so normalization is an inducible rule, not a fixed convention.</p></div>
+  <div class="step"><h3>Add the pre-freeze calibration gates</h3><p>Require the spec-dump reference prompt to clear a high per-stratum ceiling on the pinned model and seed before a stratum enters the pool, and record per-stratum reference/floor scores in the manifest so gap-recovery is falsifiable per stratum.</p></div>
+  <div class="step"><h3>Fix the output surface and provenance</h3><p>Stratified splits with even dialect/normalization mixes, a single-token output with a published exact-match normalizer, and pinned generator plus seed metadata.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>From-scratch build with no anchor code — the double-weighted reuse axis is zero, so every hour is greenfield generator and oracle work with no maintained repo to validate against.</li>
+      <li>Batch-level-only diagnosis — single-token exact-match failures carry almost no per-instance signal, so reflection/gap-recovery must operate on aggregated per-stratum scores, weakening the diagnostic loop the task is meant to exercise.</li>
+      <li>Prompt shortcut on the sigil stratum — without ≥2 same-type distractors per record, a generic type-matching prompt collapses the intended headroom to near-ceiling.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> none. No repo review file exists for this candidate, and round-2 discovery found no plausibly reusable codebase — every candidate repo was a frozen dataset, LLM-driven, or the wrong task shape.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified — there was no generator to run (I1=0).</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV -->
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../candidates-table.html">Back to table</a>
+    <a href="../recommendations-round2.html#table">Full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c14.html">&larr; #19 c14</a>
+    <a href="c01.html">c01 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c11.html">c11 House-Convention Canonicalizer</a>
+    <a href="c13.html">c13 Precedence-Ordered Decision-List</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html#c12">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c12">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

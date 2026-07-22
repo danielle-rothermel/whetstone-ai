@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Related-work additions — only what doc.css/flow.css lack. */
+
+/* Unverified flag — matches the candidate-page convention: text label, not color alone. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.fix {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--green); background: var(--green-soft);
+  color: var(--green); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* Dossier cards */
+.paper-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 18px; }
+.paper-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.paper-head h3 { margin: 0; font-size: 17px; }
+.paper-id { color: var(--muted); font: 600 12px/1.4 var(--font-mono); }
+.paper-meta { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.paper-card h4 { margin: 16px 0 6px; font: 700 11px/1.3 var(--font-system); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.paper-card h4:first-of-type { margin-top: 4px; }
+.paper-card p { font-size: 14.5px; }
+.paper-card ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+.paper-card li { margin-bottom: 5px; }
+.paper-card li::marker { color: var(--accent); font-weight: 800; }
+.corr-box {
+  margin-top: 6px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); border-radius: 0 8px 8px 0; font-size: 13.5px;
+}
+.cite-box {
+  margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--muted);
+}
+.cite-box .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Positioning grid (three axes, not a 2x2 — rendered as a simple styled table) */
+.axis-table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; }
+.axis-table th, .axis-table td { border: 1px solid var(--line); padding: 9px 12px; text-align: left; vertical-align: top; }
+.axis-table th { background: var(--accent-soft); color: var(--accent); font: 700 11.5px/1.3 var(--font-system); letter-spacing: .04em; text-transform: uppercase; }
+.axis-table td.pole { font-weight: 700; color: var(--ink); width: 20%; }
+.axis-table .c18-cell { background: var(--accent-soft); border: 1.5px solid var(--accent); font-weight: 600; color: var(--accent); }
+
+/* Floor/ceiling meter */
+.range-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13.5px; }
+.range-row .rlabel { flex: 0 0 150px; color: var(--muted); font-weight: 600; }
+.range-track { position: relative; flex: 1 1 auto; height: 10px; border-radius: 999px; background: var(--line); }
+.range-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); opacity: .35; }
+.range-fill.ceiling { background: var(--green); }
+.range-fill.floor { background: var(--amber); }
+.range-vals { flex: 0 0 100px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .axis-table { font-size: 12.5px; }
+}
+</style>
+<title>whetstone-ai · c18 Related Work</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c18.html">&larr; Back to c18 candidate page</a></nav>
+
+<h1>c18 Related Work: Depth-Controlled Synthetic Deduction (True/False/Unknown)</h1>
+<div class="byline">whetstone-ai · 2026-07-22</div>
+
+<p>Seven 2023-2025 papers bound c18's design space, all synthetic depth-binned deduction with an
+automated ground-truth oracle. The closest living competitor is <span class="key">JustLogic</span>
+(2025): a three-way True/False/Uncertain, single-shot, exact-match task that nearly co-locates with
+c18's own scoring design, meaning c18's task-<em>shape</em> novelty is thin. c18's real differentiator
+is a specific, currently-empty combination &mdash; <span class="key">fictional nonce surface + label-only
+exact match + a reseedable no-LLM generator + an independent forward-chaining oracle + a CSP stratum</span>
+&mdash; that no single peer holds all of. The most robust cross-paper finding: single-pass accuracy
+declines <span class="key">monotonically with proof depth</span> everywhere it is measured, and the
+collapse point is set by rule-set breadth, not depth alone &mdash; c18's plain if-then chaining sits in
+the easier, shallower-collapse regime.</p>
+
+<!-- PAPER DOSSIERS -->
+<div class="section-head"><h2>Paper dossiers</h2></div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>PrOntoQA: models produce valid steps but cannot plan a proof, and no amount of sampling fixes it</h3>
+    <span class="paper-id">2210.01240</span>
+  </div>
+  <div class="paper-meta">Saparov &amp; He (NYU) &middot; ICLR 2023 (arXiv v4 2023-03-02)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Introduces PrOntoQA &mdash; the fictional-ontology generator behind c18's own codebase &mdash; whose
+  chains-of-thought can be semantically parsed back into formal proof steps for step-level, not just
+  label-level, grading. Novelty is combining semantically-parseable proofs with controlled
+  <span class="key">true/false/fictional ontology</span>, <span class="key">unary/binary predicates</span>,
+  and named deduction rules in one dataset (Table 1), letting the authors decompose "proof accuracy" into
+  strictly-valid/broadly-valid/invalid and atomic/non-atomic/misleading categories no compared dataset
+  (FOLIO, ProofWriter, GSM8K, SimpleLogic) supports simultaneously.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: 8-shot in-context learning, greedy decoding &mdash; a fixed prompt of 8 fully-labeled
+  demonstrations (context+query+CoT+label) followed by one held-out test question with the CoT and label
+  stripped, generated in one forward pass. A separate self-consistency variant samples 40 completions at
+  temperature 0.7 and votes &mdash; still single-shot per sample, aggregated post hoc. Output is a
+  <span class="key">full chain-of-thought proof sequence plus a final True/False label</span>, not the
+  label alone, graded by a symbolic proof-checker (Algorithm 1) that reconstructs each sentence into a
+  logical form.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Only <span class="key">text-davinci-002</span> beats chance across the model-size sweep (350M &rarr; text-davinci-002).</li>
+    <li>5-hop fictional-ontology proof steps: 93.2% strictly-valid, 2.4% broadly-valid, 5.9% invalid.</li>
+    <li>Accuracy falls to <span class="key">chance at 5-hop, top-down, fictional ontology</span> &mdash; the paper's hardest configuration.</li>
+    <li>Self-consistency (0.56) and DFS-style demonstrations (0.55) are <em>not significantly different</em> from greedy CoT (0.545) at 5-hop &mdash; neither fixes proof planning.</li>
+    <li>Without distractors, InstructGPT predicts the label "almost perfectly" by string-matching the queried property &mdash; distractors are load-bearing, not optional.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Dominant failure is <span class="key">proof planning</span>, not step invalidity: at branch points with multiple valid next steps, the model takes a strictly-valid but misleading one and rarely recovers.</li>
+    <li>Self-consistency sampling assigns <em>higher</em> probability to incorrect proofs than the correct gold proof on items the model gets wrong &mdash; beam search would not help either.</li>
+    <li>Real-world ("true") ontology accuracy does not degrade with depth, because pretrained knowledge lets the model "skip" hops &mdash; a confound c18's fictional surface is designed to block.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The paper confirms fictional-ontology generation with
+  contamination-resistant nonce concepts and fine-grained proof-step diagnosis, and confirms
+  github.com/asaparov/prontoqa as the source of all generation code/data/outputs &mdash; both load-bearing
+  parts of the corpus claim. <span class="fix">correction</span> The exact phrase "every wumpus is a
+  yumpus" is a paraphrase of the paper's fictional-lexicon style (its actual examples use
+  cat/carnivore/mammal and vumpus/numpus/dumpus/impus/wumpus/tumpus/zumpus/rompus/jompus), not a verbatim
+  quote &mdash; a minor but real mismatch.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">39</span> citations (<span class="v">6</span> since 2025; 2023:23, 2024:10, 2025:5, 2026:1). The anchor generator is still being cited into 2026. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>PrOntoQA-OOD: compositional generalization holds, but proof-by-cases and proof-by-contradiction need a worked demo</h3>
+    <span class="paper-id">2305.15269</span>
+  </div>
+  <div class="paper-meta">Saparov, Pang, Padmakumar, Joshi, Kazemi, Kim &amp; He &middot; NeurIPS 2023 (arXiv v3 2023-11-03)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Extends PrOntoQA to a <span class="key">complete natural-deduction rule set</span> (all propositional
+  connectives, not just modus ponens) with programmable depth, width, and compositionality, arguing that
+  general deductive reasoning requires generalizing beyond the complexity level shown in demonstrations.
+  Also contributes a formal CoT-correctness evaluator and the empirical finding that in-context
+  generalization does not always favor same-distribution demonstrations &mdash; unexplained by existing
+  ICL theories.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: 8-shot (4-shot for depth/width sweeps) chain-of-thought prompting, one full CoT proof
+  generated per instance, no interactive loop. <span class="unverified">Exact literal prompt template not
+  reproduced in extraction</span> &mdash; the worked examples are unreproduced figures; what is verified
+  textually is that each instance has facts + a query + a gold CoT proof, fictional names throughout, and
+  distractors forcing a choice between two candidate premises for the next step.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="unverified">Exact per-condition percentages missing from extraction</span> &mdash; all quantitative results are reported only as figures (bar/line charts), not text or tables, in the source.</li>
+    <li>Qualitative headline: "in all but three experiments... the gap in proof accuracy between the ID and OOD settings is close to zero" &mdash; compositional generalization from single-rule demonstrations largely holds.</li>
+    <li>No model can perform disjunction elimination or proof-by-contradiction correctly <em>without</em> an in-context demonstration of that specific rule.</li>
+    <li>Model size does not strongly correlate with performance: LLaMA-65B performs comparably to PaLM-540B.</li>
+    <li>Depth generalization degrades for both ID and OOD settings as depth increases beyond the depth-2 training demonstrations.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>GPT-3.5 acquires a <span class="key">distractor-copying heuristic</span> when demonstrations lack distractors but the test item has them &mdash; copies irrelevant sentences into its output.</li>
+    <li>GPT-3.5 and PaLM both fail once compositional proofs mix 4 distinct rule types.</li>
+    <li>Removing distractors from demonstrations (while keeping them in the test item) leaves performance "largely unaffected... with the exception of a few rules for specific models."</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The paper genuinely supplies OOD depth-generalization and
+  compositional-generalization evidence, matching the "depth/compositionality extension" framing.
+  <span class="fix">correction</span> "Incremental-ladder" is a c18-side framing that does not map cleanly
+  onto this paper's design: its depth/width test is a fixed-training-depth-2-vs-swept-test-depth
+  comparison, not a many-rung ladder, and its central output is full-proof CoT graded by a formal verifier,
+  not a per-depth label the way c18's own D0-D5 ladder is framed. Quantitative headroom magnitudes are
+  themselves unverifiable from this local extraction (figures only).</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">17</span> citations (<span class="v">6</span> since 2025; 2023:4, 2024:7, 2025:6). A rising trend year-over-year. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>FLD: a complete-axiom generator where even GPT-4 solves only half the problems, and depth collapses past 5-6</h3>
+    <span class="paper-id">2308.07336</span>
+  </div>
+  <div class="paper-meta">Morishita, Morio, Yamaguchi &amp; Sogawa (Hitachi) &middot; ICML 2023</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Argues prior synthetic corpora (RuleTaker, AACorpus) use limited/arbitrary rule sets, capping the
+  generalizability of any reasoning ability learned from them; builds FLD from the
+  <span class="key">complete axioms of first-order predicate logic</span> (Gödel completeness) instead.
+  Even GPT-4 solves only about half of FLD's 10-shot problems by answer accuracy, and far less by the
+  stricter step-checked proof accuracy.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Both modes tested. (1) A fine-tuned T5 "stepwise prover" generates one proof step at a time in a
+  self-continuing loop until the hypothesis is (dis)proved &mdash; iterative but not interactive (no
+  external feedback). (2) LLMs (GPT-4, GPT-3.5-Turbo, LongAlpaca-13B) get 10-shot in-context demonstrations
+  of the full worked derivation format plus a CoT instruction, and generate the full proof-step sequence
+  and final proved/disproved/unknown label in one pass.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4</span>, 10-shot: proof accuracy FLD 12.8 / FLD* 3.2; <span class="key">answer accuracy FLD 52.4 / FLD* 49.4</span> &mdash; "even GPT-4 can solve only half of the problems."</li>
+    <li><span class="key">GPT-3.5-Turbo</span>: proof accuracy FLD 0.0 / FLD* 2.0; answer accuracy FLD 35.8 / FLD* 37.6 &mdash; near the 33.3% random floor.</li>
+    <li><span class="key">LongAlpaca-13B</span>: answer accuracy FLD 21.2 / FLD* 19.6 &mdash; below the random-guess floor.</li>
+    <li>Fully fine-tuned T5 prover: FLD proof accuracy 75.8 (v2 corpus) vs. RuleTaker 92.4-93.9 &mdash; FLD is substantially harder despite equivalent supervision.</li>
+    <li>With the full axiom set (A&asymp;10 rule choices/step), accuracy collapses to <span class="key">~0% by depth 6-8</span> regardless of training depth; with implication-only rules (A&asymp;2, the c18/RuleTaker regime) shallow-trained provers still generalize to depth 4-8.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Logical hallucination (conclusion not deducible from chosen facts), distractor confusion, and misinterpretation of negation (double-negation especially).</li>
+    <li><span class="key">Under-use of "unknown"</span>: GPT-4 "seldom answered unknown... even if the given facts are not sufficient."</li>
+    <li>Answer/proof unfaithfulness: models "do not always faithfully follow the logical steps they themselves generate" &mdash; a correct label can hide an incorrect derivation.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The paper explicitly grounds FLD in the Gödel completeness theorem, builds
+  the generator from that axiom set, and every example carries a proved/disproved/unknown label under
+  controllable depth (1-8) and distractors (up to ~20). No correction needed.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">2</span> citations (<span class="v">1</span> since 2025; 2024:1, 2025:1). Low count almost certainly an undercount for a known ICML line. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>FLD&times;2 ("FLD*"): fine-tuning on principled synthetic logic lifts LLaMA-3.1-70B up to 30 points &mdash; but it never scores raw prompting accuracy</h3>
+    <span class="paper-id">2411.12498</span>
+  </div>
+  <div class="paper-meta">Morishita, Morio, Yamaguchi &amp; Sogawa (Hitachi) &middot; NeurIPS 2024 (arXiv v2 2024-12-23)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Proposes Additional Logic Training (ALT): fine-tuning LLMs on a scaled-up synthetic deduction corpus
+  (FLD&times;2, ~100k WordNet vocabulary vs. ~15k in FLD, ~50 axioms+theorems vs. 13) built from four design
+  principles (unknown facts, illogical/distractor samples, rule diversity, linguistic diversity). Shows ALT
+  helps even very large pretrained models (LLaMA-3.1-70B, 15T+ tokens), not just small models as in prior
+  synthetic-logic work.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>This is a <span class="key">supervised fine-tuning + downstream-transfer study, not an in-context
+  evaluation of the deduction task itself</span>. Models are fine-tuned on FLD&times;2 samples for 1 epoch,
+  then evaluated 5-shot (3-shot for BBH/AbductionRules) on 31 separate downstream benchmarks &mdash; the
+  paper explicitly excludes its own synthetic corpus from evaluation ("training on them often leads to
+  overfitting to their superficial and statistical cues"). <span class="unverified">No reported accuracy
+  for a model directly answering a fresh FLD&times;2 instance via prompting alone</span> &mdash; that
+  number does not exist in this paper.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>LLaMA-3.1-8B, 5-shot average across 31 benchmarks: base 47.9 &rarr; <span class="key">+ALT-FLD&times;2 52.0</span> (best of 4 corpora tested; FLD 51.9, RuleTaker 50.1, PARARULE-Plus 48.1).</li>
+    <li>LLaMA-3.1-70B benchmark deltas after ALT-FLD&times;2: FOLIO 58.9&rarr;66.7, LogicNLI 34.9&rarr;50.9, RobustLR 49.6&rarr;81.6, AbductionRules 84.0&rarr;95.7.</li>
+    <li>Abstract: gains "up to 30 points on logical reasoning... up to 10 points on math and coding... 5 points on BBH."</li>
+    <li>Ablating any single design principle (DP1-DP4) from FLD&times;2 lowers the 8B average from 52.0 to between 50.6 and 51.4 &mdash; each principle contributes measurably.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>ALT does not teach new facts, so pure knowledge-recall failures (e.g. ARC-challenge photosynthesis ordering) remain unimproved.</li>
+    <li>Without an explicit negative/insufficient-premise (illogical) training signal, models trained only on valid samples still hallucinate a conclusion even when premises are insufficient.</li>
+    <li>Omitting the Recall-Adam knowledge-forgetting-prevention step causes ALT-trained models to <em>underperform</em> the no-ALT baseline &mdash; fine-tuning on synthetic logic can displace pretrained factual knowledge.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported, name correction.</strong> The paper is genuinely the intended follow-up to
+  FLD, extending the same proved/disproved/unknown generator line under controllable depth (s=1-8) and
+  distractors. <span class="fix">correction</span> The paper never uses the name "FLD*" anywhere in its
+  text &mdash; its own name is "Formal Logic Deduction Diverse," stylized FLD&times;2 (FLD&sup2;). "FLD*"
+  is a project-internal shorthand, not the authors' own naming; cite it as FLD&times;2.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">2</span> citations (<span class="v">2</span> since 2025; 2025:2). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>Multi-LogiEval: 33 inference rules across three logic types, and non-monotonic reasoning gets <em>easier</em> with depth while classical logic collapses</h3>
+    <span class="paper-id">2406.17169</span>
+  </div>
+  <div class="paper-meta">Patel, Kulkarni, Parmar, Budhiraja, Nakamura, Varshney &amp; Baral (Arizona State) &middot; EMNLP 2024 Main</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>The first benchmark to jointly cover genuinely multi-step reasoning (depths 1-5, not single-step as in
+  base PrOntoQA), three logic types together (propositional, first-order, non-monotonic), and a broad
+  33-rule inventory (60+ combinations across depths). LLMs show a significant, systematic accuracy drop as
+  depth increases from 1 to 5 for classical logic; non-monotonic reasoning shows the <em>opposite</em>
+  trend.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one &lt;prompt, context, question&gt; triplet per instance, zero-shot Chain-of-Thought,
+  binary Yes/No label in one call. A secondary 3-shot variant and a two-stage neuro-symbolic pipeline
+  (GPT-4 translates to a Prover9-executable program, then Prover9 solves) are also single-shot-per-stage,
+  not interactive. <span class="unverified">Exact literal follow-on prompt string not reproduced in
+  extraction</span>; the natural-language story context plus yes/no entailment question structure is
+  confirmed textually.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Average accuracy across models drops from <span class="key">~68% at depth-1 to ~43% at depth-5</span> for classical logic (PL/FOL combined).</li>
+    <li>PL average by depth: 85.42% (d1) &rarr; 42.96% (d5); FOL: 83.21% &rarr; 32.96%; <span class="key">NM (non-monotonic) average: 35.63% (d1) &rarr; 55.83% (d5) &mdash; increasing, not decreasing.</span></li>
+    <li>Several models perform <em>below</em> the computed per-depth random baseline (e.g. 86.63% at d1, 53.71% at d3) &mdash; systematic, not just noisy, failure.</li>
+    <li>Larger open-source models underperform smaller ones at high depth: Mistral-7B outperforms Orca-2-13B by "3x" at d5, despite being smaller.</li>
+    <li>3-shot substantially raises accuracy at every depth (e.g. GPT-4 FOL d4 59.17%&rarr;68.33%) but "does not fully mitigate the inherent challenges... at higher depths" for open-source models.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li><span class="key">Error propagation</span>: mistakes in the initial reasoning step propagate through the chain, driving the d4-d5 collapse.</li>
+    <li>Wrong mapping of evidence from context/premises to conclusion (~27.4% of wrong d2 chains, ~22% of wrong d3 chains).</li>
+    <li>Longer reasoning chains do not correlate with correctness: ChatGPT generates the longest chains at d5 (13.85 avg.) yet is not the most accurate.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> Venue, depth range (1-5), 33 base inference rules, 60+ combinations, and
+  the three logic types (PL/FOL/NM) are all confirmed directly against the paper's own text. No correction
+  needed.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. EMNLP 2024 Main paper reading zero. <em>OpenAlex undercounts relative to Google Scholar; zero here likely reflects indexing gaps, not lack of impact.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>JustLogic: c18's closest living competitor &mdash; three-way exact match, depth 1-7, and only DeepSeek R1 beats the human average</h3>
+    <span class="paper-id">2501.14851</span>
+  </div>
+  <div class="paper-meta">Chen, Zhang &amp; Tao &middot; arXiv v2 2025-05-09; LaTeX source formatting (icml2025.sty, [accepted] option) suggests but does not independently confirm ICML 2025 acceptance</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Argues prior deductive benchmarks lack task complexity, let prior world knowledge substitute for
+  reasoning, or offer only superficial error analysis. JustLogic inserts real GenericsKB sentences into
+  synthetically-derived propositional-logic argument structures with randomized truth values, combining
+  synthetic datasets' argument complexity (infinite depth, 7 formal argument forms) with human-curated
+  datasets' natural-language complexity. Most SOTA LLMs underperform the human average (73.0%); only
+  DeepSeek R1 (80.9%) substantially exceeds it, and all models fall short of the 100% human ceiling.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot CQO&rarr;A: a context paragraph of premises, a fixed question ("Is the statement true,
+  false, or uncertain?"), 3 answer options, one label out in one forward pass &mdash; identical in shape to
+  c18's proposed design. Zero-shot, 3-shot, and CoT variants tested; the one genuinely multi-turn ablation
+  is <span class="key">tree-of-thought</span> (candidate-generation + candidate-evaluation prompts across
+  up to depth+2 steps), a secondary probe, not the main protocol.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">DeepSeek R1</span>: 80.9% (CoT) &mdash; best overall, only model to exceed the 73.0% human average; "moderate decline" at higher depths.</li>
+    <li>GPT-4o-mini: 0-shot 53.0%, few-shot 54.7% (best), CoT 51.8% &mdash; the rare case where CoT <em>underperforms</em> few-shot.</li>
+    <li>Llama3-8B: CoT 57.8% (best) vs. 0-shot 49.8%; Llama3-70B: CoT 64.6% vs. 0-shot 53.1%.</li>
+    <li>Prior-knowledge-independence test: JustLogic |&Delta;| = 0.4 (accuracy 33.7% vs. random 33.3%) &mdash; the most prior-knowledge-independent of 5 benchmarks tested, vs. FOLIO 6.7 and LogiQA 2.0's 27.1.</li>
+    <li>Tree-of-thought helped only GPT-4o (71.4% vs. 65.6% CoT) and <em>hurt</em> Llama3-8B (38.6% vs. 57.8% CoT) and GPT-4o-mini (48.6% vs. 51.8%).</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li>Logical inconsistency: models generate arguments relying on premises that contradict their own earlier CoT steps.</li>
+    <li>Wrong application or wrong choice of argument form (e.g. invoking modus tollens where it cannot logically apply).</li>
+    <li>o1 answers "Uncertain" for 90% of depth=7 questions without faithfully engaging &mdash; suggestive of constrained test-time compute rather than a reasoning ceiling.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The synthetic/programmatic generation, prior-knowledge
+  independence testing, and fine-grained depth/argument-form error analysis are all directly confirmed as
+  core author-stated contributions. <span class="fix">correction</span> ICML 2025 acceptance is inferred
+  only from LaTeX formatting (icml2025.sty, [accepted] option) &mdash; "strongly implied but not
+  independently confirmed by arXiv metadata" (no journal-ref present). Cite the venue as an arXiv 2025
+  preprint with implied-but-unconfirmed ICML 2025 acceptance, not as a settled fact.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. Early-2025 preprint, not yet indexed-cited. <em>OpenAlex undercounts relative to Google Scholar; zero here signals "too new to index," not "ignored."</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>SATBench: the hard tail from a different reasoning regime &mdash; even o4-mini is near-random on hard UNSAT puzzles</h3>
+    <span class="paper-id">2505.14615</span>
+  </div>
+  <div class="paper-meta">Wei, Wu, Wan, Suresh, Tan, Zhou, Koyejo, Wang &amp; Aiken (Stanford, UCLA, UIUC, CMU, Nanjing) &middot; arXiv v2 2025-09-22; EMNLP 2025 acceptance cited in some sources is not confirmable from arXiv metadata</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>2100 logical puzzles automatically generated from Boolean satisfiability (SAT/CNF) formulas, translated
+  into natural-language scenarios and validated by solver-based and LLM-based consistency checks plus human
+  spot-checks. Frames SAT as a <span class="key">search-based</span> reasoning task (existence of a
+  satisfying assignment, both SAT and UNSAT outcomes possible) distinct from inference-rule-chaining
+  benchmarks (FOLIO, RuleTaker, PrOntoQA) &mdash; c18's own lineage.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot, 0-shot CoT: one call per puzzle (scenario + conditions + question), no demonstrations,
+  model emits a reasoning trace plus a final [SAT]/[UNSAT] label; no external solver access permitted for
+  the model under test. A separate single-shot judge call (GPT-4o) independently scores whether the
+  reasoning trace is valid.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">o4-mini</span>: overall 89.3% (highest), but <span class="key">UNSAT-Hard only 65.0%</span> &mdash; "close to the random baseline of 50%."</li>
+    <li>Average across all 20 tested models on hard problems: 53.0% &mdash; "nearly equivalent to the random baseline."</li>
+    <li>SAT vs. UNSAT asymmetry on hard instances: 66.7% (SAT) vs. only 39.3% (UNSAT, below random).</li>
+    <li>Raw CNF/SAT-formula input beats natural-language narrative framing for every model tested (o4-mini 94.3% formula vs. 89.4% puzzle) &mdash; representation is a real, quantified difficulty dial.</li>
+    <li>Error-aware prompting (naming the 4 failure categories, still single-shot) corrects 60.4% (o4-mini) to 73.2% (DeepSeek-R1) of previously-failing cases &mdash; the single biggest single-shot prompt lever in this dossier set.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <ul>
+    <li><span class="key">Satisfiability bias</span>: models answer SAT but supply an invalid assignment, failing to check all clauses (68.7% of o4-mini's errors).</li>
+    <li>Context inconsistency: contradicting earlier reasoning steps within the same trace (44.7% of DeepSeek-R1's errors).</li>
+    <li>Condition omission and spurious commonsense priors not present in the stated constraints.</li>
+  </ul>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported, venue flag.</strong> The SAT/CNF-to-puzzle generation, solver oracle, and
+  documented large headroom on hard UNSAT (o4-mini near random) are all directly confirmed.
+  <span class="unverified">EMNLP 2025 acceptance</span> <span class="fix">correction</span> is not
+  confirmable from arXiv HTML/abs metadata &mdash; no journal-ref or acceptance line is present; treat the
+  venue as an unverified/possibly-miscited detail pending direct confirmation against EMNLP 2025
+  proceedings.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). Mid-2025 paper. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<!-- POSITIONING MAP -->
+<div class="section-head"><h2>Positioning: the family across three axes</h2></div>
+<p>The protocol axis (single-shot vs. interactive) is <span class="key">near-degenerate</span> for this
+family: all seven papers are single-forward-pass at the model-under-test level. The only genuine
+multi-turn probes are JustLogic's tree-of-thought ablation and FLD's stepwise T5 prover &mdash; both
+secondary, and tree-of-thought mostly <em>hurts</em>. So the map below uses the three axes that actually
+separate these papers: what the verifier grades, content provenance, and the reasoning regime plus label
+space.</p>
+
+<table class="axis-table">
+  <tr><th>Axis</th><th>Pole A</th><th>Pole B</th><th>Where c18 sits</th></tr>
+  <tr>
+    <td class="pole">A &mdash; Output shape / what the verifier grades</td>
+    <td><strong>Full proof-chain</strong> + step-level structural verifier: PrOntoQA, PrOntoQA-OOD, FLD, FLD&times;2 (all argue label-only accuracy is inadequate)</td>
+    <td><strong>Label-only, exact-match</strong>: JustLogic, Multi-LogiEval, SATBench (label track)</td>
+    <td class="c18-cell">Label-only exact-match pole. Deliberately drops full proof-chain output; its planned forward-chaining oracle re-derives the label but does not grade a model-emitted chain.</td>
+  </tr>
+  <tr>
+    <td class="pole">B &mdash; Content provenance / contamination resistance</td>
+    <td><strong>Fictional / nonce predicates</strong> ("wumpus/yumpus"): PrOntoQA, PrOntoQA-OOD. <strong>Content-free WordNet-templated</strong>: FLD, FLD&times;2</td>
+    <td><strong>Real-world sentences, randomized truth</strong>: JustLogic. <strong>Naturalistic real-domain entities</strong> (less contamination-resistant): Multi-LogiEval. <strong>LLM-narrated CNF</strong>: SATBench</td>
+    <td class="c18-cell">Fictional / nonce pole, inherited directly from PrOntoQA.</td>
+  </tr>
+  <tr>
+    <td class="pole">C &mdash; Reasoning regime &amp; difficulty dial</td>
+    <td><strong>Inference-rule chaining, depth = dial</strong>: PrOntoQA (hops), PrOntoQA-OOD (depth+width+composition), FLD/FLD&times;2 (depth 1-8 + rule-set size), Multi-LogiEval (depth 1-5 &times; 33 rules), JustLogic (depth 1-7 &times; 7 forms)</td>
+    <td><strong>Search / constraint satisfaction, clause-count = dial</strong>: SATBench (SAT/UNSAT existence)</td>
+    <td class="c18-cell">Core stratum: depth bins D0-D5 + distractor rules + CWA/negation-as-failure vs. open-world. Second (CSP/seating) stratum reaches toward SATBench's pole but is unique-solution, not SAT/UNSAT.</td>
+  </tr>
+</table>
+
+<div class="card full">
+  <h3>The crowded cell is {rule-chaining &times; depth-dial &times; three-way label}; c18's empty cell is a specific combination, not a new shape</h3>
+  <p>FLD, FLD&times;2, JustLogic, and c18's core stratum all live in the same densely-occupied cell.
+  <span class="key">JustLogic is the closest living competitor</span> and nearly co-locates with c18's
+  scoring design (three-way True/False/Uncertain, single-shot, exact-match) &mdash; c18 cannot claim
+  task-shape novelty over it. c18's distinguishing position is the specific <em>triple</em> {fictional
+  surface + label-only exact match + reseedable-no-LLM generator} plus a planned independent
+  forward-chaining oracle and a CSP stratum welded onto the deduction stratum &mdash; no single published
+  peer holds all of these together. This is an <span class="key">integration/engineering contribution</span>,
+  not a new benchmark concept.</p>
+</div>
+
+<!-- CAPABILITY SYNTHESIS -->
+<div class="section-head"><h2>Capability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One-shot accuracy declines monotonically with depth everywhere; the collapse point depends on rule-set breadth, not depth alone</h3>
+    <p>The single most robust cross-paper finding: <span class="key">accuracy falls as proof depth
+    increases</span> in every dossier that varies depth (Multi-LogiEval ~68%&rarr;~43% d1-d5; JustLogic
+    monotonic decline through d7 and beyond; PrOntoQA falls to chance at 5-hop top-down; PrOntoQA-OOD
+    degrades for both ID and OOD as depth grows). But the collapse point is not fixed &mdash; FLD's own
+    argument is that with <span class="key">implication-only rules (A&asymp;2, the PrOntoQA/RuleTaker
+    regime c18 uses)</span>, shallow-trained provers still generalize to depth 4-8, while the
+    <span class="key">full axiom set (A&asymp;10)</span> collapses to ~0% by depth 6-8 regardless of
+    training depth. c18 sits in the easier, shallower-collapse regime. Failures are driven by
+    <span class="key">planning and error propagation</span>, not single-step invalidity: PrOntoQA's steps
+    are 93.2% strictly-valid at 5 hops, yet the model picks a valid-but-misleading branch and rarely
+    recovers; Multi-LogiEval shows mistakes in the initial step propagate through the chain, and longer
+    reasoning chains do not correlate with correctness.</p>
+  </div>
+  <div class="card">
+    <h3>Interaction and extra demonstrations rarely help and can actively hurt; the reliable lever is CoT within one pass</h3>
+    <p>The only genuine interactive ablation across the corpus &mdash; JustLogic's tree-of-thought &mdash;
+    helped only GPT-4o and <em>hurt</em> Llama3-8B (57.8%&rarr;38.6%) and GPT-4o-mini; the authors conclude
+    prompting techniques costlier than vanilla CoT offer little to no advantage. More demonstrations help
+    modestly but saturate around 8-shot (PrOntoQA/PrOntoQA-OOD) and never remove the depth degradation
+    (Multi-LogiEval 3-shot lifts every depth but "does not fully mitigate" high-depth failure); few-shot
+    <em>without</em> a CoT rationale can even underperform zero-shot. Sampling/aggregation tricks do not
+    fix planning either &mdash; PrOntoQA's self-consistency and DFS-demonstrations are statistically
+    indistinguishable from greedy CoT, and probability aggregation actually favors wrong proofs on items
+    the model gets wrong. The reliable single-shot lever is <span class="key">CoT plus naming the logic
+    explicitly</span>: JustLogic's CoT gains average +8 to +12 points over zero-shot; SATBench's
+    error-aware prompting (naming failure categories, still single-shot) recovers 60-73% of previously
+    failing cases, the single biggest swing measured anywhere in this dossier set.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Distractors are load-bearing, not optional: without them models label almost perfectly by shortcut-matching, not reasoning</h3>
+  <p>PrOntoQA: "without any distractors, InstructGPT is able to predict the true/false label almost
+  perfectly" by string-matching the queried property against context. PrOntoQA-OOD makes the identical
+  design point. This is the <span class="key">single biggest risk to c18's ceiling</span>: if the
+  reseed-only baseline's regenerated instances lack strong distractors, even a naive prompt could score
+  85-95%+ by shortcut-matching rather than reasoning &mdash; whether the codebase's default settings emit
+  distractors is the single biggest swing factor and must be checked directly in the harness.</p>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the c18 reseed-only baseline</h2></div>
+<p>c18 config being scored: PrOntoQA instances regenerated as-is (fresh seeds, fresh fictional ontologies),
+existing hop-depth settings, native <span class="key">True/False exact-match</span> output (the codebase's
+native closed-world 2-way label &mdash; no added Unknown handling or distractor/soft-rule strata beyond
+what the repo natively emits), cheap tier, temperature 0. No dossier tests this exact model tier, this
+exact 2-way native format, or PrOntoQA label-only accuracy for modern models &mdash; the closest label-only
+PrOntoQA numbers are <em>proof</em> accuracy on a 2022 model, so both ranges below carry real uncertainty.
+Four structural facts push the predicted score <em>above</em> the raw JustLogic/FLD proxies: native output
+is 2-way (50% floor, not 33%), c18 sits in the easy A&asymp;2 if-then regime, its surface is clean
+fictional templates (easier than JustLogic's natural language or SATBench's narratives), and the 2026
+cheap tier is stronger than the 2024 GPT-4o-mini/Llama3-8B proxies used throughout this literature.</p>
+
+<div class="card full">
+  <div class="range-row">
+    <span class="rlabel">Naive floor (0-shot)</span>
+    <div class="range-track"><div class="range-fill floor" style="left:12%; width:52%;"></div></div>
+    <span class="range-vals">~60&ndash;78%</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling (CoT + logic-naming)</span>
+    <div class="range-track"><div class="range-fill ceiling" style="left:60%; width:30%;"></div></div>
+    <span class="range-vals">~75&ndash;90%</span>
+  </div>
+  <p class="small muted" style="margin-top:14px;">Uncertainty is <strong>moderate-to-high</strong> for the
+  floor and <strong>moderate</strong> for the ceiling. Direction of every lever (CoT helps, distractors are
+  required, depth degrades accuracy) is robust across papers; the magnitude for this exact 2026 cheap
+  tier, this exact 2-way native format, is extrapolated from proxies rather than directly measured.
+  <span class="key">Go/no-go gate</span>: if the harness's default settings emit weak or no distractors,
+  the naive floor risks landing at 85-95% via shortcut-matching, leaving little headroom &mdash; check the
+  codebase's default distractor behavior before trusting the floor estimate. The native 2-way T/F format
+  also omits the literature's most diagnostic failure mode (under-using "unknown" / open-world
+  withholding), which argues for adding the Unknown axis if a strong model-discriminating signal is
+  required beyond this reseed-only baseline.</p>
+</div>
+
+<!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
+<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>JustLogic already fills c18's near-identical cell; c18's added value there is narrow and must be stated honestly</h3>
+    <p>JustLogic delivers a programmatically generated, depth 1-7, three-way True/False/Uncertain,
+    exact-match, single-shot task with contamination control and depth laddering &mdash;
+    <span class="key">structurally almost identical</span> to c18's scoring design. c18's remaining
+    differentiators against it are narrow: fully fictional/nonce surface vs. JustLogic's real-sentence
+    randomized-truth surface (a trade, not a strict improvement &mdash; JustLogic even instruments its own
+    NL complexity, which c18 does not); an explicit CWA-vs-open-world toggle as a named dial; the CSP
+    stratum; and an independent forward-chaining oracle where JustLogic's failure analysis stays
+    qualitative. Overlap here is high enough that c18 cannot claim task-shape novelty over this paper.</p>
+  </div>
+  <div class="card">
+    <h3>Against the FLD lineage, c18's cleanest non-overlapping contribution is a number that literature never reports</h3>
+    <p>FLD&times;2 is upstream corpus-and-training methodology, not inference-time evaluation &mdash; it
+    explicitly excludes its own corpus from evaluation and reports only downstream-transfer accuracy after
+    fine-tuning. c18 would add exactly what FLD&times;2 never provides: a
+    <span class="key">direct, off-the-shelf, frozen-model inference-time T/F/Unknown accuracy number</span>
+    on fresh depth-d instances. FLD itself does test LLM few-shot accuracy directly, but as a secondary
+    analysis subordinate to its fine-tuned-prover study; c18's protocol treats that number as the primary
+    deliverable.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>If optimization yields large, verified gains, the defensible claim is optimizer-behavior on a contamination-free task &mdash; not a new benchmark or reasoning-science result</h3>
+  <p>The planned un-optimized baseline is a <span class="key">faithful regeneration of PrOntoQA</span>
+  (fresh seeds, existing hop-depth settings, native 2-way T/F, no Unknown, no distractor/CSP additions
+  beyond the codebase's native support) &mdash; not the full c18 design. Any first-round result is
+  therefore a statement about prompt-optimization on PrOntoQA-style depth-binned deduction, not about
+  c18's novel axes. The defensible workshop claim: automated prompt optimization (COPRO / MIPROv2 / GEPA)
+  raises exact-match accuracy by a stated, CI-bounded margin over a <em>strong</em> fixed baseline (not a
+  weak zero-shot strawman &mdash; JustLogic and Multi-LogiEval both show CoT/few-shot alone move accuracy
+  substantially), with the gain broken out per depth and replicated under fresh-seed regeneration, since
+  contamination-resistance is the whole rationale for the task.</p>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>The result belongs in prompt-optimizer benchmarking, not the deductive-reasoning-evaluation line</h3>
+    <p>The deductive-reasoning-evaluation line's currency is about harder/cleaner benchmarks and
+    reasoning-failure science (JustLogic and SATBench are its live 2025 entries); an un-optimized
+    regeneration of a 2023 generator adds no benchmark novelty there, since JustLogic already fills the
+    near-identical cell. The stronger fit is <span class="key">prompt-optimizer benchmarking</span>
+    (GEPA is an ICLR 2026 oral; MAS-PromptBench 2026 is a purpose-built optimizer-comparison benchmark)
+    &mdash; a depth-parameterized, contamination-free, exact-match task with a tunable difficulty dial is
+    exactly the clean testbed that line wants. The task is the instrument; the optimizers are the object
+    of study.</p>
+  </div>
+  <div class="card">
+    <h3>Reviewers will demand a strong baseline, matched-budget optimizer comparison, per-depth breakdown, and fresh-seed replication; a main-conference benchmark slot is not realistic</h3>
+    <p>Expected asks: a hand-written CoT/few-shot baseline (not a strawman), all three optimizers at
+    matched rollout/token budget (GEPA's headline claim is efficiency), a per-depth accuracy breakdown,
+    fresh-seed/held-out-ontology replication (the single most important ablation, given the task's whole
+    rationale is contamination resistance), cross-model transfer, and floor/ceiling references with CIs.
+    <span class="key">Not publishable:</span> small or within-noise gains, gains that vanish on
+    regeneration, "optimizer beats a weak zero-shot prompt," or ceiling/floor-saturated depths with no
+    headroom. A main-conference deductive-reasoning-benchmark slot is not realistic since JustLogic/SATBench
+    already own the 2025 benchmark frontier; workshop or short-paper is the honest ceiling.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Research-currency verdict: the generator lineage is alive, but the neighborhood is crowded with fresh 2025 entrants</h3>
+  <p>OpenAlex citation counts, fetched <span class="key">2026-07-22</span>: PrOntoQA 39 (6 since 2025,
+  still cited into 2026); PrOntoQA-OOD 17 (6 since 2025, a rising 2023:4&rarr;2024:7&rarr;2025:6 trend);
+  FLD 2; FLD&times;2 2 (both since 2025); JustLogic 0; Multi-LogiEval 0; SATBench 1 (since 2026). The
+  anchor generator c18 reuses is demonstrably current, not abandoned, supporting c18's "reuse a live
+  codebase" premise. The low FLD-line counts are almost certainly undercounts for a known ICML/NeurIPS
+  line, not a signal of low impact. The 0-1 counts for JustLogic, Multi-LogiEval, and SATBench are
+  uninformative by construction (2024-2025 papers, indexing lag) &mdash; their existence as fresh entrants
+  is itself the currency signal: the sub-field is producing new benchmarks right now.
+  <span class="unverified">Net read</span>: the family is alive but maturing, not surging, and is a
+  crowded, well-trodden shape with 2025 entrants already occupying c18's near-neighborhood &mdash; arguing
+  against pitching c18 as a novel benchmark and for using it as an instrument in the more decisively
+  surging prompt-optimizer-benchmarking line instead. <em>All OpenAlex counts undercount relative to
+  Google Scholar.</em></p>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c18.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c18 candidate page</a>
+  <a href="../candidates-table.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Candidates table</a>
+  <a href="../recommendations-round2.html#table" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Round 2 rescore</a>
+</nav>
+
+</main>
+</body>
+</html>

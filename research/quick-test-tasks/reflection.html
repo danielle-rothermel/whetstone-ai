@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Search: Process Reflection</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Search: Process Reflection</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Reflection</span>
+</div>
+
+<div class="intro">
+  <p>A retrospective on the <em>process</em> that produced the quick-test candidate set — not a re-ranking of candidates. Grounded in <a href="brainstorm.html">brainstorm.html</a>, <a href="candidates-merged.html">candidates-merged.html</a>, the nine research docs, and the run statistics. Authoritative target throughout: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+</div>
+
+<div class="verdict">
+  <p><strong>The process was strong at discovery and weak at verification.</strong> Two independent generators converged on the same task families (<span class="key">22 of 24 candidates surfaced by both</span> brainstorm and literature), and the rubric was operationalized into hard, criterion-anchored filters. But <span class="key">the skeptics killed nothing</span> (<code>fatal_refutations=0</code>), <span class="key">no candidate was ever calibrated on the target model</span>, and heavy near-duplication survived into the final 24. The single highest-value fix is to insert a floor-vs-ceiling calibration gate before adversarial review, so the rubric's central knobs stop being guessed and start being measured.</p>
+</div>
+
+<div class="section-head" id="stats"><h2>Run statistics</h2></div>
+
+<div class="grid-4">
+  <div class="card"><div class="metric">76</div><div class="label">brainstorm ideas</div></div>
+  <div class="card"><div class="metric">108</div><div class="label">literature candidates</div></div>
+  <div class="card"><div class="metric">24</div><div class="label">merged / scored</div></div>
+  <div class="card"><div class="metric">10</div><div class="label">verified finalists</div></div>
+  <div class="card"><div class="metric">14</div><div class="label">external ideas</div></div>
+  <div class="card"><div class="metric">8</div><div class="label">domains searched</div></div>
+  <div class="card"><div class="metric">9</div><div class="label">clusters dropped</div></div>
+  <div class="card"><div class="metric">0</div><div class="label">fatal refutations</div></div>
+</div>
+
+<div class="section-head" id="worked"><h2>What worked well</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Brainstorm/literature convergence was the headline signal</h3>
+    <p><span class="key">22 of 24 merged candidates are tagged <code>origin: both</code></span> — independently surfaced by first-principles brainstorm and by academic literature search. Only two are brainstorm-only (c10 interlocking-cycle calendar, c21 relational micro-world); <span class="key">zero are literature-only</span>. This is the single most reassuring result in the run: two methodologically independent generators landed on the same task families, so the finalist set is unlikely to be an artifact of either method's blind spots.</p>
+    <p>It also answers "did brainstorm or literature contribute more finalists?" cleanly: <span class="key">neither dominated on discovery; they corroborated.</span> What each contributed was different and complementary:</p>
+    <ul>
+      <li><strong>Brainstorm</strong> contributed the <span class="key">task shapes</span> and the anti-one-shot engineering (per-instance keys, precedence stacks, "invent the glyphs / operators / house rules"). The rubric-critical design moves originate here: closed-vocab to protect temp-0 resolvability (c09), single-field queries to preserve strict 0/1 scoring (c11/c12), distractor-isolates-one-rule MC construction (c08/c23).</li>
+      <li><strong>Literature</strong> contributed <span class="key">calibration evidence</span>: where the default floor sits, named diagnostic failure modes (the "decimal round-trip" error), and generator donors (GSM-Symbolic templating, InductionBench, RuleTaker/ProofWriter, IFEval/COLLIE checker libraries). Crucially, it supplied the only direct proof that our own optimizers (COPRO/MIPROv2/GEPA) close incremental, monotone gaps — on HotpotQA/HoVer/PUPA (<a href="research-prompt-opt-literature.html">research-prompt-opt-literature.html</a> §4–6) — which no brainstorm could provide.</li>
+    </ul>
+    <p class="small muted">The merge used literature primarily to validate and de-risk shapes brainstorm had already proposed, rather than to introduce new ones — a healthy division of labor, but see the near-duplication risk it hides below.</p>
+  </div>
+  <div class="card">
+    <h3>External model lanes ran and added non-redundant ideas</h3>
+    <p>All five external/model lanes are traceable in <a href="brainstorm.html">brainstorm.html</a> by source tag, and each contributed ideas that survived merging:</p>
+    <ul>
+      <li><code>kimi-k2p7</code> → SSC, CSD, CAP (into c06, c23, c03).</li>
+      <li><code>deepseek-v4-flash</code> → EncodedArith, TokenCounter, MultiRuleSort, CaseOrder (into c01, c24; TokenCounter correctly <span class="key">dropped</span> as D3).</li>
+      <li><code>minimax-m3</code> → Constrained Micro-Description, Orthogonal-Feature Labeling, Keyed-DSL Arithmetic (into c22, c13, c03) — c22's whole cluster is anchored on the minimax entry.</li>
+      <li><code>gpt-5.x-codex</code> → Relational Micro-World, Protocol Bitmask, Opaque Device State, Priority Ledger (into c21, c12, c05, c14).</li>
+    </ul>
+    <p>The external lanes were <span class="key">not redundant</span> with the Claude/first-principles pass: they seeded finalists c14, c21, c22 in particular. The 14 external ideas were a good marginal investment. The honest failure mode they also surfaced: several external ideas (TokenCounter, Inverted-MC) were char-level or one-shot-guessable and got correctly filtered — the lanes added breadth at the cost of some noise, which is the expected trade and was handled.</p>
+  </div>
+  <div class="card">
+    <h3>The rubric was operationalized into hard filters, not vibes</h3>
+    <p>The merge doc opens by naming the two rubric constraints that shaped every merge — strict per-example 0/1 (no intra-example partial credit) and MC/few-word bounded output — and then visibly <span class="key">rewrites candidates to comply</span>: every "per-field partial scoring" brainstorm variant was converted to a single-field/single-token query with incrementality pushed to <span class="key">rule strata across the pool</span>. This is the most sophisticated move in the process: it preserves criterion 10 (decomposable difficulty) and criterion 2 (exact 0/1) simultaneously, which naively conflict.</p>
+    <p>The nine dropped clusters each cite a specific rubric criterion they fail (D3/D9 → criterion 5 temp-0 noise; D6/D8 → criteria 1–2; D1 → criterion 4 one-shot). The filtering was <span class="key">criterion-anchored, not taste-anchored</span>.</p>
+  </div>
+  <div class="card">
+    <h3>Char-level noise was caught as a design constraint, not a candidate</h3>
+    <p>The StringLLM/CUTE char-level cluster was retained as a <span class="key">red-flag caveat</span> (D9) that then justifies design choices elsewhere: closed-vocab in c09, dropping TokenCounter in D3, "prefer closed-vocabulary or output-length variants" in the brainstorm cross-cutting notes. Turning a weak candidate into a reusable constraint is a good outcome from a breadth sweep.</p>
+  </div>
+</div>
+
+<div class="section-head" id="failed"><h2>What did not work well</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>Skeptics killed nothing — scoring was almost certainly too credulous</h3><span class="severity blocker">Blocker</span></div>
+  <p><code>fatal_refutations=0</code> across 24 scored / 10 verified finalists, with two adversarial skeptics per finalist. <span class="key">Zero kills is a warning sign, not a victory.</span> Either the candidate set was already perfectly filtered before the skeptics ran (unlikely for 24 items), or the skeptic lenses were not sharp enough / the scoring rubric had no failing band. The merge doc itself flags real, unresolved risks a skeptic should have been able to convert into a kill-or-demote:</p>
+  <ul>
+    <li><strong>c20</strong> (invented micro-game) is self-described as "highest design effort in the list" with rules that "must be validated unambiguous with a reference ~100% prompt before use" — its ceiling is <span class="key">unverified</span>, a criterion-9 failure risk, yet it survived at full standing.</li>
+    <li><strong>c09</strong> (cipher chain) and <strong>c18/c23</strong> carry "validate the noise floor / curate complexity before adoption" caveats — unverified criterion-5 and criterion-4 risks.</li>
+    <li><strong>c15</strong> and <strong>c14</strong> both say "confirm the chosen cheap model can override priors at all before adopting" — a live threat that the <span class="key">floor is the ceiling</span> on a small model, which would void criterion 4 entirely.</li>
+  </ul>
+  <p>None of these produced a refutation. The most likely process defect: skeptics critiqued candidates <em>in the abstract</em> rather than being required to name the one rubric criterion most likely to fail on the actual pinned cheap model, and scoring had no explicit "unverified ceiling/floor ⇒ cap the score" rule. A credulity check that produces zero kills on 24 bespoke, uncalibrated task designs is not measuring what it should.</p>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>Heavy near-duplication survived into 24 finalists</h3><span class="severity high">High</span></div>
+  <p>The merge deduped clusters but the finalist set is still internally redundant: c01/c02/c03/c10 are four flavors of "invented arithmetic/notation"; c11/c12/c24 are three flavors of "canonicalize/extract/order under invented conventions"; c05/c17/c19/c20 are four flavors of "run an invented machine forward." For a quick-test selection whose entire purpose is to pick <span class="key">one</span> task, carrying 24 candidates — many siblings differing only in output format — is more than the decision needs and <span class="key">dilutes skeptic attention</span> across near-identical designs.</p>
+  <p>The brainstorm's own cross-cutting notes already identified the robust clusters (rewrite-to-normal-form appeared 3–4× independently); the process could have collapsed to ~8 cluster-representatives <em>before</em> scoring and spent the skeptic budget on adversarially calibrating those eight on the real model.</p>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>No candidate was actually calibrated on the target model</h3><span class="severity blocker">Blocker</span></div>
+  <p>Every "known ceiling / known floor" claim (criterion 9) in the candidate doc is <span class="key">asserted from literature analogy, never measured</span>. The constructed-notation doc is explicit that the two purest-fit synthetic families (balanced ternary #10, keyed novel-operator #11) have "no external validation of difficulty curve — you must calibrate floor/ceiling yourself on 10–20 evals."</p>
+  <p>The process produced 24 plausible designs but <span class="key">zero data points</span> on the one question the rubric makes falsifiable: does a naive prompt actually score well below a ceiling prompt on the cheap model, with an incremental middle? A single afternoon of running a floor prompt + a ceiling prompt on 2–3 cluster-representatives would have been worth more than the 12th–24th candidate.</p>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>The vestigial second objective was under-developed</h3><span class="severity high">High</span></div>
+  <p>The rubric's <code>callout good</code> makes a second Objective (output bytes ↓) <span class="key">mandatory</span> to claim GEPA / two-objective coverage. The docs treat it as a bolt-on ("output bytes doubles as the vestigial second objective," c11) rather than a selection criterion. Only text-output tasks (Themes A/D/E/G) can carry it; the MC-output finalists (c06, c08, c14, c16, c17-verdict) <span class="key">cannot</span>, because a single-letter answer has no meaningful length-budget axis. That materially narrows which finalists can validate the two-objective plumbing, and the merge did not flag it as a discriminator. This should have been a scored column.</p>
+</div>
+
+<div class="section-head" id="changes"><h2>What I would change next time</h2></div>
+
+<div class="steps">
+  <div class="step">
+    <h3>Insert a calibration gate between scoring and skeptics</h3>
+    <p>Before adversarial review, run floor-prompt vs. ceiling-prompt on the pinned cheap model over 10–20 instances for each cluster representative. Criteria 4/9 stop being assertions. Any candidate whose measured floor≈ceiling or floor≈0 is demoted automatically. Directly targets the credulity and calibration failures above.</p>
+  </div>
+  <div class="step">
+    <h3>Collapse to cluster-representatives before scoring, not after</h3>
+    <p>Score ~8 representatives, not 24 siblings. Reallocate the freed skeptic budget to depth (calibrate each survivor) instead of breadth (re-litigating format variants). The brainstorm already names the clusters.</p>
+  </div>
+  <div class="step">
+    <h3>Give skeptics a required output shape</h3>
+    <p>Each skeptic must (a) name the single rubric criterion most likely to fail on the pinned model, and (b) propose the cheapest experiment that would falsify the candidate. Add an explicit scoring rule: "unverified ceiling, floor, or temp-0 noise floor caps the score below the promote line." Zero kills should be impossible unless a calibration experiment cleared the risk. Consider a third skeptic lens dedicated solely to "is this one-shot-guessable by a competent prompt engineer?" — the rubric's sharpest and most easily-violated criterion.</p>
+  </div>
+  <div class="step">
+    <h3>Make the second objective a scored column, not a footnote</h3>
+    <p>Tag each candidate "carries a length objective: yes/no" and weight it, since it is mandatory for the GEPA/two-objective claim the quick test exists to support. Prefer at least one finalist that carries it natively (a short string output, not MC).</p>
+  </div>
+  <div class="step">
+    <h3>Prune the domain list at the edges; it was slightly too wide</h3>
+    <p>Eight domains produced heavy overlap in the extraction/canonicalization and simulation regions (Themes E/F/G bled into each other repeatedly). Merging "structured extraction" with "classification under remapped labels," and "simulation/state-machines" with "formal grammars/rewriting," would cut duplicate literature work without losing coverage — the cross-cutting notes show these already collapse in practice.</p>
+  </div>
+  <div class="step">
+    <h3>Keep the external lanes; they paid off</h3>
+    <p>They seeded three finalists (c14, c21, c22) that the internal lens under-weighted (instruction-hierarchy, relational vocab, constrained generation). Do not cut them to save budget.</p>
+  </div>
+  <div class="step">
+    <h3>Add one lens the current set lacks: "cheapest-to-implement first"</h3>
+    <p>The process optimized for rubric fit but never scored build cost. c20 is flagged as highest-effort; c01/c11-slug/c03 are near-trivial generators. For a quick-test whose point is to unblock the debug loop soon, implementation cost should be an explicit axis, biasing toward the cheapest task that clears the calibration gate.</p>
+  </div>
+</div>
+
+<div class="section-head" id="open"><h2>Open questions about the rubric itself</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Does crit. 10 (independent latent rules) survive crit. 2 (strict 0/1)?</h3>
+    <p>The merge doc's key move was pushing decomposition from within an example to across pool strata. This works arithmetically, but it means an optimizer only sees incremental credit if the <span class="key">stratum mix in a 10–20-task minibatch is balanced</span>. The rubric asks for "enough examples from each stratum" but does not specify that minibatch <em>sampling</em> must be stratified. On a 10-task GEPA minibatch, an unstratified draw could hide a whole rule's stratum and make a good prompt look no better than a bad one — silently breaking crit. 5's "effect size exceeds noise" guarantee. <span class="key">The rubric should require stratified minibatch sampling, or acknowledge the tension.</span></p>
+  </div>
+  <div class="card">
+    <h3>Can crit. 4 (incremental gap) and crit. 5 (temp-0 determinism) hold on the same cheap model?</h3>
+    <p>Determinism at temp 0 is easiest on short MC outputs, but the richest incremental ladders (rewrite systems, cipher chains, arithmetic) have longer/char-level outputs where temp-0 resolvability is exactly what the D3/D9 caveats warn is fragile. The rubric treats these as independent criteria; in practice they <span class="key">trade off</span>, and the safe zone (short string, closed vocab, no char arithmetic) is narrow. Is that intersection large enough to also carry the mandatory length objective? Unresolved without calibration.</p>
+  </div>
+  <div class="card">
+    <h3>What if the cheap model's floor is its ceiling?</h3>
+    <p>Multiple candidates (c14, c15) carry the caveat "confirm the model can override its prior at all." If a small model cannot be moved off a strong pretrained prior by <em>any</em> prompt, the task has no headroom on <em>that</em> model even if a larger model shows a clean gap. The rubric's criterion 9 assumes the designer "can write a ~100% prompt" — but says nothing about whether the ~100% prompt is reachable on the pinned cheap model. The known ceiling must be defined <span class="key">per model</span>, and the rubric should say so.</p>
+  </div>
+  <div class="card">
+    <h3>Is the internal-reward → official-objective correlation (crit. 6) even testable on a task this clean?</h3>
+    <p>With deterministic temp-0 scoring and exact 0/1 rewards, internal and official are <span class="key">the same measurement</span> up to split identity. The quick test may validate the plumbing of crit. 6 but cannot stress its statistics — the same way crit. 5's non-coverage note admits repeat-averaging math is never stressed under determinism. The rubric should state explicitly that crit. 6 here is a plumbing check, not a proxy-validity measurement (the real proxy question lives in the noisy full experiment).</p>
+  </div>
+  <div class="card">
+    <h3>How many latent rules is "enough" before a task stops being one-shot guessable (crit. 4) yet stays learnable (crit. 12)?</h3>
+    <p>The docs repeatedly settle on <span class="key">"4–5 interacting rules with precedence"</span> as folklore, never derived. Too few ⇒ one-shot; too many ⇒ unlearnable (InductionBench's warning that models fail even the simplest class). The rubric gives no target and no way to estimate it a priori — which is precisely why the calibration gate is the highest-value process change: the rubric's central knob is currently guessed, not measured.</p>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

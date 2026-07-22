@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c22 Stacked Verifiable-Constraint Micro-Generation</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c22</span>Stacked Verifiable-Constraint Micro-Generation</h1>
+  <span class="badge ranked">RANKED #9</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">the IFEval/IFBench verifiable-checker family, restacked</span> — a trivial micro-task wrapped in three-to-five composed, deterministically-checkable constraints scored strict all-pass.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain tone = ranked -->
+  <p><strong>Officially ranked #9 of 20 after the implementation-aware rescore, up from the 26-tier in round 1.</strong>
+  This candidate rises because its oracle is not a promise but a shipped, unit-tested library: the IFBench checker suite
+  passes its full test set verbatim, so the deterministic scoring half of the task exists as reusable code on day one.
+  What holds it below the podium is that the <span class="key">generator</span> — the layer that seeds a base task, samples a
+  constraint subset, composes the descriptions, and threads a reproducible RNG — is net-new work the repo never shipped, and
+  the round-1 design earns its non-one-shot-guessable credit almost entirely from the conditional <span class="key">Selection
+  constraints</span>, a single mechanism carrying the whole anti-enumeration load. It is a strong mid-pack pick: the cleanest
+  oracle reuse in the field, paired with a modest but real build burden and a narrow structural defence.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">26</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">11/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>A trivial micro-task gated by a stack of independently-checkable constraints, scored all-or-nothing</h3>
+    <p>The generator builds a deliberately trivial base task (produce a short answer or micro-description) and layers
+    three-to-five composed constraints drawn from a deterministic <span class="key">checker library</span> — exact word
+    count, forbidden letter, required keyword, casing rule, end-with token — including conditional <span class="key">Selection
+    constraints</span> of the form "if the input has property P obey rule A, else rule B" that the prompt must
+    <span class="key">discover rather than copy</span>. The output is a few words. It scores 1 iff <em>every</em> checker
+    passes (strict 0/1, no partial credit), while each per-checker verdict is logged as a diagnostic fact. Atoms and base
+    tasks are generated synthetically from a COLLIE-style grammar, giving an infinite, contamination-proof pool; the
+    <span class="key">constraint count and level</span> are the difficulty dial, and IFBench-style OOD atoms resist one-shot
+    enumeration.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — constructed from the merged summary: one base micro-task, four stacked atoms, one conditional on a property of the input the prompt is not told to look for.</p>
+<pre><code>BASE TASK: Name a color.
+CONSTRAINTS (all must hold):
+  1. Response is exactly 2 words.
+  2. Response contains the letter "z".
+  3. Response ends with the token "END".
+  4. SELECTION: if the base task's noun has an even
+     letter-count, the answer must be lowercase; else
+     Title Case.  ("color" = 5 letters -> odd -> Title)
+
+GOLD (one satisfying answer): "Azure END"
+NAIVE-PROMPT MISS: a prompt listing only the stated atoms
+  emits "hazy" (1 word, no END, ignores hidden casing branch)
+  -> per-atom verdicts show exactly which rule was missed.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2311.07911">IFEval</a> (Zhou et al., arXiv 2311.07911, Nov 2023)</span> — the canonical verifiable-instruction benchmark; c22 reuses its deterministic checker library (25 instruction types) as the constraint-atom source.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2307.08689">COLLIE</a> (Yao et al., ICLR 2024; arXiv 2307.08689, 2023)</span> — the grammar-based synthetic constrained-generation generator that defines c22's core generation approach.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2507.02833">IFBench / IF-RLVR</a> (Pyatkin et al., arXiv 2507.02833, 2025)</span> — 58 OOD verifiable constraints plus verifier functions; supplies c22's non-one-shot-guessable OOD atoms, and is GEPA's headline IF task.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2407.03978">ComplexBench</a> (Wen et al., NeurIPS 2024 D&amp;B; arXiv 2407.03978)</span> — the And/Chain/Selection/Nested composition operators; c22's conditional Selection constraints ("discover, not copy") come from here.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2310.20410">FollowBench</a> (Jiang et al., ACL 2024; arXiv 2310.20410)</span> — multi-level incremental constraint stacking (1&rarr;5); c22 borrows the level-ladder mechanic for its difficulty dial.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2401.03601">InFoBench / DRFR</a> (Qin et al., Findings of ACL 2024; arXiv 2401.03601)</span> — Decomposed Requirements Following Ratio; the per-atom partial-credit model c22 logs as diagnostic verdicts.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2502.04498">VFF: Verifiable Format Control</a> (Wang et al., Findings of NAACL 2025; arXiv 2502.04498)</span> — 64 fully Python-checkable format meta-constraints; documents the low small-model floor cited by c22's adaptation notes.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2505.16234">LIFEBench</a> (Zhang et al., NeurIPS 2025; arXiv 2505.16234)</span> — length-instruction benchmark documenting a low small-model floor; c22's length atom. Corpus mis-cites the first author as "Wu"; verified as Wei Zhang (see corrections).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Constrained Micro-Description</a> — the seed idea of gating a tiny generation on a stack of exact checks; merged origin "both".</li>
+      <li><a href="../candidates-merged.html#c22">c22 entry, candidates merged</a> — the merge that folded FoFo's format-following content (dropped cluster D8) into this candidate alongside c11.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>FoFo format-following (dropped cluster D8) — <span class="why">LLM-as-judge scoring fails the deterministic-exact-check criterion; its format-idea content was absorbed into c11 and c22 rather than kept as its own task</span>.</li>
+    <li>ComplexBench native scoring — <span class="why">the source benchmark augments its rules with LLM evaluators and dependency-structure aggregation, failing the pure-rule / no-partial-credit criteria; c22 keeps only the Selection composition algebra, not the scorer</span>.</li>
+    <li>Free-generation instruction-following at large (Theme H) — <span class="why">attractive for research currency but scoring wants a deterministic checker library and strict all-pass 0/1; without the "discover the hidden constraint" framing it is one-shot enumerable, so the broad theme lands at 26</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2603.04738">IF-RewardBench</a> (thu-coai, arXiv 2603.04738, 2026, ACL 2026)</span> — 842 IF instructions with single-turn / multi-turn / system-prompt-steerability constraint coverage; extends the verifiable-constraint atom pool. The corpus cites it once under RewardBench 2.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2604.04443">DeonticBench</a> (Dou et al., arXiv 2604.04443, 2026)</span> — 6,232 rule-reasoning tasks with an optional Prolog verifier and explicit rule traces; a 2026 successor to the RuleArena rule-application family adjacent to c22.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2404.13208">The Instruction Hierarchy</a> (Wallace et al., arXiv 2404.13208, 2024)</span> — the foundational conflicting-instruction / privileged-instruction framework underlying IHEval and c22's authority-priority variant; the corpus cites it only via an OpenReview id, not the arXiv page.</li>
+    <li><a href="../related-work/c22-related-work.html">c22 related work</a> — deep-read dossiers + capability/positioning synthesis, 2026-07-22.</li>
+    <li><a href="../related-work/c22-baseline-spec.html">c22 baseline spec</a> — draft baseline experiment spec — headroom before complexity.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Single-call, exact deterministic 0/1 scoring, and a synthetic infinite pool make it a clean fit on the core criteria; the constraint count is a genuine incremental difficulty dial</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>It scores 26 — below the finalist tier — because its non-one-shot-guessable credit rests narrowly on the Selection constraints; strip those and a single prompt enumerates the stated atoms</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Stratified constraint combos give a smooth climb as prompts internalize more atom types, and IFBench-style OOD atoms keep the ladder from being closed by one clever sentence</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No skeptic pass examined this candidate below the 28-tier — the round-1 adversarial lenses ran only on the finalist set, so the optimization-path story here is asserted from the rubric, not stress-tested</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Every atom has an independent, non-tautological checker (ground truth reads only the target value and the response), so the ceiling is exactly writable and errors are per-atom diagnosable</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Strict all-pass 0/1 over four-to-five atoms compresses signal harshly, and no measurement-lens pass ran below the 28-tier to confirm the pool score behaves monotonically under the chosen strata</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The oracle is shipped and unit-tested — the IFBench checker suite runs its full 59-test set green verbatim, so the scoring half is reusable almost unchanged; anchors I1/I2 at 2 and I6 at 2 (no repair flags)</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The seeded stacking generator, RNG plumbing, and composition layer are net-new (~120&ndash;200 LOC outside the repo), and the shipped <code>config.seed</code> is a decoy wired only to the LLM payload — hence I3/I4/I5 at 1 and the repo capped at 2</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The IFEval &rarr; IFBench &rarr; IF-RLVR lineage is the live verifiable-instruction line, and IFBench is GEPA's headline IF task, so the family is squarely current through 2025-2026</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Verifiable-constraint checking is a crowded, fast-moving area (IF-RewardBench, DeonticBench, the Instruction Hierarchy line), so a restacked-atoms task has a modest novelty margin over the benchmarks it borrows from</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Vendor the IFBench oracle read-only</h3><p>Import <code>INSTRUCTION_DICT</code> from <code>instructions.py</code> / <code>instructions_util.py</code> / <code>instructions_registry.py</code> and use each class's <code>check_following</code> as the 0/1 atom oracle; optionally strip the unused <code>spacy</code>/<code>langdetect</code> imports and the import-time <code>.nltk_data</code> env mutation. Roughly zero lines changed.</p></div>
+  <div class="step"><h3>Write the seeded stacking generator (~60&ndash;100 LOC)</h3><p>Given a seed and a chosen <code>instruction_id</code> subset (latent-rule strata), instantiate checkers and call <code>build_description</code> with an explicit kwargs dict derived from a <code>random.Random(seed)</code> — passing values in rather than relying on the module-global unseeded <code>random</code> — then concatenate per-constraint descriptions onto a base/nonce prompt.</p></div>
+  <div class="step"><h3>Add the Selection / discovery layer and serializer (~40 LOC)</h3><p>Encode the conditional "if input has property P obey A else B" atoms so the branch is not stated in the prompt, feed nonce keyword lists as explicit kwargs for contamination-proofing, and emit records in the <code>{key, prompt, instruction_id_list, kwargs}</code> shape the evaluator already consumes.</p></div>
+  <div class="step"><h3>Wire strict all-pass scoring (~30 LOC)</h3><p>Single LLM call, then <code>all(check_following(resp))</code> across the stack, reusing <code>evaluation_lib.test_instruction_following_strict</code> nearly verbatim; log each per-atom verdict as a diagnostic fact.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Unseeded module-global <code>random</code> in every <code>build_description</code> (19 sites plus <code>generate_keywords</code>) means generation is nondeterministic and non-re-seedable as shipped; if the explicit-kwargs plumbing is incomplete, instances are not reproducible.</li>
+      <li>The anti-one-shot defence is narrow — with the Selection/discovery atoms removed or weakly seeded, a single prompt enumerates the stated constraints and the incremental gap collapses (the criterion-4 failure mode the whole design guards against).</li>
+      <li>Strict all-pass over many atoms can floor a small model near zero, flattening the optimizer signal unless the stratified combos are tuned so easy strata are reliably reachable.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/allenai/IFBench">allenai/IFBench</a> (Apache-2.0 code / ODC-BY-1.0 data) — deep-read notes at <a href="../repos/allenai-ifbench.md">repos/allenai-ifbench.md</a>. Secondary: <a href="../repos/google-research-instruction-following-eval-ifeval.md">google-research IFEval</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status partial">partial</span>
+        the reviewer ran the IFBench checker unit tests in a fresh venv and reports <code>Ran 59 tests ... OK</code>, confirming the oracle half is reusable and correct. The generator/sampler does not exist in the repo (frozen 299-row dataset), so the end-to-end seeded-generation path was never run-verified — the net-new code that keeps this a provisional I1 = 2.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidate table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c11.html">&larr; #8 c11</a>
+    <a href="c03.html">#10 c03 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c14.html">c14 Instruction-Hierarchy Priority Ledger</a>
+    <a href="c11.html">c11 House-Convention Canonicalizer</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c22">Candidates merged</a>
+    <a href="../related-work/c22-related-work.html">Related work</a>
+    <a href="../related-work/c22-baseline-spec.html">Baseline spec</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

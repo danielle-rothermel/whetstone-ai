@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Instruction Following &amp; Constrained Generation as Quick-Test Task Candidates</title>
+</head>
+<body>
+<main>
+<h1>Instruction Following &amp; Constrained Generation as Quick-Test Task Candidates</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Instruction following</span>
+</div>
+
+<div class="intro">
+  <p>This surveys IFEval-style instruction-following and constrained-generation benchmarks for use or adaptation as the cheap quick-test task that validates prompt optimizers (COPRO, MIPROv2, GEPA, agentic) against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. Breadth over depth: <span class="key">12 candidates</span>, not ranked.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The domain is a strong structural match, with one fixed adaptation tax.</strong> Verifiable instructions are checked by <span class="key">deterministic Python functions</span> (no judge LLM, no sandbox), and each instruction is an <span class="key">independent latent rule</span> that adds score when the prompt captures it (criterion 10). The recommended shape is a <span class="key">synthetic multi-atom constrained micro-generation</span>: base task "produce a short answer," plus 3-4 stacked verifiable atoms, scored as fraction-of-atoms-satisfied. Every candidate needs the same three fixes: <span class="key">bound outputs to short strings</span> (most literature scores paragraphs, violating criterion 3), <span class="key">restrict to the code-verifiable subset</span> (many benchmarks lean on an LLM judge, disqualified by criterion 2), and <span class="key">regenerate synthetically</span> to dodge contamination (criterion 8).</p>
+</div>
+
+<div class="section-head" id="fit"><h2>Why this domain fits the rubric, and where it strains</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Fit</h3>
+    <p class="small muted">The rubric wants: single LLM call + deterministic programmatic scoring (no sandbox), output bounded to multiple-choice-or-a-few-words, default prompts far below a known ceiling, an incremental gap that closes as prompts capture independent latent rules, a synthetic/generatable pool with exact ground truth, contamination resistance, diagnostic failures, few-shot demos that help, and effect sizes resolvable on 10-20 tasks at temp 0.</p>
+    <ul>
+      <li>Verifiable instructions are checked by <span class="key">deterministic Python functions</span> — no judge LLM, no sandbox (criterion 2).</li>
+      <li>Each instruction is an <span class="key">independent latent rule</span> that adds score as the prompt captures it (criterion 10).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Strain (the recurring adaptation moves)</h3>
+    <ul>
+      <li><strong>Output length.</strong> Most of this literature scores paragraphs/essays, violating criterion 3. Shrink the target to a short constrained string / MCQ-like token.</li>
+      <li><strong>Atom selection.</strong> Keep only constraints checkable on short outputs: keyword presence, casing, ending token, exact word count, forbidden letters.</li>
+      <li><strong>Contamination.</strong> Regenerate instances synthetically to dodge criterion 8.</li>
+      <li><strong>LLM judges.</strong> Several benchmarks lean on an LLM judge for "soft" constraints; those variants fail criterion 2 and must be restricted to the programmatically-verifiable subset.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="table"><h2>All 12 candidates at a glance</h2></div>
+
+<p class="small muted">Not ranked. "Off-the-shelf generator" = synthetic, exact, compositional by construction; "mechanic" = borrow the method, not the scorer; "components" = mine the checker functions only.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Key rubric strength</th><th>Main weakness</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>IFEval</strong></td><td>Checker library</td><td>Canonical deterministic checker; strong on 2, 7, 8, 10, 11, 13</td><td>Fixed 541 prompts contaminated; original outputs long; strong models near-ceiling on single constraints</td></tr>
+    <tr><td>2</td><td><strong>COLLIE</strong></td><td>Off-the-shelf generator</td><td>Best-fit generator: synthetic, parameterized, exact, compositional; hits 2, 7, 8, 9, 10, 11</td><td>Some constraints need reasoning over long passages; must curate the short sub-grammar</td></tr>
+    <tr><td>3</td><td><strong>VFF</strong></td><td>Off-the-shelf generator (format)</td><td>Format outputs naturally short; strong on 1, 2, 3, 7, 8, 10, 11, 13; documented small-model floor</td><td>Format constraints can be one-shot guessable; add interacting non-obvious constraints</td></tr>
+    <tr><td>4</td><td><strong>IFBench + IF-RLVR</strong></td><td>Checker library (OOD)</td><td>Best-in-class for criterion 4 (documented non-guessable gap) and 8</td><td>Soft content/style constraints need LLM judge — exclude; some assume essay-length</td></tr>
+    <tr><td>5</td><td><strong>FollowBench</strong></td><td>Mechanic (incremental levels)</td><td>Multi-level 1&rarr;5 stacking maps directly onto criteria 4 and 10</td><td>Its own scoring uses strong LLMs as judges — reimplement deterministically</td></tr>
+    <tr><td>6</td><td><strong>InFoBench / DRFR</strong></td><td>Mechanic (per-rule scoring)</td><td>DRFR decomposition = criterion 10 partial-credit; per-atom expected/got is diagnostic (11)</td><td>Published DRFR scored by GPT-4 annotator (fails 2); many style atoms not checkable</td></tr>
+    <tr><td>7</td><td><strong>CFBench</strong></td><td>Taxonomy source</td><td>Rule-taxonomy blueprint (7, 10); priority mechanic supports instruction-hierarchy angle</td><td>Eval uses multi-dimensional + LLM-assisted assessment (partial fail on 2); long scenarios</td></tr>
+    <tr><td>8</td><td><strong>ComplexBench</strong></td><td>Mechanic (composition algebra)</td><td>And/Chain/<span class="key">Selection</span>/Nested operators drive a graded, discovery-driven gap (4, 10)</td><td>Own scoring augments rules with LLM evaluators + dependency aggregation (partial fail on 2)</td></tr>
+    <tr><td>9</td><td><strong>IHEval</strong></td><td>Authority/priority variant</td><td>Clean deterministic scoring, short outputs, hot 2025-2026 (tie-breaker), diagnostic failures</td><td>Criterion 4 only holds if base models mis-prioritize; fewer independent rules than pure-constraint tasks</td></tr>
+    <tr><td>10</td><td><strong>LIFEBench</strong></td><td>Single-axis (length)</td><td>Excellent on 2, 3, 8, 9; low floor empirically established, de-risking criterion 4</td><td>Length alone is a single latent rule — insufficient for criterion 10; use as one axis</td></tr>
+    <tr><td>11</td><td><strong>RuleArena</strong></td><td>Synthetic rule engine</td><td>Strongest on criterion 10 (rules are the task); exact-match, short output, contamination-proof if built</td><td>Drifts toward multi-step arithmetic (criterion 5 variance); keep rule counts + arithmetic small</td></tr>
+    <tr><td>12</td><td><strong>RewardBench 2 / IF-RewardBench</strong></td><td>Components (verifier atoms)</td><td>Ready deterministic checkers (2), short outputs (3), clean negatives for failure path (13)</td><td>Reward-model benchmark, not a generation task; single atoms must be composed for criterion 10</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="generators"><h2>Off-the-shelf generators: synthetic, exact, compositional</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>1 · IFEval — verifiable instructions, deterministic checker</h3>
+    <p><span class="key">What it is:</span> ~541 prompts, each with 1-3 verifiable instructions (25 instruction types across 9 categories: keyword frequency, length in words/sentences/paragraphs, exact casing, JSON/format, start/end tokens, bullet counts, placeholders). Each instruction checked by a deterministic program — no judge. The canonical reference for the whole domain.</p>
+    <p class="small muted"><strong>Citation:</strong> Zhou et al., "Instruction-Following Evaluation for Large Language Models," arXiv:2311.07911 (Nov 2023). <a href="https://arxiv.org/abs/2311.07911">arxiv.org/abs/2311.07911</a> · leaderboard <a href="https://llm-stats.com/benchmarks/ifeval">llm-stats.com/benchmarks/ifeval</a></p>
+    <p><span class="key">Adaptation:</span> Reuse the <em>checker library</em> (the <code>instructions_registry</code>), not the fixed 541 prompts (contaminated — criterion 8). Generate synthetic instances by sampling a base micro-task ("describe X in a few words") plus N constraint atoms drawn from the verifiable set; keep only atoms verifiable on short outputs (forbidden word, must-include keyword, all-caps, end-with token, exact word count) to satisfy criterion 3. Ground truth = checker verdict per atom; score = fraction of atoms satisfied &rarr; naturally incremental (criterion 4/10).</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Excellent on criteria 2, 7, 8, 10, 11, 13 (unparseable/empty outputs land as verifiable failures). Strong models already near-ceiling on single constraints, so use a <strong>small model + 3-4 stacked constraints</strong> to push the floor down and create headroom. Few-shot demos plausibly help (criterion 12) since format compliance is demonstrable. Weakness: original prompts want long free-form text; you must engineer the short-output variant yourself. "Loose" vs "strict" accuracy modes exist — pick strict for determinism.</p>
+  </div>
+  <div class="card">
+    <h3>2 · COLLIE — grammar-based synthetic constraint generator</h3>
+    <p><span class="key">What it is:</span> A grammar/framework for programmatically constructing constrained-generation tasks with an automatic extractor that mines instances from a corpus (Gutenberg, Wikipedia). Constraints compose from Levels (char/word/sentence/passage) &times; Transformations (Count, Position, ForEach) &times; Relations (==, in, comparisons) &times; Logic (And/Or/All) &times; Reductions. Ships COLLIE-v1 (1,132 instances, 13 constraint structures). Scoring is <code>constraint.check(text, target)</code> &rarr; boolean, fully deterministic.</p>
+    <p class="small muted"><strong>Citation:</strong> Yao et al., "COLLIE: Systematic Construction of Constrained Text Generation Tasks," ICLR 2024. arXiv:2307.08689 <a href="https://arxiv.org/abs/2307.08689">arxiv.org/abs/2307.08689</a> · code <a href="https://github.com/princeton-nlp/Collie">github.com/princeton-nlp/Collie</a> · site <a href="https://collie-benchmark.github.io/">collie-benchmark.github.io</a></p>
+    <p><span class="key">Adaptation:</span> Arguably the <strong>best-fit generator</strong> in the domain — designed to be synthetic, parameterized, exact, and compositional. Restrict the constraint grammar to short-output-checkable structures (word count == k, must contain target words, sentence position rules on a 1-2 sentence output) to hit criterion 3. Each composed atom is an independent latent rule (criterion 10); the And/Or logic gives graded difficulty. Regenerate with your own seed/targets for contamination resistance (criterion 8, built-in).</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Hits criteria 2, 7, 8, 9, 10, 11 squarely — the deterministic checker + programmatic generation is exactly what criteria 7-9 ask for. Weakness: some COLLIE constraints require reasoning/counting over longer passages (planning-hard, long outputs) — curate the sub-grammar down to the short/cheap ones. Its natural-language <em>rendering</em> of constraints is fixed; for prompt-optimization you want the constraint held constant while the <em>system prompt</em> varies, so treat the rendered instruction as part of the task input, not the mutable prompt.</p>
+  </div>
+  <div class="card">
+    <h3>3 · VFF — Verifiable Format Following, fully Python-checkable</h3>
+    <p><span class="key">What it is:</span> Dataset of <span class="key">64 unique meta-constraints</span> for output <em>format</em> control (JSON structure, field presence, casing, delimiters, ordering), where every sample is validated by a Python function — explicitly built to avoid GPT-4-as-judge bias. Progressive single&rarr;multi-constraint structure. Targets the finding that ~7B models struggle badly with fine-grained format compliance (built-in low floor).</p>
+    <p class="small muted"><strong>Citation:</strong> Wang, Zhaoyang et al., "Verifiable Format Control for Large Language Model Generations," Findings of NAACL 2025. arXiv:2502.04498 <a href="https://arxiv.org/abs/2502.04498">arxiv.org/abs/2502.04498</a> · data <a href="https://huggingface.co/datasets/jinqij/VFF">huggingface.co/datasets/jinqij/VFF</a></p>
+    <p><span class="key">Adaptation:</span> Bound outputs to small JSON / delimited strings (a few fields) so criterion 3 holds. Use the 64 meta-constraints as the latent-rule library; stack 2-4 per instance for incremental scoring. Regenerate field names/values synthetically for contamination resistance. Ground truth = per-constraint Python verdict.</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Very strong on criteria 1, 2, 3 (format outputs are naturally short), 7, 8, 10, 11, 13 (malformed JSON is a clean, diagnostic failure — great for the parse-error machinery in criterion 13). The paper documents small-model failure directly, supporting criterion 4's low floor. Weakness: format constraints can be <em>one-shot guessable</em> by a competent prompt engineer ("output valid JSON with fields a,b,c") — mitigate by adding non-obvious interacting constraints (ordering + casing + a forbidden character) so the gap closes in steps, not one jump.</p>
+  </div>
+  <div class="card">
+    <h3>4 · IFBench + IF-RLVR — out-of-distribution verifiable constraints</h3>
+    <p><span class="key">What it is:</span> 58 new, diverse, challenging verifiable out-of-domain constraints (hard: length/format/keyword; plus content/style), released with 29 hand-annotated training constraints + verification functions and RLVR training prompts. Key finding: models <em>overfit</em> the small IFEval constraint set and fail to generalize — i.e., there is real, non-guessable headroom on unseen constraints.</p>
+    <p class="small muted"><strong>Citation:</strong> Pyatkin et al., "Generalizing Verifiable Instruction Following," 2025. arXiv:2507.02833 <a href="https://arxiv.org/abs/2507.02833">arxiv.org/abs/2507.02833</a> · wiki <a href="https://ai.miraheze.org/wiki/IFBench">ai.miraheze.org/wiki/IFBench</a></p>
+    <p><span class="key">Adaptation:</span> Harvest the verification functions as your latent-rule checker set; the "OOD" constraints are precisely the ones <em>not</em> one-shot guessable (directly serves criterion 4). Generate synthetic base tasks and stack these constraints; bound output length by choosing the short-checkable subset. Contamination-resistant by design (constraints are novel).</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Best-in-class for criterion 4 (documented incremental, non-guessable gap) and criterion 8. Deterministic verifiers cover the hard constraints (criterion 2). Weakness: the "soft" content/style constraints rely on model/LLM judging — <strong>exclude those</strong>; keep only the code-verifiable hard constraints. Some constraints assume essay-length outputs; filter to short-output-compatible ones.</p>
+  </div>
+</div>
+
+<div class="section-head" id="mechanics"><h2>Design mechanics to borrow (adopt method, not scorer)</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>5 · FollowBench — multi-level incremental constraint stacking</h3>
+    <p><span class="key">What it is:</span> Multi-level benchmark that incrementally adds constraints (1&rarr;5) to a base instruction across 5 categories (Content, Situation, Style, Format, Example), letting you pinpoint the level at which a model fails. This "level" mechanic is a near-perfect analog for the rubric's incremental-gap requirement.</p>
+    <p class="small muted"><strong>Citation:</strong> Jiang et al., "FollowBench: A Multi-level Fine-grained Constraints Following Benchmark," ACL 2024. arXiv:2310.20410 <a href="https://arxiv.org/abs/2310.20410">arxiv.org/abs/2310.20410</a> · code <a href="https://github.com/YJiangcm/FollowBench">github.com/YJiangcm/FollowBench</a> · data <a href="https://huggingface.co/datasets/YuxinJiang/FollowBench">huggingface.co/datasets/YuxinJiang/FollowBench</a></p>
+    <p><span class="key">Adaptation:</span> Borrow the multi-level construction recipe (start from one constraint, add one per level) but instantiate only with programmatically-checkable atoms and short outputs. The level index gives a built-in difficulty curve and a natural per-rule score (criterion 10). Regenerate synthetically (criterion 8).</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> The incremental-level design maps directly onto criteria 4 and 10 — arguably its biggest selling point. Weakness: FollowBench's <em>own</em> evaluation uses strong LLMs as judges for open-ended constraints (fails criterion 2). You must reimplement scoring as deterministic checkers over a restricted constraint set; you're adopting the methodology, not the scorer.</p>
+  </div>
+  <div class="card">
+    <h3>6 · InFoBench / DRFR — decomposed requirement-following ratio</h3>
+    <p><span class="key">What it is:</span> 500 instructions decomposed into <span class="key">2,250 atomic yes/no requirements</span>; metric = Decomposed Requirements Following Ratio (fraction of atomic requirements satisfied). Categories: content, linguistic, style, format, number. The decomposition-into-atoms idea is the scoring model the rubric wants (partial credit per latent rule).</p>
+    <p class="small muted"><strong>Citation:</strong> Qin et al., "InFoBench: Evaluating Instruction Following Ability in Large Language Models," Findings of ACL 2024. arXiv:2401.03601 <a href="https://arxiv.org/abs/2401.03601">arxiv.org/abs/2401.03601</a> · <a href="https://aclanthology.org/2024.findings-acl.772/">aclanthology.org/2024.findings-acl.772</a></p>
+    <p><span class="key">Adaptation:</span> Adopt the DRFR decomposition as your per-rule scoring scheme, but replace GPT-4-annotated requirement checking with deterministic Python checks (requires restricting to programmatically-verifiable atoms — number/format/keyword, not "is it stylistically elegant"). Generate synthetic instances with known atom labels.</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> DRFR = graded per-rule score is exactly criterion 10's partial-credit mechanism, and "expected/got" per atom is diagnostic (criterion 11). Weakness: as published, DRFR is scored by GPT-4 as annotator (fails criterion 2); the many linguistic/style atoms are not deterministically checkable and must be dropped.</p>
+  </div>
+  <div class="card">
+    <h3>7 · CFBench — comprehensive constraint taxonomy</h3>
+    <p><span class="key">What it is:</span> 1,000 samples over 200+ scenarios / 50+ NLP tasks, with a systematic constraint taxonomy: <span class="key">10 primary categories, 25+ subcategories</span>, plus requirement-prioritization (primary vs secondary constraints). Useful mainly as a taxonomy source for enumerating independent latent rules.</p>
+    <p class="small muted"><strong>Citation:</strong> Zhang, Tao et al., "CFBench: A Comprehensive Constraints-Following Benchmark for LLMs," ACL 2025. arXiv:2408.01122 <a href="https://arxiv.org/abs/2408.01122">arxiv.org/abs/2408.01122</a> · <a href="https://aclanthology.org/2025.acl-long.1581.pdf">aclanthology.org/2025.acl-long.1581.pdf</a></p>
+    <p><span class="key">Adaptation:</span> Mine the taxonomy to define a balanced set of independent latent rules for your synthetic generator; the requirement-prioritization idea (primary vs secondary) is a natural authority/priority-ledger variant (Theme H tie-in). Regenerate instances; use only rule-checkable subcategories with deterministic scoring.</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Great as a rule-taxonomy blueprint (criteria 7, 10) and its priority mechanic supports the instruction-hierarchy angle. Weakness: evaluation uses multi-dimensional + LLM-assisted assessment (partial fail on criterion 2); scenarios are realistic/long, so you keep the taxonomy, not the data or scorer.</p>
+  </div>
+  <div class="card">
+    <h3>8 · ComplexBench — And / Chain / Selection / Nested composition</h3>
+    <p><span class="key">What it is:</span> Complex instructions built by four composition operations — <span class="key">And, Chain, Selection, Nested</span> — over 4 constraint types / 19 dimensions. Documents that performance degrades sharply as Chain/Selection depth grows. The composition operators are a principled way to make difficulty decompose and to tune the incremental curve.</p>
+    <p class="small muted"><strong>Citation:</strong> Wen et al., "Benchmarking Complex Instruction-Following with Multiple Constraints Composition," NeurIPS 2024 D&amp;B. arXiv:2407.03978 <a href="https://arxiv.org/abs/2407.03978">arxiv.org/abs/2407.03978</a> · <a href="https://openreview.net/forum?id=U2aVNDrZGx">openreview.net/forum?id=U2aVNDrZGx</a></p>
+    <p><span class="key">Adaptation:</span> Use the composition algebra (esp. <span class="key">Selection</span> = conditional constraints: "if input has property P, obey rule A else rule B") to create latent rules a prompt must <em>discover</em>, not just copy — strongly serves criterion 4 (non-one-shot-guessable) and criterion 10 (independent rules). Instantiate with deterministic atoms + short outputs; regenerate synthetically.</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> The Selection/Chain operators are the most compelling mechanism here for a graded, discovery-driven gap. Weakness: ComplexBench's own scoring augments rules with LLM evaluators and uses a dependency-structure aggregation (partial fail on criterion 2); adopt the composition structure with a pure-rule scorer only.</p>
+  </div>
+</div>
+
+<div class="section-head" id="authority"><h2>Authority / priority variant (Theme H, hot 2025-2026)</h2></div>
+
+<div class="card">
+  <h3>9 · IHEval — instruction hierarchy: system vs user vs tool</h3>
+  <p><span class="key">What it is:</span> Evaluates whether models follow the <span class="key">instruction hierarchy</span> — resolving conflicts across system prompts, user instructions, conversation history, and tool outputs (aligned vs conflicting settings). Directly supports the authority/priority-ledger variant of the seed domain.</p>
+  <p class="small muted"><strong>Citation:</strong> Zhang et al., "IHEval: Evaluating Language Models on Following the Instruction Hierarchy," 2025. arXiv:2502.08745 <a href="https://arxiv.org/abs/2502.08745">arxiv.org/abs/2502.08745</a> · Framework origin: Wallace et al., "The Instruction Hierarchy," 2024, <a href="https://openreview.net/forum?id=vf5M8YaGPY">openreview.net/forum?id=vf5M8YaGPY</a> · Related: "Control Illusion" arXiv:2502.15851.</p>
+  <p><span class="key">Adaptation:</span> Build a synthetic task where a system rule and an injected user rule conflict, and the correct short output is dictated by the higher-priority rule. Ground truth is deterministic (which rule wins &rarr; which token). The "latent rules" become the priority policy itself: capturing "system overrides user" adds score. Bound output to a single token / few words.</p>
+  <p><span class="key">Rubric fit / weaknesses:</span> Very clean deterministic scoring (criterion 2), naturally short outputs, strong 2025-2026 research interest (tie-breaker), and diagnostic failures ("model obeyed the wrong authority"). Weakness: the default-prompt-scores-low criterion (4) is only satisfied if base models genuinely mis-prioritize — literature ("Control Illusion") says they <em>do</em>, which is favorable, but you must verify a meaningful, <em>incrementally closable</em> gap rather than a binary the model either gets or doesn't. Fewer independent rules than the pure-constraint tasks (may need combining with format atoms for enough latent dimensions).</p>
+</div>
+
+<div class="section-head" id="floor"><h2>Low-floor and single-axis sources</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>10 · LIFEBench — length instruction following</h3>
+    <p><span class="key">What it is:</span> Benchmark isolating length constraints (exact/min/max word or character budgets). Documents that even strong models hit only ~0.53 accuracy on length, and sub-4B models collapse to 3-21% compliance at tight budgets — a <span class="key">built-in low floor with a known ceiling</span> (exact target length).</p>
+    <p class="small muted"><strong>Citation:</strong> Wu et al., "LIFEBench: Evaluating Length Instruction Following in Large Language Models," 2025. arXiv:2505.16234 <a href="https://arxiv.org/abs/2505.16234">arxiv.org/abs/2505.16234</a> · Related: Yuan et al., "Following Length Constraints in Instructions," arXiv:2406.17744.</p>
+    <p><span class="key">Adaptation:</span> Length is trivially deterministic to check and outputs are short by construction — pair a small "answer in exactly N words" budget with a keyword/format atom so it's not a single guessable rule. Regenerate targets synthetically (contamination-proof — it's just a number).</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Excellent on criteria 2, 3, 8, 9 (ceiling = exact length, floor = documented small-model failure), and the low floor is empirically established, de-risking criterion 4. Weakness: length alone is a <em>single latent rule</em> — insufficient for criterion 10's "several independent rules." Use it as one axis in a multi-atom generator, not the whole task.</p>
+  </div>
+  <div class="card">
+    <h3>11 · RuleArena — rule-guided reasoning (latent-rule application)</h3>
+    <p><span class="key">What it is:</span> LLMs given task instruction + reference rules + a user instance must apply the rules to compute an answer (airline baggage fees, NBA transactions, tax). Answers are numeric/deterministic. The "apply a set of explicit rules to an input to get an exact answer" shape decomposes cleanly into independent rules.</p>
+    <p class="small muted"><strong>Citation:</strong> Zhou et al., "RuleArena: A Benchmark for Rule-Guided Reasoning with LLMs in Real-World Scenarios," ACL 2025. arXiv:2412.08972 <a href="https://arxiv.org/abs/2412.08972">arxiv.org/abs/2412.08972</a> · code <a href="https://github.com/skyriver-2000/RuleArena">github.com/skyriver-2000/RuleArena</a> · Related 2026: DeonticBench arXiv:2604.04443.</p>
+    <p><span class="key">Adaptation:</span> Replace the real-world (contaminated) rule sets with a <span class="key">synthetic rule engine</span>: generate K parameterized rules ("+3 if field A&gt;5, forbidden if B=='x'"), sample an input, compute the exact answer programmatically. The correct short answer (a number or a label) is exact-match scored. Each rule the prompt surfaces adds accuracy &rarr; incremental (criteria 4, 10). Prompt optimization here means eliciting correct multi-rule application.</p>
+    <p><span class="key">Rubric fit / weaknesses:</span> Strongest on criterion 10 (rules are <em>the</em> task), deterministic exact-match scoring (criterion 2), short numeric/label output (criterion 3), fully synthetic &amp; contamination-proof if you build the rule engine (criteria 7, 8). Diagnostic failures ("applied rule 2 but missed rule 4"). Weakness: closer to rule-guided reasoning than pure "constrained generation" — drifts toward multi-step arithmetic, which can add unwanted variance; keep rule counts small and arithmetic trivial so temp-0 determinism holds (criterion 5). This is a <strong>synthetic-family</strong> candidate more than an off-the-shelf dataset.</p>
+  </div>
+</div>
+
+<div class="section-head" id="components"><h2>Verifier components to mine</h2></div>
+
+<div class="card">
+  <h3>12 · RewardBench 2 "Precise Instruction Following" / IF-RewardBench</h3>
+  <p><span class="key">What it is:</span> RewardBench 2 adds a Precise Instruction Following category scored by verifier functions drawn from the IFBench taxonomy (e.g., "answer without the letter u"). IF-RewardBench (ACL 2026) benchmarks judge models for IF evaluation. Primarily a source of clean, atomic, programmatically-verifiable single constraints and negatives.</p>
+  <p class="small muted"><strong>Citation:</strong> Malik et al., "RewardBench 2: Advancing Reward Model Evaluation," 2025. arXiv:2506.01937 <a href="https://arxiv.org/abs/2506.01937">arxiv.org/abs/2506.01937</a> · IF-RewardBench: arXiv:2603.04738, <a href="https://github.com/thu-coai/IF-RewardBench">github.com/thu-coai/IF-RewardBench</a></p>
+  <p><span class="key">Adaptation:</span> Lift the verifier-function constraints (forbidden-letter, exact-count, casing) as atoms for the synthetic generator; these are short-output-checkable and non-obvious ("write without the letter e") &rarr; good for a non-guessable incremental gap. Ignore the reward-model framing; you only want the constraint checkers and negative examples.</p>
+  <p><span class="key">Rubric fit / weaknesses:</span> Provides ready deterministic checkers (criterion 2) that produce short outputs (criterion 3) and clean negatives for the failure-path machinery (criterion 13). The forbidden-letter style constraints are hard for small models but capturable by better prompts (good for criteria 4, 12). Weakness: it's a reward-model benchmark, not a generation task — you're mining components, not adopting it wholesale; single-constraint atoms need to be composed to satisfy criterion 10.</p>
+</div>
+
+<div class="section-head" id="synthesis"><h2>Cross-cutting synthesis for the designer</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>What to adopt</h3>
+    <ul>
+      <li><strong>Best off-the-shelf generators</strong> (synthetic, exact, compositional): COLLIE (#2), VFF (#3), and the IFEval/IFBench checker libraries (#1, #4). These already give deterministic Python scoring and can be regenerated to dodge contamination. Recommended quick-test task: a <span class="key">synthetic multi-atom constrained micro-generation</span> — base task "produce a short answer/description," plus 3-4 stacked verifiable atoms drawn from these libraries, scored as fraction-of-atoms-satisfied.</li>
+      <li><strong>Best design mechanics to borrow:</strong> FollowBench's incremental level-stacking (#5) and ComplexBench's And/Chain/<span class="key">Selection</span> operators (#8) give the graded, non-one-shot-guessable gap criterion 4 demands (Selection = conditional rules the prompt must discover). InFoBench's DRFR (#6) is the per-rule partial-credit scoring model.</li>
+      <li><strong>Best for the authority/priority (Theme H) variant:</strong> IHEval (#9) + CFBench's requirement-prioritization (#7) — deterministic, short-output, hot 2025-2026 research area (tie-breaker).</li>
+      <li><strong>Best low-floor guarantees:</strong> LIFEBench (#10) and VFF (#3) empirically document small-model failure, de-risking criterion 4; RuleArena-style synthetic rule engines (#11) give the cleanest independent-latent-rules decomposition.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Universal caveats</h3>
+    <ul>
+      <li>Most published <em>scorers</em> use LLM judges for soft constraints — restrict to the <span class="key">code-verifiable subset</span> to honor criterion 2.</li>
+      <li>Most target long outputs — you must <span class="key">bound to short outputs</span> (criterion 3), which also keeps temp-0 determinism tight (criterion 5).</li>
+      <li>Published prompts are contaminated — <span class="key">regenerate</span> (criterion 8).</li>
+      <li>Verify empirically that stacked constraints give an <span class="key">incremental, not binary</span>, gap on a small model before committing.</li>
+    </ul>
+  </div>
+</div>
+
+<p class="small muted space-top">Domain fit against the full rubric: see the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. For where this domain sits among all eight search domains, see the <a href="landscape.html">Landscape</a>; for the adoption case, see <a href="recommendations.html">Recommendations</a>.</p>
+
+</main>
+</body>
+</html>

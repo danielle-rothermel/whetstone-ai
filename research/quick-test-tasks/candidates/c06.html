@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c06 Artificial-Grammar Violation Classification</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c06</span>Artificial-Grammar Violation Classification</h1>
+  <span class="badge ranked">RANKED #13</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">formal-language / subregular membership testing (MLRegTest, Dyck)</span> — reframed from binary accept/reject into a multiple-choice "which rule class does this string violate" task.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain tone: ranked, neither adopted nor gated -->
+  <p><strong>28-tier finalist, held at #13 after the implementation-aware rescore.</strong>
+  This candidate entered round 2 as one of seven verified round-1 finalists, and on the design
+  its appeal is real: a seeded formal grammar produces strings that are either well-formed or
+  carry exactly one injected violation, and the model answers with a single multiple-choice letter
+  naming the violated rule class, so scoring is trivially exact and each captured constraint catches
+  one violation class in a clean incremental ladder. The rescore pushed it down because the moves
+  that keep the ladder honest &mdash; non-mnemonic rule instantiations plus label recomputation &mdash;
+  shift the headroom off execution difficulty and onto hidden rule tables, at which point it converges
+  on what c21 and c03 already do more cleanly, and its convention-exploiting-prompt floor needs a
+  red-team gate the other finalists do not. Both reusable repos donate a genuinely independent membership
+  oracle but emit only a binary accept/reject label with no rule-violation taxonomy, so the entire
+  multiclass strata layer is new code and the generator was never run-verified for this task.
+  <span class="muted small">(Provenance note: recommendations.md line 230 records "28/28"; the
+  authoritative round-1 score/tie-break is 28/2, used in the chips below.)</span></p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">9</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>A grammar-violation classifier where the MC letter names the broken rule</h3>
+    <p>A seeded generator samples strings from a randomized formal grammar composing four to five
+    <span class="key">constraint types</span> &mdash; feature-agreement pairs, nesting-depth limits,
+    forbidden adjacencies, balanced multi-type delimiters, and one attribute-dependent depth limit &mdash;
+    and either keeps a string well-formed or injects exactly one <span class="key">violation</span> of a
+    known class. The model outputs a single <span class="key">multiple-choice letter</span>: A well-formed /
+    B agreement / C nesting / D adjacency, with an <span class="key">earliest-violation-by-scan-order</span>
+    tie-break when a corruption could read as more than one class. Ground truth is the injected class; the
+    score is exact letter match. Because each constraint the prompt captures catches exactly one violation
+    class, the strata are cleanly incremental at the pool level, and the label directly names the violated
+    rule, making failures maximally diagnostic. Randomized grammars per run make instances contamination-proof,
+    and the four-way format gives a one-in-four guess floor.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative, built faithfully from the merged summary. Seeded conditions: this run
+    draws an agreement rule (paired tags must share their height feature), a max nesting depth of two, and a
+    forbidden adjacency ('q' may not immediately follow 'p'). One violation is injected; the tie-break is
+    earliest-by-scan-order.</p>
+<pre><code>Grammar (this run):
+  R1 agreement : paired tags must share their height feature (+hi with +hi)
+  R2 nesting   : bracket depth may not exceed 2
+  R3 adjacency : symbol 'q' may not immediately follow 'p'
+
+String:  [ a+hi  [ b-hi  a+hi ] ]  p q
+
+Question: which rule class does this string violate?
+  A well-formed   B agreement   C nesting   D adjacency
+
+Gold: D  (the 'p q' adjacency breaks R3; depth stays within 2, tags agree)
+
+Naive-prompt miss: a one-shot solver that only internalized "check brackets
+balance and nest" scans depth, sees depth 2 is fine, and answers A well-formed
+— it never learned the per-run adjacency and agreement rules, so it catches at
+most two of the four classes.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2304.07687">MLRegTest</a> (van der Poel et al., JMLR 2024)</span> — a benchmark of 1,800 regular languages across the subregular hierarchy scored as accept/reject membership; the core source for c06's rule-strata design, supplying the subregular families that become the violation classes.</li>
+      <li><span class="cite"><a href="https://aclanthology.org/2021.acl-long.292/">Self-Attention Networks Can Process Bounded Hierarchical Languages</a> (Yao et al., ACL 2021)</span> — the foundational Dyck-n / bounded-depth bracket expressivity result that anchors the next-legal-bracket and nesting variants; it is the concrete anchor for the "Dyck membership &amp; next-legal-bracket" research line named in the merge.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2411.07107">Training Neural Networks as Recognizers of Formal Languages / FLaRe</a> (Butoi et al., ICLR 2025)</span> — releases the FLaRe benchmark across the Chomsky hierarchy; the second reusable donor. Correction: the corpus dates it "2024" and implies van der Poel authorship, but it is ICLR 2025, first author Butoi &mdash; a distinct paper from MLRegTest.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Artificial Grammar Well-Formedness Judgment</a> — the seed brainstorm item; became the well-formed / violated framing.</li>
+      <li>Symbolic Sequence Categorization (SSC) — supplied the multi-class categorization label shape; Nested-Bracket Path Resolver contributed the depth/bracket variants and the next-legal-bracket alternate task.</li>
+      <li><a href="../candidates-merged.html#c06">Merged entry c06</a> — origin: both brainstorm and literature; unifies the well-formedness judgment with subregular-membership benchmarks.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D3 TokenCounter (distinct vowel/consonant counting) — <span class="why">letter counting is tokenization-bound and StringLLM/CUTE show char-count tasks are noisy at temp 0, threatening exact-match; a live constraint on why c06's violations must be structural, not count-based</span>.</li>
+    <li>D9 Char-level string-task cluster (StringLLM, CUTE, letter-counting) — <span class="why">not a task, kept only as the red-flag design caveat that justifies MC / closed-vocab framing over character-level scoring in this family</span>.</li>
+    <li>Pure Dyck-k balanced-membership — <span class="why">retained only as a variant: balanced-parenthesis membership is one skill (counting depth), so rule decomposition is thin unless enriched with multiple bracket types and forbidden-substring constraints — the enrichment c06 adopts</span>.</li>
+    <li>Convergent cousins c21 / c03 — <span class="why">not dropped, but named in the round-2 reason as doing the hidden-rule-table job more cleanly; c06's rescue moves headroom onto hidden tables and lands on their territory</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2604.20811">Diagnosing CFG Interpretation in LLMs / RoboGrid</a> (Li et al., arXiv 2026)</span> — directly tests LLMs on novel CFGs at inference and stress-tests recursion depth and complexity, which is exactly the c06 nesting / grammar-from-context threat model.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2606.09822">Causally Evaluating the Learnability of Formal Language Tasks</a> (Snaebjarnarson et al., arXiv 2026)</span> — builds formal-language tasks from probabilistic finite automata and argues correlational membership evals are flawed, speaking to c06's honest-ladder and measurement concern.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2510.07591">Creating ConLangs to Probe Metalinguistic Grammatical Knowledge of LLMs</a> (Taguchi &amp; Sproat, arXiv 2025)</span> — synthetic-grammar well-formedness probing of LLMs, adjacent to c06's agreement/violation judgment.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Best-in-domain on output boundedness (a single MC letter) and independent-rule decomposition (each subregular constraint is one rule); one of the seven verified finalists</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The four-way guess floor demands class-balanced sampling and several composed constraints so guessing is penalized; pure accept/reject would give thin diagnostics without the which-rule label</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Survived the optimization-path lens with the c11/c12 profile — a not-one-shot-guessable, contamination-proof design puts the decisive rule knowledge outside COPRO's score-only rephrasing</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>A convention-exploiting prompt can floor the task at roughly half to sixty percent if rule instantiations are mnemonic, so the fix needs a red-team gate the other finalists do not</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Refuted-then-rescued: non-mnemonic instantiations plus label recomputation keep the ladder honest, and the exact-match MC surface makes effect sizes clean to read</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The rescue moves headroom off execution difficulty and onto hidden rule tables, at which point the task converges on what c21 and c03 measure more cleanly</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>MLRegTest ships nearly fifteen hundred committed automata across thirteen subregular families as ready-made strata, and both donors expose an independent membership oracle that can re-derive labels for any string</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Neither repo emits a violation taxonomy — both are binary accept/reject with undifferentiated negatives — so the entire multiclass corruption layer is new code; the injected-violation isolation scored weakest and MLRegTest's sampler is unseeded</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Tie-break holds; the subregular-membership and CFG-interpretation lines stay active into 2026 (RoboGrid, learnability-of-formal-language work), keeping the anchor current</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Currency alone could not offset the redundancy with c21/c03 and the calibration burden; the exact-match tier of finalists simply outscored it on implementation substance</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Vendor automata + oracle, not samplers</h3><p>Take the ~1,470 committed <code>.fst</code> files and the three-line composition oracle (<code>pynini.acceptor(s) @ fsa</code> non-empty == accepted) from heinz-jeffrey/subregular-learning; the 13-family filename tag becomes the latent-rule strata. Repo edits: zero — treat it as a data + oracle donor</p></div>
+  <div class="step"><h3>Write a seeded sampler</h3><p>Author <code>c06_gen.py</code> (~90 LOC, outside the repo) with a threaded <code>random.Random(seed)</code> drawing fixed-length strings over each FST's alphabet, because neither donor's sampler is controllably re-seedable</p></div>
+  <div class="step"><h3>Build the missing violation taxonomy</h3><p>For each of at least four named rules, author a rule-specific corruption operator that breaks exactly that rule while satisfying the others (this exists in neither repo — negatives are undifferentiated), and label every string via the independent oracle, not the tautological training labels</p></div>
+  <div class="step"><h3>Balance and stratify</h3><p>Balance labels across the four classes; compose four to five constraint types including one attribute-dependent depth limit so a one-shot prompt catches only two or three of four classes; wire the earliest-violation-by-scan-order tie-break</p></div>
+  <div class="step"><h3>Red-team the floor</h3><p>Gate on non-mnemonic instantiations and recompute labels, then adversarially probe for a convention-exploiting prompt that lifts the floor toward sixty percent; admit only strata that clear the gate</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Mnemonic rule instantiations let a convention-exploiting prompt floor the task around half to sixty percent, collapsing the headroom unless the red-team gate is enforced per stratum.</li>
+      <li>The rescued design shifts difficulty onto hidden rule tables and converges on c21/c03, so the marginal value over already-adopted candidates is thin.</li>
+      <li>Heavy native dependency: the MLRegTest oracle needs <code>pynini==2.1.2</code> (conda-only OpenFst binding), the main operational risk, unless the automata are exported to a pure-Python FSA format.</li>
+      <li>The FLaRe donor requires a two-stage offline pipeline (<code>save_automaton.py</code> then <code>prepare_sampler.py</code>) plus an SSH-URL <code>rau</code> git dependency before any string is produced.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase (primary):</span> <a href="https://github.com/heinz-jeffrey/subregular-learning">heinz-jeffrey/subregular-learning</a> (CC-BY-4.0) — deep-read notes at <a href="../repos/heinz-jeffrey-subregular-learning-mlregtest-genera.md">repos/heinz-jeffrey-subregular-learning-mlregtest-genera.md</a>. Reusable core is the composition oracle + committed automata; samplers are unseeded with no tests.</li>
+      <li><span class="key">Codebase (alt):</span> <a href="https://github.com/rycolab/neural-network-recognizers">rycolab/neural-network-recognizers</a> (MIT) — deep-read notes at <a href="../repos/rycolab-neural-network-recognizers-flare-generator.md">repos/rycolab-neural-network-recognizers-flare-generator.md</a>. Clean seed-threaded generator with an independent oracle and passing tests, but binary label only, no rule-violation multiclass.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified; I1 was kept at the deep-read provisional (2) per the round-2 unverified-but-read note, no generator run was performed for c06.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../candidates-table.html">Back to full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c02.html">&larr; #12 c02</a>
+    <a href="c09.html">#14 c09 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c04.html">c04 Term-Rewriting</a>
+    <a href="c18.html">c18 Synthetic Deduction</a>
+    <a href="c23.html">c23 Rule-Induction Ladder</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c06">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

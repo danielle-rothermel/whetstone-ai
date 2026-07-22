@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Related-work additions — only what doc.css/flow.css lack. */
+
+/* Unverified flag — matches the candidate-page convention: text label, not color alone. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.fix {
+  display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid var(--green); background: var(--green-soft);
+  color: var(--green); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+
+/* Dossier cards */
+.paper-card { padding: 20px 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 18px; }
+.paper-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.paper-head h3 { margin: 0; font-size: 17px; }
+.paper-id { color: var(--muted); font: 600 12px/1.4 var(--font-mono); }
+.paper-meta { margin: 2px 0 14px; color: var(--muted); font-size: 13px; }
+.paper-card h4 { margin: 16px 0 6px; font: 700 11px/1.3 var(--font-system); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.paper-card h4:first-of-type { margin-top: 4px; }
+.paper-card p { font-size: 14.5px; }
+.paper-card ul { margin: 4px 0 0; padding-left: 18px; font-size: 14px; color: var(--ink); }
+.paper-card li { margin-bottom: 5px; }
+.paper-card li::marker { color: var(--accent); font-weight: 800; }
+.corr-box {
+  margin-top: 6px; padding: 10px 14px; border-left: 3px solid var(--amber);
+  background: var(--amber-soft); border-radius: 0 8px 8px 0; font-size: 13.5px;
+}
+.cite-box {
+  margin-top: 4px; padding: 10px 14px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--muted);
+}
+.cite-box .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+
+/* Positioning table */
+.pos-table-wrap { overflow-x: auto; margin: 18px 0; }
+table.pos-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.pos-table th, table.pos-table td { padding: 8px 10px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+table.pos-table th { background: var(--accent-soft); color: var(--accent); font: 700 11px/1.3 var(--font-system); letter-spacing: .03em; text-transform: uppercase; }
+table.pos-table tr.c22-row td { background: var(--accent-soft); font-weight: 600; }
+table.pos-table td.num { font-variant-numeric: tabular-nums; text-align: right; }
+
+/* Empty-cell grid for crowded/empty regions */
+.region-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 14px 0; }
+.region { padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); font-size: 13.5px; }
+.region.crowded { border-color: var(--muted); }
+.region.empty { border: 1.5px dashed var(--accent); background: var(--accent-soft); }
+.region h4 { margin: 0 0 8px; font: 700 11.5px/1.3 var(--font-system); letter-spacing: .05em; text-transform: uppercase; color: var(--ink); }
+.region.empty h4 { color: var(--accent); }
+
+/* Floor/ceiling meter */
+.range-row { display: flex; align-items: center; gap: 12px; margin: 10px 0; font-size: 13.5px; }
+.range-row .rlabel { flex: 0 0 150px; color: var(--muted); font-weight: 600; }
+.range-track { position: relative; flex: 1 1 auto; height: 10px; border-radius: 999px; background: var(--line); }
+.range-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); opacity: .35; }
+.range-fill.ceiling { background: var(--green); }
+.range-fill.floor { background: var(--amber); }
+.range-vals { flex: 0 0 100px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  table.pos-table { font-size: 12px; }
+}
+</style>
+<title>whetstone-ai · c22 Related Work</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c22.html">&larr; Back to c22 candidate page</a></nav>
+
+<h1>c22 Related Work: Stacked Verifiable-Constraint Micro-Generation</h1>
+<div class="byline">whetstone-ai · 2026-07-22</div>
+
+<p>Eleven 2023-2026 papers bound c22's design space. c22's un-optimized baseline —
+<span class="key">standard IFEval checker atoms only</span>, 3-5 stacked per trivial micro-task, strict
+all-pass 0/1 — sits in the single most crowded corner of this literature (IFEval, COLLIE, FollowBench,
+InFoBench, ComplexBench, VFF, IFBench all stack deterministic or hybrid constraints and confirm a
+<span class="key">strict-AND floor effect</span>). c22's genuine novelty — a hidden, <span class="key">discover-not-copy
+Selection constraint</span> plus a synthetic infinite generator — lives entirely in a later layer the
+baseline does not yet exercise: every documented Selection operator in this corpus (ComplexBench,
+IF-RewardBench) states its branch condition in the prompt. The corpus also contains one confirmed citation
+error, corrected below.</p>
+
+<!-- PAPER DOSSIERS -->
+<div class="section-head"><h2>Paper dossiers</h2></div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>IFEval: the canonical checker library c22 vendors wholesale, at only 1-3 stacked atoms</h3>
+    <span class="paper-id">2311.07911</span>
+  </div>
+  <div class="paper-meta">Zhou, Lu, Mishra, Brahma, Basu, Luan, D. Zhou, Hou (Google) &middot; arXiv preprint, v1 2023-11-14 &middot; no peer-reviewed venue on record</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Defines 25 <span class="key">verifiable instruction</span> types across 9 groups (keywords, length,
+  casing, format, start/end-with, etc.) whose compliance a simple deterministic program can check, and
+  builds 541 prompts (1-3 instructions each) to score GPT-4 and PaLM 2 Small. Novelty is the taxonomy itself
+  plus a dual <span class="key">strict/loose</span> scoring scheme — loose applies 8 mechanical response
+  transforms (markdown-strip, intro/outro-strip) specifically to fix false negatives from formatting
+  artifacts, at the cost of more false positives.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one prompt with the base request plus 1-3 appended verifiable instructions, one response,
+  no demos shown to the evaluated model. Table 2 example: <em>"Who built the first artificial ice rink? ...
+  Use less than 487 words."</em> Scoring is prompt-level strict-accuracy — <span class="key">all instructions
+  in the prompt must be followed</span> — exactly c22's all-pass 0/1 criterion.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4</span>: prompt-level strict-accuracy 76.89%, inst-level strict 83.57% (Table 3) — the gap between the two numbers is the strict-AND compression effect made visible even at only 1-3 atoms.</li>
+    <li><span class="key">PaLM 2 Small</span>: prompt-level strict-accuracy 43.07%, inst-level strict 55.76% — a concrete small-model floor at c22's exact scoring convention.</li>
+    <li>Strict vs. loose gap is small but real: GPT-4 +2.41pp, PaLM 2 S +3.88pp prompt-level — a few points of "failure" are formatting false negatives, not true non-compliance.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Naive strict string-matching misclassifies compliant responses as failing when incidental markdown
+  (bold) or intro/outro lines surround an otherwise-correct answer — the exact motivation for the loose
+  metric. Per-category breakdowns exist only in figures <span class="unverified"></span> not renderable in
+  extraction.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> IFEval defines exactly 25 verifiable instruction types and is the originating
+  checker-based evaluation approach later work builds on — c22 reuses this checker library directly as its
+  constraint-atom source. One precision note: the paper's own prompt count is <strong>541</strong>, not the
+  abstract's rounded "around 500" — immaterial to the corpus claim but worth citing precisely. c22 inherits
+  IFEval's checkers but <span class="key">not</span> its loose-accuracy mitigation, so its strict-only baseline
+  carries the same formatting false-negative risk without the fix.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">30</span> citations (<span class="v">22</span> since 2025; 2024:8, 2025:15, 2026:7). Implausibly low for a benchmark of IFEval's stature — read as an <em>indexing artifact</em>, not a true impact signal. <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>COLLIE: one-shot demos don't help, feedback plateaus at 66% — and its grammar has no conditional branch</h3>
+    <span class="paper-id">2307.08689</span>
+  </div>
+  <div class="paper-meta">Yao, Chen, Hanjie, Yang, Narasimhan (Princeton) &middot; arXiv v1 2023-07-17 &middot; ICLR 2024 attribution unconfirmed from arXiv metadata</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>A context-free grammar compositionally expresses count/position constraints across word/sentence/
+  paragraph/passage levels, combined only with logical AND/OR, with target values extracted from real corpora
+  (Wikipedia, CC-News, Gutenberg) rather than invented. Even GPT-4, the best of five models, satisfies
+  constraints only <span class="key">50.9%</span> of the time zero-shot on COLLIE-v1.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Primary: zero-shot, one rendered instruction per constraint, one generation, binary True/False per
+  instance. Also runs a genuine <span class="key">interactive feedback loop</span> (rounds 2-4, rule-based or
+  GPT-polished per-turn feedback stating which constraints failed) — the paper's own closest analog to a
+  multistep protocol.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4</span>: 50.9% average zero-shot; 100% success starting a sentence with a given word vs. 40-60% ending one with a given word (position effect).</li>
+    <li>Pass@20: GPT-4 &gt;63% vs. GPT-3.5 32%.</li>
+    <li>Feedback loop: ~20% gain after round 2, then <span class="key">plateaus at 66%</span> through rounds 3-4 — comparable to plain pass@5, not a solve.</li>
+    <li>Logical composition hurts even when the added constraint looks trivial: sent03 (word01 + one extra sentence-level count constraint) is uniformly harder than word01 alone.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Exact-equality count constraints are harder than range or bound-only constraints; arbitrary (non-first,
+  non-last) position constraints are uniformly hard; GPT-4 frequently <span class="key">fabricates non-words</span>
+  ("coordinasor") to satisfy tight letter-position constraints rather than producing valid English.</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The corpus's zero-shot-vs-one-shot numbers
+  (GPT-4 40.7%&rarr;39.4%, GPT-3.5 23.1%&rarr;23.6%) were run on <strong>"an internal version of the dataset
+  before the current Collie-v1"</strong> — not COLLIE-v1 itself, and not directly comparable to the 50.9%
+  COLLIE-v1 headline. Also, calling COLLIE "purely synthetic" overstates it: constraint <em>target values</em>
+  are deliberately extracted from real corpora, which the paper explicitly contrasts with prior synthetic
+  grammar-based benchmarks (BabyAI/CLEVR-style).</div>
+  <p><strong>Partially supported.</strong> COLLIE's grammar offers only AND/OR — <span class="key">no conditional
+  Selection operator</span> ("if P then A else B") anywhere in its formal grammar — so it is a structural
+  ancestor of c22's stacking mechanic but not its Selection/discovery mechanism, which is sourced from
+  ComplexBench instead.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (0 since 2025; 2024:1). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>FollowBench: the level-ladder c22 borrows, and a judge whose agreement swings 67-88% by prompt design</h3>
+    <span class="paper-id">2310.20410</span>
+  </div>
+  <div class="paper-meta">Jiang, Y. Wang, Zeng, Zhong, Li, Mi, Shang, X. Jiang, Liu, W. Wang (HKUST/Huawei Noah's Ark) &middot; ACL 2024 (arXiv v3 camera-ready 2024-06-05)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Five constraint categories (Content, Situation, Style, Format, Example) and a <span class="key">Multi-level
+  mechanism</span> that adds one constraint per level (1-5) to the same base instruction, letting difficulty
+  breakdown localize exactly where a model's instruction-following collapses. A hybrid rule-based/GPT-4-judge
+  protocol shows the instruction-following upper bound for GPT-4/GPT-3.5 is <span class="key">about 3
+  constraints</span>; open-source models cap around 2.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot, single-round by explicit design ("our current investigation is confined to single-round
+  interactions"): each level-n instance is one independent forward pass with all n constraints stated up
+  front — nothing staged or hidden. The Example-constraint category is itself a 5-shot in-context task with
+  n-1 noise/distractor templates injected as difficulty rises.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">CSL</span> (Consistent Satisfaction Levels) ceiling: GPT-4 3.3, GPT-3.5 2.9; open-source models cluster 1.4-2.4.</li>
+    <li>Format constraints show the steepest floors: LLaMA2-Chat-70B/13B/7B score 0.0-0.5 HSR across nearly all levels, vs. GPT-4's 87.5&rarr;42.5 in the same category.</li>
+    <li>Example constraints (noisy 5-shot) are uniformly hardest: even GPT-4's HSR average is only 50.7, vs. 76-93 in Content/Situation/Style.</li>
+    <li>Judge-prompt ablation: multi-level-aware judge prompt reaches 88% human agreement vs. 79% without the evolution path vs. 67% for a holistic Vicuna-style quality prompt.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>All 13 models degrade roughly monotonically 1&rarr;5; stronger models fail <em>less consistently</em>
+  once they fail once (GPT-4 42.2% "failure consistency" vs. ChatGLM3-6B's 64.0%) — capability and
+  <span class="key">quality are decomposable axes</span> (WizardLM-13B beats GPT-3.5 on AlpacaEval but trails
+  badly on CSL).</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> The paper verbatim confirms the incremental 1-to-5 level-ladder mechanic c22
+  borrows. But roughly half of FollowBench's instructions require an LLM judge (an "inherent imperfection" by
+  the authors' own words) — a dependency c22's fully deterministic checker library is designed to avoid
+  entirely. FollowBench's constraints are also all stated in-prompt; its only "discovery" burden falls on the
+  judge (spotting the newly-added constraint), never on the generating model.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>InFoBench: DRFR is the ancestor of c22's per-atom diagnostics, but its atoms are judged by an LLM, not code</h3>
+    <span class="paper-id">2401.03601</span>
+  </div>
+  <div class="paper-meta">Qin, Song, Hu, Yao, Cho, X. Wang, Wu, Liu, P. Liu, Yu &middot; arXiv v1 2024-01-07 &middot; Findings of ACL 2024 per task citation (not independently confirmed from arXiv metadata)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Introduces the <span class="key">Decomposed Requirements Following Ratio (DRFR)</span>: decompose each
+  complex instruction into atomic YES/NO criteria and score per-requirement rather than holistically. A
+  500-instruction benchmark (Easy + a harder, manually curated Hard Set) pairs with the finding that GPT-4 as
+  annotator is cheap and nearly as accurate as human experts for this decomposed scoring.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Generation is single-shot (one instruction, one greedy-decoded response). Scoring is a
+  <span class="key">multi-turn dialogue with the judge</span> — GPT-4 answers each decomposed question
+  sequentially, carrying prior YES/NO answers as context; this sequential protocol beat both an all-at-once
+  and a fully-independent question format. Few-shot examples added to the judge prompt gave
+  <span class="key">"no significant improvement."</span></p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>DRFR vs. Direct Scoring Pairwise Kappa: 0.532 vs. 0.284 — decomposition roughly doubles annotator agreement.</li>
+    <li>Annotator accuracy/cost (50-instruction slice): Expert 100%/$1,416/1,440 min; GPT-4 89%/$19.40/60 min; AMT 84%/$187.50/2,160 min.</li>
+    <li>Six-model DRFR (Overall): GPT-4 89.4, GPT-3.5 86.7, Claude-2.1 86.4, Gemini-Pro 85.6, Llama-2-70B 84.4, Vicuna-13B 78.4.</li>
+    <li>Even the best model leaves <span class="key">&gt;10% of requirements unfulfilled</span>.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>All six models score lowest on <span class="key">Number and Linguistic</span> constraints — miscounted
+  characters, unmaintained numeric ratios; the judge itself inherits some of these numeric-counting errors,
+  plus spatial-reasoning blind spots and susceptibility to instruction-echoing.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Supported.</strong> DRFR = sum of per-atom binary verdicts over total requirements — precisely a
+  per-atom, partial-credit-style diagnostic model. c22 borrows the per-atom verdict-logging idea but
+  intentionally rejects DRFR's ratio-based partial credit for its own instance score, keeping only strict
+  0/1 all-pass. The core difference: InFoBench's atoms are judged by an <span class="key">LLM</span>
+  (imperfect per its own error analysis), not a deterministic checker.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2025:1). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>ComplexBench: the source of c22's Selection operator — but every documented Selection states its condition</h3>
+    <span class="paper-id">2407.03978</span>
+  </div>
+  <div class="paper-meta">Wen, Ke, Gu, Wu, Huang, Zhou, Li, Hu, Gao, Xu, Liu, Tang, H. Wang, M. Huang (Tsinghua/Zhipu AI/UESTC) &middot; NeurIPS 2024 D&amp;B (arXiv v3, 2024-10-31)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Introduces And/Chain/<span class="key">Selection</span>/Nested composition types — beyond simple
+  And-coordination — plus a Rule-Augmented LLM-based (RAL) evaluator combining deterministic rule-checks with
+  an LLM judge. Even GPT-4-1106 fails <span class="key">~20% of complex instructions</span> overall, and only
+  <span class="key">14.9%</span> on the strict Coherent Test for multi-layer nested Selection.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Primary: single-shot, one full composed instruction, one response, hybrid RAL scoring (partial-credit
+  DRFR-style, dependency-aggregated — <span class="key">not</span> strict all-pass). Secondary: manually
+  decomposes composition-bearing instructions into a multi-round execution loop.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4-1106</span>: All(Avg.) DRFR 0.800 (best of 15), but Selection(&ge;3)=0.694 and Sel.&amp;Chain(&ge;3)=0.626 — its worst subcategories.</li>
+    <li>GPT-3.5-Turbo-1106 fine-grained collapse: DRFR falls from 0.845 (1 And only) to <span class="key">0.083</span> for the single hardest combination (1 And + 1 Chain + 2 Selection).</li>
+    <li><span class="key">Manual decomposition into multi-round execution hurts</span>, not helps: GPT-3.5-Turbo-1106 overall DRFR drops 0.682&rarr;0.652, worse on more-composed categories — attributed to cumulative errors across turns.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Selection's difficulty is not just picking the right branch but <span class="key">executing it without
+  interference from irrelevant branches</span>. A documented annotation artifact: ~70% of two-branch
+  Selections have the correct branch first — a positional bias the authors correct for and a direct warning
+  for c22's own Selection generator.</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The operator taxonomy attribution is fully
+  supported, but <strong>"discover, not copy" is NOT literally supported by the paper</strong>: in every
+  worked example and the formal definition, the Selection condition is always <span class="key">stated
+  explicitly</span> in the instruction text. c22's hidden-condition hardening is a genuine extension this
+  paper does not test or claim.</div>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. <em>OpenAlex undercounts relative to Google Scholar; zero here reflects indexing lag for a NeurIPS 2024 D&amp;B paper, not irrelevance.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>VFF: structurally the closest paper to the baseline — same strict-AND scoring, same deterministic-beats-judge case</h3>
+    <span class="paper-id">2502.04498</span>
+  </div>
+  <div class="paper-meta">Z. Wang, Jiang, Zhou, Zheng, Zhang, Bansal, Yao (UNC Chapel Hill / Imperial / Microsoft Research) &middot; arXiv v1 2025-02-06 &middot; Findings of NAACL 2025</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>7B-level open models satisfy general instruction-following reasonably but fail badly on fine-grained
+  format control as constraint count rises (level 1&rarr;3). VFF curates ~60 Python-verifiable meta-constraints
+  over Alpaca questions and shows a self-improvement pipeline (sample &rarr; annotate via checker &rarr; SFT+DPO)
+  raises small-model format-following, sometimes past GPT-4.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one instruction (question + concatenated constraints), one response, scored by
+  <span class="key">I = &prod; F<sub>k</sub>(y)</span> — strict conjunctive pass across k constraint instances,
+  exactly c22's all-pass design. Multi-step exists only in training (progressive curriculum across
+  difficulty levels), never at evaluation time.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">GPT-4-turbo</span> strict at levels 1/2/3: <span class="key">76.29 / 53.33 / 35.31</span> — the cleanest strict-AND analog to c22's own difficulty dial.</li>
+    <li>GPT-3.5: 62.93 / 34.07 / 16.40; 7B baselines (Mistral, LLaMA-2, LLaMA-3): L1&asymp;50-60, L3&asymp;9-16.</li>
+    <li>Trained LLaMA-3-8B reaches level-3 <span class="key">38.36</span>, edging out GPT-4-turbo's 35.31 — but its general InfoBench score regresses (83.10&rarr;78.13).</li>
+    <li><span class="key">Deterministic checking dominates LLM judging</span>: Python 100% accuracy / 0.52s / $0 vs. GPT-4o-mini 59.0%/99.5s/$0.0144 and GPT-4o 70.0%/205s/$2.38, with judges 25-52% self-inconsistent even at temp 0.1.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>All 7B baselines collapse specifically on <span class="key">level-2/level-3 composition</span>, not
+  general instruction comprehension; DPO-only training (no prior SFT) actively harms format-following as
+  training proceeds across levels.</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The paper states "we only reserve about
+  <strong>60</strong> unique meta constraints" — not 64. No occurrence of "64" appears anywhere in the
+  extracted text; the figure should read ~60.</div>
+  <p><strong>Partially supported, with the numeric correction above.</strong> The low small-model floor on
+  composed constraints is directly confirmed. VFF has <span class="key">no conditional/Selection constraint</span>
+  anywhere — its meta-constraints are static template-fills, the single largest structural gap versus c22's
+  design, and its base task is open-ended Alpaca prose, not c22's trivial micro-output.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. <em>OpenAlex undercounts relative to Google Scholar; zero reflects indexing lag for a 2025 Findings paper, not irrelevance.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>LIFEBench: exact length targets are the hardest control method — and c22's tiny output sidesteps this entirely</h3>
+    <span class="paper-id">2505.16234</span>
+  </div>
+  <div class="paper-meta">Wei Zhang, Zhou, K. Wang, Fang, Y. Zhang, R. Wang, G. Zhang, Li, Sun, Lyu, Y. Liu, Su (BUPT/NTU/NUS/M-A-P/NCEPU/Sony AI) &middot; NeurIPS 2025 (arXiv v1 2025-05-22)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>The first full-range (16-8,192 words) length-instruction-following benchmark: 26 LLMs mostly fail to hit
+  exact length targets, and <span class="key">almost universally fail to reach vendor-claimed maximum output
+  lengths</span> even under extreme forcing (up to 32,768 words). Introduces Length Deviation/Length Score
+  metrics and a "lazy generation strategies" failure taxonomy.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: one templated <code>[Instruction] + [Requirement]</code> prompt, one generation, scored
+  post hoc by word count. No demos, no feedback loop in the main protocol. Reasoning models show internal
+  multi-step self-correction (draft, self-count, revise) <span class="key">within</span> one call, not an
+  external interaction loop.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">23 of 26 models score below Length Score 60</span> under Equal-To (exact match); only o3-mini (75.4), Claude-3.7-Sonnet-Thinking (61.3), Gemini-2.5-Pro (60.0) exceed it.</li>
+    <li>Under At-Most, 19/26 exceed LS 90; under At-Least, only 6/26 do — "Equal To" is far harder than one-sided bounds.</li>
+    <li>Under long constraints (&ge;4096 words) <span class="key">no model consistently exceeds LS 40</span>.</li>
+    <li>Lazy-strategy rate (refusal / partial-attempt) exceeds 10% on average at the 8192-word constraint, near 50% for o1-mini/o3-mini specifically.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p><span class="key">Length-awareness deficit</span>: models cannot accurately gauge their own generated
+  word count; reasoning-model self-correction "only partially alleviates the problem for short length
+  constraints and still fails under longer constraints."</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction, confirmed</span> First author is <strong>Wei Zhang</strong>
+  (BUPT) — the paper's own header cross-check explicitly confirms this and flags an earlier "Wu" citation in
+  the corpus as an error.</div>
+  <p><strong>Partially supported.</strong> The low floor is real but is <span class="key">not exclusively a
+  small-model effect</span> — even large/proprietary/reasoning models (GPT-4o, Gemini-2.0-Flash, DeepSeek-R1)
+  score well below 60 LS under exact-match. Relevant to c22: its micro-output design ("a few words") makes an
+  exact-word-count atom trivially satisfiable on a tiny target, sidestepping LIFEBench's central long-form
+  collapse.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. <em>OpenAlex undercounts relative to Google Scholar; zero reflects indexing lag for a NeurIPS 2025 paper, not irrelevance.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>IFBench: frontier models score &lt;50% OOD after saturating IFEval at 80%+ — c22's baseline reuses the saturated atoms</h3>
+    <span class="paper-id">2507.02833</span>
+  </div>
+  <div class="paper-meta">Pyatkin, Malik, Graf, Ivison, Huang, Dasigi, Lambert, Hajishirzi (AI2 / University of Washington) &middot; NeurIPS 2025 D&amp;B (arXiv v3, 2025-11-11)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Frontier models (GPT-4.1, Claude 3.7/4 Sonnet, Qwen3-32B) strongly overfit to IFEval's saturated
+  25-constraint set and <span class="key">score below 50% on 58 new OOD constraints</span> despite 80%+ on
+  IFEval. RLVR training (IF-RLVR/GRPO) on stacked constraints — up to 5-6 per training instance — improves
+  both in-domain and OOD instruction-following.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-turn: task + 1-2 concatenated constraints, one completion. Multi-turn variant: constraint deferred
+  to a third dialogue turn asking the model to <span class="key">rewrite</span> a prior response — still one
+  generation call, with dialogue history as context rather than an interactive feedback loop. The
+  <span class="key">shipped eval set contains only 1-2 constraints per instance</span> — deeper stacking (up
+  to 6) appears only in training data, not the released benchmark.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Frontier models: <span class="key">&lt;50% IFBench vs. 80%+ IFEval</span> — the paper's headline generalization gap.</li>
+    <li>Training-stacking sweep: IFBench score <span class="key">peaks at n=3</span> stacked training constraints (59.5), non-monotonic thereafter (49.4 at n=4, 55.8 at n=5) — direct empirical support for c22's 3-5 dial.</li>
+    <li>Multi-turn transfer: models trained only on single-turn data lose ~20-30 points when evaluated multi-turn; only mixed-format training balances both.</li>
+    <li>Category floors persist post-training: "words"/"sentence" categories stay 48-71% even after targeted RL, vs. casing/format 90+.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p><span class="key">Reward hacking</span>: IF-RLVR-trained models over-prioritize the verifiable constraint
+  at the expense of task quality (e.g., "only use unique words" wrecks an actual tiramisu recipe); base-policy
+  completions score higher on LLM-judged quality (7/10) than IF-RLVR completions (6.4/10) on the same prompts.</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The extracted paper text contains
+  <strong>no mention of "GEPA"</strong> anywhere — the "GEPA's headline IF task" clause cannot be verified
+  from this source and is presumably attested elsewhere.</div>
+  <p><strong>Partially supported</strong> on the 58-OOD-constraints-plus-verifiers half. c22's un-optimized
+  baseline uses <span class="key">exactly the saturated IFEval atoms</span> IFBench shows are overfit —
+  the family is current, but the baseline's specific atom set is its least-current slice.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">1</span> citation (<span class="v">1</span> since 2025; 2026:1). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>IF-RewardBench: judges max out at 0.609 tau_b vs. 0.755 human — and corroborates Selection as the hardest composition to verify</h3>
+    <span class="paper-id">2603.04738</span>
+  </div>
+  <div class="paper-meta">B. Wen, Niu, C. Wang, Ling, Y. Zhang, Ke, H. Wang, M. Huang (Tsinghua CoAI / Zhipu AI / UESTC) &middot; ACL 2026 (arXiv v2, 2026-04-16)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>Benchmarks <span class="key">judge/reward models</span>, not generators: even the best proprietary judge
+  (Gemini-3-Pro) reaches only Kendall tau_b <span class="key">0.609</span> ranking responses by
+  instruction-following quality, versus a human baseline of 0.755; all dedicated reward models score below
+  0.2. Adopts ComplexBench's And/Chain/Selection/Nested taxonomy directly.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single inference pass per judgment: full instruction + full constraint checklist + response, judge emits
+  all per-constraint verdicts at once (constraint assessment) or ranks multiple responses (overall
+  assessment). Not a generator benchmark — this paper studies whether a judge can score outputs correctly, a
+  different axis from c22 entirely.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li><span class="key">74.6% of (response, constraint) pairs are annotated "followed"</span> — a rare direct anchor for a single stated constraint's base pass rate, used as c22's floor-risk calibration anchor.</li>
+    <li>Complex composition types (<span class="key">Chain, Selection</span>) are harder for judges to verify than Single/And — independent corroboration that Selection resists easy reasoning, this time from the judge-reliability angle.</li>
+    <li>Disabling chain-of-thought hurts judges substantially (GLM-4.6 constraint-assessment tau_b drops 32.7%); self-consistency (Maj@K) helps but saturates beyond K=7.</li>
+    <li>Numerical/Format constraints — c22's exact atom set — are the <span class="key">easiest, most reliably verified</span> category; Situation/Style are hardest and least suited to automatic judgment.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Judges systematically <span class="key">under-detect constraint violations</span> (low negative-class
+  F1) and fail to correctly prioritize system-prompt constraints over conflicting later user-turn constraints.</p>
+  <h4>Corpus-claim verdict</h4>
+  <p><strong>Partially supported.</strong> The 842-instruction count and three instruction types are directly
+  confirmed. But "extending the verifiable-constraint atom pool" overstates it: most of IF-RewardBench's
+  constraint categories are <span class="key">not</span> reliably code-verifiable and rely on costly human
+  annotation (~$15,000, 22 annotators) — it extends the constraint <em>taxonomy</em> and judge-evaluation
+  methodology, not a deterministic-checker code pool comparable to IFEval/IFBench's.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. <em>OpenAlex undercounts relative to Google Scholar; zero-by-construction for a 2026 ACL paper — indexing lag, not irrelevance.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>The Instruction Hierarchy: a foundational rule-priority framework, but cited into this corpus via a shaky reference</h3>
+    <span class="paper-id">2404.13208</span>
+  </div>
+  <div class="paper-meta">Wallace, Xiao, Leike, Weng, Heidecke, Beutel (OpenAI) &middot; arXiv v1 2024-04-19 &middot; no peer-reviewed venue on record</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>LLMs are vulnerable to prompt injection largely because they treat system, user, and tool-output
+  instructions as equal priority. Proposes a 4-level hierarchy (System &gt; User &gt; multimodal &gt; Tool) and
+  a synthetic-data fine-tuning recipe, improving robustness by up to <span class="key">63%</span> in-domain
+  and <span class="key">34%</span> on held-out attack generalization, with minimal capability loss.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single forward-pass: System + User (+ optional Tool Output) in, one Model Output, scored by exact-string/
+  unigram-overlap heuristics or a separate GPT-4-judge call — never a deterministic per-atom checker.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Hierarchy-trained GPT-3.5 Turbo: up to 63% robustness gain on main evals, 34% on held-out generalization evals, comparable capability benchmarks (TriviaQA, LAMBADA, HellaSwag).</li>
+    <li>Regressions on two <span class="key">over-refusal</span> evals (System Message Probing Questions; Jailbreakchat with Allowed Prompts) — the hierarchy over-applies to benign look-alike inputs.</li>
+    <li>A prompting-only "System Message Baseline" is much weaker than fine-tuning on hierarchy data, though combining both sometimes helps most.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Over-refusal is the central failure mode; the Conclusion also concedes "our current models are likely
+  still vulnerable to powerful adversarial attacks."</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The extraction contains <strong>no reference to
+  "IHEval"</strong> anywhere in the body or references list — this paper does not mention, propose, or
+  evaluate on an IHEval benchmark. c22's own candidate page separately flags that the corpus <span class="unverified">cites it only via an OpenReview id</span>, not the arXiv page — an independent citation-hygiene issue corroborating that the IHEval linkage needs a downstream-paper check, not this one.</div>
+  <p><strong>Partially supported.</strong> The foundational privileged-instruction framework is real and
+  well-supported; the paper's scoring (GPT-4-judge / string-overlap) is exactly the kind of non-deterministic
+  verification c22's checker-library design is built to avoid.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">8</span> citations (<span class="v">7</span> since 2025; 2024:1, 2025:5, 2026:2). <em>OpenAlex undercounts relative to Google Scholar.</em></div>
+</div>
+
+<div class="paper-card">
+  <div class="paper-head">
+    <h3>DeonticBench: rule-selection dominates real-world failure (96.8% "Wrong Rule" on Housing) — adjacent, not a direct ancestor</h3>
+    <span class="paper-id">2604.04443</span>
+  </div>
+  <div class="paper-meta">Dou, Brena, Deo, Jurayj, J. Zhang, Holzenberger, Van Durme (Johns Hopkins / T&eacute;l&eacute;com Paris) &middot; arXiv v1 2026-04-06 &middot; venue ambiguous (COLM-styled, unconfirmed)</div>
+  <h4>Claim &amp; novelty</h4>
+  <p>LLMs struggle to apply obligations/permissions/prohibitions from long real statutes across four
+  high-stakes domains (tax, airline fees, immigration appeals, housing law), even with an optional Prolog
+  solver-assisted workflow. 6,232 tasks, the largest benchmark to date for executable rule-based reasoning in
+  real-world domains.</p>
+  <h4>Protocol &amp; observation (exact)</h4>
+  <p>Single-shot: Direct / Zero-Shot / Few-Shot, one call each, scored by an external SWI-Prolog execution
+  engine comparing printed output to a gold label ($1 tolerance for numeric, exact match for classification)
+  — a real symbolic verifier, but one that checks only the <span class="key">final printed answer</span>, with
+  no per-sub-rule diagnostic built into scoring itself.</p>
+  <h4>Models &amp; headline numbers</h4>
+  <ul>
+    <li>Best hard-subset results: O3 Zero-Shot <span class="key">44.4%</span> on SARA Numeric; GPT-4.1 Few-Shot <span class="key">46.6</span> macro-F1 on Housing — though within the same table GPT-5.1 Few-Shot scores higher on Housing (46.8), and a separately-tabulated coding model (GPT-5.2-Codex) scores higher on SARA Numeric (45.8).</li>
+    <li>Error taxonomy on hardest failures: <span class="key">"Wrong Rule"</span> dominates Housing (96.8% few-shot) and USCIS-AAO (77.3% zero-shot); "Numerical" (arithmetic) errors dominate Airline (100% few-shot).</li>
+    <li>SFT/DPO/GRPO on Qwen2.5-32B improves classification tasks but SARA Numeric stays below 10% across every training method.</li>
+  </ul>
+  <h4>Failure modes</h4>
+  <p>Symbolic (Prolog) generation trades abstentions for correctness vs. Direct prompting, which reduces
+  abstentions but raises incorrect-answer rates; increased reasoning effort does not consistently help and
+  sometimes hurts.</p>
+  <h4>Corpus-claim verdict</h4>
+  <div class="corr-box"><span class="fix">correction</span> The "successor to the RuleArena rule-application
+  family" framing overstates the relationship: RuleArena is only <strong>one of four</strong> source domains
+  (the Airline subset) — the paper itself frames RuleArena/CL-bench merely as "closest to our setting" for a
+  size comparison, not as lineage DeonticBench formally succeeds. The paper never mentions IFEval/IFBench/
+  verifiable-constraint instruction-following at all; "adjacent to c22" is the corpus's own editorial framing.</div>
+  <p><strong>Partially supported.</strong> The 6,232-task count and optional-Prolog-verifier framing are
+  confirmed. Its "Wrong Rule" error category echoes c22's Selection mechanism at a conceptual level (discover
+  which rule applies) but at a heavyweight symbolic-execution scale, contrasting with c22's lightweight
+  pure-Python checkers.</p>
+  <div class="cite-box">OpenAlex, fetched 2026-07-22: <span class="v">0</span> citations. <em>OpenAlex undercounts relative to Google Scholar; zero-by-construction for an April 2026 preprint, not evidence of low impact.</em></div>
+</div>
+
+<!-- POSITIONING MAP -->
+<div class="section-head"><h2>Positioning map</h2></div>
+<p>Three axes organize this family: <span class="key">verifier type</span> (deterministic code &rarr; hybrid
+&rarr; LLM judge &rarr; symbolic execution), <span class="key">rule provenance</span> (stated atoms &rarr;
+stated composition &rarr; hidden/discover &rarr; source-priority), and <span class="key">output shape</span>
+(micro all-pass vs. free-form partial-credit). Every one of the 11 papers is single-shot on the generation
+side — "multi-turn" is always a judge protocol, a training curriculum, or a difficulty ladder, never an
+interactive solver loop for the model under test.</p>
+
+<div class="pos-table-wrap">
+<table class="pos-table">
+<thead><tr>
+  <th>Paper</th><th>Verifier</th><th>Provenance / shape</th><th>Output / scoring</th><th class="num">Cited-by (OpenAlex, 2026-07-22)</th>
+</tr></thead>
+<tbody>
+<tr><td>IFEval (2311.07911)</td><td>Deterministic, 25 checkers</td><td>Stated atoms (1-3)</td><td>Free-form, prompt-level strict all-pass (+loose)</td><td class="num">30</td></tr>
+<tr><td>COLLIE (2307.08689)</td><td>Deterministic parser (count/pos)</td><td>Stated, AND/OR only, no conditional</td><td>Word&rarr;passage, True/False all-hold</td><td class="num">1</td></tr>
+<tr><td>FollowBench (2310.20410)</td><td>Hybrid (rule for closed, GPT-4 judge for open)</td><td>Stated, incremental level 1&rarr;5</td><td>HSR/SSR/CSL (partial + all-pass HSR)</td><td class="num">1</td></tr>
+<tr><td>InFoBench (2401.03601)</td><td>LLM-as-judge, per-atom YES/NO</td><td>Stated (decomposed post-hoc)</td><td>DRFR ratio (partial credit)</td><td class="num">1</td></tr>
+<tr><td>ComplexBench (2407.03978)</td><td>Hybrid RAL (~17% rule, ~83% judge)</td><td>And/Chain/Selection/Nested, condition stated</td><td>DRFR w/ dependency aggregation</td><td class="num">0</td></tr>
+<tr><td>VFF (2502.04498)</td><td>Deterministic Python, ~60 meta-constraints</td><td>Stated atoms, level 1-3</td><td>Free-form, strict AND (&prod;F<sub>k</sub>)</td><td class="num">0</td></tr>
+<tr><td>LIFEBench (2505.16234)</td><td>Deterministic word/char counter</td><td>Stated (single length atom)</td><td>Continuous Length Score 0-100</td><td class="num">0</td></tr>
+<tr><td>IFBench (2507.02833)</td><td>Deterministic, 58 OOD + 29 train checkers</td><td>Stated atoms (1-2 per eval instance)</td><td>Free-form, strict/loose prompt-level</td><td class="num">1</td></tr>
+<tr><td>Instruction Hierarchy (2404.13208)</td><td>GPT-4 judge + string overlap</td><td>Source-priority (system&gt;user&gt;tool)</td><td>Free-form, obey/ignore</td><td class="num">8</td></tr>
+<tr><td>IF-RewardBench (2603.04738)</td><td>Meta: scores judges; ground truth code+human</td><td>Taxonomy incl. Selection, condition stated</td><td>Per-atom pass-rate + ranking (&tau;<sub>b</sub>)</td><td class="num">0</td></tr>
+<tr><td>DeonticBench (2604.04443)</td><td>External SWI-Prolog execution</td><td>Rule selection from long statutes</td><td>Macro-F1 / numeric accuracy</td><td class="num">0</td></tr>
+<tr class="c22-row"><td>c22 (as designed)</td><td>Deterministic (IFBench checkers), per-atom diagnostics</td><td>Baseline: stated; Selection layer: hidden/discover</td><td>Micro-output, strict all-pass 0/1</td><td class="num">&mdash;</td></tr>
+</tbody>
+</table>
+</div>
+<p class="small muted">OpenAlex counts fetched 2026-07-22. <span class="unverified"></span> These
+materially <strong>undercount relative to Google Scholar</strong> — IFEval's "30" is implausibly low for a
+benchmark of its stature and reads as an indexing artifact, not a true count — and are near-zero
+by construction for 2025-2026 papers (indexing lag, not irrelevance). Treat as a coarse recency signal only.</p>
+
+<div class="region-grid">
+  <div class="region crowded">
+    <h4>Crowded region</h4>
+    <p>Deterministic/hybrid scoring &times; stated stacked atoms &times; free-form output. IFEval, COLLIE,
+    VFF, IFBench, FollowBench, and ComplexBench's rule subset all live here, all use constraint count as the
+    difficulty dial, and all confirm the strict-AND floor effect plus deterministic-beats-judge. c22's
+    un-optimized baseline lands squarely in this corner.</p>
+  </div>
+  <div class="region empty">
+    <h4>Empty cell 1 — trivial micro-output</h4>
+    <p>No paper deliberately trivializes the base task to isolate constraint-following in strict all-pass
+    scoring over a <span class="key">few-word output</span>. Every other paper uses substantive base tasks
+    (essays, recipes, statutes) where task-quality and constraint-following interact.</p>
+  </div>
+  <div class="region empty">
+    <h4>Empty cell 2 — hidden Selection</h4>
+    <p>The Selection <em>operator</em> exists (ComplexBench, IF-RewardBench), but in every documented example
+    the branch condition is <span class="key">stated in the prompt</span>. c22's "discover, not copy"
+    conditional constraint over trivial micro-outputs occupies a genuinely empty cell.</p>
+  </div>
+  <div class="region empty">
+    <h4>Empty cell 3 — seeded infinite generator</h4>
+    <p>Every paper here ships a fixed, frozen, released dataset. None ships a seeded on-the-fly generator.
+    c22's infinite/contamination-resistant pool is a real gap — but it is <span class="key">build burden, not
+    the novelty claim</span>: the checker code is reused; the generator is net-new, unshipped work.</p>
+  </div>
+</div>
+
+<!-- CAPABILITY SYNTHESIS -->
+<div class="section-head"><h2>Capability synthesis</h2></div>
+<p class="small muted">Scoped to c22's <span class="key">reseed-only baseline</span>: standard IFEval checker
+atoms only, no OOD/invented atoms, no Selection constraints yet — the framing that removes exactly the two
+mechanisms carrying c22's anti-enumeration story, so the evidence that applies most directly is the
+IFEval/IFBench-in-domain/VFF/FollowBench body of work.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>One-shot works at 1-2 atoms; strict all-pass collapses by 4-5 — at every model tier</h3>
+    <p>Hard anchors at c22's exact scoring convention: <span class="key">IFEval prompt-strict</span> at 1-3
+    atoms — GPT-4 76.9%, PaLM-2-Small 43.1%. <span class="key">VFF strict at 3 atoms</span> — GPT-4-turbo 35%,
+    GPT-3.5 16%, 7B models 9-16%. Per single stated constraint, base pass rate is
+    <span class="key">&asymp;0.75</span> (IF-RewardBench) — casing/format/keyword atoms are easy (90+ even for
+    mid models), exact-count/forbidden-letter/length atoms are the hard floor-drivers. c22's trivial
+    micro-output <span class="key">uniquely neutralizes the length/counting-collapse</span> that dominates
+    VFF/LIFEBench (a 2-word answer trivially satisfies "&le;N words"), easing it relative to those benchmarks
+    on the count/length axis specifically.</p>
+  </div>
+  <div class="card">
+    <h3>Multistep does not rescue: few-shot &asymp; 0 effect, decomposition hurts, feedback plateaus</h3>
+    <p>Few-shot/one-shot demonstrations do <span class="key">not help and can hurt</span>: COLLIE zero&rarr;one-shot
+    is statistically indistinguishable; FollowBench's Example category (5-shot by design) is its
+    <em>hardest</em> category. Instruction decomposition into multi-turn execution
+    <span class="key">actively hurts</span> (ComplexBench: GPT-3.5 DRFR 0.682&rarr;0.652, attributed to
+    cumulative multi-round errors). Iterative feedback helps early then plateaus without solving (COLLIE:
+    +20% at round 2, then flat at 66% through round 4). This <em>supports</em> c22's single-call design but
+    warns the task will not be "fixed" by prompting scaffolds — difficulty is intrinsic to strict
+    compositional constraint-following.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Cheap-tier models are the decisive band, and the evidence here is thinnest: estimates interpolate between GPT-3.5/PaLM-2-Small and GPT-4</h3>
+  <p>No dossier reports numbers for c22's exact cheap tier (Gemini-2.5-Flash / GPT-5-mini / Claude Haiku 4.5 /
+  DeepSeek-Chat class) on a strict all-pass, deterministic-checker micro-task — the single largest evidence
+  gap in this synthesis. The closest anchors: <span class="key">PaLM-2-Small</span> IFEval prompt-strict
+  43.07% at 1-3 atoms; GPT-3.5 VFF strict 62.93/34.07/16.40 at L1/L2/L3; 7B-8B open models consistently
+  L1&asymp;50-65, L3&asymp;9-16. Today's cheap-tier hosted models are almost certainly stronger than these
+  proxies but weaker than frontier — placed <span class="key">between GPT-3.5-turbo and GPT-4</span>: closer
+  to GPT-4 on easy atoms (casing/format/keyword), closer to GPT-3.5 on hard atoms (exact-count/forbidden-letter)
+  and under deep stacking. The cheap tier should show the <span class="key">steepest count-driven decay</span>
+  of the deployable tiers, mirroring VFF's GPT-3.5 curve (63&rarr;34&rarr;16) more than its GPT-4 curve
+  (76&rarr;53&rarr;35).</p>
+</div>
+
+<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the reseed-only baseline</h2></div>
+<p>Setup: cheap tier, temp 0, strict all-pass, 3-5 stated IFEval atoms sampled fresh per instance over a
+trivial micro-task. This is the intersection of the <span class="key">easiest task shape</span> in the
+literature (micro-output neutralizes the length/count confound) and the <span class="key">least-measured
+model tier</span> — no dossier tests this exact cell, so both ranges carry real, asymmetric uncertainty.</p>
+
+<div class="card full">
+  <div class="range-row">
+    <span class="rlabel">Naive-prompt floor</span>
+    <div class="range-track"><div class="range-fill floor" style="left:20%; width:20%;"></div></div>
+    <span class="range-vals">~0.20&ndash;0.45</span>
+  </div>
+  <div class="range-row">
+    <span class="rlabel">Ceiling (engineered prompt)</span>
+    <div class="range-track"><div class="range-fill ceiling" style="left:55%; width:25%;"></div></div>
+    <span class="range-vals">~0.55&ndash;0.80</span>
+  </div>
+  <p class="small muted" style="margin-top:14px;">Point estimates: naive floor <strong>&asymp;0.30</strong>
+  (between VFF-L3 GPT-3.5's 0.16 and IFEval's 1-3-atom small-model 0.43, nudged up by the micro-task easing,
+  down by 4-5-atom strictness and c22's strict-only formatting false-negatives); ceiling
+  <strong>&asymp;0.70</strong> (an engineered prompt enumerating each stated atom should approach a strong
+  model's per-atom competence, since <span class="key">nothing is hidden</span> in the reseed-only baseline).
+  <span class="key">Uncertainty is HIGH and asymmetric</span> — the floor could be as low as ~0.10 (hard-atom-heavy
+  sampler, fast cheap-tier decay) or as high as ~0.50 (easy-atom-skewed sampler); the ceiling is more stable
+  (0.55-0.85). <span class="key">Go/no-go gate</span>: if the measured naive floor exceeds ~0.60, add
+  difficulty via count/hard-atom strata before proceeding.</p>
+</div>
+
+<div class="card full space-top">
+  <h3>The gap is real but likely one-shot-closable: the reseed-only baseline strips its own anti-enumeration mechanisms</h3>
+  <p>A naive-to-ceiling gap of <span class="key">~0.30-0.45</span> (0.30&rarr;0.70) is plausible and would give
+  a usable optimization signal. <strong>But</strong> the reseed-only baseline is explicitly missing the
+  Selection/discovery and OOD atoms — the two mechanisms c22's own verdict says carry the entire
+  anti-enumeration load. Because every constraint is stated in this baseline, a single well-drafted
+  enumerate-the-atoms prompt can in principle close most of that gap: nothing needs discovering. This
+  predicts the reseed-only baseline will look <span class="key">promising on floor-vs-ceiling spread but weak
+  on sustained optimization difficulty</span> — evidence leans toward needing the Selection/OOD complexity
+  layer for a durable optimizer target, unless the count/hard-atom strata alone are found to hold up a
+  residual gap.</p>
+</div>
+
+<!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
+<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>The un-optimized baseline adds almost nothing over IFEval/VFF/IFBench as an IF benchmark</h3>
+    <p>Every per-paper comparison in this corpus reaches the same conclusion for the <span class="key">baseline
+    specifically</span>: c22 reuses IFEval's checkers verbatim, VFF already tests strict-AND stacking over
+    parametrized meta-constraints, and IFBench already shows those same atoms are overfit/saturated. c22's
+    honest additions at the baseline stage are narrow — a seeded generator vs. frozen datasets, deliberate
+    base-task triviality, and per-instance per-checker diagnostic logging — not new instruction-following
+    science. The novelty (Selection/discovery, OOD atoms, infinite generator) is <span class="key">entirely
+    a later layer</span> the baseline does not yet exercise.</p>
+  </div>
+  <div class="card">
+    <h3>If optimization yields large, verified gains, the precise claim is a measurement claim, not a capability claim</h3>
+    <p>The defensible framing: reflective prompt optimization (GEPA/MIPROv2/COPRO) raises strict all-pass
+    accuracy from X% to Y% at Z rollouts on a deterministically-verified, contamination-resistant task, with
+    <span class="key">zero label noise</span> because scoring is execution-based (VFF: Python 100% vs. judges
+    59-70% with 25-52% self-inconsistency). This is <em>not</em> a claim that optimizers improve
+    instruction-following capability in general — only that they improve this measured metric on this task.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>Belongs to the prompt-optimizer-benchmarking line, realistically a workshop paper — not a new IF-benchmark venue</h3>
+  <p>Framed as "a new IF benchmark," the baseline would be correctly rejected as incremental over the crowded
+  A1&times;B1&times;C2 corner (per-paper analysis above shows it adds nothing over IFEval/VFF/IFBench there).
+  Its real value is as a <span class="key">clean testbed for comparing optimizers</span>: deterministic
+  oracle, tunable difficulty, contamination-proof, cheap — exactly the current prompt-optimizer-benchmarking
+  line (GEPA is an ICLR 2026 oral whose headline IF task is IFBench, c22's lineage). Reviewers will demand:
+  multiple optimizers at matched rollout budgets, a few-shot control (since COLLIE/InFoBench/IFEval all show
+  demos are cheap here), difficulty-stratified and per-atom curves, held-out seed/atom generalization,
+  multiple base models, and variance reporting — and will reject floor-artifact, memorized-atom, or
+  judge-scored results. A NeurIPS D&amp;B path (the IFBench/ComplexBench precedent) needs the full
+  Selection+OOD+generator design, not the baseline.</p>
+</div>
+
+<div class="card full space-top">
+  <h3>Research-currency verdict: the family is squarely current, but the baseline's atom set is its most saturated layer</h3>
+  <p>OpenAlex citation counts, fetched <span class="key">2026-07-22</span>: IFEval 30 (22 since 2025) &middot;
+  Instruction Hierarchy 8 (7) &middot; COLLIE 1 &middot; FollowBench 1 &middot; InFoBench 1 &middot; IFBench 1
+  &middot; ComplexBench 0 &middot; VFF 0 &middot; LIFEBench 0 &middot; IF-RewardBench 0 &middot; DeonticBench 0.
+  <span class="unverified">Mandatory caveat</span>: these OpenAlex counts materially undercount relative to
+  Google Scholar — IFEval's "30" is not credible as a true count for the canonical verifiable-IF benchmark and
+  reads as an indexing artifact — and are near-zero by construction for 2025-2026 papers (lag, not
+  irrelevance). The lineage is live and accelerating (IFEval 2023 &rarr; ComplexBench NeurIPS 2024 D&amp;B
+  &rarr; VFF/LIFEBench/IFBench 2025 &rarr; IF-RewardBench/DeonticBench 2026), and IFEval's own 22-of-30
+  citations landing in 2025+ (even undercounted) confirms the founder is still actively built upon. But
+  IFBench exists <em>because</em> IFEval's 25 atoms are saturated/overfit (frontier &lt;50% OOD) — and c22's
+  un-optimized baseline uses exactly those saturated atoms. Net: <span class="key">currency is a genuine
+  strength of the family and of c22's full design, and a genuine weakness of c22's baseline as specced.</span>
+  The publishable path leans on optimizer-benchmarking currency (GEPA/MAS-PromptBench), not on out-citing the
+  IF-benchmark corner.</p>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c22.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c22 candidate page</a>
+  <a href="../candidates-table.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Candidates table</a>
+  <a href="../recommendations-round2.html#table" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">Round 2 rescore</a>
+</nav>
+
+</main>
+</body>
+</html>

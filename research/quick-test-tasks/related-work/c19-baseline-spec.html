@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Baseline-spec additions — only what doc.css/flow.css lack. */
+
+/* DRAFT badge, matching the candidate-page .badge convention */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.draft { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+
+.hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.hdr-row h1 { margin: 0; }
+
+/* Outcome cards for the three-outcome decision rule */
+.outcome-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; margin: 16px 0; }
+.outcome {
+  padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.outcome .oc-tag {
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.outcome.a { border-color: var(--red); } .outcome.a .oc-tag { color: var(--red); background: var(--red-soft); }
+.outcome.b { border-color: var(--amber); } .outcome.b .oc-tag { color: var(--amber); background: var(--amber-soft); }
+.outcome.c { border-color: var(--green); } .outcome.c .oc-tag { color: var(--green); background: var(--green-soft); }
+.outcome h3 { font-size: 15px; margin: 0; }
+.outcome .cond { font: 600 12.5px/1.4 var(--font-mono); color: var(--muted); }
+.outcome p { font-size: 13.5px; margin: 0; }
+.outcome .decision { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.outcome .decision b { color: var(--ink); }
+
+/* Recommendation vs constraint distinction (skill §3) */
+.constraint {
+  margin: 14px 0; padding: 14px 20px; border: 1.5px solid var(--ink); border-radius: 10px;
+  background: var(--surface);
+}
+.constraint .tag {
+  display: inline-block; margin-bottom: 6px; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--ink);
+}
+.constraint ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.constraint li { margin-bottom: 5px; }
+
+.proposed-tag {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--accent);
+  font: 700 9.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+  vertical-align: middle; margin-left: 6px;
+}
+
+/* Open decisions list — visually prominent */
+.open-decisions {
+  margin: 16px 0; padding: 20px 24px; border: 2px solid var(--amber); border-radius: 12px;
+  background: var(--amber-soft);
+}
+.open-decisions h3 { color: var(--amber); margin-bottom: 10px; }
+.open-decisions ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+.open-decisions li { margin-bottom: 10px; }
+.open-decisions li::marker { color: var(--amber); font-weight: 800; }
+.open-decisions li:last-child { margin-bottom: 0; }
+
+.evnote {
+  margin: 10px 0; padding: 10px 16px; border-left: 3px solid var(--muted);
+  background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+}
+.evnote em { color: var(--ink); }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .outcome-grid { grid-template-columns: 1fr; }
+}
+</style>
+<title>whetstone-ai · c19 Baseline Spec</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c19.html">&larr; Back to c19 candidate page</a></nav>
+
+<div class="hdr-row">
+  <h1>c19 Baseline Spec: Headroom Before Complexity</h1>
+  <span class="badge draft">Draft</span>
+</div>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<div class="callout warn">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the numeric thresholds (&sect;3), and nine other open items
+  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
+  anything here as final.
+</div>
+
+<p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt
+on the <span class="key">vanilla</span> Minigrid task shape &mdash; before any build effort goes into the
+invented-command / wrap-vs-clamp complexity layer. It is a <span class="key">go/no-go instrument</span>, not
+the benchmark itself: c19's biggest early-kill risk is a naive floor that already sits near the ceiling
+(LLM-BabyBench's Predict split shows 85&ndash;97.5% on Easy standard-semantics). If that risk is real on the
+vanilla task, this baseline finds it cheaply, before the net-new simulation logic that is c19's real cost gets
+built.</p>
+
+<div class="constraint">
+  <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
+  <ul>
+    <li><span class="key">Vanilla Minigrid dynamics only.</span> Standard actions, standard movement semantics.
+    No invented commands, no wrap-vs-clamp variants &mdash; that added complexity is exactly what this
+    experiment tests the necessity of, so it cannot appear in the baseline.</li>
+    <li><span class="key">Fresh seeds, never a published instance.</span> No seed may coincide with one
+    published by any of the five related-work papers (contamination resistance, rubric criterion 8).</li>
+    <li><span class="key">Stochastic-layout envs only</span> &mdash; <code>Fetch</code>, <code>SimpleCrossing</code>,
+    <code>FourRooms</code>, <code>Empty-Random</code>. Fixed-layout <code>Empty</code> is excluded: it does not
+    vary by seed (<code>Empty-8x8</code> is identical for seeds 7 and 8), so it cannot supply distinct
+    instances.</li>
+    <li><span class="key">Single derived-fact question</span>, scored exact 0/1 match against an independent
+    oracle (the Minigrid object-model walk).</li>
+    <li><span class="key">Temperature 0.</span> Repeats = 3 (<code>repeat_id</code> in {0,1,2}) to exercise the
+    aggregation plumbing.</li>
+  </ul>
+</div>
+
+<!-- STRATA -->
+<div class="section-head"><h2>1. Strata design</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Three crossed axes: env id, grid size, fact type</h3>
+    <p><span class="key">Env id</span> (4 levels) &mdash; <code>Fetch</code>, <code>SimpleCrossing</code>,
+    <code>FourRooms</code>, <code>Empty-Random</code>; all four are run-verified as seed-threaded and
+    byte-reproducible. <span class="key">Grid size</span> (2 levels) &mdash; small ~5&times;5 and medium ~8&times;8
+    (env-native size variants where available), because the related-work synthesis shows monotone decline
+    5&times;5&rarr;9&times;9 with 7&times;7 already halving visual-grid accuracy. <span class="key">Fact type</span>
+    (4 levels) &mdash; final coordinate, heading, carrying-flag, what-is-in-front, read directly from the
+    serialized grid and agent state by independent oracle glue. Coordinate-after-a-sequence is the hardest
+    (most spatial); heading/carry are easier (fewer classes, less spatial) &mdash; the axis spreads difficulty
+    and guards against a single near-guessable fact.</p>
+  </div>
+  <div class="card">
+    <h3>Applicability matrix <span class="proposed-tag">proposed</span></h3>
+    <p class="small muted" style="margin-bottom:10px;">Not every (env &times; fact) pair is meaningful:
+    carrying-flag and what-is-in-front are only informative on envs with fetchable/placed objects.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Fact type</th><th>Fetch</th><th>SimpleCrossing</th><th>FourRooms</th><th>Empty-Random</th></tr></thead>
+        <tbody>
+          <tr><td>final coordinate</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+          <tr><td>heading</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+          <tr><td>carrying-flag</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
+          <tr><td>what-is-in-front</td><td>yes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:10px;">Carrying-flag needs pickup-able objects plus a command
+    sequence that may pick one up; only Fetch reliably supplies that under vanilla dynamics. <strong>Open:</strong>
+    the owner may extend carrying to other envs if the glue places objects (&sect;7.5).</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>N per stratum = 15 <span class="proposed-tag">proposed</span>; 390 instances total</h3>
+  <p><span class="key">Design driver:</span> rubric criterion 5 resolvability. Optimizers rank proposals on
+  tiny internal evals (3&ndash;20 tasks, 1 repeat); a meaningful prompt change (&ge;10 points) must exceed
+  residual noise on a 10&ndash;20 task internal eval. A 10-point effect on a 10-task eval is one task flipping,
+  so N=10 per internal slice is the quantization floor. Setting per-stratum N to 15 keeps every stratum at or
+  above that band so a single stratum can serve as an internal-eval slice and still resolve a 10-point effect
+  (1.5 tasks).</p>
+  <p>Env &times; size &times; {coordinate, heading, what-is-in-front} = 4 &times; 2 &times; 3 = 24 strata.
+  Env &times; size &times; {carrying-flag}, Fetch only = 1 &times; 2 &times; 1 = 2 strata.
+  <strong>26 strata &times; 15 = 390 instances</strong> in the pinned pool &mdash; comfortably in the
+  "hundreds of tasks" band rubric criterion 7 wants for disjoint minibatch/subset/official splits. Seeds are
+  the instance index within a stratum, drawn from a fresh reserved range no paper has published.</p>
+  <div class="evnote"><em>Evidence note (thin):</em> no related-work paper measured per-stratum variance on
+  this exact (single-fact, ASCII, vanilla, temp-0) cell. N=15 comes from the rubric's resolvability
+  arithmetic, not a measured variance estimate. If a pilot shows temp-0 repeat disagreement is non-trivial (it
+  should be near-zero), N must rise &mdash; flagged in &sect;7.8.</div>
+</div>
+
+<!-- PROBE PROMPTS -->
+<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<p>Both probes are shown for the <span class="key">final-coordinate</span> fact; the harness substitutes the
+fact-specific question line for the other three fact types. <code>{GRID}</code> is filled with
+<code>pprint_grid()</code> output; <code>{COMMAND}</code> is the vanilla command string (standard Minigrid
+actions only &mdash; turn-left, turn-right, forward, pickup, drop, toggle &mdash; rendered as single letters
+<code>L R F P D T</code>). These operationalize rubric criterion 4 (default prompts score low; better prompts
+close the gap) and criterion 9 (floor, ceiling, and a reference prompt known in advance).</p>
+
+<h3 style="margin-top:22px;">2.1 Probe (a) &mdash; deliberately naive prompt</h3>
+<pre><code class="language-plaintext">Here is a grid and a sequence of moves for the robot.
+
+{GRID}
+
+Moves: {COMMAND}
+
+Where does the robot end up? Answer with just the final coordinate.</code></pre>
+<p class="small muted">Fact-line variants: heading &mdash; <em>"Which direction is the robot facing at the end?
+Answer with one letter."</em> &middot; carrying-flag &mdash; <em>"Is the robot carrying an object at the end?
+Answer yes or no."</em> &middot; what-is-in-front &mdash; <em>"What is directly in front of the robot at the
+end? Answer with one word."</em></p>
+<p>Design intent: gives the grid, the command, and the question &mdash; nothing else. No coordinate
+convention, no glyph legend, no statement of move semantics, no origin. It leans entirely on the model's
+memorized "standard grid semantics." This is exactly where the too-high-floor risk lives: a capable model may
+infer the standard conventions unaided, which is precisely what this probe is designed to measure.</p>
+
+<h3 style="margin-top:26px;">2.2 Probe (b) &mdash; best-effort ceiling prompt (all standard conventions stated)</h3>
+<pre><code class="language-plaintext">You are simulating a robot on a 2D grid. Follow these rules EXACTLY.
+
+COORDINATES: cells are written (row, col). Row 0 is the TOP row; col 0 is the LEFTMOST
+column. Rows increase downward, columns increase rightward.
+
+GLYPHS in the grid below (two characters per cell):
+  - a period "." is an empty floor cell the robot may enter.
+  - "#" or "WG"/"WB" etc. (a wall glyph) is a wall; the robot CANNOT enter or pass through it.
+  - a two-letter object glyph (e.g. "KY" = yellow key, "BR" = red ball, "GG" = green goal)
+    is an object occupying that cell.
+  - the robot is shown by a direction arrow: ">" faces right (east), "<" faces left (west),
+    "^" faces up (north / toward row 0), "V" faces down (south).
+
+HEADINGS: the robot has a facing direction, one of E (east/right), W (west/left),
+N (north/up), S (south/down).
+
+MOVES (apply in order, left to right):
+  - L = turn left 90 degrees in place (does not move): E->N->W->S->E.
+  - R = turn right 90 degrees in place: E->S->W->N->E.
+  - F = step ONE cell forward in the current facing direction. If the cell directly ahead
+    is a wall or is off the edge of the grid, the robot does NOT move (it stays put); it does
+    not wrap around and does not pass through walls.
+  - P = pick up the object in the cell directly ahead, if any, and only if not already
+    carrying something; the robot then carries it.
+  - D = drop the carried object into the cell directly ahead, if that cell is empty.
+  - T = toggle (open/close) the object directly ahead; does not change position or heading.
+
+Work step by step: track the robot's (row, col) position and its heading after EACH move,
+then report only the final answer.
+
+{GRID}
+
+Moves: {COMMAND}
+
+QUESTION: What is the robot's final coordinate? Answer on the last line as: row,col</code></pre>
+<p class="small muted">Fact-line variants (replace the QUESTION line): heading &mdash; <em>"Answer on the
+last line as one of: E W N S"</em> &middot; carrying-flag &mdash; <em>"Answer on the last line as: yes or
+no"</em> &middot; what-is-in-front &mdash; <em>"Answer on the last line with one word (e.g. wall, empty, key,
+ball, goal)."</em></p>
+<p>Design intent: states every standard Minigrid convention the naive prompt withholds &mdash; origin and
+indexing, glyph legend, exact move semantics including the no-wrap/no-pass-through edge rule, and an explicit
+step-by-step instruction. It includes a lightweight CoT nudge ("work step by step") because the capability
+synthesis shows CoT is the single load-bearing lever for the cheap tier (0%&rarr;74&ndash;86%); a ceiling
+prompt that omitted it would understate the true ceiling and inflate apparent headroom.</p>
+<div class="evnote"><em>Evidence note:</em> the capability synthesis shows the ASCII rendered-grid
+representation is the <em>weak</em> format (visual-grid 34% vs adjacency 86% at 5&times;5 for Gemini-CoT). The
+ceiling prompt stays on ASCII by constraint (the task shape is fixed), so this is the
+<strong>best-prompt-on-ASCII</strong> ceiling &mdash; estimated ~55&ndash;75% &mdash; not the ~80&ndash;90%
+best-prompt-if-restructured ceiling. The decision rule in &sect;3 is calibrated to the ASCII ceiling.</div>
+
+<!-- DECISION RULE -->
+<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<p>Let <strong>naive</strong> = mean exact-match under probe (a), <strong>ceiling</strong> = mean under probe
+(b), each averaged repeat-within-task then across strata, per model, then aggregated across the model set
+(owner picks aggregate: mean or min &mdash; &sect;7.2). Thresholds are proposals grounded in the capability
+synthesis (central estimates: naive ~30&ndash;45%, ceiling ~65&ndash;80% on ASCII; too-high-floor is the
+dominant risk) and the positioning early-warning gate ("if naive floor is high (&gt;~80%) OR ceiling barely
+beats naive, STOP").</p>
+
+<div class="card full">
+  <p style="margin-bottom:0;"><strong>Proposed numeric anchors</strong> <span class="proposed-tag">all owner-adjustable</span>:
+  <code>HIGH</code> band = score &ge; 75%; <code>MID/LOW</code> band = score &lt; 75%; "&asymp;" (naive
+  approximately equals ceiling) means |naive &minus; ceiling| &lt; 10 points (the criterion-5 resolvability
+  unit); "&ll;" (naive much less than ceiling) means ceiling &minus; naive &ge; 20 points (two resolvability
+  units).</p>
+</div>
+
+<div class="outcome-grid">
+  <div class="outcome a">
+    <span class="oc-tag">Outcome (a) &middot; No headroom</span>
+    <h3>naive &asymp; ceiling &asymp; HIGH</h3>
+    <div class="cond">|naive &minus; ceiling| &lt; 10 <strong>and</strong> both &ge; 75%</div>
+    <p>The vanilla task is already near-solved regardless of prompt; there is no gap for an optimizer to
+    close. This is the P2-Easy scenario (85&ndash;97.5% standard semantics) flagged as the biggest early-kill
+    risk.</p>
+    <div class="decision"><b>Decision:</b> the vanilla task is inadequate as-is &mdash; proceed to build the
+    invented-command / wrap-vs-clamp complexity layer. That net-new difficulty is now justified by
+    measurement, not assumed.</div>
+  </div>
+  <div class="outcome b">
+    <span class="oc-tag">Outcome (b) &middot; Headroom, not prompt-closable</span>
+    <h3>naive &asymp; ceiling &asymp; MID/LOW</h3>
+    <div class="cond">|naive &minus; ceiling| &lt; 10 <strong>and</strong> both &lt; 75%</div>
+    <p>The task is hard, but stating all standard conventions doesn't help &mdash; the deficit is raw
+    execution/state-tracking, not missing convention knowledge. Models can have intact local reasoning yet
+    fail to integrate a sequence within one forward pass.</p>
+    <div class="decision"><b>Decision:</b> build the invented-rule layer (there is difficulty to exploit)
+    <strong>and</strong> keep execution depth shallow &mdash; short command sequences, small grids &mdash; so
+    the discriminating difficulty comes from convention rules (which prompts can surface) rather than deep
+    multi-step execution (which they can't).</div>
+  </div>
+  <div class="outcome c">
+    <span class="oc-tag">Outcome (c) &middot; Prompt-closable headroom</span>
+    <h3>naive &ll; ceiling</h3>
+    <div class="cond">ceiling &minus; naive &ge; 20 points</div>
+    <p>Naive under-performs, and simply stating the standard conventions recovers a large, real gap &mdash;
+    exactly the substrate an optimizer benchmark needs, and the same signature as the CoT/convention-statement
+    swing documented at the cheap tier.</p>
+    <div class="decision"><b>Decision:</b> direct prompt optimization is viable on the vanilla task; the
+    invented-rule build may be deferred or skipped for the quick-test purpose. Caveat: the publishability case
+    still needs the convention layer to differentiate from prior work &mdash; "viable for the quick-test
+    instrument" &ne; "sufficient for the paper" (&sect;7.10).</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Boundary cases the owner must rule on (&sect;7.4):</strong> mixed bands (naive MID, ceiling HIGH,
+  gap 10&ndash;20 points &mdash; falls between (b) and (c)); large per-model divergence (one model shows (c),
+  another (a)), given the documented GPT-5-mini non-conformance. Proposed default: use the
+  <strong>min across models</strong> for the HIGH test (conservative against a single lucky model) and the
+  <strong>max gap across models</strong> for the &ll; test (any model showing prompt-closable headroom
+  counts).
+</div>
+
+<!-- MODEL EVIDENCE -->
+<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
+<div class="callout warn">Not finalized here. See &sect;7.1. The owner decides the final roster, whether to
+add a frontier anchor, and the exact model versions/snapshots.</div>
+
+<h3 style="margin-top:18px;">4.1 Models tested by the five related-work papers</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Model</th><th>Tier</th><th>Paper(s)</th><th>Result on the c19-relevant cell</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>Claude 3.7 Sonnet</td><td>frontier</td><td>P2</td><td>Predict 97.5% Easy &rarr; 82.5% Very Hard; only model holding command-sequences (80%)</td><td>cap Q1/Q3</td></tr>
+      <tr><td>GPT-4o</td><td>mid</td><td>P2, P1</td><td>Predict 97.5% Easy &rarr; 61.2% Very Hard; ~random-walk on GRASP planning (p=0.63)</td><td>cap Q1/Q3</td></tr>
+      <tr><td>Qwen3-32B</td><td>reasoning-mid</td><td>P2</td><td>Predict 95% Easy &rarr; 48.8% Very Hard</td><td>cap Q1</td></tr>
+      <tr><td>DeepSeek-R1-Distill-70B</td><td>reasoning-mid</td><td>P2</td><td>Predict 97.5% Easy &rarr; 37.2% Very Hard; 89% room &rarr; 44% maze</td><td>cap Q1</td></tr>
+      <tr><td>Llama-3.1-405B</td><td>frontier-open</td><td>P2</td><td>Predict 85% Easy &rarr; 41.3% Very Hard (non-monotonic)</td><td>cap Q1</td></tr>
+      <tr><td>Llama-3.1-70B</td><td>mid-open</td><td>P2</td><td>Predict 63.8% Easy (outlier low) &rarr; 34% Very Hard</td><td>cap Q1</td></tr>
+      <tr><td>Llama-3.1-8B</td><td>small-open</td><td>P2</td><td>Predict 12.9% Easy &rarr; ~2.8% (near-floor); command-seq 0%</td><td>cap Q1</td></tr>
+      <tr><td>O3</td><td>frontier-reasoning</td><td>P4</td><td>Perfect maze nav to 30&times;30 (clean ceiling)</td><td>cap Q3</td></tr>
+      <tr><td>GPT-4 Turbo</td><td>mid</td><td>P3</td><td>Vanilla FR 76 @10&times;10; AoP-DFS collapses to 1-3/100</td><td>cap Q3</td></tr>
+      <tr><td>ChatGPT-4</td><td>mid</td><td>P3</td><td>Vanilla FR up to 76 @10&times;10 &rarr; 11-13 @30&times;30</td><td>cap Q1</td></tr>
+      <tr><td>Qwen2.5-7B</td><td>small-open</td><td>P3</td><td>Vanilla FR 48@10&times;10 &rarr; 13@30&times;30; Algo-Reasoning 0/0/0</td><td>cap Q3</td></tr>
+      <tr><td><strong>Gemini-2.5-Flash</strong></td><td><strong>cheap</strong></td><td>P4, P5</td><td>base 5&times;5 adj 8% &rarr; CoT 86%; visual-grid CoT 34%; weak in MazeEval &gt;7&times;7</td><td>cap Q3/Q4</td></tr>
+      <tr><td><strong>GPT-5-mini</strong></td><td><strong>cheap</strong></td><td>P5</td><td>no adjacency advantage (30 adj/32 visual); compositional 100%&rarr;4% (5&times;5&rarr;9&times;9); <strong>non-conforming outlier</strong></td><td>cap Q3/Q4</td></tr>
+      <tr><td><strong>Claude-Haiku-4.5</strong></td><td><strong>cheap</strong></td><td>P5</td><td>base ~0% &rarr; CoT 78% (5&times;5 adjacency)</td><td>cap Q3/Q4</td></tr>
+      <tr><td><strong>DeepSeek-Chat</strong></td><td><strong>cheap</strong></td><td>P5</td><td>base 0-16% &rarr; CoT 74% (5&times;5 adjacency)</td><td>cap Q3/Q4</td></tr>
+      <tr><td>GPT-4o-mini</td><td>cheap</td><td>P4</td><td>"weaker performer," fails beyond 7&times;7</td><td>cap Q3</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>4.2 Proposed candidate set <span class="proposed-tag">not finalized</span></h3>
+    <p>The quick test runs at the cheap tier. Proposed set = the exact P5 (2604.10690) roster, because it is
+    the only paper whose entire model set is the cheap tier and it tested the closest task shape:</p>
+    <ul>
+      <li><span class="key">Gemini-2.5-Flash</span></li>
+      <li><span class="key">Claude-Haiku-4.5</span></li>
+      <li><span class="key">DeepSeek-Chat</span></li>
+      <li><span class="key">GPT-5-mini</span> &mdash; included specifically because it is the documented
+      non-conformer; it stress-tests the cross-model divergence path in &sect;3's decision rule.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>4.3 Tradeoffs for the owner</h3>
+    <ul>
+      <li><span class="key">Pro:</span> directly comparable to the most on-point published numbers; spans
+      providers; cheap enough for many repeats; includes a known outlier to exercise the divergence logic.</li>
+      <li><span class="key">Con:</span> all four are cheap-tier; adding a frontier anchor (Claude 3.7 Sonnet or
+      an O-series model) would test whether the too-high-floor risk is worse at frontier, but raises cost.</li>
+      <li><span class="key">Con:</span> GPT-5-mini's non-conformance can dominate a min-aggregate; model choice
+      must be paired with the aggregate choice in &sect;3.</li>
+      <li><span class="key">Con:</span> a 4-provider set has 4 independent rate limits; wall-clock is gated by
+      the slowest provider.</li>
+      <li><span class="key">Note:</span> exact model versions/snapshots and provider routing are
+      output-affecting and must be pinned once selected (&sect;7.1).</li>
+    </ul>
+  </div>
+</div>
+
+<!-- COST -->
+<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<p><span class="key">Formula:</span> instances &times; probes &times; models &times; repeats = LLM calls;
+calls &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: N = 390 instances; 2 probes
+(naive, ceiling); repeats = 3.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Per-instance token estimate <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Naive probe</th><th>Ceiling probe</th></tr></thead>
+        <tbody>
+          <tr><td>Input tokens (grid ~64 cells &times;2 chars + command + scaffold)</td><td class="num">~250</td><td class="num">~750</td></tr>
+          <tr><td>Output tokens (short answer vs. CoT trace + answer)</td><td class="num">~30</td><td class="num">~400</td></tr>
+          <tr><td><strong>Total tokens/call</strong></td><td class="num"><strong>~280</strong></td><td class="num"><strong>~1,150</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Calls, tokens, and dollar cost</h3>
+    <p><strong>Calls per model per full run:</strong> 390 &times; 2 probes &times; 3 repeats =
+    <strong>2,340 calls/model</strong> (1,170 naive + 1,170 ceiling).</p>
+    <p><strong>Tokens per model per full run:</strong> (1,170 &times; 280) + (1,170 &times; 1,150) = 327,600 +
+    1,345,500 &asymp; <strong>1.67M tokens/model</strong>.</p>
+    <p><strong>For the proposed 4-model set:</strong> 4 &times; 2,340 = <strong>9,360 calls</strong>;
+    4 &times; 1.67M &asymp; <strong>6.7M tokens</strong> per full baseline run.</p>
+    <p><strong>Cost</strong> (order-of-magnitude, cheap-tier blended ~$0.50&ndash;$1.50 per 1M tokens):
+    roughly <strong>$3&ndash;$10 per full baseline run</strong> &mdash; squarely in the cents-to-single-dollars
+    band the rubric requires.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <p style="margin-bottom:0;"><strong>Wall-clock</strong> (proposed): at modest concurrency (~20 concurrent
+  calls/provider, ~2&ndash;4s/call for cheap-tier CoT outputs), 9,360 calls / (20 &times; 4 providers) &asymp;
+  117 waves &times; ~3s &asymp; <strong>6&ndash;10 minutes</strong>, dominated by the slowest provider and its
+  rate limit. Comfortably "minutes, not hours."</p>
+</div>
+<div class="evnote"><em>Evidence note (thin):</em> the ceiling-probe output-token estimate (~400 CoT tokens) is
+a guess; CoT length is model-dependent and no source paper reports token counts. A 10-instance pilot per
+model should replace these estimates before committing the full run (&sect;7.8).</div>
+
+<!-- RUBRIC MAPPING -->
+<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
+    <tbody>
+      <tr><td>One LLM call + one exact-match oracle check per instance</td><td>1 (single node graph), 2 (exact check by simple fn)</td></tr>
+      <tr><td>Single derived fact, single-token-ish answer, short ASCII grid input</td><td>3 (bounded token cost)</td></tr>
+      <tr><td>Two probes (naive vs ceiling) measuring the gap</td><td><strong>4</strong> (default low, better closes gap), <strong>9</strong> (floor/ceiling/reference known)</td></tr>
+      <tr><td>Naive probe withholds all conventions; ceiling states them + CoT</td><td><strong>4</strong>, <strong>9</strong></td></tr>
+      <tr><td>Temp 0, repeats = 3, N=15/stratum sized to resolve &ge;10-pt effect on 10-20 task eval</td><td><strong>5</strong> (determinism + resolvability)</td></tr>
+      <tr><td>390-instance pinned pool, seeded, disjoint splits reserved</td><td>7 (large generated pool, splits), 8</td></tr>
+      <tr><td>Fresh reserved seeds, no published instance</td><td><strong>8</strong> (contamination resistance)</td></tr>
+      <tr><td>Independent oracle = Minigrid object-model walk, not sampler re-derivation</td><td>2, 8, 11</td></tr>
+      <tr><td>Strata = env &times; size &times; fact type (latent-difficulty axes)</td><td>5 (aggregation crosses strata), 10 (independent rules), 7</td></tr>
+      <tr><td>Exact-match "expected X got Y" diagnostics per fact</td><td>11 (diagnostic failures)</td></tr>
+      <tr><td>Decision rule keys off measured naive/ceiling gap vs known thresholds</td><td><strong>9</strong> (falsifiable success criterion), 4</td></tr>
+      <tr><td>Cheap-tier model set, short outputs, minutes wall-clock</td><td>3, 14</td></tr>
+      <tr><td>Repeats validate aggregation plumbing though scores agree</td><td>5, and noted non-coverage (repeat-averaging under variance is NOT stressed)</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="small muted" style="margin-top:10px;"><strong>Criteria the baseline deliberately does not cover:</strong>
+few-shot (12), reflection-trace diagnosticity beyond exact-match (11 partial), the second output-bytes
+objective (GEPA two-objective), and multi-node routing &mdash; all out of scope for a headroom baseline.</p>
+
+<!-- OPEN DECISIONS -->
+<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="open-decisions">
+  <h3>Nothing below is frozen &mdash; all ten items require an explicit owner call before this spec can run.</h3>
+  <ol>
+    <li><strong>Model set</strong> (&sect;4) &mdash; final roster; whether to add a frontier anchor; exact
+    model versions/snapshots and provider routing (all output-affecting, must be pinned).</li>
+    <li><strong>Aggregate function</strong> for the decision rule (&sect;3) &mdash; mean vs min across models;
+    pairing with the GPT-5-mini non-conformer.</li>
+    <li><strong>Decision thresholds</strong> (&sect;3) &mdash; the 75% HIGH band, the 10-point "&asymp;" unit,
+    the 20-point "&ll;" unit. All are proposals derived from the capability synthesis's central estimates, not
+    from measured c19 data.</li>
+    <li><strong>Boundary-case handling</strong> (&sect;3) &mdash; mixed bands (gap 10&ndash;20 points) and
+    per-model divergence resolution.</li>
+    <li><strong>N per stratum / stratum weights</strong> (&sect;1) &mdash; proposed uniform N=15; owner may
+    reweight (e.g. more N on the coordinate-after-sequence stratum flagged as most discriminating, less on
+    near-guessable carry/heading). Whether to expand carrying-flag beyond Fetch.</li>
+    <li><strong>Grid sizes</strong> (&sect;1) &mdash; the small/medium levels (~5&times;5 / ~8&times;8) and
+    env-native size variants to use.</li>
+    <li><strong>Seed ranges / split boundaries</strong> (&sect;1) &mdash; exact reserved ranges guaranteeing
+    disjoint train/minibatch/official splits and zero overlap with any published instance.</li>
+    <li><strong>Pilot before full run</strong> (&sect;5) &mdash; run 10 instances/model to replace the
+    token/CoT-length estimates and confirm temp-0 repeat agreement before committing the ~$3&ndash;10 full run;
+    if repeats disagree, raise N.</li>
+    <li><strong>Answer normalization policy</strong> &mdash; how the exact-match scorer canonicalizes model
+    output (whitespace, <code>row,col</code> vs <code>(row,col)</code>, <code>E</code> vs <code>east</code>,
+    <code>yes</code> vs <code>y</code>) before the 0/1 compare. Loose normalization inflates scores; strict
+    normalization may penalize format-only misses.</li>
+    <li><strong>Quick-test vs paper scope</strong> (&sect;3 outcome c) &mdash; even if outcome (c) says the
+    vanilla task is a viable optimizer-benchmark instrument, the positioning synthesis says the paper still
+    needs the invented-command layer to differentiate from prior work. Owner decides whether "viable for the
+    quick test" is sufficient or the build proceeds regardless for the publication case.</li>
+  </ol>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c19.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c19 candidate page</a>
+  <a href="c19-related-work.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">c19 related work</a>
+</nav>
+
+</main>
+</body>
+</html>

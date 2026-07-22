@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking. */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c24 Composite-Key Sorting &amp; Canonical Ordering</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER -->
+<div class="cand-head">
+  <h1><span class="cand-id">c24</span>Composite-Key Sorting &amp; Canonical Ordering</h1>
+  <span class="badge ranked">RANKED #4</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">BBH <code>word_sorting</code> under invented composite conventions</span> — sort tokens by a bespoke multi-level key nobody can guess, exact-match the canonical line.</div>
+
+<!-- (2) VERDICT BOX -->
+<div class="verdict"><!-- plain tone = ranked -->
+  <p><strong>Ranked fourth of twenty in the round-2 rescore, up from the round-1 27-tier into the top five.</strong>
+  It rose because its codebase is real and run-verified: reasoning-gym is consumed as a clean dependency with
+  no repo edits, its per-item <span class="key">Random(seed+idx)</span> plumbing is threaded and byte-identical
+  under re-run, and its sorting oracle is Python <span class="key">sorted()</span> — trivially independent.
+  It sits behind the podium rather than on it because the differentiating task logic is entirely net-new:
+  the randomized <span class="key">composite tie-breaker keys</span> that give each rule level a distinct diff
+  signature are not in the shipped generator, so a fresh subclass of roughly one hundred to one hundred fifty
+  lines must be written, and the base class awards substring partial credit that a strict <span class="key">0/1
+  override</span> must replace. A single shared reference sorter couples the strata to re-certification, which
+  is what holds its rule-independence cell below the top.</p>
+  <p class="small muted"><strong>Score discrepancy flagged, not resolved:</strong> the round-2 rescore table and
+  its section heading both state an implementation total of twelve of sixteen, and the per-cell row is
+  I1=2, I2=2, I3=2, I4=1, I5=1, I6=2 — which sums to ten, not twelve. The authoritative doc is internally
+  inconsistent here (total column and heading agree on twelve; the listed cells sum to ten). The stated
+  total is reproduced below; the arithmetic gap is surfaced rather than silently corrected.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+    <span class="chip"><span class="k">R1 TB</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">12/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES -->
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Sort short token lists by a per-batch invented composite key, exact-match the canonical line</h3>
+    <p>Each instance is three to six <span class="key">tokens</span> or <span class="key">(letter, number) pairs</span> —
+    or, in one stratum, three to four small <span class="key">permutations in cycle notation</span> with a stated
+    composition-direction convention. A nonstandard <span class="key">composite key</span> governs the ordering:
+    sort by the second letter, break ties by length descending, rerank vowels after consonants, apply a per-element
+    transform (double if even, triple if odd), and emit canonical cycle form with the smallest element leading.
+    The model returns one comma-joined line or canonical string, scored by <span class="key">exact match</span>
+    against a reference sorter. Each latent rule — primary key, each tie-breaker, the rerank rule, the element
+    transform, the separator convention — is visible as a distinct <span class="key">diff signature</span>, so a
+    partial prompt fails on exactly the rung it missed. Keys and directions are randomized per batch so the prompt
+    must convey them rather than let the model guess from priors.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — constructed from the merged summary, not a corpus verbatim; the seeded key spec is what makes this instance behave this way.</p>
+<pre><code>Convention (secret, per batch):
+  primary key = 2nd letter, ascending
+  tie-break   = word length, descending
+  rerank      = vowel-initial words move after consonant-initial
+
+Tokens:  vane, kilo, arch, oboe, nerd
+Gold:    kilo, nerd, arch, vane, oboe
+
+Naive-prompt miss (plain alphabetical):
+         arch, kilo, nerd, oboe, vane   -> exact-match FAIL
+</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE -->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2210.09261">BIG-Bench Hard</a> (Suzgun et al., ACL Findings 2023; arXiv 2022)</span> — supplies the <code>word_sorting</code> task, its exact-match short-output format, and the large prompt-sensitive headroom this candidate inherits. Note the arXiv-vs-venue split: first posted 2022, published ACL Findings 2023.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2206.04615">BIG-bench</a> (Srivastava et al., TMLR 2022)</span> — the <code>word_sorting</code> task actually originates here, not in the BBH paper; BBH merely selects it. Underlying substrate for the sorting instance format.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2309.03409">OPRO</a> (Yang et al., ICLR 2024)</span> — named optimizer substrate; reports up to +50% on BBH tasks, the strongest headroom evidence for this sorting format.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2309.08532">EvoPrompt</a> (Guo et al., ICLR 2024)</span> — named optimizer substrate reporting BBH gains, co-anchoring the prompt-sensitive headroom claim for <code>word_sorting</code>.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2309.16797">Promptbreeder</a> (Fernando et al., arXiv 2023)</span> — evolutionary optimizer in the same BBH/<code>word_sorting</code> lineage, producing BBH exact-match gains.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Invented-rule sorting of symbolic tokens</a> — the seed idea: order tokens under a rule the model cannot guess.</li>
+      <li><a href="../brainstorm.html">CaseOrder / MultiRuleSort / Permutation composition with nonstandard conventions</a> — sibling brainstorm items merged in, contributing the multi-level key and the cycle-notation stratum.</li>
+      <li><a href="../candidates-merged.html#c24">c24 merged entry (origin: both)</a> — folds the brainstorm sorters together with the BBH <code>word_sorting</code> generator substrate.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>Inverted Multiple-Choice convention (dropped cluster D1) — <span class="why">both sources flag HIGH one-shot risk; a single sentence ("answer the alphabetically-first incorrect option") closes the gap, failing the anti-one-shot criterion; remapped-label ground is covered by c15</span>.</li>
+    <li>Interval-Overlap Field Selection (dropped cluster D2) — <span class="why">only two or three boundary/tie conventions, enumerable in one prompt; the boundary-convention flavor is absorbed by the c12/c13 strata</span>.</li>
+    <li>Char-level string-task cluster (dropped cluster D9; StringLLM, CUTE, letter-counting) — <span class="why">not a task — kept only as the red-flag caveat that char-level counting is tokenization-bound and temp-0 noisy, which is why this candidate stays at the token level, not the character level</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH -->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2402.08939">Premise Order Matters in Reasoning with Large Language Models</a> (Chen et al., ICML 2024)</span> — best-known evidence that reordering under a fixed convention swings LLM accuracy by more than thirty points; directly motivates the ordering-under-invented-conventions difficulty this candidate targets.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2502.19907">Order Doesn't Matter, But Reasoning Does: Training LLMs with Order-Centric Augmentation</a> (He et al., EMNLP 2025)</span> — 2025 work on LLM brittleness to premise and condition ordering under logically-equivalent reorderings, keeping the ordering-under-invented-conventions premise research-current.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES -->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Landed in the 27-tier: each tie-breaker leaves a distinct diff signature, and BBH evidences large prompt-sensitive headroom on this exact format</li>
+      <li>Randomized keys per batch defeat the naive-alphabetical prior, giving a genuine floor</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>Not one of the eight rubric finalists; it sat a notch below the 28-tier canonicalizers c11 and c12 that cover the same "canonical string under invented house rules" region</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>A single sentence cannot encode a randomized multi-level composite key, so the prompt must actually carry each rule level — the optimization axis stays alive</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>No dedicated skeptic pass examined c24 below the 28-tier; the optimization-path verdict here is inferred from its region siblings, not a candidate-specific refutation</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Bounded single comma-joined line, exact match against a Python <code>sorted()</code> oracle — no soft or composite metric, temp-0 deterministic at the token level</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>No candidate-specific measurement skeptic pass exists below the 28-tier; and the shipped base class awards substring partial credit, so exactness only holds once the strict override is written</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Codebase run-verified in a fresh venv — twenty-one tests pass, same-seed byte-identical, six of six independent ground-truth checks correct; consumed with zero repo lines changed</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>The differentiating composite tie-breaker logic is net-new task code, and a shared reference sorter couples the strata to re-certification — the reasons its rule-independence and gate-count cells stayed at one</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Ordering-under-convention brittleness is live 2024-2025 work (premise-order and order-centric-augmentation results), and reasoning-gym is a maintained NeurIPS-2025-spotlight library</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>The BBH <code>word_sorting</code> substrate is a 2022-2023 benchmark whose published instances are contamination-exposed; currency depends on the invented-key regeneration, not the original task</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION -->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Consume reasoning-gym as a dependency</h3><p>Vendor or install open-thought/reasoning-gym and reuse its <code>ProceduralDataset</code> infra and per-item <code>Random(seed+idx)</code> pattern; change zero repo lines</p></div>
+  <div class="step"><h3>Write the composite-key sorting subclass</h3><p>New <code>ProceduralDataset</code> subclass, roughly one hundred to one hundred fifty lines: generate records with several invented fields, sample a randomized composite key ordering (primary plus tie-breakers) per instance as the latent rule, and compute the oracle with Python <code>sorted(key=...)</code></p></div>
+  <div class="step"><h3>Override scoring to strict 0/1</h3><p>Replace the base class's substring partial-credit <code>score_answer</code> with a strict exact-match 0/1 override, so a prompt that misses one rule level scores zero on that instance</p></div>
+  <div class="step"><h3>Swap in nonce vocabulary and add glue</h3><p>Bypass the bundled real-text Gutenberg corpus (<code>in_the_year_2889.txt</code>) with nonce vocab to keep instances contamination-proof; add roughly thirty to fifty lines of LLM glue for the single call and 0/1 exact-match scoring</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>The randomized composite tie-breaker keys are net-new task logic, not a config flag — the shipped generator sorts by a single ASCII key with no per-tie-breaker diff signatures</li>
+      <li>A shared reference sorter couples every stratum to re-certification: a change to the oracle re-validates all key levels at once (this is the I5=1 cause)</li>
+      <li>If the strict override is forgotten, the base class's substring partial credit silently breaks the intended 0/1 exactness</li>
+      <li>Off-path <code>pool_matrix.py</code> uses module-global <code>np.random.seed</code>; do not co-import it naively into a shared process, or determinism can be corrupted</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> (Apache-2.0) — deep-read notes at <a href="../repos/open-thought-reasoning-gym.md">repos/open-thought-reasoning-gym.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status pass">verified</span>
+        ran in a fresh venv; same-seed byte-identical, different-seed varies, and all six hand-checked <code>word_sorting</code> instances matched an independent <code>sorted()</code> oracle. The invented composite-key semantics themselves are never run-verified — they are the net-new code still to be written.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV -->
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../candidates-table.html">Back to candidates table</a>
+    <a href="../recommendations-round2.html#table">Full rescore</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c17.html">&larr; #3 c17</a>
+    <a href="c10.html">#5 c10 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c11.html">c11 House-Convention Canonicalizer</a>
+    <a href="c03.html">c03 Keyed Custom-Operator Evaluation</a>
+    <a href="c01.html">c01 Invented-Glyph Base Arithmetic</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../landscape.html">Round 1 (27-tier)</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c24">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c04 Term-Rewriting to Normal Form</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c04</span>Term-Rewriting to Normal Form</h1>
+  <span class="badge ranked">RANKED #7</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">abstract rewriting systems (ARS/TRS)</span> — apply invented productions to a start string until nothing more can fire, plus a parallel-rewriting L-system stratum.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- plain = ranked -->
+  <p><strong>Ranked #7 of 20 after the implementation-aware rescore.</strong> The round-1
+  landscape called this the <span class="key">strongest anti-one-shot design in the whole
+  pool</span>: its latent rules are <span class="key">abstract productions over invented
+  symbols</span>, so there is literally nothing for a competent prompt to guess or recall —
+  the model must read the rule table and execute it. It now carries
+  <span class="key">I1 = 3 on the run-verified reasoning-gym base</span> (carried over from
+  c24). That standing is tempered by real caveats: the round-1
+  <span class="key">too-hard risk</span> and <span class="key">char-level temp-0 noise on
+  longer normal forms</span> flags, the <span class="key">I4 = 0</span> calibration burden,
+  and a <span class="key">tie-breaker of 1</span>. Provenance: c04 was initially excluded
+  by the round-1 tie-breaker=1 filter and was folded into the official ranking by the
+  2026-07-21 amendment; scored via the same pipeline post-hoc (web discovery + desk scoring
+  with the same rubric and exercises + a deep active-path code read written to repos/), on
+  equal terms with the other candidates. Run-verification status: c04's best repo,
+  open-thought/reasoning-gym, was run-verified during round 2 (under c24: same-seed
+  byte-identical, 6/6 independent ground-truth checks), so repo-level verification carries
+  over; the candidate-specific rewrite-system task logic is authored on top of that reused
+  infrastructure.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">26</span></span>
+    <span class="chip"><span class="k">TB</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">11</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Execute a seeded abstract rewrite system to its unique normal form</h3>
+    <p>The generator emits an instance made of <span class="key">3–6 productions</span>
+    over <span class="key">invented symbols</span> plus a <span class="key">start string
+    of 8–14 symbols</span>. The system is constrained to be
+    <span class="key">confluent and terminating</span> (or a fixed leftmost-innermost
+    strategy is imposed) so the <span class="key">normal form</span> is unique and
+    program-checkable. The model applies the productions,
+    <span class="key">iterating to fixpoint</span> (not a single pass), and returns the
+    short normal-form string — or, in the <span class="key">L-system parallel-rewriting
+    stratum</span>, a bounded derived feature (final length, or the symbol at position
+    <em>k</em>) so the answer stays short even though a D0L derivation blows up
+    exponentially. Scoring is exact match against a reference rewriter run to fixpoint.
+    Latent rules decompose cleanly: each production, redex-selection strategy,
+    iterate-to-fixpoint, empty-production deletion, guard conditions, and
+    parallel-vs-sequential application — so failures localize to a single un-applied
+    production or a halted iteration.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative — constructed from the merged summary. Seeded conditions: a nonce alphabet, a confluent+terminating rule table, a start string in the mid-length band; the answer is the irreducible string.</p>
+<pre><code>Rewrite rules (apply anywhere, repeat until nothing fires):
+  ØÞ → Þ
+  ÞØ → Þ
+  ØØ → Ø
+  ÞÞ → Þ
+
+Start:  Ð Ø Þ Ø Þ Ø Þ Ø Þ Ð
+
+Question: give the normal form (the string when no rule can fire).
+
+Gold: ÐÞÐ      (reference rewriter, run to fixpoint; confluent, order-independent)
+
+Naive miss: a one-pass left-to-right scan applies each rule once and stops,
+missing that new redexes appear after each rewrite (each collapse creates a
+fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches ÐÞÐ.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://dblp.org/search?q=Term+Rewriting+Systems+Terese">Terese, Term Rewriting Systems</a> (eds. Bezem, Klop &amp; de Vrijer, CUP 2003)</span> — foundational reference for abstract rewriting, confluence, and termination underpinning the normal-form oracle. The merged file attributed this vaguely to "Terese; confluence-strategy work 2024"; corrected here — "Terese" is a collective pseudonym for editors Bezem, Klop &amp; de Vrijer.</li>
+      <li><span class="cite"><a href="https://www.cambridge.org/core/books/term-rewriting-and-all-that/71768055278D0DEF4FFC74722DE0D707">Baader &amp; Nipkow, Term Rewriting and All That</a> (CUP 1998)</span> — standard textbook; source for Newman's lemma (local confluence ⇒ confluence for terminating systems) guaranteeing a unique normal form. Cited only in the research file, not the merged list; a core reference that belongs here.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2411.06409">Zhang, Mitterwallner et al., Automated Strategy Invention for Confluence of Term Rewrite Systems</a> (arXiv:2411.06409, 2024)</span> — the "confluence-strategy work 2024" the merged file gestured at; supports enforcing unique normal forms.</li>
+      <li><span class="cite"><a href="https://dblp.org/search?q=Algorithmic+Beauty+of+Plants+Prusinkiewicz">Prusinkiewicz &amp; Lindenmayer, The Algorithmic Beauty of Plants</a> (Springer 1990)</span> — canonical L-system reference; grounds the parallel-rewriting (D0L) stratum.</li>
+      <li class="unverified"><span class="cite"><a href="https://www.sciencedirect.com/science/article/pii/0022519368900799">Lindenmayer, Mathematical models for cellular interactions in development</a> (J. Theoretical Biology, 1968)</span> — canonical original L-system paper; not fetched to a confirming page this session.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html">Symbolic Rewrite-System Normal Form</a> — the core "apply productions until irreducible" idea.</li>
+      <li>Expression rewriting under invented rewrite rules; Grammar-of-rewrites (RS3) — sibling brainstorm items merged into one candidate.</li>
+      <li><a href="../candidates-merged.html#c04">candidates-merged · c04</a> — the merge that fused the three brainstorm items with the TRS literature and the L-system parallel-rewriting stratum (research Cand 5 + Cand 11).</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>L-systems as a standalone dataset — <span class="why">folded into c04 as the parallel-rewriting stratum, a reference-only literature entry not counted as its own cluster; the cited 2025 L-system paper targets compiler benchmarks, so only the mechanism is reusable, not any QA ground truth</span>.</li>
+    <li>Dyck / formal-language membership &amp; repair (research Cand 10) — <span class="why">routed to c06 instead; membership counting is one thin skill, so its latent-rule decomposition and failure diagnosis are coarser than rewriting</span>.</li>
+    <li>SATBench / FOLIO / LogicNLI (research Cands 6–8) — <span class="why">deduction cousins that add a generation model into the pipeline, are memorizable/small, or belong to the deduction candidate c18; not rewriting-to-fixpoint</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025–2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2411.06409">Zhang, Mitterwallner et al., Automated Strategy Invention for Confluence of Term Rewrite Systems</a> (arXiv:2411.06409, 2024)</span> — automated confluence-strategy invention; directly supports the generator's need to certify unique normal forms.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2512.17616">da Silva, Leite &amp; Pereira, Multi-Language Benchmark Generation via L-Systems</a> (arXiv:2512.17616, cs.PL, Dec 2025)</span> — recent LLM-adjacent use of L-systems to generate benchmarks; the corpus reuses only the parallel-rewriting mechanism (the paper targets compiler/benchmark generation, not a QA dataset).</li>
+    <li><span class="cite"><a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> (NeurIPS 2025 Spotlight, Apache-2.0)</span> — ships <code>ab.py</code>, a genuine term-rewriting-to-normal-form task (Victor Taelin's A::B system), and <code>string_synthesis.py</code>, a second rewrite-to-fixpoint generator; the actively-maintained substrate this candidate would build on.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Arguably the purest rubric fit — abstract symbols, exact program-checkable oracle, per-production decomposition, single call, bounded output; failures localize to one misapplied production, ideal for reflection</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Scored at the 26-tier with tie-breaker one, the flag being that it is potentially too hard — the difficulty may sit above the band where an incremental ladder is observable</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>The strongest anti-one-shot design in the pool — abstract productions over invented symbols have nothing to guess or recall, so the demo and rule table are unavoidably load-bearing</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No dedicated skeptic pass ran on c04 (it sat below the 28-tier where the adversarial lenses were applied), so the optimization-path story is asserted from the design, not stress-tested</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>A confluent+terminating system (Newman's lemma) or a fixed reduction strategy makes the normal form provably unique and exactly checkable — no ambiguous labels</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>Character-level normal forms invite temp-0 token noise on longer outputs, and determinism must be actively enforced or the label is ambiguous</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Ranked #7 of 20, it rides the run-verified reasoning-gym base: a clean, independent term-rewriting generator and oracle already exists there (<code>ab.py</code>) on a re-seedable framework whose ProceduralDataset / score_answer / register_dataset contract matches every c04 requirement — earning I1 = 3</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The full spec (invented vocabularies + latent-rule strata + MC variant) is not native: rules and symbols are fixed in <code>ab.py</code>, so a ~150-LOC clone-and-generalize is required, and the design's many interacting parts drive I4 to zero; the candidate-specific logic is authored on top of the run-verified base rather than run-verified itself</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Grounded in an actively-maintained NeurIPS 2025 Spotlight substrate plus 2024–2025 arXiv work on confluence-strategy invention and L-system benchmark generation</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The core theory (Terese, Baader &amp; Nipkow) is textbook-old, and the recent L-system paper targets compiler benchmarks rather than QA, so currency is partly borrowed from the substrate rather than the task</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<p class="small muted">Implementation scoring was produced by the <strong>same pipeline</strong> as every other candidate — web discovery + desk scoring with the same rubric and exercises + a deep active-path code read written to repos/ — and folded into the official ranking by the 2026-07-21 amendment. Run-verification: open-thought/reasoning-gym was <strong>run-verified during round 2</strong> (under c24: same-seed byte-identical, 6/6 independent ground-truth checks), so repo-level verification carries over; the c04-specific rewrite-system logic is authored on top of that reused, verified infrastructure.</p>
+<div class="steps">
+  <div class="step"><h3>Adopt reasoning-gym as substrate</h3><p>Reuse <code>ProceduralDataset</code>, per-instance <code>Random(seed+idx)</code> seeding, <code>register_dataset</code>, and the exact-match <code>score_answer</code> (already strict 0/1)</p></div>
+  <div class="step"><h3>Clone-and-generalize <code>ab.py</code> (Option B, ~150 LOC)</h3><p>Sample a nonce alphabet, a rule table, and a start term from the seed; generalize <code>compute_steps</code> from four hard-coded productions to a rule-table lookup; render the prompt from the sampled table</p></div>
+  <div class="step"><h3>Enforce determinism before freeze</h3><p>Certify confluence + termination (critical-pair check / Newman's lemma) or impose a fixed leftmost-innermost strategy so every instance has a unique normal form</p></div>
+  <div class="step"><h3>Add latent-rule and L-system strata</h3><p>Copy the curriculum pattern for rule-count / alphabet-size levels; add a capped-iteration D0L stratum asking for a bounded derived feature; add the optional MC-over-candidate-normal-forms variant</p></div>
+  <div class="step"><h3>Calibrate difficulty and pin the noise floor</h3><p>Tune term length and rule count so a default prompt lands mid-range; measure temp-0 character-level noise on longer normal forms and, if needed, shorten outputs or move to the bounded-feature / MC framing</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Add-one-rule blast radius is global — a new production can break confluence/termination via critical-pair overlaps, so the confluence check must re-run on the whole system and every instance whose normal form changes must be re-verified and regenerated; not rule-local.</li>
+      <li>Four-plus pre-freeze gates — determinism enforcement, "potentially too hard" difficulty calibration, the char-arithmetic temp-0 noise floor on longer normal forms, and the L-system iteration cap must all clear before freeze.</li>
+      <li>Two open repair flags, no skeptic pass — landscape.md records "potentially too hard" and "char-arithmetic temp-0 noise"; both repairable but non-empty, and no adversarial lens examined c04 below the 28-tier.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> (Apache-2.0) — deep-read notes at <a href="../repos/open-thought-reasoning-gym.md">repos/open-thought-reasoning-gym.md</a>. Ships <code>ab.py</code> (A::B term-rewriting-to-normal-form, deterministic <code>compute_steps</code> oracle, length curriculum) and <code>string_synthesis.py</code> (second rewrite-to-fixpoint generator).</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status partial">repo run-verified (carried over)</span>
+        — the reasoning-gym base was run-verified during round 2 (under c24: same-seed byte-identical, 6/6 independent ground-truth checks), so repo-level verification carries over: same-seed reproducibility, independent oracle, and 0/1 exact match were all reproduced empirically in the deep-read. The candidate-specific Option-B rewrite generator is authored on top of that verified base and is not itself separately run-verified. Distant references amarmaduke/reducto (MIT) and gregcaban/rkt-term-rewriting (MIT) supply reduction semantics only — no seeding, strata, or exact-match harness — so not config-plus-glue reuse.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c21.html">&larr; #5 c21 Relational Micro-World with Invented Vocabulary</a>
+    <a href="c11.html">#6 c11 House-Convention Canonicalizer &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c17.html">c17 Invented-Gate Circuit Evaluation</a>
+    <a href="c23.html">c23 Hidden-Rule String-Transform Induction</a>
+    <a href="c06.html">c06 Artificial-Grammar Violation Classification</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c04">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

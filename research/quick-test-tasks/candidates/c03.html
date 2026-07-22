@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking. */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c03 Keyed Custom-Operator Expression Evaluation</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER -->
+<div class="cand-head">
+  <h1><span class="cand-id">c03</span>Keyed Custom-Operator Expression Evaluation</h1>
+  <span class="badge ranked">RANKED #10</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">a BIG-bench multistep-arithmetic generator with invented infix operators and a hidden precedence/wrap convention</span> — apply a per-instance operator table, not PEMDAS, and output one integer.</div>
+
+<!-- (2) VERDICT BOX -->
+<div class="verdict"><!-- plain tone = ranked -->
+  <p><strong>Round-1 backup, demoted to the middle of the round-2 rescore.</strong> This was the round-1 co-recommendation with the adopted winner — the only other candidate both adversarial skeptics left unrefuted — and its design is genuinely clean: a per-instance symbol table, a tiny reference evaluator, and per-instance random parameters that make it the most straightforwardly contamination-proof candidate in the pool. What sank it in the implementation-aware rescore is the codebase. The BIG-bench multistep-arithmetic generator that would seed it computes its ground truth by running <code>eval()</code> on the generator's own string, which is a fine oracle for standard <code>+ - *</code> but is tautological for invented operators Python does not know. The load-bearing oracle is therefore new code we must write, not config, and the round-1-mandated foil-bank plus per-rung effect-size machinery keeps the moving-part count and calibration burden up — so its total lands mid-pack rather than near the top. Its weakest round-1 criterion (a legible-flag one-shot exposure) survived attack only on the strength of fixes that are cheap but load-bearing, and the wrap rule as first framed was measured to be nearly invisible.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+    <span class="chip"><span class="k">R1 TB</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">10 / 16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES -->
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Apply an invented operator table under a hidden house precedence, output one integer</h3>
+    <p>Each instance opens with a <span class="key">per-instance symbol table</span> defining invented infix operators as closed forms (for example <code>(a·k + b) mod m</code>), plus <span class="key">decoy symbols</span> that are never used, an <span class="key">opaque mode token</span>, and a short chained expression. The model must apply the table and the house conventions and emit <span class="key">one integer</span> (or a four-way multiple-choice letter over candidate results), scored strict 0/1 exact match against a roughly ten-line reference evaluator. The headroom lives in <span class="key">family-constant latent rules</span> the instance does not state or actively mis-states: modular wrap into residues 1..m rather than 0..m−1, the precedence and associativity carried by the opaque mode token, a threshold post-processing step, and a recurrence stratum with an index term. Naive prompts assume PEMDAS and standard semantics; the ceiling prompt states the general read-table-then-evaluate procedure and should reach roughly full accuracy.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Family-latent conventions the instance never states: <code>⊞</code> binds tighter than <code>◇</code>, and every result wraps into residues 1..m. Drawn from the round-1 recommendation writeup.</p>
+<pre><code>Definitions:
+  x ◇ y = (3x + 2y) mod 6
+  x ⊞ y = |x − y| + 1
+  x ⨂ y = x            (decoy, never used)
+  mode: K3
+Evaluate:  2 ◇ 4 ⊞ 3
+
+Gold: 4
+  house precedence: 4 ⊞ 3 = 2, then 2 ◇ 2 = 10 mod 6 = 4.
+Naive PEMDAS / left-to-right:
+  2 ◇ 4 = 14 mod 6 = 2, then 2 ⊞ 3 = 2  → answers 2  → scored 0.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE -->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2512.16902">In-Context Algebra</a> (Todd et al., ICLR 2026)</span> — core literature for defining made-up algebraic operators in context; this is c03's central design substrate. The corpus dates the arXiv ID to 2025, but the paper is ICLR 2026.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2411.05943">Quantifying AI through Algorithmic Generalization</a> (Ito et al., 2024)</span> — the algorithmic-generalization framing for the keyed-operator synthetic family, since there is no single canonical benchmark for made-up in-context operators.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2210.09261">Challenging BIG-Bench Tasks / BBH</a> (Suzgun et al., ACL Findings 2023)</span> — source of the multistep-arithmetic generator c03 adapts, and the evaluation substrate the OPRO/EvoPrompt optimizers ran on.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a> (Wu et al., NAACL 2024)</span> — counterfactual non-standard arithmetic; motivates c03's PEMDAS-defeating invented operators and hidden precedence.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2211.09066">Teaching Algorithmic Reasoning via In-Context Learning</a> (Zhou et al., 2022)</span> — grounding for teaching an operator's procedure in-context; the design basis for c03's ceiling prompt.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../candidates-merged.html#c03">Custom binary operator (# operator); Keyed-DSL Arithmetic; Custom-precedence arithmetic mini-grammar; Custom Arithmetic Precedence (CAP); Modular polynomial / linear-recurrence next-term</a> — the five brainstorm items merged into c03 (origin: both brainstorm and literature).</li>
+      <li><a href="../candidates-merged.html#c03">Merged literature line: novel-operator / keyed-DSL in-context arithmetic family, In-Context Algebra, and the BBH multistep-arithmetic generators (OPRO/EvoPrompt substrate)</a> — supplied the reference-evaluator-as-ceiling and per-instance-random-parameter methodology at merge.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>The recurrence / linear-recurrence next-term brainstorm item — <span class="why">absorbed as one bounded stratum inside c03 (an index-term recurrence rung) rather than kept as its own candidate</span>.</li>
+    <li>Interval-Overlap Field Selection (dropped cluster D2) — <span class="why">only two or three boundary/tie conventions, enumerable in one prompt; its boundary-convention flavor was absorbed by c12/c13 strata</span>.</li>
+    <li>Inverted multiple-choice convention (dropped cluster D1) — <span class="why">both sources flagged HIGH one-shot risk (one sentence closes the gap, failing criterion 4); usable at most as a plumbing check, the same convention-legibility failure c03's opaque-token fix guards against</span>.</li>
+    <li>Sibling arithmetic evaluators c01 (invented-glyph positional base) and c02 (fictional mixed-radix units) — <span class="why">not dead, but the closest live cousins; c01 is gated by both skeptics at major severity, and c02 was edged out on research currency and its overlap with c01/c10</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) -->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a> (Mirzadeh et al., ICLR 2025)</span> — per-instance symbolic templating that yields contamination-proof arithmetic; the parameterization method c03 uses to manufacture known-ceiling instances.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2309.03409">OPRO / Large Language Models as Optimizers</a> (Yang et al., ICLR 2024)</span> — an optimizer that used BBH multistep-arithmetic as its evaluation substrate; the corpus names it as headroom evidence for c03.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2309.08532">EvoPrompt</a> (Guo et al., ICLR 2024)</span> — the second optimizer substrate cited for BBH multistep-arithmetic gains underpinning c03's incremental-ladder claim.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2502.15823">InductionBench</a> (Hua et al., ACL 2025)</span> — complexity-class rule induction; the withheld-rule floor variant of c03's keyed operators, where the model must infer the table rather than read it.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES -->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Textbook single-call, exact-integer-match graph, and per-instance random parameters make it the most straightforwardly contamination-proof candidate; the reference evaluator gives an exact checkable ceiling</li>
+      <li>Errors are diagnostic: an off-by-one at the residue boundary flags the wrap rule, order errors flag associativity, magnitude errors flag precedence</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>Criterion 4 scored a bare pass: a generic "ignore PEMDAS, read the table literally, obey the flags, output only the integer" prompt captures everything the instance states legibly, so the headroom lives entirely in unstated conventions</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Not refuted at major severity; the incremental ladder survives contingent on fixes that are concrete and cheap (opaque convention tokens, foil-bank rejection sampling)</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>A score-only instruction rephraser (COPRO) cannot produce per-run hidden conventions, so it validates plumbing and generic-instruction gains only, not deep hyperparameter comparison; the design deliberately keeps the anti-PEMDAS rung reachable so a broken optimizer stays distinguishable from a stumped one</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Also not refuted; the ceiling is exactly computable from the reference evaluator, and per-rung effect sizes are verifiable at calibration with ablated reference prompts</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>Simulation in the verdict found the wrap rule nearly invisible: naive 0..m−1 and house 1..m answers coincide on the large majority of unforced instances, so learning it would be worth only a couple of points on a fifteen-task eval — far below the resolvability bar unless boundary cases are forced</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>The BIG-bench generation skeleton is genuinely reusable — the seeded, re-seedable <code>RandomState</code> recursion lifts cleanly (about forty lines), and oracle independence becomes a second oracle we control</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>The <code>eval()</code>-of-the-generator-string oracle is tautological for invented operators, so the load-bearing evaluator is new code, not config; the foil-bank, forced boundary cases, and per-latent effect-size gates raise both the moving-part count and the calibration burden, keeping the total at ten</li>
+    </ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros">
+      <li>Sits in the live in-context rule-learning and novel-operator arithmetic line — In-Context Algebra, algorithmic generalization, and the OPRO/EvoPrompt-on-BBH lineage — a small but publishable community</li>
+    </ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons">
+      <li>A smaller community than instruction-following, and the keyed-operator design is a synthetic family with no single canonical benchmark, so it opens no established wave of its own</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS -->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Lift the generator, write a real oracle</h3><p>Copy the roughly forty lines of seeded recursion (<code>generate_content</code>/<code>generate_subparenthesis</code>/<code>generate_string</code> plus the <code>RandomState(seed)</code> plumbing) from the BIG-bench task, swap in per-instance nonce operator symbols and a sampled symbol table, then replace the <code>eval()</code> ground truth with a new roughly forty-to-seventy-line evaluator honoring the per-instance operator semantics and the wrap/precedence conventions</p></div>
+  <div class="step"><h3>Enforce the observability partition</h3><p>Print per-instance-random conventions in the instance, but carry the headroom only in family-constant latents (1..m wrap, opaque mode-token semantics, threshold, recurrence); make every rule toggle an opaque token whose meaning is never stated, and keep the <code>mod m</code> surface notation deliberately misleading versus the 1..m ground truth</p></div>
+  <div class="step"><h3>Foil-bank rejection sampling and forced boundary cases</h3><p>Evaluate each candidate instance under wrong-wrap, wrong-associativity, PEMDAS, no-threshold, and no-index foils; accept only instances where each active stratum's foil answer differs from truth; force at least one intermediate ≡ 0 mod m in every wrap-stratum instance and at least three operands so associativity errors always surface; draw MC distractors from the deduplicated foil outputs</p></div>
+  <div class="step"><h3>Calibrate effect sizes and freeze</h3><p>Verify each rung is worth at least ten points on a ten-to-twenty-task eval using ablated reference prompts (one per latent rule); empirically confirm the ceiling is near full and the naive floor is low on the pinned model; scope few-shot demos by stratum so no single demo set reveals more than one hidden convention; add a strict integer/MC parser (non-numeric maps to 0)</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>One legibility slip collapses a rung: since all headroom lives in unstated conventions, any instance that inadvertently states or reveals a family-latent flag turns a hidden rule into a one-shot freebie</li>
+      <li>The wrap rule is nearly invisible without the forced ≡ 0 mod m boundary case, so skipping that generator constraint yields a stratum with a real but immeasurably small effect size</li>
+      <li>Fewer rungs than the richer candidates (roughly four or five family-constant latents) mean coarser hyperparameter resolution, and the new custom oracle carries an injection surface if any adaptation ever admits external strings into the <code>eval</code>-style path</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/google/BIG-bench/tree/main/bigbench/benchmark_tasks/multistep_arithmetic">google/BIG-bench — multistep_arithmetic</a> (Apache-2.0) — deep-read notes at <a href="../repos/google-big-bench-multistep-arithmetic-task.md">repos/google-big-bench-multistep-arithmetic-task.md</a>. Seed plumbing is mostly clean (one vestigial <code>rng</code> pass-through, and <code>random_seed=0</code> treated as unset); no task-specific tests exist.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        never run-verified. The I1=2 provisional was kept from the deep code read, not a live run; the deep read confirms the oracle is tautological for the invented-operator family, which is why the evaluator must be rewritten before any run can measure a ceiling.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV -->
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c22.html">&larr; #9 c22</a>
+    <a href="c23.html">#11 c23 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c01.html">c01 Invented-Glyph Base Arithmetic</a>
+    <a href="c17.html">c17 Invented-Gate Circuits</a>
+    <a href="c24.html">c24 Composite-Key Sorting</a>
+    <a href="c02.html">c02 Mixed-Radix Units</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c03">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

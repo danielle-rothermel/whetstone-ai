@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Baseline-spec additions — only what doc.css/flow.css lack. */
+
+/* DRAFT badge, matching the candidate-page .badge convention */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.draft { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+
+.hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.hdr-row h1 { margin: 0; }
+
+/* Outcome cards for the three-outcome decision rule */
+.outcome-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; margin: 16px 0; }
+.outcome {
+  padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.outcome .oc-tag {
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.outcome.a { border-color: var(--red); } .outcome.a .oc-tag { color: var(--red); background: var(--red-soft); }
+.outcome.b { border-color: var(--amber); } .outcome.b .oc-tag { color: var(--amber); background: var(--amber-soft); }
+.outcome.c { border-color: var(--green); } .outcome.c .oc-tag { color: var(--green); background: var(--green-soft); }
+.outcome h3 { font-size: 15px; margin: 0; }
+.outcome .cond { font: 600 12.5px/1.4 var(--font-mono); color: var(--muted); }
+.outcome p { font-size: 13.5px; margin: 0; }
+.outcome .decision { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.outcome .decision b { color: var(--ink); }
+
+/* Recommendation vs constraint distinction (skill §3) */
+.constraint {
+  margin: 14px 0; padding: 14px 20px; border: 1.5px solid var(--ink); border-radius: 10px;
+  background: var(--surface);
+}
+.constraint .tag {
+  display: inline-block; margin-bottom: 6px; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--ink);
+}
+.constraint ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.constraint li { margin-bottom: 5px; }
+
+.proposed-tag {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--accent);
+  font: 700 9.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+  vertical-align: middle; margin-left: 6px;
+}
+
+/* Open decisions list — visually prominent */
+.open-decisions {
+  margin: 16px 0; padding: 20px 24px; border: 2px solid var(--amber); border-radius: 12px;
+  background: var(--amber-soft);
+}
+.open-decisions h3 { color: var(--amber); margin-bottom: 10px; }
+.open-decisions ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+.open-decisions li { margin-bottom: 10px; }
+.open-decisions li::marker { color: var(--amber); font-weight: 800; }
+.open-decisions li:last-child { margin-bottom: 0; }
+
+.evnote {
+  margin: 10px 0; padding: 10px 16px; border-left: 3px solid var(--muted);
+  background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+}
+.evnote em { color: var(--ink); }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .outcome-grid { grid-template-columns: 1fr; }
+}
+</style>
+<title>whetstone-ai · c22 Baseline Spec</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c22.html">&larr; Back to c22 candidate page</a></nav>
+
+<div class="hdr-row">
+  <h1>c22 Baseline Spec: Headroom Before Complexity</h1>
+  <span class="badge draft">Draft</span>
+</div>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<div class="callout warn">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision thresholds (&sect;3), and six other open items
+  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
+  anything here as final.
+</div>
+
+<p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt
+on c22's <span class="key">reseed-only baseline</span> &mdash; standard IFEval checker atoms only, before any
+build effort goes into the added-complexity layer (conditional Selection/discovery atoms, IFBench OOD atoms,
+seeded-generator hardening). It is a <span class="key">go/no-go instrument</span>, not the benchmark itself:
+c22's related-work synthesis shows the reseed-only baseline strips out exactly the two mechanisms
+(Selection/discovery, OOD atoms) that carry c22's entire anti-enumeration story, so a naive-to-ceiling gap here
+may be wide but shallow &mdash; closable by a single well-drafted enumerate-the-atoms prompt. If that risk is
+real, this baseline finds it cheaply, before the Selection/OOD/generator work that is c22's real cost gets
+built.</p>
+
+<div class="constraint">
+  <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
+  <ul>
+    <li><span class="key">Standard IFEval checker atoms only.</span> Reuse the <code>google-research</code>
+    IFEval checker library as-is (<code>instructions.py</code> / <code>instructions_util.py</code> /
+    <code>instructions_registry.py</code>, <code>INSTRUCTION_DICT</code>), each class's
+    <code>check_following</code> as the 0/1 atom oracle. Scoring glue reuses
+    <code>evaluation_lib.test_instruction_following_strict</code>.</li>
+    <li><span class="key">No OOD atoms, no conditional Selection constraints.</span> Those are exactly the
+    added-complexity design this experiment gates &mdash; they cannot appear in the baseline.</li>
+    <li><span class="key">3&ndash;5 atoms sampled fresh per instance</span> over trivial micro-tasks;
+    <span class="key">all-checkers-pass strict 0/1</span> (<code>all(check_following(...))</code>), no partial
+    credit.</li>
+    <li><span class="key">Fresh seeds only</span> &mdash; never a published instance. Instances synthesized per
+    <code>random.seed(instance_seed)</code> before each <code>build_description</code>, seed recorded as
+    metadata (rubric criterion 8, contamination resistance). The shipped <code>config.seed</code> is a decoy
+    wired only to the LLM payload; do not rely on it.</li>
+    <li><span class="key">Independent oracle</span>, exact 0/1 vs. the deterministic checker &mdash; never an
+    LLM judge.</li>
+    <li><span class="key">Temperature 0.</span> Repeats = 3 (validate the aggregation plumbing; determinism
+    means they should largely agree).</li>
+  </ul>
+</div>
+
+<!-- STRATA -->
+<div class="section-head"><h2>1. Strata design</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Two crossed axes: constraint count, atom-type mix</h3>
+    <p><span class="key">Constraint count</span> (3 levels) &mdash; <code>n &isin; {3, 4, 5}</code>, the
+    candidate's own stated difficulty dial; strict-AND compounds failure per added atom. <span class="key">Atom-type
+    mix</span> (2 levels) &mdash; <span class="key">easy-skewed</span> (all atoms from the easy pool: casing,
+    format-wrapper, keyword-presence, start/end-token &mdash; per-atom pass ~0.80&ndash;0.90) vs.
+    <span class="key">mixed</span> (&ge;1 hard atom included: exact-word-count-equals-N, forbidden-letter
+    across the whole output &mdash; per-atom pass ~0.55&ndash;0.75). Atom-type mix is the single largest score
+    driver identified in the related-work synthesis. Honor <code>INSTRUCTION_CONFLICTS</code>
+    (<code>instructions_registry.py:79-176</code>) when sampling a stack so atoms cannot contradict.</p>
+  </div>
+  <div class="card">
+    <h3>Deliberately excluded from the grid</h3>
+    <p><span class="key">Language-detection atoms</span> (nondeterministic edge) and any atom requiring the
+    nltk <code>punkt</code> tokenizer unless the runtime download is pinned &mdash; both are determinism risks
+    (repo red flag) that would undercut criterion 5's resolvability requirement. Prefer regex/count-only
+    checkers for the easy pool.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>N per stratum = 20 <span class="proposed-tag">proposed</span>; 120 instances total; 6 strata</h3>
+  <p><span class="key">Design driver:</span> rubric criterion 5 resolvability. At temperature 0 with pinned
+  seeds the per-task score is near-deterministic, so residual noise across the 3 repeats should be small; the
+  binding constraint is instead the binomial resolution of a per-stratum rate estimate. At an all-pass rate
+  near 0.3&ndash;0.7, the standard error of a 20-instance rate estimate is &asymp; 0.10&ndash;0.11, so a
+  <strong>&ge;10-point (0.10) effect sits at the ~1 SE margin per single stratum</strong> and is comfortably
+  resolvable when pooled across the aggregate. N=20 satisfies criterion 5's "10&ndash;20 task internal eval"
+  band directly.</p>
+  <p>Constraint count &times; atom-type mix = 3 &times; 2 = <strong>6 strata &times; 20 = 120 instances</strong>
+  in the pinned pool, &times; 3 repeats = <strong>360 rollouts per (model, prompt) condition</strong>.
+  <span class="key">Aggregation:</span> average exact 0/1 first by repeat within task, then across tasks within
+  stratum, then across strata. Report per-stratum rates AND the pooled all-pass rate. Improvements must come
+  from solving more complete instances, never partial credit inside an instance.</p>
+  <div class="evnote"><em>Evidence note (thin):</em> N=20/stratum trades resolvability against cost. If the
+  owner needs a &ge;10-pt effect resolvable <em>within a single stratum</em> at high confidence, bump to N=40
+  (flagged in &sect;7.2). The pooled 120-instance aggregate resolves a 10-pt shift robustly regardless.</div>
+</div>
+
+<!-- PROBE PROMPTS -->
+<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<p>Both prompts receive the same generated instance: a base micro-task line plus the concatenated per-atom
+constraint descriptions emitted by <code>build_description</code>. These operationalize rubric criterion 4
+(default prompts score low; better prompts close the gap) and criterion 9 (floor, ceiling, and a reference
+prompt known in advance).</p>
+
+<h3 style="margin-top:22px;">2.1 Probe (a) &mdash; deliberately minimal naive prompt</h3>
+<pre><code class="language-plaintext">{BASE_TASK_AND_CONCATENATED_CONSTRAINTS}
+
+Answer:</code></pre>
+<p>Design intent: that is the entire prompt &mdash; the raw generated instance text, a blank line, and
+<code>Answer:</code>. No restatement of the constraints, no enumeration, no format hygiene, no emphasis, no
+worked reasoning. This is the "prompt lists only the stated atoms" miss case from the candidate's own example
+&mdash; it operationalizes the criterion-4 expectation that default behavior sits well below ceiling.</p>
+
+<h3 style="margin-top:26px;">2.2 Probe (b) &mdash; best-effort ceiling prompt (all standard conventions stated)</h3>
+<pre><code class="language-plaintext">You must produce a response that satisfies EVERY constraint below. The response
+is scored 1 only if all constraints pass a deterministic checker; missing even
+one constraint scores 0. There is no partial credit.
+
+Constraints (all must hold simultaneously):
+{BASE_TASK_AND_CONCATENATED_CONSTRAINTS}
+
+Follow these conventions of this task exactly:
+- Every constraint is stated explicitly above. Nothing is hidden; you do not need
+  to infer any unstated rule. Enumerate each constraint and satisfy it directly.
+- Output ONLY the answer text itself. Do not add a preamble, explanation,
+  restatement, label, quotation marks, or trailing commentary — extra text can
+  itself violate a length, word-count, casing, or forbidden-token constraint.
+- Do NOT use markdown, bold, bullets, or headers unless a constraint explicitly
+  requires them; stray formatting characters count against exact-match checks.
+- For any word-count or length constraint, count exactly and match the stated
+  number precisely (exact means exact, not "about").
+- For any forbidden-letter or forbidden-word constraint, scan your whole answer
+  and confirm the letter/word appears nowhere.
+- For any casing, start-token, or end-token constraint, verify the first/last
+  characters or tokens literally match what is required.
+- Before finalizing, silently check each constraint one more time; if any fails,
+  revise until all pass. Then output only the final answer.
+
+Answer:</code></pre>
+<p>Design intent: states every standard/default convention of the reseed-only task &mdash; strict all-pass
+semantics, output-only hygiene (the strict-vs-loose false-negative mitigation from the synthesis, since c22
+inherits IFEval checkers without the loose metric), per-atom-type checking hints, and a self-verify pass.
+Because <span class="key">nothing is hidden in the reseed-only baseline</span>, this prompt can in principle
+enumerate and satisfy all stated atoms &mdash; it is the true ceiling probe.</p>
+<div class="evnote"><em>Evidence note:</em> the related-work synthesis is the direct source of the "nothing
+hidden" framing &mdash; every documented Selection operator in the corpus (ComplexBench, IF-RewardBench)
+states its branch condition in the prompt, and the reseed-only baseline has no Selection layer at all yet.
+The ceiling prompt's enumerate-and-verify design is calibrated to that fully-stated baseline, not to the later
+Selection/OOD layer.</div>
+
+<!-- DECISION RULE -->
+<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<p>Let <strong>naive</strong> = pooled all-pass rate under probe (a), <strong>ceiling</strong> = pooled all-pass
+rate under probe (b), <strong>gap</strong> = ceiling &minus; naive. Thresholds are anchored to the
+related-work synthesis's point estimates for the expected default (3&ndash;5 mixed atoms, cheap tier, temp 0,
+strict all-pass): <span class="key">naive floor central guess &asymp; 0.30</span> (range 0.25&ndash;0.40),
+<span class="key">ceiling central guess &asymp; 0.70</span> (range 0.60&ndash;0.80). "High" is defined relative
+to the ceiling-prompt expectation, not 1.0.</p>
+
+<div class="card full">
+  <p style="margin-bottom:0;"><strong>Proposed numeric anchors</strong> <span class="proposed-tag">all owner-adjustable</span>:
+  "&asymp;" (naive approximately equals ceiling) means <code>gap &lt; 0.10</code> (the criterion-5 resolvability
+  unit); "&ll;" (naive much less than ceiling) means <code>gap &ge; 0.20</code> (two resolvability units);
+  <code>HIGH</code> band = rate &ge; 0.75; <code>MID/LOW</code> band = rate &lt; 0.55 (especially &lt; 0.40).</p>
+</div>
+
+<div class="outcome-grid">
+  <div class="outcome a">
+    <span class="oc-tag">Outcome (a) &middot; No headroom</span>
+    <h3>naive &asymp; ceiling &asymp; HIGH</h3>
+    <div class="cond">gap &lt; 0.10 <strong>and</strong> both &ge; 0.75</div>
+    <p>Both prompts land near-ceiling; the task is trivially solved either way, regardless of prompt
+    engineering effort.</p>
+    <div class="decision"><b>Decision:</b> proceed to the candidate's added-complexity design (Selection/OOD
+    atoms). The existing reseed-only shape is exhausted as an optimizer target.</div>
+  </div>
+  <div class="outcome b">
+    <span class="oc-tag">Outcome (b) &middot; Headroom, not prompt-closable</span>
+    <h3>naive &asymp; ceiling &asymp; MID/LOW</h3>
+    <div class="cond">gap &lt; 0.10 <strong>and</strong> both &lt; 0.55 (esp. &lt; 0.40)</div>
+    <p>Even the ceiling prompt cannot close the gap to high &mdash; a raw capability deficit under strict
+    stacking, not a prompting problem.</p>
+    <div class="decision"><b>Decision:</b> proceed to the added-complexity design <strong>and</strong> keep
+    base difficulty shallow &mdash; fewer atoms, easy-skewed strata &mdash; so the optimizer signal is not
+    floored.</div>
+  </div>
+  <div class="outcome c">
+    <span class="oc-tag">Outcome (c) &middot; Prompt-closable headroom</span>
+    <h3>naive &ll; ceiling</h3>
+    <div class="cond">gap &ge; 0.20</div>
+    <p>A single engineered prompt recovers most of the gap &mdash; the anti-enumeration mechanisms are absent
+    from this baseline, so the gap is wide-but-shallow.</p>
+    <div class="decision"><b>Decision:</b> direct prompt optimization is viable on the existing reseed-only
+    shape for the quick-test purpose. Caveat: the synthesis warns this gap is likely one-shot-closable, so
+    sustained optimization difficulty may still require the Selection/OOD complexity layer for a durable
+    optimizer target (&sect;7.4).</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Ambiguous middle</strong> (&sect;7.4): <code>0.10 &le; gap &lt; 0.20</code>, or both prompts land
+  ~0.55&ndash;0.75. Proposed default: treat as a soft (c)-lean but flag for owner review &mdash; synthesis
+  uncertainty is HIGH and asymmetric here (floor could plausibly be 0.10&ndash;0.50), so a borderline gap
+  should trigger a targeted re-run (e.g. split easy-skewed vs. mixed strata) before committing a branch.
+  <strong>Read per-stratum too:</strong> the decision may differ by stratum &mdash; easy-skewed/3-atom strata
+  may show outcome (a) while mixed/5-atom strata show (b) or (c); if so, the shallow-base recommendation in
+  (b) is directly actionable.
+</div>
+
+<!-- MODEL EVIDENCE -->
+<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
+<div class="callout warn">Not finalized here. See &sect;7.1. The owner decides the primary cheap-tier model,
+whether to add a frontier anchor, and the exact model versions/snapshots.</div>
+
+<h3 style="margin-top:18px;">4.1 What the related-work dossiers measured (strict all-pass / prompt-level, the c22-comparable metric)</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Model</th><th>Metric (source)</th><th>Result</th><th>Tier</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>GPT-4</td><td>IFEval prompt-strict, 1&ndash;3 atoms (2311.07911)</td><td><strong>76.89%</strong></td><td>frontier</td><td>inst-level 83.57% &mdash; shows the all-pass compression</td></tr>
+      <tr><td>PaLM-2-Small</td><td>IFEval prompt-strict, 1&ndash;3 atoms (2311.07911)</td><td><strong>43.07%</strong></td><td>small/cheap</td><td>single most transferable cheap-tier datapoint</td></tr>
+      <tr><td>GPT-4-turbo</td><td>VFF strict, L1/L2/L3 (2502.04498)</td><td><strong>76.3 / 53.3 / 35.3</strong></td><td>frontier</td><td>cleanest c22 analog (deterministic, strict AND)</td></tr>
+      <tr><td>GPT-3.5-turbo</td><td>VFF strict, L1/L2/L3 (2502.04498)</td><td><strong>62.9 / 34.1 / 16.4</strong></td><td>cheap proxy</td><td>closest measured proxy for cheap-tier band</td></tr>
+      <tr><td>GPT-4</td><td>COLLIE zero-shot avg (2307.08689)</td><td>50.9%</td><td>frontier</td><td>pass@20 &gt;63%</td></tr>
+      <tr><td>GPT-3.5</td><td>COLLIE pass@20 (2307.08689)</td><td>32%</td><td>cheap proxy</td><td>&nbsp;</td></tr>
+      <tr><td>7B&ndash;8B open (Mistral-7B, LLaMA-2-7B, LLaMA-3-8B)</td><td>VFF L1/L3 (2502.04498); IFBench pre-RLVR (2507.02833)</td><td>L1 &asymp; 50&ndash;65, L3 &asymp; 9&ndash;16; IFBench 16&ndash;31</td><td>small/open</td><td>consistent low floor under stacking</td></tr>
+      <tr><td>GPT-4.1 / Claude 3.7&middot;4 Sonnet / Qwen3-32B</td><td>IFBench OOD (2507.02833)</td><td><strong>&lt;50%</strong></td><td>frontier</td><td>OOD atoms &mdash; not in baseline scope, context only</td></tr>
+      <tr><td>Gemini-2.5-Flash</td><td>DeonticBench (different task) (2604.04443)</td><td>weak</td><td>cheap</td><td>not on stacked-IFEval-atom strict test</td></tr>
+      <tr><td>GPT-5-mini</td><td>IF-RewardBench judge &tau;<sub>b</sub> 0.211 (2603.04738)</td><td>judge-only</td><td>cheap</td><td>not measured as a generator on c22-like tasks</td></tr>
+      <tr><td>DeepSeek-Chat / Claude Haiku 4.5</td><td>&mdash;</td><td><strong>not measured anywhere in the 11 dossiers</strong></td><td>cheap</td><td>zero direct evidence</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>4.2 Proposed candidate set <span class="proposed-tag">not finalized</span></h3>
+    <p>The quick-test contract wants a small, cheap model (rubric goal: cents per run, minutes). Proposed:</p>
+    <ul>
+      <li><span class="key">Primary:</span> one cheap-tier hosted model &mdash; candidates: Gemini-2.5-Flash,
+      GPT-5-mini, Claude Haiku 4.5, or DeepSeek-Chat. This is the decisive band for c22 and, critically, the
+      band with <span class="key">essentially zero direct evidence</span> in the related-work corpus &mdash;
+      measuring it is the point.</li>
+      <li><span class="key">Optional second (frontier anchor):</span> one frontier model (e.g. a GPT-4-class or
+      Claude Sonnet-class model) to bracket the ceiling and confirm the strict-AND compression direction,
+      matching the reviewer demand for multiple base models.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>4.3 Tradeoffs for the owner</h3>
+    <ul>
+      <li><span class="key">Pro:</span> the cheap tier is where the answer matters but where the corpus is
+      flying blind &mdash; the floor/ceiling estimates (&sect;3) are interpolations, not measurements; the
+      actual numbers can genuinely inform or surprise.</li>
+      <li><span class="key">Con:</span> a single cheap model is cheapest and fastest but a single-model result
+      "won't generalize"; adding a frontier anchor roughly doubles cost but pre-empts that reviewer objection.</li>
+      <li><span class="key">Con:</span> model choice interacts with &sect;3 thresholds &mdash; a stronger cheap
+      model shifts both naive and ceiling upward, making outcome (a) more likely; a weaker one pushes toward
+      (b). The thresholds are set for the cheap-tier band and may need per-model adjustment.</li>
+      <li><span class="key">Note:</span> exact model versions/snapshots are output-affecting and must be pinned
+      once selected (&sect;7.1).</li>
+    </ul>
+  </div>
+</div>
+
+<!-- COST -->
+<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<p><span class="key">Formula:</span> N &times; repeats &times; prompts = rollouts/model; rollouts &times;
+tokens/rollout = tokens; tokens &times; price = cost. Fixed factors: N = 120 instances (6 strata &times; 20); 2
+prompts (naive, ceiling); repeats = 3.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Per-instance token estimate <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Naive probe</th><th>Ceiling probe</th></tr></thead>
+        <tbody>
+          <tr><td>Input tokens (base task + concatenated constraints, +convention block for ceiling)</td><td class="num">~150</td><td class="num">~400</td></tr>
+          <tr><td>Output tokens (micro-task, a few words)</td><td class="num">~20</td><td class="num">~20</td></tr>
+          <tr><td><strong>Total tokens/call</strong></td><td class="num"><strong>~170</strong></td><td class="num"><strong>~420</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:10px;">The ceiling prompt's self-verify step is instructed to stay
+    silent, so output stays tiny; if a model emits visible reasoning, cap via <code>max_tokens &asymp; 64</code>.</p>
+  </div>
+  <div class="card">
+    <h3>Calls, tokens, and dollar cost</h3>
+    <p><strong>Rollouts per model per full run:</strong> 120 &times; 2 prompts &times; 3 repeats =
+    <strong>720 rollouts/model</strong> (360 naive + 360 ceiling).</p>
+    <p><strong>Tokens per model per full run:</strong> naive 360 &times; (150 in + 20 out) = 54k in + 7.2k out;
+    ceiling 360 &times; (400 in + 20 out) = 144k in + 7.2k out &mdash; <strong>&asymp;198k input + 14.4k output
+    &asymp; 213k tokens/model</strong>.</p>
+    <p><strong>Cost</strong> (illustrative placeholder rates, ~$0.15/M input, ~$0.60/M output for cheap tier):
+    per model &asymp; (0.198M&times;$0.15) + (0.0144M&times;$0.60) &asymp; <strong>$0.04 per full baseline
+    run</strong>. Adding a frontier anchor (~$3/M in, $15/M out): frontier &asymp; $0.81 &mdash;
+    <strong>combined &asymp; $0.85 per full run</strong>. Both satisfy the rubric's "cents per run" goal.</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <p style="margin-bottom:0;"><strong>Wall-clock</strong> (proposed): 720 rollouts, ~20 output tokens each, no
+  sandbox, no chained calls. At modest concurrency (~20 in flight) and ~1&ndash;2s/call, <strong>&asymp;
+  1&ndash;2 minutes per model</strong>, rate-limits permitting. Generator and scoring are local and negligible.
+  Comfortably "minutes, not hours."</p>
+</div>
+<div class="evnote"><em>Evidence note (thin):</em> the &sect;5 dollar rates are illustrative placeholders, not
+confirmed provider pricing. Confirm actual rates for the chosen models before committing the full run
+(&sect;7.7).</div>
+
+<!-- RUBRIC MAPPING -->
+<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
+    <tbody>
+      <tr><td>Single LLM call + deterministic checker, no chain</td><td>1 (single node graph), 2 (exact check by simple fn)</td></tr>
+      <tr><td>Micro-task, few-word output, max_tokens ~64</td><td>3 (bounded token cost), 14</td></tr>
+      <tr><td>Naive vs. ceiling prompts (&sect;2) measuring the gap</td><td><strong>4</strong> (default low, better closes gap), <strong>9</strong> (floor/ceiling/reference known)</td></tr>
+      <tr><td>Two axes &times; N=20/stratum, 120 total, temp 0, 3 repeats (&sect;1)</td><td><strong>5</strong> (&ge;10-pt effect resolvable, determinism + resolvability)</td></tr>
+      <tr><td>Fresh seeds per instance, seed as metadata, no published rows</td><td><strong>8</strong> (contamination resistance)</td></tr>
+      <tr><td>Reuse IFEval checkers verbatim as independent oracle</td><td>2, 8, 11</td></tr>
+      <tr><td>Per-atom verdict logged as diagnostic fact</td><td>10, 11 (diagnostic failures)</td></tr>
+      <tr><td>Constraint-count + atom-mix strata (latent-difficulty axes)</td><td>7 (large pool, splits), 10</td></tr>
+      <tr><td>Aggregate 0/1 within-repeat &rarr; within-task &rarr; within-stratum &rarr; across strata</td><td>5 (aggregation crosses strata)</td></tr>
+      <tr><td>Strict all-pass 0/1, no partial credit</td><td>2, 4</td></tr>
+      <tr><td>Three-outcome decision rule with synthesis-anchored thresholds (&sect;3)</td><td><strong>9</strong> (falsifiable success criterion), 4</td></tr>
+      <tr><td>Cheap-tier model set, short outputs, minutes wall-clock</td><td>3, 14</td></tr>
+      <tr><td>Repeats validate aggregation plumbing though scores agree</td><td>5, and noted non-coverage (repeat-averaging under variance is NOT stressed)</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="small muted" style="margin-top:10px;"><strong>Criteria the baseline deliberately does not cover:</strong>
+multi-node routing, sandbox execution, dr-code preprocessing, the second (output-bytes) Objective, and
+repeat-averaging under real variance &mdash; all out of scope for a headroom baseline.</p>
+
+<!-- OPEN DECISIONS -->
+<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="open-decisions">
+  <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
+  <ol>
+    <li><strong>Model set</strong> (&sect;4) &mdash; which cheap-tier model as primary; whether to include a
+    frontier anchor (doubles cost, brackets the ceiling, pre-empts the single-model objection).</li>
+    <li><strong>N per stratum</strong> (&sect;1) &mdash; proposed 20 (satisfies criterion 5, cheap). Bump to 40
+    if a &ge;10-pt effect must resolve <em>within a single stratum</em> at high confidence?</li>
+    <li><strong>Atom pool membership</strong> (&sect;1) &mdash; confirm the exact IFEval <code>instruction_id</code>
+    set assigned to the easy vs. hard pools, and confirm exclusion of language-detection / nltk-<code>punkt</code>-dependent
+    atoms (determinism risk). Owner may want a specific curated list.</li>
+    <li><strong>Decision thresholds / ambiguity band</strong> (&sect;3) &mdash; accept <code>gap &ge; 0.20</code>
+    = prompt-closable and <code>gap &lt; 0.10</code> = no gap, or tighten/loosen given the HIGH synthesis
+    uncertainty on the floor (0.10&ndash;0.50)?</li>
+    <li><strong>Ceiling-prompt wording</strong> (&sect;2.2) &mdash; approve the drafted convention block, or
+    trim/extend the hygiene hints? It inherits IFEval-strict false-negative risk; the hygiene block is the
+    mitigation.</li>
+    <li><strong>Loose-metric side report</strong> &mdash; the synthesis notes strict-only costs a few points to
+    formatting false-negatives. Optionally also log per-atom (loose-style) rates alongside strict all-pass, as
+    reviewers will later demand &mdash; cheap to add now.</li>
+    <li><strong>Dollar rates</strong> (&sect;5) &mdash; the cost estimates use illustrative placeholder prices;
+    confirm actual provider pricing for the chosen models.</li>
+    <li><strong>Seed-plumbing implementation</strong> &mdash; confirm the glue seeds the module-global
+    <code>random</code> (or holds a <code>random.Random(seed)</code>) before each <code>build_description</code>,
+    and passes explicit kwargs for nonce vocab; the repo's <code>config.seed</code> is a decoy.</li>
+  </ol>
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c22.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c22 candidate page</a>
+  <a href="c22-related-work.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">c22 related work</a>
+</nav>
+
+</main>
+</body>
+</html>

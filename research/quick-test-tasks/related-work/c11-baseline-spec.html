@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Baseline-spec additions — only what doc.css/flow.css lack. */
+
+/* DRAFT badge, matching the candidate-page .badge convention */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.draft { color: var(--amber); background: var(--amber-soft); border-color: var(--amber); }
+
+.hdr-row { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.hdr-row h1 { margin: 0; }
+
+/* Outcome cards for the three-outcome decision rule */
+.outcome-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 16px; margin: 16px 0; }
+.outcome {
+  padding: 18px 20px; border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.outcome .oc-tag {
+  align-self: flex-start; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.outcome.a { border-color: var(--red); } .outcome.a .oc-tag { color: var(--red); background: var(--red-soft); }
+.outcome.b { border-color: var(--amber); } .outcome.b .oc-tag { color: var(--amber); background: var(--amber-soft); }
+.outcome.c { border-color: var(--green); } .outcome.c .oc-tag { color: var(--green); background: var(--green-soft); }
+.outcome h3 { font-size: 15px; margin: 0; }
+.outcome .cond { font: 600 12.5px/1.4 var(--font-mono); color: var(--muted); }
+.outcome p { font-size: 13.5px; margin: 0; }
+.outcome .decision { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.outcome .decision b { color: var(--ink); }
+
+/* Recommendation vs constraint distinction (skill §3) */
+.constraint {
+  margin: 14px 0; padding: 14px 20px; border: 1.5px solid var(--ink); border-radius: 10px;
+  background: var(--surface);
+}
+.constraint .tag {
+  display: inline-block; margin-bottom: 6px; padding: 2px 10px; border-radius: 999px;
+  font: 700 10.5px/1.5 var(--font-system); letter-spacing: .06em; text-transform: uppercase;
+  color: #fff; background: var(--ink);
+}
+.constraint ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.constraint li { margin-bottom: 5px; }
+
+.proposed-tag {
+  display: inline-block; padding: 1px 9px; border-radius: 999px;
+  border: 1px dashed var(--accent); background: var(--accent-soft); color: var(--accent);
+  font: 700 9.5px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+  vertical-align: middle; margin-left: 6px;
+}
+
+/* Open decisions list — visually prominent */
+.open-decisions {
+  margin: 16px 0; padding: 20px 24px; border: 2px solid var(--amber); border-radius: 12px;
+  background: var(--amber-soft);
+}
+.open-decisions h3 { color: var(--amber); margin-bottom: 10px; }
+.open-decisions ol { margin: 0; padding-left: 20px; font-size: 14.5px; }
+.open-decisions li { margin-bottom: 10px; }
+.open-decisions li::marker { color: var(--amber); font-weight: 800; }
+.open-decisions li:last-child { margin-bottom: 0; }
+
+.evnote {
+  margin: 10px 0; padding: 10px 16px; border-left: 3px solid var(--muted);
+  background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; color: var(--muted);
+}
+.evnote em { color: var(--ink); }
+
+.nav-back { margin-bottom: 22px; }
+.nav-back a {
+  display: inline-flex; align-items: center; gap: 6px;
+  font: 600 13px/1.4 var(--font-system); padding: 5px 14px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+}
+.nav-back a:hover { border-color: var(--accent); }
+
+@media (max-width: 900px) {
+  .outcome-grid { grid-template-columns: 1fr; }
+}
+</style>
+<title>whetstone-ai · c11 Baseline Spec</title>
+</head>
+<body>
+<main>
+
+<nav class="nav-back"><a href="../candidates/c11.html">&larr; Back to c11 candidate page</a></nav>
+
+<div class="hdr-row">
+  <h1>c11 Baseline Spec: Headroom Before Complexity</h1>
+  <span class="badge draft">Draft</span>
+</div>
+<div class="byline">whetstone-ai &middot; 2026-07-22</div>
+
+<div class="callout warn">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), and six other open items
+  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
+  anything here as final.
+</div>
+
+<p>This experiment measures how much headroom exists between a naive canonicalization prompt and a
+best-effort ceiling prompt on <span class="key">plain RFC 8785 (JCS) canonical JSON</span> &mdash; before any
+build effort goes into c11's invented, adversarially-deviating house-rule layer. It is a
+<span class="key">go/no-go instrument</span>, not the benchmark itself: plain JCS sits in the crowded
+"public-standard-conformance" cell the related-work synthesis maps out, so a large gain there is a materially
+weaker result than a gain on the invented-rule task &mdash; but it is the cheapest, lowest-risk first
+measurement of whether the task shape has headroom at all before house rules are designed and validated.</p>
+
+<div class="constraint">
+  <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
+  <ul>
+    <li><span class="key">Plain RFC 8785 (JCS) canonical JSON, no invented deviations yet.</span> That added
+    complexity is exactly what this experiment tests the necessity of, so it cannot appear in the baseline.</li>
+    <li><span class="key">Fresh seeds, never a published instance.</span> Inputs are sampled from pinned
+    json-schema-faker schemas; no seed may coincide with a previously published instance (contamination
+    resistance, rubric criterion 8).</li>
+    <li><span class="key">Independent oracle</span> &mdash; the trailofbits <code>rfc8785-py</code> reference
+    implementation (<code>rfc8785.dumps</code>), used unmodified. It is a pure function of the input Python
+    object, computed from RFC rules rather than from how the input was built (oracle independence).</li>
+    <li><span class="key">Scoring: 0/1 whole-string exact match</span> of the returned canonical JSON string
+    against the oracle. One trivial input normalization is permitted before the compare: strip surrounding
+    whitespace / code fences. Nothing else.</li>
+    <li><span class="key">Temperature 0.</span> Repeats = 3 (<code>repeat_id</code> in {0,1,2}) to exercise the
+    aggregation plumbing.</li>
+  </ul>
+</div>
+
+<!-- STRATA -->
+<div class="section-head"><h2>1. Strata design</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Stratum axis: which JCS sub-rule the instance stresses</h3>
+    <p>The capability synthesis is unambiguous: structural JSON validity is near-saturated; the failures live
+    in the canonical <em>details</em> &mdash; <span class="key">key sort order</span> (UTF-16 code-unit
+    comparison), <span class="key">number canonicalization</span> (ECMAScript shortest-round-trip, flagged as
+    the single hardest sub-rule), <span class="key">exact escaping</span>, and
+    <span class="key">zero-insignificant-whitespace</span>. Schema content swings the score more than model
+    choice. So the stratum axis is realized as schema-content shape, not model or prompt variation.</p>
+  </div>
+  <div class="card">
+    <h3>Five strata <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Stratum</th><th>What the schema forces</th></tr></thead>
+        <tbody>
+          <tr><td>S1</td><td>Flat / shallow</td><td>Few keys, all-ASCII strings, ints only, no sort tension</td></tr>
+          <tr><td>S2</td><td>Key-sort stress</td><td>Many keys whose insertion order &ne; UTF-16 sorted order; nested objects</td></tr>
+          <tr><td>S3</td><td>Number-canonicalization</td><td>Floats needing ECMA shortest round-trip; large ints; &minus;0; exponent forms</td></tr>
+          <tr><td>S4</td><td>Unicode / escaping</td><td>Strings needing \u escapes, control chars, exact escape policy</td></tr>
+          <tr><td>S5</td><td>Mixed / deep</td><td>Nested combination of S2+S3+S4 in one instance</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="small muted" style="margin-top:10px;">Every instance is generated adversarially so it actually
+    exercises its stratum's sub-rule (e.g. S2 instances are rejected if their keys are already sorted, since
+    messy and canonical forms would then coincide).</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <h3>200 official + 200 held-out = 400 pinned instances <span class="proposed-tag">proposed</span></h3>
+  <p><span class="key">Design driver:</span> rubric criterion 5 resolvability. A meaningful prompt change
+  (&ge;10 points) must resolve above residual noise on a 10&ndash;20 task internal eval. The internal-eval
+  slice is &ge;2 tasks per stratum &times; 5 strata = <strong>10 tasks minimum, 20 tasks target</strong>,
+  exactly the 10&ndash;20 band criterion 5 names; at temperature 0 a 10-point effect is &ge;1 flipped task out
+  of 10, resolvable given the near-determinism the rubric assumes.</p>
+  <p><span class="key">Official/calibration pool:</span> 40 instances per stratum &times; 5 strata = 200,
+  sized so a per-stratum accuracy is stable to a binomial standard error of &asymp;&plusmn;8pp at p=0.5, while
+  keeping a full baseline run in the cents-per-run / minutes envelope (&sect;5) and satisfying the "hundreds
+  of tasks" pool (rubric criterion 7). <span class="key">Held-out fresh-seed split:</span> a further 200
+  disjoint-seed instances, generated and frozen now but not scored in this baseline &mdash; reserved so any
+  later optimizer claim is verified on seeds never seen.</p>
+  <div class="evnote"><em>Evidence note:</em> the output-bytes objective is provably degenerate here (correct
+  canonical strings have fixed length), so this baseline validates single-objective optimization plus
+  two-objective plumbing only, not a real multi-objective result &mdash; it must say so wherever it is
+  reported.</div>
+</div>
+
+<!-- PROBE PROMPTS -->
+<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<p>Both probes are prompt-only &mdash; no constrained decoding, which is a decoding-engine intervention
+unavailable in this baseline. The model receives the messy input JSON (<code>{input}</code>) and must return
+only the canonical string. These operationalize rubric criterion 4 (default prompts score low; better
+prompts close the gap) and criterion 9 (floor, ceiling, and a reference prompt known in advance).</p>
+
+<h3 style="margin-top:22px;">2.1 Probe (a) &mdash; deliberately underspecified naive prompt</h3>
+<pre><code class="language-plaintext">Canonicalize this JSON.
+
+{input}</code></pre>
+<p>Design intent: names the operation but states none of the JCS sub-rules. It is the "single instruction, no
+worked examples" floor the capability synthesis predicts at <span class="key">~5&ndash;30% (best guess
+~15%)</span>, and the operationalization of criterion 4's claim that models' default behavior sits well below
+the ceiling.</p>
+
+<h3 style="margin-top:26px;">2.2 Probe (b) &mdash; best-effort ceiling prompt (all JCS rules + worked examples)</h3>
+<pre><code class="language-plaintext">Convert the JSON below into its RFC 8785 (JCS) canonical form and return ONLY the
+resulting string, with no code fences, no commentary, and no trailing newline.
+
+Apply every one of these rules exactly:
+
+1. Object keys are sorted by their UTF-16 code units (compare the raw UTF-16 code-unit
+   sequences of the key strings, ascending). Sort keys at every nesting level.
+2. No insignificant whitespace: no spaces or newlines anywhere except inside string
+   values. `{"a":1,"b":[2,3]}`, never `{ "a": 1 }`.
+3. Strings use the shortest JSON escaping: escape only " \ and the control characters
+   U+0000..U+001F. Use the two-character forms \" \\ \b \f \n \r \t where they exist;
+   otherwise \u00XX (lowercase hex). Do not escape forward slash or any other character.
+4. Numbers use the ECMAScript Number-to-string (shortest round-trip) form: integers with
+   no decimal point or exponent; no leading zeros; no "+" on exponents; "-0" becomes "0";
+   the minimal digit sequence that round-trips to the same IEEE-754 double.
+5. Literals are exactly true, false, null. Arrays preserve their element order.
+
+Worked examples:
+
+Input:  {"b": 2, "a": 1}
+Output: {"a":1,"b":2}
+
+Input:  {"x": 1.0, "y": 1e2, "z": -0}
+Output: {"x":1,"y":100,"z":0}
+
+Input:  {"s": "line1\nline2", "t": "&pi;"}
+Output: {"s":"line1\nline2","t":"&pi;"}
+
+Input:  {"nested": {"d": 4, "c": 3}, "arr": [true, null]}
+Output: {"arr":[true,null],"nested":{"c":3,"d":4}}
+
+Now canonicalize:
+
+{input}</code></pre>
+<p>Design intent: states every standard convention of the existing task and shows four worked examples
+spanning sort / number / escape / whitespace &mdash; the "several worked examples" the capability synthesis
+conditions its ceiling prediction on, <span class="key">~40&ndash;75% (best guess ~55%)</span>. The examples
+are illustrative covering, not full-table coverage (no rule table exists in plain JCS), so no leakage concern
+applies to this baseline; the leakage guard becomes live only for the eventual invented-rule task.</p>
+<div class="evnote"><em>Evidence note (thin):</em> the Output strings in the worked examples above are
+hand-written and must be regenerated by <code>rfc8785.dumps</code> on the exact inputs and pasted verbatim
+before freezing &mdash; do not trust the hand-typed forms (the &pi;/escape example in particular needs
+confirming against the oracle's literal-UTF-8-vs-\u-escape behavior). Flagged in &sect;7.5.</div>
+
+<!-- DECISION RULE -->
+<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<p>Let <strong>F</strong> = naive-probe score, <strong>C</strong> = ceiling-probe score, each official-pool
+exact-match, averaged per repeat then across strata. Thresholds are inferences from the capability synthesis
+(predicted naive floor ~5&ndash;30%, best ~15%; predicted ceiling ~40&ndash;75%, best ~55%), with an explicit
+upside risk that plain JCS is <em>memorizable public knowledge</em> and the naive floor could exceed 40%. All
+bands are DRAFT and must be re-pinned once calibration numbers land.</p>
+
+<div class="card full">
+  <p style="margin-bottom:0;"><strong>Proposed numeric anchors</strong> <span class="proposed-tag">all owner-adjustable</span>:
+  <code>HIGH</code> &ge; ~80%; <code>MID</code> &asymp; ~40&ndash;75%; <code>LOW</code> &le; ~30%; "&asymp;"
+  (F approximately equals C) means within ~10 points (the criterion-5 resolution grain); "&ll;" (F much less
+  than C) means C &minus; F &ge; ~20 points (2&times; the resolution grain, so a "prompt-closable" verdict
+  clears noise with margin).</p>
+</div>
+
+<div class="outcome-grid">
+  <div class="outcome a">
+    <span class="oc-tag">Outcome (a) &middot; No headroom</span>
+    <h3>F &asymp; C &asymp; HIGH</h3>
+    <div class="cond">|F &minus; C| &lt; 10 <strong>and</strong> both &ge; ~80%</div>
+    <p>Plain JCS is too easy or memorized &mdash; the synthesis's "JSON is saturated" upside risk realized.
+    Any reasonable prompt hits the ceiling; every optimizer would look identical (rubric criterion 4 fails).</p>
+    <div class="decision"><b>Decision:</b> proceed to the candidate's added-complexity design (invented
+    house-rule deviations, post-diet &le;6 single-pass rules). The task shape has no discriminative gap
+    without them.</div>
+  </div>
+  <div class="outcome b">
+    <span class="oc-tag">Outcome (b) &middot; Headroom, not prompt-closable</span>
+    <h3>F &asymp; C &asymp; MID/LOW</h3>
+    <div class="cond">|F &minus; C| &lt; 10 <strong>and</strong> both &lt; ~75%</div>
+    <p>The ceiling prompt states every rule and still can't lift the score &mdash; a raw capability deficit
+    (the persistent number-canonicalization slip that does not go away with prompting).</p>
+    <div class="decision"><b>Decision:</b> pursue the added-complexity design <strong>and</strong> keep base
+    difficulty shallow. If the model can't execute plain JCS even when told every rule, invented deviations
+    layered on top will floor the score. Bias strata toward S1/S2, drop or cap S3 number-heavy content.</div>
+  </div>
+  <div class="outcome c">
+    <span class="oc-tag">Outcome (c) &middot; Prompt-closable headroom</span>
+    <h3>F &ll; C</h3>
+    <div class="cond">C &minus; F &ge; ~20 points, C not near ceiling-saturated</div>
+    <p>Naive is low, and stating the rules substantially lifts the score &mdash; the gap is prompt-shaped, the
+    criterion-4 ideal: room to improve, and prompts close it.</p>
+    <div class="decision"><b>Decision:</b> direct prompt optimization is viable on plain JCS; run
+    COPRO/MIPROv2/GEPA on it first. Added complexity is optional, not required. Caveat: plain JCS still sits
+    in the crowded public-standard-conformance cell &mdash; "viable for the quick-test instrument" &ne;
+    "sufficient for the paper" (&sect;7.8).</div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Where the risk concentrates (&sect;7.2, &sect;7.8):</strong> outcome (a) is the synthesis's primary
+  predicted risk for plain JCS &mdash; run the naive floor specifically on the <strong>number-heavy (S3) and
+  unicode-heavy (S4) strata</strong>, since the corpus says that is where breakage, and therefore
+  discriminative signal, lives. If even S3/S4 come back HIGH, outcome (a) is firm. All thresholds must be
+  frozen from the <em>measured</em> calibration numbers, not the predictions, before any optimizer run.
+</div>
+
+<!-- MODEL EVIDENCE -->
+<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
+<div class="callout warn">Not finalized here. See &sect;7.1. The cheap tier c11 actually runs at is not
+directly tested by any related-work paper; the table below is adjacent-proxy evidence, not measurements of
+our models on our task.</div>
+
+<h3 style="margin-top:18px;">4.1 Models tested by the related-work papers</h3>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Model (tier)</th><th>Paper</th><th>Metric</th><th>Result</th><th>c11 relevance</th></tr></thead>
+    <tbody>
+      <tr><td>GPT-4o (frontier closed)</td><td>LLMStructBench</td><td>DOC_micro (all-or-nothing)</td><td>0.52 (top tier)</td><td>The DOC_micro ceiling the synthesis anchors c11's ceiling on</td></tr>
+      <tr><td>Gemma3-27B (open)</td><td>LLMStructBench</td><td>DOC_micro</td><td>0.52 (tied GPT-4o)</td><td>Frontier open matches closed on all-or-nothing</td></tr>
+      <tr><td>GPT-4o</td><td>StructEval</td><td>avg over 44 tasks (graded)</td><td>76.02% (best)</td><td>JSON/CSV/YAML gen "saturated" &gt;90% for it</td></tr>
+      <tr><td>GPT-4o-mini (cheap closed)</td><td>StructEval</td><td>avg</td><td>73.19% (~3pp behind 4o)</td><td>Closest "-mini" proxy to c11 cheap tier</td></tr>
+      <tr><td>GPT-4.1-mini (cheap closed)</td><td>StructEval</td><td>avg</td><td>75.64% (best on T-gen 92.57)</td><td>Cheap-tier proxy, strong on generation</td></tr>
+      <tr><td>o1-mini (reasoning)</td><td>StructEval</td><td>avg</td><td>75.58%</td><td>Reasoning gave no decisive edge over 4o here</td></tr>
+      <tr><td>GPT-4o-mini</td><td>PolyNorm</td><td>WER (lower better)</td><td>6.60&ndash;11.19% (vs 4o 4.17&ndash;7.88)</td><td>Meaningfully worse than 4o but beats rule baseline</td></tr>
+      <tr><td>GPT-4.1 / Claude 3.7&ndash;4 Sonnet / Qwen3-32B (frontier)</td><td>IFBench</td><td>novel-constraint accuracy</td><td>&lt;50% one-shot</td><td>Most c11-relevant SHOWN result: novel rules crater accuracy even at frontier</td></tr>
+      <tr><td>o3 (frontier reasoning)</td><td>IFBench</td><td>novel-constraint accuracy</td><td>only OOTB model IF-RLVR can't beat</td><td>Reasoning helps most on novel constraints</td></tr>
+      <tr><td>DeepSeek-R1-1.5B (tiny open)</td><td>LLMStructBench</td><td>DOC_micro</td><td>0.16 (strat P), recovers under schema-forcing</td><td>Prompting strategy beats scale at this tier</td></tr>
+      <tr><td>Gemma3-1B / Phi3-3.8B (tiny open)</td><td>LLMStructBench</td><td>DOC_micro</td><td>0.10 / 0.01 (strat P)</td><td>Floor of the cheap/open tier</td></tr>
+      <tr><td>Qwen3-4B (open small)</td><td>StructEval</td><td>avg</td><td>67.04% (best open-source)</td><td>Small-open structured-output proxy</td></tr>
+      <tr><td>Llama-3.1-8B / Phi-3-mini (open)</td><td>StructEval</td><td>TOML gen</td><td>6.76 / 0.00</td><td>Format collapse worst at cheap/open tier</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>4.2 Candidate slate to choose &ge;2 from <span class="proposed-tag">not finalized</span></h3>
+    <p>The quick test runs at the cheap tier (rubric criteria 3, 14: cents/run, minutes), spanning &ge;2
+    small models so the result isn't single-model under-powered:</p>
+    <ul>
+      <li><span class="key">Gemini-2.5-Flash</span> &mdash; cheap frontier-family, fast, high concurrency.</li>
+      <li><span class="key">GPT-5-mini</span> &mdash; "-mini" closed tier the StructEval/PolyNorm proxies most resemble.</li>
+      <li><span class="key">Claude Haiku 4.5</span> &mdash; cheap closed, strong instruction-following.</li>
+      <li><span class="key">DeepSeek-Chat</span> &mdash; cheap, and the DeepSeek family is the one with
+      published tiny-model structured-output numbers (proxy anchor).</li>
+    </ul>
+    <p class="small muted">If any Claude/Anthropic model is on the final slate, confirm exact model IDs and
+    pricing before finalizing &sect;5 cost &mdash; do not rely on memory.</p>
+  </div>
+  <div class="card">
+    <h3>4.3 Tradeoffs for the owner</h3>
+    <ul>
+      <li><span class="key">One model</span> minimizes &sect;5 cost and answers the headroom go/no-go, but
+      produces a result reviewers flag as under-powered (field norm is 12&ndash;22 models).</li>
+      <li><span class="key">&ge;2 small models</span> costs ~2&times; but lets an eventual optimizer claim
+      argue generality across the cheap tier; cheap-tier scores swing widely, so a single model's number may
+      not generalize.</li>
+      <li><span class="key">Reasoning model?</span> No decisive edge on structured-output proxies but did
+      help most on the novel-constraint axis (IFBench o3). Plain JCS is not novel, so likely unnecessary for
+      this baseline but may matter for the eventual invented-rule task.</li>
+      <li><span class="key">Model choice matters less than schema content</span> here (synthesis, stated
+      twice) &mdash; argues for spending budget on strata coverage over model count if forced to trade.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- COST -->
+<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<p><span class="key">Formula:</span> instances &times; probes &times; models &times; repeats = LLM calls;
+calls &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: 200 official instances
+(the 200 held-out are generated once and frozen, adding no per-run token cost); 2 probes (naive, ceiling);
+repeats = 3.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Per-instance token estimate <span class="proposed-tag">proposed</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Component</th><th>Naive probe</th><th>Ceiling probe</th></tr></thead>
+        <tbody>
+          <tr><td>Input JSON instance (S1 shallow ~50 &rarr; S5 deep ~300)</td><td class="num">~50&ndash;300</td><td class="num">~50&ndash;300</td></tr>
+          <tr><td>Prompt overhead (naive: bare instruction; ceiling: rules + 4 worked examples)</td><td class="num">~10</td><td class="num">~450</td></tr>
+          <tr><td>Output canonical string (roughly the input size)</td><td class="num">~50&ndash;300</td><td class="num">~50&ndash;300</td></tr>
+          <tr><td><strong>Blended total tokens/call</strong></td><td class="num"><strong>~350</strong></td><td class="num"><strong>~800</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Calls, tokens, and dollar cost</h3>
+    <p><strong>Calls</strong> = 200 official &times; 2 probes &times; models(M) &times; 3 repeats.</p>
+    <p><strong>M=1:</strong> 1,200 calls &times; ~600 tokens/call blended &asymp; <strong>~720K tokens</strong>.
+    <strong>M=2:</strong> 2,400 calls &asymp; <strong>~1.44M tokens</strong>.
+    <strong>M=4:</strong> 4,800 calls &asymp; <strong>~2.88M tokens</strong>.</p>
+    <p><strong>Cost</strong> (order-of-magnitude, cheap-tier blended ~$0.5&ndash;$1.5 per 1M tokens; confirm
+    live pricing before running): <strong>M=2 &asymp; $1&ndash;$2</strong>; <strong>M=4 &asymp; $2&ndash;$4</strong>
+    per full baseline run &mdash; squarely in the rubric's cents-to-a-few-dollars band (criteria 3, 14).</p>
+  </div>
+</div>
+
+<div class="card full space-top">
+  <p style="margin-bottom:0;"><strong>Wall-clock</strong> (proposed): at a modest sustained ~5 calls/sec (temp
+  0, short outputs, cheap-tier concurrency), <strong>M=2's 2,400 calls &asymp; ~8 minutes</strong>;
+  <strong>M=4's 4,800 calls &asymp; ~16 minutes</strong> &mdash; "minutes, not hours" holds. Generation time is
+  negligible: json-schema-faker produced its full suite in ~870ms in a repo run, so generating all 400
+  instances is sub-second.</p>
+</div>
+<div class="evnote"><em>Evidence note (thin):</em> the ceiling-probe token estimate folds in a fixed ~450-token
+rule-and-example overhead; actual output length varies with schema depth and is a guess pending a pilot. A
+small pilot per model should replace these estimates before committing the full run (&sect;7.4).</div>
+
+<!-- RUBRIC MAPPING -->
+<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
+    <tbody>
+      <tr><td>One LLM call &rarr; one exact-match eval; no chain</td><td>1, 2</td></tr>
+      <tr><td>0/1 whole-string exact match vs oracle; no partial credit</td><td>2, aggregation callout</td></tr>
+      <tr><td>Short inputs, bounded outputs (~50&ndash;300 tok)</td><td>3, 14</td></tr>
+      <tr><td>Naive vs ceiling probes designed so default scores low and rule-stated prompt lifts it</td><td><strong>4</strong>, 10</td></tr>
+      <tr><td>Temperature 0; pinned seeds recorded as metadata; 3 repeats</td><td><strong>5</strong></td></tr>
+      <tr><td>Internal-eval slice = 10&ndash;20 tasks, &ge;2/stratum, &ge;10-pt effect resolvable</td><td><strong>5</strong></td></tr>
+      <tr><td>Fresh seeds only, never published instances; held-out fresh-seed split frozen</td><td><strong>8</strong></td></tr>
+      <tr><td>Synthetic parameterized pool (json-schema-faker), 200 official + 200 held-out, known ground truth</td><td>7, <strong>8</strong></td></tr>
+      <tr><td>Ceiling probe = known-in-advance ceiling; naive = known floor; &sect;3 thresholds = falsifiable criterion</td><td><strong>9</strong></td></tr>
+      <tr><td>Frozen thresholds derived from measured calibration, not predictions</td><td><strong>9</strong></td></tr>
+      <tr><td>5 strata by JCS sub-rule (sort/number/escape/mixed), each a latent-rule stratum</td><td>10, aggregation-crosses-strata callout</td></tr>
+      <tr><td>Exact-match diff names which sub-rule slipped (expected X, got Y)</td><td>11</td></tr>
+      <tr><td>Independent oracle (rfc8785-py), pure function, generator-independent</td><td>2, 8 (no tautology)</td></tr>
+      <tr><td>Output-bytes objective declared degenerate here</td><td>GEPA callout</td></tr>
+      <tr><td>3 repeats validate aggregation plumbing (determinism &rArr; largely agree)</td><td>5, 13</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- OPEN DECISIONS -->
+<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="open-decisions">
+  <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
+  <ol>
+    <li><strong>Model slate</strong> (&sect;4) &mdash; which models, and how many. Recommendation to choose
+    from: Gemini-2.5-Flash / GPT-5-mini / Claude Haiku 4.5 / DeepSeek-Chat; &ge;2 for generality vs 1 for
+    cost. Include a reasoning model now or defer to the invented-rule task? Drives &sect;5 cost directly.</li>
+    <li><strong>Decision-rule thresholds</strong> (&sect;3) &mdash; the HIGH/MID/LOW bands and the ~20-point
+    "prompt-closable" gap are draft inferences from the synthesis. Confirm or re-pin after calibration numbers
+    land.</li>
+    <li><strong>N per stratum</strong> (&sect;1) &mdash; 40 official / 40 held-out per stratum (200/200 total)
+    proposed. Owner may want more official-pool instances if per-stratum error bars (~&plusmn;8pp) are too
+    loose for the go/no-go, or fewer to cut cost.</li>
+    <li><strong>Internal-eval slice size</strong> (&sect;1) &mdash; 10 (min) vs 20 (target) tasks; criterion 5
+    permits either. Owner sets whether it is a disjoint split or a labeled subset of the official 200.</li>
+    <li><strong>Ceiling-probe example set</strong> (&sect;2) &mdash; four worked examples proposed; owner may
+    add or remove. Regardless, all example outputs must be regenerated by the real oracle and pasted verbatim
+    before freezing.</li>
+    <li><strong>Schema pin</strong> (&sect;1) &mdash; exact json-schema-faker schemas per stratum are not yet
+    written. Owner approves the schema set and confirms date formats are excluded or
+    <code>minDateTime</code>/<code>maxDateTime</code> pinned (the one wall-clock nondeterminism source in the
+    generator).</li>
+    <li><strong>Version pins</strong> &mdash; json-schema-faker version (v0.6.2 reviewed), rfc8785-py version,
+    and confirmation the oracle is used strictly unmodified for the plain-JCS baseline.</li>
+    <li><strong>What outcome (a) triggers</strong> (&sect;3) &mdash; if plain JCS is HIGH, the design jumps to
+    the invented-rule build. Owner confirms that branch is in scope and budgeted before this baseline runs, so
+    the result is actionable either way.</li>
+  </ol>
+</div>
+
+<div class="callout warn" style="margin-top:18px;">
+  <strong>Evidence-thinness disclosures.</strong> No paper runs c11's exact task (byte-exact canonical JSON vs
+  a deterministic oracle); every floor/ceiling number above is an inference with wide error bars. The cheap
+  tier c11 runs at is not directly tested by any paper (&sect;4). The serialization-convention ablation
+  &mdash; the exact axis c11 varies &mdash; has zero measured effect size anywhere in the corpus; the
+  &sect;1 stratum-difficulty ordering is inferred from adjacent break-point evidence, not measured. The
+  naive-floor prediction pulls two ways: novel-constraint evidence argues for a low floor, but plain JCS is a
+  memorizable public standard, so the floor could exceed 40% &mdash; this is the uncertainty the baseline
+  exists to resolve.
+</div>
+
+<nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
+  <a href="../candidates/c11.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">&larr; c11 candidate page</a>
+  <a href="c11-related-work.html" style="font:600 12.5px/1.4 var(--font-system); padding:4px 12px; border-radius:999px; border:1px solid var(--line); text-decoration:none; color:var(--accent); background:var(--surface);">c11 related work</a>
+</nav>
+
+</main>
+</body>
+</html>

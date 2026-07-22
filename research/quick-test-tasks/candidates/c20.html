@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
+<link rel="icon" href="../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../doc.css">
+<link rel="stylesheet" href="../flow.css">
+<style>
+/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+   Reuses the family palette (--accent, --green, --amber, --red, --line,
+   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+
+/* (1) Status badge — one accent-tinted pill per adoption state.
+   Color alone is never the only signal: each state also carries its own
+   label text, so it stays legible for color-vision differences and in dark. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 4px 13px; border-radius: 999px;
+  font: 700 11.5px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Header row: id + name on the left, badge trailing on the right */
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head h1 { margin: 0; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
+.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
+.anchor-sub .key { font-weight: 500; }
+
+/* (2) Score chips — numbers as secondary metadata, never as prose.
+   A chip is a label + value pair; only chips carry digits on the page. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 12px/1.4 var(--font-system);
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 10.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+
+/* (6) Perspectives grid — five named lenses, pros and cons in each */
+.lens {
+  padding: 16px 20px; border: 1px solid var(--line);
+  border-radius: 12px; background: var(--surface);
+}
+.lens h3 { margin-bottom: 10px; }
+.lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+.lens .pros li::marker { color: var(--green); font-weight: 800; }
+.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .rowlabel {
+  display: block; margin-top: 10px;
+  font: 700 10.5px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+}
+
+/* (4/5) Citations and link-verification marking.
+   Format in prose: Name (Authors, Venue Year). */
+.cite { font-style: italic; color: var(--muted); }
+.cite a { font-style: normal; }
+/* Unverified links/claims are visibly flagged — text label, not color only. */
+.unverified::after {
+  content: "unverified";
+  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  border: 1px dashed var(--amber); background: var(--amber-soft);
+  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
+  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
+}
+.dead-branch { color: var(--muted); }
+.dead-branch .why { color: var(--muted); font-size: 13px; }
+
+/* (8) Footer nav row */
+.cand-nav {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+}
+.cand-nav a {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.cand-nav a:hover { border-color: var(--accent); }
+.cand-nav .navgroup { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.cand-nav .spacer { flex: 1 1 auto; }
+.cand-nav .navlabel { color: var(--muted); font: 700 10px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; margin-right: 2px; }
+
+@media (max-width: 900px) {
+  .lens .pros, .lens .cons { font-size: 13.5px; }
+  .cand-nav .spacer { flex-basis: 100%; height: 0; }
+}
+</style>
+<title>whetstone-ai · c20 Invented Micro-Game Turn Resolution</title>
+</head>
+<body>
+<main>
+
+<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<div class="cand-head">
+  <h1><span class="cand-id">c20</span>Invented Micro-Game Turn Resolution</h1>
+  <span class="badge ranked">RANKED #16</span>
+</div>
+<div class="anchor-sub">You know this as: <span class="key">invented game rules</span> — the TextArena-style "resolve one deterministic turn of a made-up card or resource game," reduced to one derived token.</div>
+
+<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
+<div class="verdict"><!-- .good = adopt/backup · .bad = gated/below-cut · plain = ranked -->
+  <p><strong>Ranked in the lower-middle of the pool after the implementation-aware rescore.</strong>
+  c20 carries the strongest design story in the family — a per-run invented game with several
+  independently discoverable rules is contamination-proof by construction and gives a low
+  naive-prompt floor because models default to real-card-game priors — but that same richness is what
+  costs it on implementation. Round 1's own reflection flagged it as the <span class="key">highest
+  design effort</span> in the list, and the reason is legible: every invented rule set must be
+  validated <span class="key">unambiguous</span> against a reference near-perfect prompt before it can
+  be frozen, a heavy calibration burden with many moving parts. The best reusable codebase, gg-bench,
+  is a frozen corpus of LLM-generated Gym micro-games whose per-turn <code>step()</code> triple is a
+  clean oracle, so our diff would be pure config-plus-scoring glue; but the corpus is
+  <span class="key">LLM-generated-game shaped, not a rule-engine we can pin</span> — its ground truth
+  is "whatever the generated code implements," which may diverge from the natural-language rulebook,
+  its seeding is inconsistent across envs, and it ships zero tests. The repo review's provisional
+  reuse score was <span class="key">accepted as read rather than run-verified</span>, so the codebase
+  strength on this candidate is unconfirmed. The net is a task that is theoretically excellent but
+  expensive and unpinned to build — which is why a strong round-1 design slides to the lower-middle
+  once implementation is priced in.</p>
+  <div class="chips">
+    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+    <span class="chip"><span class="k">I2</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I3</span><span class="v">0</span></span>
+    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+    <span class="chip total"><span class="k">Impl total</span><span class="v">8/16</span></span>
+  </div>
+</div>
+
+<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
+<div class="section-head"><h2>What it proposes</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>The task: resolve one turn of a per-run invented game, exact-match on a single token</h3>
+    <p>A seeded generator <span class="key">invents a tiny deterministic game</span> for each run: a
+    <span class="key">nonstandard rank order</span> (for example seven-high),
+    <span class="key">trump or override cards</span>, resource exchange rates, caps with overflow
+    discard, and a <span class="key">counterintuitive action-resolution priority</span>. An instance
+    is a game state plus a trick or move sequence; the model outputs exactly one token — a winning
+    card id, a final token count, or <code>WIN</code>/<code>LOSE</code> — scored by exact match against
+    the reference resolver. Each invented rule flips a distinct subset of instances, so rule capture is
+    incremental and a miss is diagnostic: "used real-world ace-high" is a signature a reflection LM can
+    read. Strong priors toward real card games guarantee a low default floor, invented rules per run
+    are contamination-proof, and few-shot worked turns measurably teach the rank order and the
+    resolution priority. The design-defining requirement — flagged in round 1 — is that the rules must
+    be validated unambiguous with a reference near-perfect prompt before use, and that injected illegal
+    moves exercise the rule-violation failure path via a <code>reject</code> token.</p>
+  </div>
+  <div class="card">
+    <h3>Example instance</h3>
+    <p class="small muted">Illustrative. Seeded conditions: a four-card trick-taking micro-game with rank order 7-high (7 &gt; 6 &gt; … &gt; 2 &gt; A), suit <code>moss</code> is trump this run, follow-suit required, no override cards active.</p>
+<pre><code>Rules (given by prompt): rank order is 7 high then 6,5,4,3,2, ace low; must follow the
+led suit if able; trump suit = moss beats any non-moss regardless of rank; highest card
+of the led suit wins if no trump is played.
+
+Trick (in play order):
+  P1 leads  bloom-6
+  P2 plays  bloom-A   (followed suit)
+  P3 plays  moss-2    (could not follow, played trump)
+  P4 plays  bloom-7   (followed suit)
+
+Query: which card id wins the trick?
+Gold: moss-2
+
+Naive-prompt miss: a model applying real-world ace-high and ignoring the invented
+trump picks bloom-A (highest bloom by standard rank), or applying 7-high but missing
+trump picks bloom-7 — each wrong-rule signature is legible to a reflection LM.</code></pre>
+  </div>
+</div>
+
+<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
+<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="grid-2">
+  <div class="card">
+    <h3>Literature parents</h3>
+    <ul>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2504.11442">TextArena</a> (Guertler et al., arXiv 2025)</span> — the core source: 50-plus text games and the rule-encoding infrastructure that the invented-game family imitates.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2504.12562">ZeroSumEval</a> (Khan et al., arXiv 2025)</span> — an inter-model competition framework cited as synthetic / infinite game-generation evidence.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2508.03368">Game Reasoning Arena</a> (Cipolina-Kun et al., arXiv 2025)</span> — a benchmark assessing LLM reasoning through game play, cited for the rule-encoding patterns c20 reuses.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2508.08501">GVGAI-LLM</a> (Li et al., arXiv 2025)</span> — cited in the c20 research notes as infinite / synthetic game generation, supporting the contamination-proof invented-game framing.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Brainstorm parents</h3>
+    <ul>
+      <li><a href="../brainstorm.html#theme-e">Invented Card Trick-Taking Scorer</a> — invented suits/ranks, trump precedence, follow-suit eligibility, non-standard rank order, override cards, tie-break, combo bonus; the trick-taking half of the merge, chosen for the strong real-card-game prior that opens headroom.</li>
+      <li><a href="../brainstorm.html#theme-e">Dice/Token Resource Micro-Game Resolver</a> — invented exchange rates, resource caps/overflow, action priority/resolution order, payment-before-gain, win threshold; the resource half of the merge, contributing the token-count and WIN/LOSE output flavor.</li>
+      <li><a href="../candidates-merged.html#c20">c20 in candidates-merged</a> — origin "both"; the merge fused the two brainstorm micro-games with the TextArena-style invented-game literature into one turn-resolution task.</li>
+    </ul>
+  </div>
+</div>
+<div class="card full space-top">
+  <h3>Dead branches: dropped near-relatives</h3>
+  <ul class="dead-branch">
+    <li>D5 · Grounded grid compositional (gSCAN / ReaSCAN) — <span class="why">dropped: grid rendering plus action-sequence outputs are the most expensive things in the pool to bound, and the reviewer judged them "not worth the adaptation cost." A sibling deterministic-simulation branch killed on output-bounding grounds; grid coverage went to c19, compositional splits to c23</span>.</li>
+    <li>D4 · CRUXEval-style code-output prediction — <span class="why">dropped: the published set is heavily contaminated and regeneration needs a code DSL with unconstrained return types that fight exact-match bounding. The execution-simulation cousin of c20, killed because it could not stay single-token; execution flavor went to c05, rule-induction flavor to c23</span>.</li>
+    <li>Scheduler / protocol-validator execution (research candidate 12, folded into c05) — <span class="why">a near-relative deterministic-resolution idea (transition table plus event trace → final state) that was routed into the state-tracking/execution line rather than kept as a separate invented-game candidate</span>.</li>
+  </ul>
+</div>
+
+<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
+<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="card full">
+  <ul>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2504.11442">TextArena</a> (Guertler et al., arXiv 2025)</span> — 50-plus text games with rule-encoding infrastructure; the current backbone the invented-game family imitates, and still-active 2025 work.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2508.03368">Game Reasoning Arena</a> (Cipolina-Kun et al., arXiv 2025)</span> — a 2025 benchmark assessing LLM reasoning through game play, directly current for the turn-resolution framing.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2508.08501">GVGAI-LLM</a> (Li et al., arXiv 2025)</span> — 2025 work on infinite / synthetic game generation, evidence that contamination-proof invented games are a live direction.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2505.07215">gg-bench: Measuring General Intelligence with Generated Games</a> (arXiv 2025)</span> — the candidate's reusable corpus: 1000 LLM-generated Gym micro-games with a uniform <code>step()</code>/<code>render()</code>/<code>valid_moves()</code> interface, itself a 2025 artifact.</li>
+  </ul>
+</div>
+
+<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
+<div class="section-head"><h2>Perspectives</h2></div>
+<div class="grid-3">
+  <div class="lens">
+    <h3>Round-1 rubric fit</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Invented rules per run are contamination-proof by construction; strong real-card-game priors guarantee a low naive-prompt floor; each rule flips a distinct instance subset so rule capture is incremental and misses are diagnostic; injected illegal moves cleanly exercise the rule-violation failure path.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>It is the highest design effort in the pool — rules must be authored and validated unambiguous against a reference near-perfect prompt, and it is easy to accidentally make a rule ambiguous, which would break exact-match.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Optimization-path skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Decisive knowledge (rank order, trump precedence, resolution priority) is re-invented per run and cannot be captured by score-only instruction rephrasing without actually stating the rules, and worked-turn demos are load-bearing.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>No dedicated round-1 skeptic pass examined c20 — round-1 recommendations.md analyzes only the five finalists (c21, c03, c14, c11, c12), so this lens is inferred from the merged summary, not an adversarial verdict.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Measurement skeptic</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Ground truth is the game rules as code — the reference resolver's own transition, independent of any generation-time answer key and, for a small trick, hand-verifiable in under a minute.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>With the gg-bench corpus the oracle is LLM-generated code, so <code>step()</code> may not faithfully implement the natural-language rulebook; "ground truth" means "whatever the generated rules implement," and no test asserts rule-versus-description agreement. Never given a formal round-1 measurement-skeptic pass either.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Implementation lens (round 2)</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>If reuse holds, the diff is pure config-plus-scoring glue (roughly 120-200 lines outside the repo) over a frozen corpus whose per-turn oracle needs no LLM call to produce ground truth; the pool is large and pre-filtered.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The reuse score was an unverified provisional accepted as read, never run-verified; seeding is inconsistent (about 142 of 1000 envs use module-global <code>np.random</code> that ignores the seed), the corpus ships zero tests and no CI, and it is a game-generator corpus, not a rule-engine we can pin — reflected in a bottom I3 and low I2/I5/I6.</li></ul>
+  </div>
+  <div class="lens">
+    <h3>Research currency</h3>
+    <span class="rowlabel">Supports</span>
+    <ul class="pros"><li>Invented-game evaluation is live in 2025 — TextArena, Game Reasoning Arena, ZeroSumEval, GVGAI-LLM, and gg-bench are all 2025 artifacts, so a quick test built here sits in an active area.</li></ul>
+    <span class="rowlabel">Against</span>
+    <ul class="cons"><li>The field is crowded and fast-moving, and the specific contribution is a careful single-token reframing of an existing invented-game genre rather than a new problem class; the authoring cost may outrun the marginal novelty.</li></ul>
+  </div>
+</div>
+
+<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
+<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="steps">
+  <div class="step"><h3>Vendor the frozen corpus, not the pipeline</h3><p>Blobless-clone gg-bench and sparse-checkout only <code>gg_bench/data/{envs,descriptions,actions,splits}</code> (the RL <code>models/</code> tree of ~2128 files is off-path). Add <code>gymnasium</code> + <code>numpy</code> only; deliberately skip <code>stable-baselines3</code> / <code>sbx</code> / <code>torch</code>. Write a small <code>loader.py</code> that <code>importlib</code>-loads <code>env_{id}.py</code> by path, reusing the exact instantiate → <code>valid_moves()</code> → <code>step()</code> → <code>render()</code> pattern from the repo's <code>scripts/filter/execution.py</code>.</p></div>
+  <div class="step"><h3>Own the RNG and build the instance generator</h3><p>In <code>instance_generator.py</code>, global-seed (<code>np.random.seed(s); random.seed(s)</code>) before <code>env.reset(seed=s)</code> to defeat the unthreaded-seed envs, replay a seeded prefix of moves via <code>valid_moves()</code>, capture <code>render()</code> as board text plus sorted legal moves, and emit an instance of the description, actions, board, legal moves, and the c20 question. Restrict the pool to <code>filtering.json</code> valid envs intersected with the deterministic / self-<code>np_random</code> envs for reproducibility.</p></div>
+  <div class="step"><h3>Wire the oracle, strata, and validation gates</h3><p><code>oracle.py</code> calls <code>env.step(candidate)</code> on a fresh replayed copy for the all-or-nothing exact-match target. Map easy/medium/hard splits to latent-rule strata. Then the design-defining gate: for each rule set, run a reference near-perfect prompt and confirm the rules are unambiguous (near-ceiling) before freezing, add an illegal-move stratum requiring a <code>reject</code> token, and audit for description-versus-code mismatch so the code oracle is trusted knowingly.</p></div>
+</div>
+
+<div class="grid-2 space-top">
+  <div class="card">
+    <h3>Risks</h3>
+    <ul>
+      <li>Unthreaded seeding in roughly 142 of 1000 envs (module-global <code>np.random</code>, e.g. <code>env_1.py:30-31</code>) plus 14 more on unseeded stdlib <code>random</code> means reproducibility depends on our harness global-seeding or restricting the pool — must be handled, not assumed.</li>
+      <li>The corpus is LLM-generated, so an env's <code>step()</code> may not match its <code>descriptions/{id}.txt</code>; treating the code as authoritative accepts a minority of rule/description mismatches, and there are zero tests or CI asserting any env is correct.</li>
+      <li>The unambiguous-rules validation gate is heavy and per-run — the single most expensive calibration burden in the pool — and a missed ambiguity silently breaks exact-match rather than failing loudly.</li>
+      <li>The reuse strength was accepted as an unverified provisional, so the codebase advantage is unconfirmed by a fresh run and could degrade on contact.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Repo review &amp; run verification</h3>
+    <ul>
+      <li><span class="key">Codebase:</span> <a href="https://github.com/vivek3141/gg-bench">vivek3141/gg-bench</a> (MIT, arXiv:2505.07215) — deep-read notes at <a href="../repos/gg-bench-measuring-general-intelligence-with-gener.md">repos/gg-bench-measuring-general-intelligence-with-gener.md</a>.</li>
+      <li><span class="key">Run verification:</span>
+        <span class="status open">not run</span>
+        Round 2 kept c20's reuse score as an "unverified provisional accepted as read." The deep-read review smoke-tested envs in a gymnasium+numpy venv (deterministic-env replay byte-identical; the <code>env_1</code> global-RNG seeding gap confirmed and mitigated), but no dedicated finalist run-verification pass ran on this candidate — treat the reuse score as unconfirmed.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- (8) FOOTER NAV ------------------------------------------------------------>
+<nav class="cand-nav">
+  <div class="navgroup">
+    <span class="navlabel">Table</span>
+    <a href="../recommendations-round2.html#table">Back to full rescore</a>
+    <a href="../candidates-table.html">Candidates table</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">By rank</span>
+    <a href="c08.html">&larr; #15 c08</a>
+    <a href="c13.html">#17 c13 &rarr;</a>
+  </div>
+  <div class="spacer"></div>
+  <div class="navgroup">
+    <span class="navlabel">Related</span>
+    <a href="c05.html">c05 Deterministic Execution &amp; State Tracking</a>
+    <a href="c19.html">c19 Grid-World State Prediction</a>
+  </div>
+  <div class="navgroup">
+    <span class="navlabel">Sources</span>
+    <a href="../recommendations.html">Round 1</a>
+    <a href="../recommendations-round2.html#table">Round 2</a>
+    <a href="../candidates-merged.html#c20">Candidates merged</a>
+  </div>
+</nav>
+
+</main>
+</body>
+</html>

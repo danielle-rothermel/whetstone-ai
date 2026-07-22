@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Task Landscape</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Task Landscape</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <span class="here">Landscape</span>
+</div>
+
+<div class="intro">
+  <p>A review of the whole design space searched for the quick-test task: the one cheap, single-call, exact-scored task family that validates the prompt-optimizer implementations (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) and the shared execution contract before the expensive HumanEval+ code-compression experiment. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The space is richest in the invented-convention family</strong> — tasks where a seeded generator hides arbitrary rules and an invented codebook behind a single bounded question. All seven finalists live there. The standout is <span class="key">c21 (Relational Micro-World with Invented Vocabulary)</span>: the only candidate whose two independent sources of headroom — an unguessable closed vocabulary <em>and</em> seeded nonstandard relation properties — both survive adversarial review with only minor pinning fixes. The other six 28-scorers each carry a repairable, non-fatal design change. See <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
+</div>
+
+<div class="section-head" id="inputs"><h2>Inputs and pointers</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Process artifacts</h3>
+    <ul>
+      <li>Idea space: <a href="brainstorm.html">brainstorm.html</a> — <span class="key">76 brainstormed ideas</span>, 8 themes (A-H).</li>
+      <li>Merged pool: <a href="candidates-merged.html">candidates-merged.html</a> — 76 brainstorm + 108 literature candidates → <span class="key">24 merged candidates</span> (9 clusters dropped).</li>
+      <li>Tie-breaker scan: <a href="trends-2025-2026.html">trends-2025-2026.html</a> — 9 active research areas.</li>
+      <li>Optimizer methods: <a href="research-prompt-opt-literature.html">research-prompt-opt-literature.html</a>.</li>
+      <li>Process reflection: <a href="reflection.html">reflection.html</a> — what worked, what didn't, changes for next time.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Per-domain research docs (detail behind each cluster)</h3>
+    <ul>
+      <li><a href="research-synthetic-rule-induction-and-composition.html">Synthetic rule-induction &amp; composition</a></li>
+      <li><a href="research-constructed-notation-arithmetic-and-nons.html">Constructed-notation arithmetic</a></li>
+      <li><a href="research-formal-grammars-term-rewriting-and-logic.html">Formal grammars, rewriting, logic</a></li>
+      <li><a href="research-deterministic-simulation-state-machines-.html">Deterministic simulation &amp; state machines</a></li>
+      <li><a href="research-constructed-language-translation-and-lay.html">Constructed-language translation &amp; ciphers</a></li>
+      <li><a href="research-classification-under-nonstandard-remappe.html">Classification under remapped labels</a></li>
+      <li><a href="research-structured-extraction-and-canonicalizati.html">Structured extraction &amp; canonicalization</a></li>
+      <li><a href="research-instruction-following-and-constrained-ge.html">Instruction following &amp; constrained generation</a></li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="domains"><h2>Two search passes, eight domains</h2></div>
+
+<p>Two independent passes were merged. The <span class="key">brainstorm</span> pass generated 76 ideas across model lenses (<code>claude-opus-4-8[1m]</code>, <code>kimi-k2p7</code>, <code>deepseek-v4-flash</code>, <code>minimax-m3</code>, <code>gpt-5.x-codex</code>, and first-principles design). The <span class="key">literature</span> pass contributed 108 candidates anchored in 2024-2026 benchmarks. Both were filtered through the same two hard rubric constraints — strict per-example 0/1 exact match (no partial credit inside an example) and bounded MC / few-word output, single call, no sandbox — which forced every "per-field partial scoring" idea to be rewritten as a single-field / single-token query, with incrementality relocated to <span class="key">rule strata across the task pool</span> rather than partial credit within an instance.</p>
+
+<div class="grid-4">
+  <div class="card"><h3>A · Constructed notation / invented arithmetic</h3><p class="small muted">Invented glyphs, bases, operators, units; numeric or short-string output under nonstandard conventions.</p></div>
+  <div class="card"><h3>B · Constructed language / morphology</h3><p class="small muted">Artificial grammars mapping marked tokens to a canonical output template.</p></div>
+  <div class="card"><h3>C · Ciphers / composable reversible transforms</h3><p class="small muted">Layered invented transforms decoded to a closed vocabulary.</p></div>
+  <div class="card"><h3>D · Formal grammars, rewriting, logic</h3><p class="small muted">Well-formedness judgments, term rewriting to normal form, truth evaluation, implication compliance.</p></div>
+  <div class="card"><h3>E · Deterministic simulation &amp; state machines</h3><p class="small muted">Invented machines, games, protocols, automata run forward to a bounded answer.</p></div>
+  <div class="card"><h3>F · Remapped label semantics</h3><p class="small muted">Opaque codebooks and override policies that defeat the pretrained label prior.</p></div>
+  <div class="card"><h3>G · Extraction / canonicalization / serialization</h3><p class="small muted">House-style normalizers producing exact canonical strings; the largest cluster and the closest analog to the project's dr-serialize canonical-JSON work.</p></div>
+  <div class="card"><h3>H · Instruction following / constrained generation</h3><p class="small muted">Simultaneous constraints or an authority policy over directives.</p></div>
+</div>
+
+<div class="section-head" id="clusters"><h2>Six structural clusters cut across the domains</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>Invented-notation evaluators</strong> (c01 glyph base arithmetic, c02 mixed-radix units, c03 keyed operators, c10 interlocking calendars/clocks) — parse a per-instance legend, then evaluate under nonstandard place/precedence/modulus rules.</li>
+  <li><strong>Abstract symbol-system execution</strong> (c04 term rewriting, c05 FSM/protocol/pointer state tracking, c17 invented-gate circuits, c19 grid-world, c20 micro-game turns) — run a latent machine to a bounded derived fact.</li>
+  <li><strong>Constraint / violation diagnosis</strong> (c06 artificial-grammar violation class, c16 Wason implication compliance, c18 synthetic deduction, c22 stacked verifiable constraints) — classify well-formedness or compliance against conjoined rules.</li>
+  <li><strong>Remapped-label &amp; policy classification</strong> (c13 decision-list triage, c14 instruction-hierarchy priority ledger, c15 opaque-codebook labels, c21 relational nonce-graph QA) — emit an MC letter or closed-vocab token under an opaque codebook or precedence policy.</li>
+  <li><strong>Canonicalization / extraction under invented conventions</strong> (c11 house-convention canonicalizer, c12 sigil-schema extraction, c24 composite-key sorting) — produce an exact canonical string under bespoke house rules.</li>
+  <li><strong>Rule-induction from I/O</strong> (c23 hidden-rule string-transform ladder, c08 Rosetta MC puzzles, c09 cipher-chain decode, c07 case-marked conlang translation) — infer a hidden transform from demos and apply it, making the MIPROv2 demo axis load-bearing.</li>
+</ul>
+
+<div class="section-head" id="table"><h2>Full ranked table: all 24 scored candidates</h2></div>
+
+<p class="small muted">Score = summed rubric fit (14 criteria, 0-2 each, max 28). TB = tie-breaker (0-2, separate from the rubric, 2025-2026 research activity). The seven 28-scorers are the verified finalists; notes carry each lens's repairable findings (none fatal).</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>ID</th><th>Name</th><th>Domain</th><th>Score</th><th>TB</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td><strong>c21</strong></td><td><strong>Relational Micro-World with Invented Vocabulary</strong></td><td>relational/kinship QA over nonce graphs</td><td class="num"><strong>28</strong></td><td class="num">2</td><td><strong>Top finalist.</strong> Invented codebook + seeded relation properties; both lenses survive (minor). Needs unique-answer rejection sampling and stratified minibatches.</td></tr>
+    <tr><td>c05</td><td>Deterministic Execution &amp; State Tracking (FSM/protocol/pointer)</td><td>state-machine simulation</td><td class="num">28</td><td class="num">2</td><td>Most diagnostic cluster; both lenses refuted-but-repairable — conventional rules are one-shot guessable and the no-CoT vs long-trace dilemma threatens the known ceiling.</td></tr>
+    <tr><td>c06</td><td>Artificial-Grammar Violation Classification</td><td>formal-language membership (MC)</td><td class="num">28</td><td class="num">2</td><td>Clean MC strata, 25% guess floor; needs non-mnemonic rule instantiations and label recomputation to keep the ladder honest.</td></tr>
+    <tr><td>c11</td><td>House-Convention Canonicalizer</td><td>serialization/normalization</td><td class="num">28</td><td class="num">2</td><td>Mirrors dr-serialize; drop the check-digit/global-sort strata a small model can't execute, keep tables wider than any demo batch.</td></tr>
+    <tr><td>c12</td><td>Sigil-Schema Field Extraction &amp; Dialect Routing</td><td>structured extraction</td><td class="num">28</td><td class="num">2</td><td>Strictly one field per instance; drop the arithmetic checksum stratum, force same-type distractors, randomize the implied-decimal place.</td></tr>
+    <tr><td>c14</td><td>Instruction-Hierarchy Priority Ledger</td><td>authority/conflict resolution</td><td class="num">28</td><td class="num">2</td><td>Nonce authority tags defeat system&gt;user priors; fix one hidden policy across splits, use anti-convention flags to block delegated induction.</td></tr>
+    <tr><td>c15</td><td>Opaque-Codebook Remapped-Label Classification</td><td>classification under remapped labels</td><td class="num">28</td><td class="num">2</td><td>Flipped-label mechanism gives a real floor; needs two-sided model gating and paraphrase families so one trace batch can't leak the whole table.</td></tr>
+    <tr><td>c01</td><td>Invented-Glyph Positional Base Arithmetic</td><td>constructed notation</td><td class="num">27</td><td class="num">2</td><td>Only criterion 4 is soft (positional eval is a known skill); commit to secret per-stratum conventions and cap demo coverage.</td></tr>
+    <tr><td>c03</td><td>Keyed Custom-Operator Expression Evaluation</td><td>invented operators/precedence</td><td class="num">27</td><td class="num">2</td><td>Opaque per-instance rule keys + forced boundary cases keep the wrap/associativity rungs resolvable; foil-bank rejection sampling recommended.</td></tr>
+    <tr><td>c07</td><td>Case-Marked Micro-Conlang Translation</td><td>constructed-language morphology</td><td class="num">27</td><td class="num">2</td><td>Natural MIPROv2 demo axis; but rules are given in-gloss or predicted by linguistic priors — must MTOB-ify (withhold affix semantics) to restore the ladder.</td></tr>
+    <tr><td>c10</td><td>Interlocking-Cycle Calendar &amp; Clock Arithmetic</td><td>constructed cyclic systems</td><td class="num">27</td><td class="num">1</td><td>Independent coprime moduli isolate which cycle rule broke; solid, less research-current.</td></tr>
+    <tr><td>c13</td><td>Precedence-Ordered Decision-List Classification</td><td>policy/triage classification</td><td class="num">27</td><td class="num">2</td><td>Archetypal independent-rules-with-override task; first-match decision list, feature-combinatorial pool.</td></tr>
+    <tr><td>c16</td><td>Wason Implication-Compliance Classifier</td><td>conditional-rule compliance</td><td class="num">27</td><td class="num">2</td><td>Distinctive model-side residual: vacuous-truth &amp; directionality errors persist even under a perfect instruction.</td></tr>
+    <tr><td>c17</td><td>Invented-Gate Circuit Evaluation</td><td>boolean circuits/connectives</td><td class="num">27</td><td class="num">2</td><td>Randomized truth tables make the demo axis load-bearing — no fixed instruction encodes them.</td></tr>
+    <tr><td>c18</td><td>Depth-Controlled Synthetic Deduction (T/F/Unknown)</td><td>synthetic logic/multi-hop</td><td class="num">27</td><td class="num">2</td><td>RuleTaker/PrOntoQA-style depth bins give an incremental ladder; proof engine names the failed step.</td></tr>
+    <tr><td>c19</td><td>Grid-World State Prediction</td><td>deterministic spatial simulation</td><td class="num">27</td><td class="num">2</td><td>One derived fact (not a path) removes many-valid-answers ambiguity; grid-nav familiarity is the mild risk.</td></tr>
+    <tr><td>c20</td><td>Invented Micro-Game Turn Resolution</td><td>invented game rules</td><td class="num">27</td><td class="num">2</td><td>Strong real-card-game priors guarantee a low floor; injected illegal moves exercise the failure path.</td></tr>
+    <tr><td>c24</td><td>Composite-Key Sorting &amp; Canonical Ordering</td><td>ordering under invented conventions</td><td class="num">27</td><td class="num">2</td><td>Randomized sort keys per batch; each tie-breaker leaves a distinct diff signature. BBH evidences prompt-sensitive headroom.</td></tr>
+    <tr><td>c02</td><td>Fictional Mixed-Radix Unit Conversion</td><td>invented measurement systems</td><td class="num">26</td><td class="num">1</td><td>NUMCoT-documented conversion brittleness; overlaps c01/c10, edged out on research currency.</td></tr>
+    <tr><td>c04</td><td>Term-Rewriting to Normal Form</td><td>abstract rewriting systems</td><td class="num">26</td><td class="num">1</td><td>Cleanest anti-one-shot design (abstract productions have nothing to guess); risk is being too hard, and char-arithmetic temp-0 noise.</td></tr>
+    <tr><td>c08</td><td>Rosetta-to-Match-Up MC Linguistic Puzzles</td><td>linguistic-puzzle rule induction (MC)</td><td class="num">26</td><td class="num">2</td><td>Distractors each differ by one latent rule → built-in incremental ladder; MC framing tames scoring.</td></tr>
+    <tr><td>c09</td><td>Composable Cipher-Chain Decode to Closed Vocab</td><td>invented composable ciphers</td><td class="num">26</td><td class="num">2</td><td>Structural (not shift-arithmetic) ops + closed-vocab / MC variant to dodge temp-0 char noise.</td></tr>
+    <tr><td>c22</td><td>Stacked Verifiable-Constraint Micro-Generation</td><td>instruction following/constrained gen</td><td class="num">26</td><td class="num">2</td><td>COLLIE-style checker library; strict all-pass 0/1; conditional Selection constraints must be discovered.</td></tr>
+    <tr><td>c23</td><td>Hidden-Rule String-Transform Induction Ladder</td><td>compositional rule induction from I/O</td><td class="num">26</td><td class="num">2</td><td>Demos load-bearing by construction; InductionBench warns to curate difficulty so easiest strata are reachable.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="regions"><h2>Strong regions decompose and localize; weak regions leak or blur</h2></div>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Strong: invented-notation &amp; symbol-system execution</h3>
+    <p class="small muted">c01, c03, c04, c05, c10, c17</p>
+    <ul>
+      <li>Excel where it matters: difficulty decomposes into <span class="key">independent latent rules</span> (criterion 10), failures localize to a single un-applied rule (criterion 11), per-instance randomized tables are <span class="key">contamination-proof by construction</span> (criterion 8).</li>
+      <li>Shared weakness — criterion 4: when the underlying skill (positional arithmetic, FSM simulation, protocol semantics) is pretraining-common, a competent one-shot prompt approaches the ceiling unless conventions are made <span class="key">arbitrary and secret</span> and stratified so no fixed prompt covers the pool.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Strong: remapped-label &amp; policy classification</h3>
+    <p class="small muted">c13, c14, c15, c21</p>
+    <ul>
+      <li>Opaque codebooks and nonce authority policies genuinely <span class="key">defeat the pretrained prior</span>: a real low floor, an inspectable rule-by-rule ladder, a guess-pinned 25% baseline.</li>
+      <li><span class="key">c21 is the strongest overall</span>: it stacks an invented closed vocabulary on seeded nonstandard relation properties, so both the codebook and the traversal rules must be learned, and failures separate codebook misses from traversal misses. Both adversarial lenses left it standing with only minor, pinning-level fixes.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Strong: constraint / violation diagnosis</h3>
+    <p class="small muted">c06, c16, c18</p>
+    <ul>
+      <li>MC output makes scoring trivially deterministic; injected single-class violations map each failure to a known rule.</li>
+      <li>c16 adds a rare bonus: genuine <span class="key">model-side residual</span> — vacuous-truth and directionality errors survive a perfect instruction, so the ceiling isn't instantly reachable.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weak: ciphers / char-arithmetic transforms</h3>
+    <p class="small muted">Theme C, c09</p>
+    <ul>
+      <li>Character-level shift arithmetic is <span class="key">token-noise-prone</span>, threatening temp-0 resolvability (criterion 5). Only the structural-op + closed-vocabulary / MC variant survives, at 26.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weak: constructed-language translation</h3>
+    <p class="small muted">Theme B, c07</p>
+    <ul>
+      <li>The load-bearing rules are either handed to the model in the per-instance gloss or predicted by <span class="key">universal linguistic priors</span> (case marking, topic particles) — a single competent paragraph one-shots much of the gap. Refuted as designed; needs an MTOB-style redesign withholding affix semantics.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Weak: free-generation IF &amp; partial-credit designs</h3>
+    <p class="small muted">Theme H c22; much of Theme G's original form</p>
+    <ul>
+      <li>c22: attractive research currency (IFEval/IFBench lineage) but scoring wants a deterministic checker library and strict all-pass 0/1; lands at 26.</li>
+      <li>The no-partial-credit rule forced multi-field extractors into single-field queries; survivors (c11, c12, c24) relocated incrementality to pool strata, several others dropped in the merge.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout warn space-top">
+  <strong>The recurring failure mode is criterion-4 collapse.</strong> Whenever the latent rules are conventional, fully stated in-instance, or enumerable in one paragraph, the gap becomes one-shot guessable and every optimizer looks identical. The winning move — seen in c21/c15/c14/c11 — is to make the decisive knowledge <span class="key">arbitrary seeded information</span> that cannot be recalled or guessed, only discovered from demos and failure traces, while keeping a designer-authored ceiling prompt that provably reaches ~100%.
+</div>
+
+<div class="section-head" id="near-misses"><h2>Notable candidates just below the finalist cut</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>c17 Invented-Gate Circuit Evaluation (27)</strong> — arguably the purest embodiment of "demos are load-bearing" (randomized truth tables cannot be encoded by any fixed instruction), but its single-token boolean output gives slightly coarser strata than the 28-tier tasks.</li>
+  <li><strong>c13 Precedence-Ordered Decision-List Classification (27)</strong> — the archetypal independent-rules-with-override task; edged out mainly because its rule families are less contamination-novel than nonce-graph or opaque-codebook designs.</li>
+  <li><strong>c16 Wason Implication-Compliance Classifier (27)</strong> — uniquely retains model-side residual headroom, but the binary/MC output and vacuous-truth subtlety make its floor harder to pin precisely.</li>
+  <li><strong>c18 Depth-Controlled Synthetic Deduction (27)</strong> — the cleanest incremental ladder via proof depth bins, held back only by the heavier reasoning load per instance.</li>
+  <li><strong>c04 Term-Rewriting to Normal Form (26)</strong> — the strongest anti-one-shot design in the pool (abstract productions have literally nothing to guess), but flagged for being potentially too hard and for char-arithmetic temp-0 noise on longer normal forms.</li>
+  <li><strong>c08 Rosetta MC Linguistic Puzzles (26)</strong> — a built-in incremental ladder (each distractor differs by exactly one latent rule) with clean MC scoring; a strong research-current dark horse that the exact-match tier simply outscored.</li>
+</ul>
+
+<p class="small muted space-top">See the per-domain research docs linked above for the mechanism detail, floor/ceiling evidence, and generator sketches behind each cluster.</p>
+
+</main>
+</body>
+</html>

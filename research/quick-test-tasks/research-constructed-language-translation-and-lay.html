@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Quick-Test Candidates: Constructed-Language Translation &amp; Layered Ciphers</title>
+</head>
+<body>
+<main>
+<h1>Quick-Test Candidates: Constructed-Language Translation &amp; Layered Ciphers</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Conlang &amp; ciphers</span>
+</div>
+
+<div class="intro">
+  <p>Breadth-focused literature scan for the whetstone-ai quick-test task — the cheap, single-call, exact-scored task that validates the COPRO / MIPROv2 / GEPA / Codex-agent optimizers before the HumanEval+ code-compression run. Domain seed: <span class="key">constructed-language translation and layered ciphers/encodings</span> (brainstorm Themes B &amp; C). Twelve candidates below, unranked, each tagged <code>existing-benchmark</code>, <code>adaptation</code>, or <code>synthetic-family</code>. Scored against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The deployable winners are synthetic generators, not the published benchmarks.</strong> The best translation-flavor fits are <span class="key">#8 synthetic Rosetta/Match-Up MC</span>, <span class="key">#7 case-marked micro-language</span>, and <span class="key">#4 ConLang generator</span> — all synthetic, exact-scorable, latent-rule-decomposed, contamination-proof. The best cipher-flavor fits are <span class="key">#9 composable structural cipher chain → closed vocab</span> and <span class="key">#6 novel-cipher subset</span>, but only when outputs are snapped to a closed vocabulary or MC. The named benchmarks (MTOB, LingOly, CipherBank) contribute paradigm, format library, and realism, but each fails the rubric as-shipped on long inputs, soft scoring, or contamination.</p>
+</div>
+
+<div class="callout warn">
+  <strong>Two universal caveats.</strong> (1) <span class="key">Criterion 5 — char noise:</span> the cipher literature is unanimous that even reasoning models sit at ~40-45% exact-match on char-level ciphers because LLMs do char-level bijections stochastically, so temp-0 outputs are noisy and prompt effects get swamped. Every cipher/char candidate must move noise out of the score via closed-vocabulary nearest-match snapping or MC. (2) <span class="key">Criterion 4 — one-shot guessability:</span> every translation candidate must stack ≥3 interacting latent rules where the <em>interaction/precedence</em> is the load-bearing hard rule, not any single affix or cipher layer. Constructed-language/morphology candidates fit the rubric better than raw ciphers because their rules are lexical/structural, not per-character arithmetic.</p>
+</div>
+
+<div class="section-head" id="rubric-anchors"><h2>Rubric anchors used to score fit</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li><strong>1.</strong> Single LLM-call node + one eval node (no encoder→decoder chain).</li>
+  <li><strong>2.</strong> Exact deterministic programmatic scoring, no sandbox.</li>
+  <li><strong>3.</strong> Bounded output — multiple choice or a few words.</li>
+  <li><strong>4.</strong> Default prompt scores well below a KNOWN ceiling; gap closes <span class="key">incrementally</span> (not one-shot guessable).</li>
+  <li><strong>5.</strong> Prompt-quality differences resolvable at temp-0 on 10-20 evals (effect ≥10 pts &gt; residual noise).</li>
+  <li><strong>7.</strong> Synthetic/parameterized pool, hundreds of instances, exact ground truth.</li>
+  <li><strong>8.</strong> Contamination-resistant (not a memorizable published set).</li>
+  <li><strong>9.</strong> Known ceiling/floor/reference prompt.</li>
+  <li><strong>10.</strong> Difficulty decomposes into independent latent rules.</li>
+  <li><strong>11.</strong> Diagnostic failures ("expected X, got Y" reveals which rule broke).</li>
+  <li><strong>12.</strong> Few-shot demos measurably help.</li>
+</ul>
+
+<div class="section-head" id="deployable"><h2>Deployable synthetic families</h2></div>
+
+<div class="card">
+  <h3>#7 · Synthetic Case-Marked Micro-Language Translation <span class="small muted">synthetic-family · Theme B</span></h3>
+  <p><strong>What it is.</strong> Program-generated agglutinative micro-language: suffixes mark role/number/tense; a <span class="key">case suffix determines subject/object regardless of linear position</span>; a topic-fronting particle reorders the output. Model gets a small in-context lexicon + rule hints (or few-shot pairs) and must produce a fixed-template 3-6 word English phrase. MTOB's paradigm shrunk to quick-test scale, and the most direct instantiation of the domain seed.</p>
+  <p><strong>Adaptation.</strong> This IS the adaptation — build the generator. (a) Exact-match on a canonicalized template with a rigid slot order so "expected X got Y" is clean (2/11); (b) keep the affix inventory large/rotating enough that the mapping is not one-shot-guessable — the brainstorm flags one-shot risk MODERATE-HIGH, mitigated by making case assignment override word order, which naive English-SVO prompts get wrong (4); (c) each affix rule is an independent latent rule (10); (d) few-shot pairs teach the affix→gloss map (12).</p>
+  <p><strong>Rubric-fit.</strong> Best all-round fit in Theme B: cheap, exact-scored, generatable in the hundreds, contamination-proof, latent-rule-decomposed, few-shot-friendly. <span class="key">Main risk: one-shot guessability</span> — a strong prompt engineer might infer "suffix -k = object" from a couple examples in one shot, collapsing the incremental gap (4/5). Counter by stacking ≥3 interacting rules (case + topic-fronting + number/tense agreement) and making the precedence between case and topic particle the hard latent rule. Low direct research novelty alone, but inherits MTOB/ConLang relevance.</p>
+  <p class="small muted">Sources: (paradigm) MTOB — https://arxiv.org/abs/2309.16575 · (generation) ConLang probing (2025) — https://arxiv.org/pdf/2510.07591 · SIGMORPHON reinflection for affix-paradigm design — https://arxiv.org/abs/1910.11493</p>
+</div>
+
+<div class="card">
+  <h3>#8 · Synthetic Rosetta/Match-Up Grammar Puzzle Generator <span class="small muted">synthetic-family</span></h3>
+  <p><strong>What it is.</strong> A parameterized generator emitting LingOly-style <span class="key">Rosetta</span> items (N glossed example pairs + one held-out item) but presenting the query as <span class="key">Match-Up multiple choice</span> (which A/B/C/D pairing is correct), fusing candidates #2 and #3 into a deployable synthetic task. The latent grammar (order, agreement, a number system, a compounding rule) is drawn per instance from a seeded config.</p>
+  <p><strong>Adaptation.</strong> Build the generator; expose knobs for #independent rules and #demo pairs. MC framing gives exact deterministic scoring and temp-0 resolvability for free (2/3/5). Seeded regeneration = contamination-proof (7/8). Choose distractors so each latent rule the prompt captures rules out one distractor → incremental gap + diagnostic failure (4/10/11).</p>
+  <p><strong>Rubric-fit.</strong> Combines LingOly's proven difficulty structure with MC's clean scoring — <span class="key">arguably the strongest rubric fit among translation-flavored options</span>, and rides an active research wave (linguistics-olympiad-for-LLMs, 2024-2026). Weakness: designing distractors that isolate one rule each takes care; poorly chosen distractors make items either trivial or unresolvable.</p>
+  <p class="small muted">Sources: LINGOLY (NeurIPS 2024) — https://arxiv.org/abs/2406.06196 · From Rosetta to Match-Up (2026) — https://arxiv.org/pdf/2605.13408 · Can LLMs Solve and Generate Linguistic Olympiad Puzzles? (EMNLP 2025) — https://arxiv.org/abs/2509.21820</p>
+</div>
+
+<div class="card">
+  <h3>#4 · ConLangs to Probe Metalinguistic Grammatical Knowledge <span class="small muted">synthetic-family</span></h3>
+  <p><strong>What it is.</strong> 2025 paper (Taguchi &amp; Sproat). Systematically generates constructed languages, varying morphosyntactic features under precise control, specifically to avoid memorization — contamination resistance is the whole point. Dataset released on HuggingFace. Paper scoring uses METEOR; the task is generate/analyze structures in the invented language.</p>
+  <p><strong>Adaptation.</strong> The closest thing to a ready-made <span class="key">generator</span> for Theme B. Reuse the grammar-generation code/spec; <span class="key">replace METEOR with exact-match</span> by bounding outputs to a fixed-template short gloss or a meaning-MC. Turn the varied morphosyntactic features (word order, case, agreement, tense marking) into the independent latent rules (10) so partial rule knowledge earns partial score (4/11). Sample hundreds of instances per grammar (7).</p>
+  <p><strong>Rubric-fit.</strong> Directly synthetic + contamination-proof (7/8 strong), latent-rule decomposition is native (10), on-domain and 2025-current. Weakness: default eval is soft (METEOR) and generation-oriented → must re-bound the output surface to satisfy 2/3/5. Requires integrating their generator rather than an off-the-shelf dataset.</p>
+  <p class="small muted">Sources: Creating ConLangs to Probe the Metalinguistic Grammatical Knowledge of LLMs (2025) — https://arxiv.org/pdf/2510.07591</p>
+</div>
+
+<div class="card">
+  <h3>#9 · Composable Cipher-Chain Decode → Closed Vocabulary <span class="small muted">synthetic-family · Theme C</span></h3>
+  <p><strong>What it is.</strong> An ordered stack of named reversible ops (keyed block transposition, invented digraph swap, positional skip) with a per-instance key; decoding applies inverses <span class="key">in reverse order</span> to recover a short <span class="key">closed-vocabulary</span> plaintext (a few nonsense-but-listed words). The closed vocab + nearest-match snapping is the deliberate fix for the char-arithmetic temp-0 hazard.</p>
+  <p><strong>Adaptation.</strong> Avoid Caesar/shift-arithmetic layers (noisiest, per #5/#6); prefer <span class="key">structural</span> reversible ops (transposition, block reversal, digraph substitution) whose correctness is deterministic and whose failures are legible ("applied layers in wrong order"). Score by snapping output to the nearest closed-vocab token, or go full MC (2/3/5). Each layer = one independent latent rule; the reverse-order rule is the hard meta-rule (4/10). Few-shot chains teach the inversion pattern (12).</p>
+  <p><strong>Rubric-fit.</strong> <span class="key">Cleanest per-layer diagnostics of any candidate</span> (11) and a natural incremental ladder — add layers — for criterion 4. Native exact scoring + trivially generatable (2/7/8). The brainstorm rates one-shot risk MEDIUM-HIGH and char-noise as the main threat to 5 — both mitigated by structural (not arithmetic) layers and closed-vocab/MC output. Watch that a very long chain doesn't drop below the floor with no incremental path. Rides the 2025-2026 cipher-reasoning wave.</p>
+  <p class="small muted">Sources: CipherBank (2025) — https://arxiv.org/abs/2504.19093 · Benchmarking LLMs for Cryptanalysis (Findings-EMNLP 2025) — https://aclanthology.org/2025.findings-emnlp.1082.pdf · https://arxiv.org/pdf/2505.24621</p>
+</div>
+
+<div class="card">
+  <h3>#10 · Invented Tonal/Diacritic Orthography Disambiguation (MC) <span class="small muted">synthetic-family · Theme B</span></h3>
+  <p><strong>What it is.</strong> Base glyph + stacked diacritics; a tone/diacritic marker resolves homographs, a context particle can override the tone, and there's a precedence order among markers. Output is a <span class="key">meaning A/B/C/D</span> — natively multiple choice, so exact scoring and temp-0 resolution are easy. Shares homograph/precedence structure with the Theme F enum/codebook tasks.</p>
+  <p><strong>Adaptation.</strong> Generator emits glyph strings + a per-instance diacritic legend; question asks the meaning of a target token. Independent latent rules: (a) which diacritic selects which sense, (b) context-particle override, (c) marker precedence (4/10). MC output already satisfies 2/3/5. Randomize glyph↔meaning maps per instance for contamination (8).</p>
+  <p><strong>Rubric-fit.</strong> Because it's MC over meanings, it sidesteps <span class="key">both</span> the translation-scoring softness (unlike #1) <span class="key">and</span> the cipher char-noise (unlike #5/#9) — a very safe criterion-5 profile. Precedence/override interaction gives genuine incremental headroom and diagnostic failures ("picked sense B, ignored the override particle" → 4/11). Weakness: with only ~4 diacritics the rule set can become one-shot-guessable; keep the precedence/override interaction as the load-bearing hard rule. Modest standalone research novelty (rides the rare-script / unfamiliar-writing-system line).</p>
+  <p class="small muted">Sources: LINGOLY (2024) — https://arxiv.org/abs/2406.06196 · Reasoning Over the Glyphs: Decipherment of Rare Scripts (2025) — https://arxiv.org/pdf/2501.17785</p>
+</div>
+
+<div class="section-head" id="benchmarks"><h2>Existing benchmarks — usable only after adaptation</h2></div>
+
+<div class="card">
+  <h3>#2 · LingOly — Olympiad-Level Linguistic Reasoning Puzzles <span class="small muted">existing-benchmark</span></h3>
+  <p><strong>What it is.</strong> NeurIPS 2024 benchmark (Bean et al.). 1,133 problems over 90+ low-resource/extinct languages, six formats (incl. <span class="key">Rosetta</span> = translate from paired examples, <span class="key">Pattern</span>, <span class="key">Match-Up</span>), five difficulty levels, six topics (phonology, morphology, syntax, semantics, number systems, compound). Rosetta items are "here are N glossed pairs, translate this one" — exactly the in-context grammar-induction shape the domain wants. Hard: top model ~35% on the hardest tier → satisfies criterion 4's headroom naturally.</p>
+  <p><strong>Adaptation.</strong> A published fixed set → contamination risk (fails 8); the authors themselves report a no-context baseline to catch memorization. <span class="key">Do not use LingOly items directly</span>; use it as a format spec and generate fresh synthetic Rosetta/Match-Up puzzles from a parameterized grammar (nearest deployable form is #8). If adapting existing items: constrain to Match-Up (naturally MC → exact match, satisfies 2/3) and drop the free-form translation formats.</p>
+  <p><strong>Rubric-fit.</strong> Format library is a goldmine and difficulty decomposes into independent latent rules cleanly (10). Weaknesses: fixed/published (8), many items are free-text (2/3), difficulty is uneven — some items one-shot-guessable, others near-impossible (threatens the incremental clause of 4 and the 10-20-task resolution of 5). Very active 2024-2026 line (LingOly-TOO, LingBench++, LINGOLY follow-ups).</p>
+  <p class="small muted">Sources: LINGOLY (NeurIPS 2024) — https://arxiv.org/abs/2406.06196 · https://arxiv.org/html/2406.06196v2 · Can LLMs Solve and Generate Linguistic Olympiad Puzzles? (EMNLP 2025) — https://arxiv.org/abs/2509.21820 · https://aclanthology.org/2025.emnlp-main.969.pdf · LingBench++ (2025) — https://arxiv.org/pdf/2507.16809</p>
+</div>
+
+<div class="card">
+  <h3>#3 · From Rosetta to Match-Up — Paired Linguistic-Puzzle Corpus <span class="small muted">adaptation</span></h3>
+  <p><strong>What it is.</strong> 2026 paper presenting a paired corpus of linguistic puzzles with human + LLM benchmarks, explicitly pairing <span class="key">Rosetta-style</span> translation puzzles with <span class="key">Match-Up</span> (which pairs of words translate each other) versions of the same underlying data. The Match-Up framing is inherently closed-set / multiple-choice — exactly what makes exact deterministic scoring and temp-0 resolvability tractable.</p>
+  <p><strong>Adaptation.</strong> Use the Match-Up transformation as the <span class="key">scoring trick</span>: any generated micro-translation puzzle can be presented as "which of A/B/C/D is the correct pairing," collapsing free-text translation into MC (2/3/5). Regenerate instances synthetically for contamination safety (8). Add latent rules (case marking, affix order, topic-fronting) to build the incremental gap (4/10).</p>
+  <p><strong>Rubric-fit.</strong> The Rosetta↔Match-Up duality is the <span class="key">single most useful idea in this scan</span> for reconciling "translation task" with "exact MC scoring." Weakness: the corpus itself is fixed/published (contamination) and recent enough that provenance/quality is less battle-tested than LingOly. Best used as a design pattern, not a data source.</p>
+  <p class="small muted">Sources: From Rosetta to Match-Up (2026) — https://arxiv.org/pdf/2605.13408 · https://arxiv.org/html/2605.13408</p>
+</div>
+
+<div class="card">
+  <h3>#5 · CipherBank — Cryptographic Decryption Benchmark <span class="small muted">existing-benchmark · caution</span></h3>
+  <p><strong>What it is.</strong> 2025 (Li et al., Shanghai AI Lab). 2,358 tasks, 9 algorithms in 3 categories: Substitution (ROT13, Atbash, Polybius, Vigenère), Transposition (Reverse, SwapPairs), Custom (DualAvgCode, ParityShift, WordShift). Scoring = <span class="key">exact character match</span> (+ Levenshtein partial-credit report). 3-shot prompts. Findings: best model Claude-3.5 = 45.14%, o1 = 40.59%; much better on ROT13 than custom ciphers; char-level ciphers "solvable in principle but hard" — models can't reliably apply systematic per-character transforms.</p>
+  <p><strong>Adaptation.</strong> Exactly the char-arithmetic temp-0 hazard flagged in the brainstorm. <span class="key">Do not score raw decrypt</span>; convert to closed-vocabulary decode (nearest-word snap) or MC over candidate plaintexts (2/3/5). Regenerate keys/plaintexts synthetically per instance — ciphers are parameterized (8). Use the 3-category split as natural independent latent rules (10) and compose 2-3 layers for the incremental gap (4).</p>
+  <p><strong>Rubric-fit.</strong> Native exact-match scoring (2), trivially generatable with exact ground truth (7/8), clean per-layer diagnostics (11), demos help (12, they use 3-shot). But the headline risk is <span class="key">criterion 5</span>: raw char-level accuracy is noisy at temp-0, so a 10-point prompt gain may not resolve on 10-20 items unless you snap to a closed vocab. Very-hard ciphers (Vigenère) may sit below the floor with no incremental path. Prefer substitution/transposition layers over polyalphabetic. Hot 2025-2026 area.</p>
+  <p class="small muted">Sources: CipherBank (2025) — https://arxiv.org/abs/2504.19093 · https://arxiv.org/html/2504.19093v1</p>
+</div>
+
+<div class="card">
+  <h3>#6 · CipherBench (v2) — Common / Uncommon / Novel Cipher Decoding <span class="small muted">existing-benchmark</span></h3>
+  <p><strong>What it is.</strong> Benchmark evaluating LLM decode over ten cipher techniques grouped as <span class="key">common, uncommon, and novel (user-created)</span>. Explicit thesis: as reasoning improves, models can decode <em>novel</em> ciphers not in pretraining — directly relevant to the "invented-rule decoder" brainstorm entry (Theme C) and to whether a fresh synthetic cipher is genuinely un-memorized.</p>
+  <p><strong>Adaptation.</strong> Use only the <span class="key">novel-cipher</span> methodology (invent a fresh per-instance rule the model applies from an in-context spec) — the contamination-proof core (8) with real headroom (4). Bound output to closed vocab / MC (2/3/5). Layer 2-3 novel ops for the incremental gap (4/10). Ground truth is exact by construction (7).</p>
+  <p><strong>Rubric-fit.</strong> The common/uncommon/novel axis is a ready-made difficulty ladder mapping onto criterion 4's incremental path and criterion 10's independent rules. Same char-noise caveat as #5. The novel-cipher subset is <span class="key">the most rubric-aligned because it isn't memorizable</span>. Weakness: as a published benchmark the specific ciphers may leak; regenerate.</p>
+  <p class="small muted">Sources: CipherBench v2 — https://cipherbench.github.io/ · (context) Jailbreaking LLMs via Novel Complex Ciphers (2024) — https://arxiv.org/abs/2402.10601</p>
+</div>
+
+<div class="card">
+  <h3>#11 · Synthetic Morphological (Re)Inflection — SIGMORPHON-style, bounded <span class="small muted">adaptation</span></h3>
+  <p><strong>What it is.</strong> SIGMORPHON/CoNLL shared tasks (2017-2024): given a lemma + a morphosyntactic feature bundle (UniMorph tags), produce the inflected form; or fill a paradigm from partial exposure. High/medium/low-resource conditions built in. Output is a <span class="key">single short word</span> with exact-match accuracy — already criterion-2/3 compliant.</p>
+  <p><strong>Adaptation.</strong> Real SIGMORPHON languages are memorizable (fails 8). Instead <span class="key">generate a synthetic morphology</span> (invented stems + invented affix rules + phonological alternations) and ask for the inflected form of a novel lemma given an in-context paradigm. Exact match on the produced word (2). Independent latent rules = each affix/alternation (10); few-shot = partial paradigm (native to the task → 12).</p>
+  <p><strong>Rubric-fit.</strong> Exact-match single-word output is an ideal scoring surface (2/3/5) and demos provably help — the task is built around learning from a partial paradigm, so 12 is guaranteed. Latent-rule decomposition (stem change vs. suffix vs. phonological rule) is clean (10/11). Risk: a single regular affix rule is one-shot-guessable → stack an irregular/allomorphy rule and a phonological alternation to preserve the incremental gap (4). Char-level output means some temp-0 spelling noise, milder than ciphers. Active area (SIGMORPHON through 2024; morphological analogy 2023-2025).</p>
+  <p class="small muted">Sources: SIGMORPHON 2019 Shared Task (cross-lingual inflection) — https://arxiv.org/abs/1910.11493 · CoNLL-SIGMORPHON 2018 (103 languages) — https://arxiv.org/pdf/1810.07125 · SIGMORPHON shared-tasks index — https://sigmorphon.github.io/sharedtasks/</p>
+</div>
+
+<div class="section-head" id="inspiration"><h2>Inspiration and evidence — not deployable as-is</h2></div>
+
+<div class="card">
+  <h3>#1 · MTOB — Machine Translation from One Book (Kalamang) <span class="small muted">adaptation</span></h3>
+  <p><strong>What it is.</strong> ICLR 2024 benchmark (Tanzer, Suzgun, Visser, Jurafsky, Melas-Kyriazi). A model gets ~several hundred pages of field-linguistics reference material (grammar textbook + bilingual word list + 375 parallel sentences) for <span class="key">Kalamang</span> (&lt;200 speakers, ~zero web presence) and must translate EN↔Kalamang. Frames the task as L2 learning from a single book rather than corpus mining. LLM baselines: 44.7 chrF (Kalamang→EN), 45.8 (EN→Kalamang) vs. 51.6/57.0 for a human who learned from the same book. Strong contamination resistance by construction.</p>
+  <p><strong>Adaptation.</strong> MTOB violates criteria 1-3 hard: full-sentence outputs, chrF scoring, hundreds of pages of input (huge token cost). <span class="key">Do not use Kalamang data directly</span> — borrow only the paradigm ("learn language from a compact in-context grammar, then translate a short phrase") and regenerate a tiny synthetic micro-grammar (see #7). If used near-verbatim: shrink to a one-page grammar snippet, restrict test items to fixed-template 3-6 word phrases, replace chrF with exact-match on a canonicalized gloss.</p>
+  <p><strong>Rubric-fit.</strong> Excellent conceptual template, directly on-domain, strong 2024-2026 interest (a magnet paper). But as-shipped it fails 1/2/3/5 (long inputs, soft scoring, sentence-length outputs, chrF noise defeats 10-20-task resolution) and is a fixed corpus (fails 7/8 at instance level — one language, can't generate hundreds of independent instances). Best treated as <span class="key">inspiration + a source of realism</span>, not the deployed task.</p>
+  <p class="small muted">Sources: A Benchmark for Learning to Translate a New Language from One Grammar Book (2023/2024) — https://arxiv.org/abs/2309.16575 · project: https://lukemelas.github.io/mtob/ · code: https://github.com/lukemelas/mtob</p>
+</div>
+
+<div class="card">
+  <h3>#12 · Char-Level String-Transform Tasks (StringLLM / CUTE / counting) <span class="small muted">existing-benchmark · diagnostic</span></h3>
+  <p><strong>What it is.</strong> A cluster of 2024-2025 benchmarks probing LLM character-level competence, useful mainly as <span class="key">evidence for the criterion-5 caveat</span> rather than as the task itself:</p>
+  <ul>
+    <li><strong>StringLLM</strong> (2024) — systematic string-processing capability suite.</li>
+    <li><strong>CUTE</strong> (2024) — measures whether LLMs understand their own tokens (spelling, char ops).</li>
+    <li><strong>Counting Ability &amp; Tokenization</strong> (2024) and "Why LLMs Struggle to Count Letters" (2024) — quantify how BPE tokenization breaks letter-level operations.</li>
+    <li><strong>Divide-and-Conquer char manipulation</strong> (2025) — a prompting fix that measurably improves char-level accuracy → demonstrates a genuine incremental prompt-improvement gap.</li>
+  </ul>
+  <p><strong>Adaptation.</strong> If used as a task at all: pick a bounded char-op (apply an invented positional substitution + count/report a single letter → short-word or numeric answer, exact match). Generate instances synthetically (8). But note these are tokenization-bound — many items are noisy at temp-0, the precise hazard criterion 5 guards against.</p>
+  <p><strong>Rubric-fit.</strong> Most valuable as a <span class="key">red-flag reference</span>: the Divide-and-Conquer result shows char-level prompting <em>does</em> have an incremental improvement curve (supports 4/12 for a carefully bounded design), while the counting/tokenization papers show raw char tasks are noisy (threatens 5). Use these to justify closed-vocab/MC output framing across all cipher candidates (#5/#6/#9), rather than as a standalone quick-test task. Strong 2024-2026 interest.</p>
+  <p class="small muted">Sources: StringLLM (2024) — https://arxiv.org/pdf/2410.01208 · CUTE (2024) — https://arxiv.org/pdf/2409.15452 · Counting Ability of LLMs and Impact of Tokenization (2024) — https://arxiv.org/html/2410.19730v2 · Why Do LLMs Struggle to Count Letters? (2024) — https://arxiv.org/html/2412.18626v1 · Enhancing LLM Character-Level Manipulation via Divide and Conquer (2025) — https://arxiv.org/pdf/2502.08180</p>
+</div>
+
+<div class="section-head" id="synthesis"><h2>Cross-cutting synthesis</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Best rubric fits</h3>
+    <ul>
+      <li><strong>Translation flavor:</strong> #8 (synthetic Rosetta/Match-Up MC), #7 (case-marked micro-language), #4 (ConLang generator) — all synthetic, exact-scorable, latent-rule-decomposed, contamination-proof. <span class="key">#8's Match-Up MC framing</span> is the single cleanest way to reconcile "translation task" with exact deterministic 10-20-item resolution.</li>
+      <li><strong>Cipher flavor:</strong> #9 (composable structural cipher chain → closed vocab) and #6 (novel-cipher subset), <span class="key">provided outputs are snapped to a closed vocabulary or MC</span>. Avoid raw char-arithmetic ciphers and polyalphabetic (Vigenère) layers — the literature (#5, #12) shows temp-0 char noise sits at ~40-45% and would defeat criterion 5.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>Ingredients, not deployable tasks</h3>
+    <ul>
+      <li><strong>Inspiration/realism:</strong> #1 (MTOB), #2 (LingOly), #3 (Rosetta↔Match-Up), #11 (SIGMORPHON) — all fixed/published (contamination) and/or soft-scored, but each contributes a reusable ingredient: <span class="key">paradigm, format library, MC-duality, exact-match single-word surface</span>.</li>
+      <li><strong>Research-tie-breaker signal (2024-2026):</strong> MTOB, LingOly (+TOO/++ follow-ups), cipher-reasoning (CipherBank/CipherBench), and char-level/tokenization limits are all live lines, so a synthetic quick-test grown from #7/#8/#9 could plausibly seed its own research direction.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>Two guardrails restated for the generator design.</strong> <span class="key">Criterion 5:</span> every cipher/char candidate must move noise out of the score via closed-vocab snapping or MC. <span class="key">Criterion 4:</span> every translation candidate must guard one-shot guessability by stacking ≥3 interacting latent rules where the interaction/precedence is the load-bearing hard rule, not any single affix or cipher layer.
+</div>
+
+</main>
+</body>
+</html>

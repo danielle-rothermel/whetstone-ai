@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>Prompt-Optimizer Literature: Tasks, Gains, and Rubric Fit</title>
+</head>
+<body>
+<main>
+<h1>Prompt-Optimizer Literature: Tasks, Gains, and Rubric Fit</h1>
+<div class="byline">whetstone-ai · 2026-07-21</div>
+
+<div class="family-nav">
+  <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
+  <a href="recommendations.html">Recommendations</a>
+  <a href="landscape.html">Landscape</a>
+  <span class="here">Prompt-opt literature</span>
+</div>
+
+<div class="intro">
+  <p>Which evaluation tasks the prompt-optimizer papers and frameworks our harness implements actually use — DSPy COPRO/MIPROv2, GEPA, OPRO, APE, ProTeGi, PromptBreeder, EvoPrompt — plus prominent 2024–2026 successors. For each candidate: which optimizers used it, reported baseline→optimized gains (headroom / incrementality evidence), cost profile, and the adaptation our <a href="../../design/quick-test-rubric.html">quick-test rubric</a> would require.</p>
+</div>
+
+<div class="verdict good">
+  <p><strong>The literature already points to the rubric's ideal task.</strong> The three best direct-fit synthetic families are <span class="key">multistep-arithmetic / word-sort generators</span> (from BBH), a <span class="key">hidden-rule mapping task</span> (from Instruction Induction), and a <span class="key">rule-based classifier</span> (from the text-classification suite). All three deliver a known ceiling/floor, decomposable latent rules, exact few-word scoring, contamination resistance, and demo-learnability — the full rubric. Published <span class="key">headroom evidence</span> for our exact optimizers comes from HotpotQA/HoVer/PUPA (COPRO/MIPROv2/GEPA show monotone, optimizer-separating gaps) and BBH/GSM8K (OPRO/EvoPrompt/PromptBreeder show large exact-match gaps), and <span class="key">format templates</span> come from Ethos/Liar/SST-2 and IFBench.</p>
+</div>
+
+<div class="section-head" id="rubric"><h2>Rubric anchors used to score fit</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li>Single LLM-call node + exact deterministic scoring, no sandbox.</li>
+  <li>Outputs bounded to MC or a few words.</li>
+  <li>Default prompt well below a <span class="key">known ceiling</span> with an incremental, decomposable path.</li>
+  <li>Synthetic / generatable, hundreds of instances, contamination-resistant.</li>
+  <li>Diagnostic failures for reflection.</li>
+  <li>Few-shot demos measurably help.</li>
+  <li>Prompt-quality differences resolvable on 10–20 evals at temperature 0.</li>
+</ul>
+
+<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>Most-used shared substrates</h3>
+    <p class="small muted">BIG-Bench Hard (BBH), GSM8K, the Instruction-Induction (II) and BIG-Bench Instruction Induction (BBII) suites, and a handful of text-classification sets (Ethos, Liar, SST-2, Subj, TREC). These recur across OPRO, APE, ProTeGi, PromptBreeder, EvoPrompt, and PromptWizard.</p>
+  </div>
+  <div class="card">
+    <h3>DSPy-lineage tasks are the best incremental evidence, the worst direct fit</h3>
+    <p class="small muted">COPRO, MIPROv2, and GEPA use multi-hop pipeline tasks (HotpotQA, HoVer, PUPA, IFBench) — exactly the tasks our harness's optimizers demonstrably move, but they violate criteria 1–2 (retrieval, multi-node graphs, non-exact metrics). Adapt their headroom structure, do not reuse the task.</p>
+  </div>
+  <div class="card">
+    <h3>Headroom pattern</h3>
+    <p class="small muted">The cleanest incremental gaps appear on (a) BBH symbolic sub-tasks and (b) II/BBII latent-rule tasks — both closest to our rubric because they are algorithmic, exact-match, few-word-output, and decomposable into latent rules. OPRO's "up to 50% on BBH" and PromptBreeder/EvoPrompt BBH gains are the strongest published headroom signals on exact-match, single-call tasks.</p>
+  </div>
+  <div class="card">
+    <h3>Contamination caveat</h3>
+    <p class="small muted">Every published benchmark above is contaminated to some degree — which is why the rubric wants <span class="key">synthetic generation</span>. The literature already points the way: II tasks are algorithmically generatable, and BBH's symbolic sub-tasks (multi-step arithmetic, tracking shuffled objects, logical deduction, word sorting) are parameterized generators with exact ground truth — the natural template for our synthetic family.</p>
+  </div>
+</div>
+
+<div class="section-head" id="summary-table"><h2>Candidate summary: task, optimizers, and fit</h2></div>
+
+<p class="small muted">Fit classes: <strong>synthetic family</strong> = direct-fit target to build; <strong>adaptation candidate</strong> = strong scoring shape needing a synthetic redesign; <strong>reference</strong> = keep as headroom/incrementality evidence only.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Task</th><th>Optimizers that used it</th><th>Class</th><th>Rubric fit</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td><strong>BBH symbolic sub-tasks</strong></td><td>OPRO, EvoPrompt, PromptBreeder, TextGrad, PromptWizard, APE (via BBII)</td><td>synthetic family</td><td>Excellent</td></tr>
+    <tr><td>2</td><td><strong>Instruction Induction (II) suite</strong></td><td>APE (24/24), PromptBreeder, EvoPrompt, PromptWizard (via BBII), ProTeGi lineage</td><td>synthetic family</td><td>Very strong</td></tr>
+    <tr><td>3</td><td>GSM8K</td><td>OPRO, PromptBreeder, EvoPrompt, MIPROv2 (DSPy), PromptWizard, TextGrad</td><td>reference</td><td>Partial</td></tr>
+    <tr><td>4</td><td>HotpotQA (multi-hop QA)</td><td>COPRO, MIPROv2, GEPA</td><td>reference</td><td>Poor (headroom proof)</td></tr>
+    <tr><td>5</td><td>HoVer (claim verification)</td><td>MIPROv2, GEPA</td><td>reference</td><td>Poor</td></tr>
+    <tr><td>6</td><td>PUPA (privacy delegation)</td><td>MIPROv2, GEPA</td><td>reference</td><td>Poor</td></tr>
+    <tr><td>7</td><td><strong>IFBench (IF constraints)</strong></td><td>GEPA (and MIPROv2 baseline)</td><td>adaptation candidate</td><td>Partial-to-good</td></tr>
+    <tr><td>8</td><td>Ethos (hate-speech)</td><td>ProTeGi, PromptBreeder</td><td>format seed</td><td>Format perfect</td></tr>
+    <tr><td>9</td><td>Liar (fact-checking, 6-way)</td><td>ProTeGi</td><td>format seed</td><td>Format good</td></tr>
+    <tr><td>10</td><td><strong>Text-classification suite</strong> (SST-2, Subj, TREC, AG-News)</td><td>EvoPrompt, APE, ProTeGi, PromptWizard, SAMMO</td><td>synthetic family</td><td>Format ideal</td></tr>
+    <tr><td>11</td><td><strong>Multistep-arithmetic / word-sort generators</strong></td><td>OPRO, EvoPrompt, PromptBreeder, PromptWizard (as BBH members)</td><td>synthetic family</td><td>Best fit</td></tr>
+    <tr><td>12</td><td><strong>Symbolic hidden-rule mapping</strong> (II-style, fully synthetic)</td><td>Generalizes II / MIR-Bench (Yan et al. 2025)</td><td>synthetic family</td><td>Excellent</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="synthetic"><h2>Direct-fit synthetic families to build</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>1 · BBH symbolic sub-tasks → synthetic family</h3><span class="severity medium">Excellent</span></div>
+  <ul>
+    <li><strong>Gains / headroom:</strong> OPRO reports up to <span class="key">+50%</span> over human-designed prompts on BBH tasks; EvoPrompt up to <span class="key">+25%</span> (avg ~2.5–3.5%); TextGrad ~64.9 avg with Llama3-8B. Large, clearly incremental gaps on exact-match tasks.</li>
+    <li><strong>Cost:</strong> single LLM call, short output (a letter / number / short string), case-insensitive exact match. ~250 examples/sub-task shipped, but the generators are parameterizable to hundreds+.</li>
+    <li><strong>Rubric fit:</strong> multi-step arithmetic, tracking shuffled objects, logical deduction, and word sorting each decompose into independent latent rules (operator precedence, swap order, ordering constraints, lexicographic key) → incremental score, diagnostic failures, few-shot demos help.</li>
+    <li><strong>Adaptation:</strong> reimplement 1–2 sub-tasks (e.g. tracking-shuffled-objects, multi-step-arithmetic) as a <span class="key">seeded synthetic generator</span> with a length/complexity knob (number of swaps / operations) as the difficulty and vestigial second-metric (output-length) axis. Directly satisfies criteria 3, 4, 7, 8, 10, 11, 12.</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>2 · Instruction Induction (II) suite → synthetic family</h3><span class="severity medium">Very strong</span></div>
+  <ul>
+    <li><strong>Gains / headroom:</strong> APE reaches human-level on 24/24 (IQM 0.765–0.810 vs human 0.749); BBII: APE improves/matches zero-shot on 17/21. The point of these tasks is that a naive instruction scores far below a good induced instruction — canonical incremental headroom.</li>
+    <li><strong>Cost:</strong> single call, few-word outputs, exact match. Tasks like larger-animal, second-letter, antonym, negation, pluralization, rhymes, cause-selection, sum, number-to-word.</li>
+    <li><strong>Rubric fit:</strong> each task is one latent rule; several are trivially generatable with exact labels (second-letter, larger-animal from a size table, sum, pluralization). Few-shot demos are the whole premise (rule inferable from I/O pairs) → satisfies criterion 12 directly.</li>
+    <li><strong>Adaptation:</strong> compose a <span class="key">multi-rule</span> synthetic variant (e.g. "apply rule A then rule B to the input") so difficulty decomposes into independent latent rules (criterion 10) and partial prompts earn partial score (criterion 4). Generate hundreds per rule combo with RNG seed.</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>10 · Text-classification suite (SST-2, Subj, TREC, AG-News) → synthetic rule-based classifier</h3><span class="severity medium">Format ideal</span></div>
+  <ul>
+    <li><strong>Gains / headroom:</strong> EvoPrompt reports 8–22% accuracy gains over baselines across SST-2 / classification / BBH; SAMMO reports &gt;100% relative gains on some older-model classification cases.</li>
+    <li><strong>Cost:</strong> single call, MC/short-label output, exact match — ideal cheap format.</li>
+    <li><strong>Rubric fit:</strong> format ideal; but sentiment/topic are single latent constructs (poor rule decomposition) and contaminated.</li>
+    <li><strong>Adaptation:</strong> convert to a <span class="key">synthetic rule-based classifier</span> — generate feature-bearing strings and assign the label by a composition of hidden Boolean rules (e.g. "positive iff contains token-class A AND NOT token-class B"). Each rule adds accuracy when the prompt captures it → incremental, decomposable, diagnostic, few-shot-teachable, contamination-proof, known ceiling. One of the top two synthetic-family designs.</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>11 · Multistep-arithmetic / word-sorting generators → synthetic family</h3><span class="severity medium">Best fit</span></div>
+  <ul>
+    <li><strong>Optimizers (as BBH members):</strong> OPRO, EvoPrompt, PromptBreeder, PromptWizard.</li>
+    <li><strong>Gains / headroom:</strong> inherits BBH's large exact-match gaps (see #1).</li>
+    <li><strong>Cost:</strong> single call; the model can be forced to emit <span class="key">only the final answer</span> (number / sorted list) → truly bounded output, exact match, no sandbox.</li>
+    <li><strong>Rubric fit:</strong> excellent and possibly the single best fit. Difficulty knob = number of operations / list length. Latent rules = operator precedence, associativity, lexicographic key, tie-handling. Fully generatable with exact ground truth, hundreds+ of instances, contamination-resistant, temp-0 deterministic, few-shot demos plainly help, failures diagnostic ("expected 42, got 48" → precedence rule missed).</li>
+    <li><strong>Adaptation:</strong> implement the generator + answer-only scoring + a length-budget knob as the vestigial second metric. Minimal engineering; maximal rubric coverage.</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>12 · Symbolic hidden-rule mapping (II-style, fully synthetic) → synthetic family</h3><span class="severity medium">Excellent</span></div>
+  <ul>
+    <li><strong>Lineage:</strong> generalizes Instruction-Induction (#2) and MIR-Bench-style function I/O induction (Yan et al. 2025) — active 2025–2026 research interest in in-context rule induction.</li>
+    <li><strong>Gains / headroom:</strong> analogous to APE/II results (naive prompt near-floor, induced-rule prompt near-ceiling); designed so partial-rule prompts land in between.</li>
+    <li><strong>Cost:</strong> single call, few-word output (the transformed string / class letter), exact match.</li>
+    <li><strong>Rubric fit:</strong> define K independent latent transformation rules (e.g. character substitution, positional swap, arithmetic on indices); each instance applies a seeded subset; the ground-truth output is computed exactly. Prompt quality = how many rules it states → smooth incremental score; failures reveal exactly which rule was violated; few-shot demos let the model infer rules directly (criterion 12); known 100% ceiling (state all rules) and known floor (naive prompt).</li>
+    <li><strong>Adaptation:</strong> essentially the rubric's ideal task written from scratch, drawing the incrementality/decomposition structure from the II literature and the exact-match/few-word format from BBH. Top candidate alongside #11.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="adaptation"><h2>Adaptation candidate: verifiable constraints</h2></div>
+
+<div class="finding">
+  <div class="finding-head"><h3>7 · IFBench (instruction-following constraints)</h3><span class="severity high">Partial-to-good</span></div>
+  <ul>
+    <li><strong>Optimizers that used it:</strong> GEPA (and MIPROv2 baseline).</li>
+    <li><strong>Gains / headroom:</strong> GEPA (Qwen3-8B): 36.9 → 36.2 → <span class="key">38.6</span>; (GPT-4.1-mini): 47.8 → 49.2 → <span class="key">52.7</span>. Small gaps — a caution that instruction-following alone may be too flat for clean ranking.</li>
+    <li><strong>Cost:</strong> single-ish call; <span class="key">programmatic constraint checking</span> (e.g. "answer only yes/no", output-format constraints) is exactly rubric-style deterministic scoring.</li>
+    <li><strong>Rubric fit:</strong> the scoring mechanism (verifiable output constraints, exact programmatic check, few-word outputs) is an excellent rubric match; the published gaps are thin.</li>
+    <li><strong>Adaptation:</strong> build a <span class="key">synthetic constraint-composition</span> task — each instance imposes N independent, programmatically-checkable output constraints (casing, length, forbidden words, required prefix, MC letter). Each constraint = one latent rule → incremental score, diagnostic "violated constraint X" failures, few-shot-teachable. Strong candidate; closely aligned with #1/#2.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="format-seeds"><h2>Format seeds: cheap single-call classifiers</h2></div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>8 · Ethos (hate-speech) → synthetic-family seed</h3>
+    <ul>
+      <li><strong>Optimizers:</strong> ProTeGi, PromptBreeder.</li>
+      <li><strong>Gains:</strong> ProTeGi reaches 0.95; PromptBreeder 80% (hand prompt) → <span class="key">89%</span> (evolved). Clear headroom from a naive prompt.</li>
+      <li><strong>Cost:</strong> single call, binary label output, exact match. Cheapest possible scoring.</li>
+      <li><strong>Fit:</strong> format fits perfectly (single call, MC/binary, exact match, temp-0 resolvable). Weaknesses: single latent construct, contaminated, subjective labels.</li>
+      <li><strong>Adaptation:</strong> shape template for a synthetic binary/MC classifier where the label is set by a hidden Boolean rule over generated features (see #10). Keeps the cheap format, adds decomposable latent rules and contamination resistance.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>9 · Liar (fact-checking, 6-way) → ProTeGi evidence</h3>
+    <ul>
+      <li><strong>Optimizers:</strong> ProTeGi.</li>
+      <li><strong>Gains:</strong> ProTeGi ~0.64 (hard task; large residual headroom, which is the point — low ceiling attainable makes gaps visible).</li>
+      <li><strong>Cost:</strong> single call, short categorical output, exact match.</li>
+      <li><strong>Fit:</strong> format good (MC, exact match, single call); but real-world content = contaminated, and no clean latent-rule decomposition or known 100% ceiling.</li>
+      <li><strong>Adaptation:</strong> same as Ethos — borrow the multi-way categorical exact-match format for a synthetic rule-based classifier with a <span class="key">known</span> ceiling.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="reference"><h2>Reference only: headroom and incrementality evidence</h2></div>
+
+<div class="callout warn">
+  These tasks are the strongest published proof that <strong>our exact optimizers close gaps incrementally</strong>, but they violate criteria 1–2 (retrieval, multi-node graphs, long CoT, or non-exact metrics). Retained as citations, excluded as the quick-test task.
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>3 · GSM8K (grade-school math)</h3><span class="severity high">Partial</span></div>
+  <ul>
+    <li><strong>Optimizers:</strong> OPRO, PromptBreeder, EvoPrompt, MIPROv2 (DSPy), PromptWizard, TextGrad.</li>
+    <li><strong>Gains:</strong> OPRO 71.8% → 80.2% (PaLM-2-L; "+8% over human prompts"); PromptBreeder 83.9% zero-shot (evolved prompt "SOLUTION:") vs CoT 63.8% / Plan-and-Solve 65.4%; PromptWizard 90%.</li>
+    <li><strong>Cost:</strong> single call but <span class="key">long CoT output</span> and numeric answer; answer extraction + numeric compare (deterministic).</li>
+    <li><strong>Fit:</strong> scoring is deterministic (number match), but outputs are NOT bounded to a few words (CoT), it is heavily contaminated, and it is a single latent skill (no clean rule decomposition). Good evidence of headroom, poor direct fit.</li>
+    <li><strong>Adaptation:</strong> would require forcing short-form answers and a synthetic arithmetic generator — at which point it collapses into candidate #1/#11. Keep as a reference-gain data point.</li>
+  </ul>
+</div>
+
+<div class="finding">
+  <div class="finding-head"><h3>4 · HotpotQA (multi-hop QA)</h3><span class="severity blocker">Poor fit / strongest proof</span></div>
+  <ul>
+    <li><strong>Optimizers:</strong> COPRO, MIPROv2, GEPA (the flagship DSPy-lineage task).</li>
+    <li><strong>Gains:</strong> GEPA paper (Qwen3-8B): baseline 42.3 → MIPROv2 55.3 → <span class="key">GEPA 62.3</span>; (GPT-4.1-mini): 38.0 → 58.0 → <span class="key">69.0</span>. Clear, monotone, optimizer-separating gaps. A separate teleprompter comparison found HotpotQA gains small vs cross-seed std — signal can be noisy.</li>
+    <li><strong>Cost:</strong> <span class="key">multi-node retrieval pipeline</span>, multiple LLM calls, exact-match answer scoring.</li>
+    <li><strong>Fit:</strong> poor direct fit (violates criteria 1–2), but the single strongest published proof that our exact optimizers (COPRO/MIPROv2/GEPA) produce an incremental, monotone gap on the same task. Use as headroom/incrementality evidence only.</li>
+    <li><strong>Adaptation:</strong> not adaptable without discarding what makes it HotpotQA. Excluded as a task; retained as the canonical "these optimizers close gaps incrementally" citation.</li>
+  </ul>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <h3>5 · HoVer (multi-hop claim verification)</h3>
+    <ul>
+      <li><strong>Optimizers:</strong> MIPROv2, GEPA.</li>
+      <li><strong>Gains:</strong> GEPA (Qwen3-8B): 35.3 → MIPROv2 47.3 → <span class="key">52.3</span>; (GPT-4.1-mini): 46.3 → 48.3 → 51.7. Incremental, optimizer-separating.</li>
+      <li><strong>Cost:</strong> multi-hop retrieval + query writing; scored on gold-document recall. Multi-call.</li>
+      <li><strong>Fit:</strong> poor direct fit (retrieval, multi-node). Value is as incrementality evidence for MIPROv2/GEPA specifically. No rubric adaptation — reference only.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>6 · PUPA (privacy-conscious delegation)</h3>
+    <ul>
+      <li><strong>Optimizers:</strong> MIPROv2, GEPA.</li>
+      <li><strong>Gains:</strong> GEPA (Qwen3-8B): 80.8 → 81.6 → <span class="key">91.9</span>; (GPT-4.1-mini): 78.6 → 83.4 → <span class="key">94.5</span>. MIPROv2 barely moves while GEPA jumps — good optimizer-discrimination example.</li>
+      <li><strong>Cost:</strong> composite metric (response quality + PII-leakage), model ensemble. Not exact-match.</li>
+      <li><strong>Fit:</strong> poor (composite/soft metric violates criterion 2). Reference only, but a nice illustration that a two-objective aggregate (quality vs leakage) resembles our vestigial compression axis (quality vs output-length). Conceptual template for the two-objective / length-budget knob.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="recommendation"><h2>Recommendation summary for the quick-test designer</h2></div>
+
+<div class="grid-3">
+  <div class="card">
+    <h3>Best direct-fit synthetic families</h3>
+    <p class="small muted">#11 (multistep-arithmetic / word-sort generator), #12 (hidden-rule mapping), and #10-as-synthetic (rule-based classifier). All three give a <span class="key">known ceiling/floor</span>, decomposable latent rules, exact few-word scoring, contamination resistance, and demo-learnability — the full rubric.</p>
+  </div>
+  <div class="card">
+    <h3>Best headroom evidence for our optimizers</h3>
+    <p class="small muted">HotpotQA / HoVer / PUPA (COPRO, MIPROv2, GEPA show monotone, optimizer-separating gaps) and BBH / GSM8K (OPRO / EvoPrompt / PromptBreeder show large exact-match gaps). These justify the expectation that our optimizers can close an incremental gap, though they are not themselves the quick-test task.</p>
+  </div>
+  <div class="card">
+    <h3>Format templates</h3>
+    <p class="small muted">Ethos / Liar / SST-2 (cheap single-call MC/exact-match) and IFBench (programmatic constraint checking) for the scoring harness.</p>
+  </div>
+</div>
+
+<div class="section-head" id="sources"><h2>Sources</h2></div>
+
+<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+  <li>GEPA: Reflective Prompt Evolution (ICLR 2026 Oral), arXiv:2507.19457 — <a href="https://arxiv.org/abs/2507.19457">abs</a>, <a href="https://arxiv.org/html/2507.19457v1">html</a></li>
+  <li>MIPROv2 / Optimizing Instructions and Demonstrations (EMNLP 2024), arXiv:2406.11695 — <a href="https://arxiv.org/abs/2406.11695">abs</a></li>
+  <li>OPRO / Large Language Models as Optimizers (ICLR 2024), arXiv:2309.03409 — <a href="https://arxiv.org/abs/2309.03409">abs</a></li>
+  <li>APE / Large Language Models Are Human-Level Prompt Engineers (ICLR 2023), arXiv:2211.01910 — <a href="https://arxiv.org/pdf/2211.01910">pdf</a></li>
+  <li>ProTeGi / Automatic Prompt Optimization with "Gradient Descent" and Beam Search (EMNLP 2023), arXiv:2305.03495 — <a href="https://aclanthology.org/2023.emnlp-main.494/">aclanthology</a></li>
+  <li>PromptBreeder (arXiv 2023), arXiv:2309.16797 — <a href="https://arxiv.org/pdf/2309.16797">pdf</a></li>
+  <li>EvoPrompt / Connecting LLMs with Evolutionary Algorithms (ICLR 2024), arXiv:2309.08532 — <a href="https://arxiv.org/abs/2309.08532">abs</a></li>
+  <li>Instruction Induction (ACL 2023), arXiv:2205.10782 — <a href="https://arxiv.org/abs/2205.10782">abs</a></li>
+  <li>BIG-Bench Hard / Challenging BIG-Bench Tasks (ACL Findings 2023) — <a href="https://aclanthology.org/2023.findings-acl.824.pdf">pdf</a></li>
+  <li>PromptWizard (Microsoft) — <a href="https://microsoft.github.io/PromptWizard/">site</a></li>
+  <li>SAMMO (Microsoft Research) — <a href="https://www.microsoft.com/en-us/research/blog/sammo-a-general-purpose-framework-for-prompt-optimization/">blog</a></li>
+  <li>A Systematic Survey of Automatic Prompt Optimization Techniques, arXiv:2502.16923 — <a href="https://arxiv.org/html/2502.16923v1">html</a></li>
+  <li>LangProBe: a Language Programs Benchmark, arXiv:2502.20315 — <a href="https://arxiv.org/html/2502.20315">html</a></li>
+</ul>
+
+</main>
+</body>
+</html>

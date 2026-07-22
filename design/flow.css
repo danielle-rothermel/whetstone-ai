@@ -1,0 +1,132 @@
+/* Shared diagram vocabulary for the whetstone design-doc family.
+   Loads after doc.css; reuses its variables. */
+
+/* Family navigation across the five configuration docs */
+.family-nav {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin: 14px 0 4px;
+}
+.family-nav a, .family-nav span.here {
+  font: 600 12.5px/1.4 var(--font-system);
+  padding: 4px 12px; border-radius: 999px;
+  border: 1px solid var(--line); text-decoration: none;
+  color: var(--accent); background: var(--surface);
+}
+.family-nav span.here {
+  color: #fff; background: var(--accent); border-color: var(--accent);
+}
+
+/* Block code (prompt templates, formulas) */
+pre {
+  margin: 10px 0; padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: #f8fafc; overflow-x: auto;
+}
+pre code {
+  display: block; padding: 0; border: none; background: none;
+  font: 12.5px/1.6 var(--font-mono); white-space: pre;
+}
+
+/* Vertical stack of system planes */
+.flow { display: grid; gap: 0; margin: 18px 0; }
+.plane {
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 16px 14px; background: var(--surface);
+}
+.plane-label {
+  font: 700 11px/1.3 var(--font-system);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 10px;
+}
+.plane-label .sub { font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+/* Component boxes inside a plane */
+.comps { display: flex; flex-wrap: wrap; gap: 10px; align-items: stretch; }
+.comp {
+  flex: 1 1 150px; min-width: 140px;
+  border: 1.5px solid var(--line); border-radius: 8px;
+  padding: 8px 12px 9px; background: #fff; font-size: 13.5px;
+}
+.comp b { display: block; font-size: 13px; margin-bottom: 1px; }
+.comp .note { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.comp.settled { border-color: var(--green); }
+.comp.breach { border-color: var(--red); }
+.comp hr { border: none; border-top: 1px solid var(--line); margin: 6px 0; }
+.comp.substrate { background: var(--bg); border-style: solid; border-color: var(--line); }
+.comp.node { border-color: var(--accent); }
+
+/* Arrows between planes */
+.flow-arrow {
+  display: flex; justify-content: center; align-items: baseline; gap: 14px;
+  padding: 7px 0; font-size: 12.5px; color: var(--muted);
+}
+.flow-arrow .glyph { color: var(--accent); font-weight: 700; font-size: 14px; }
+.flow-arrow code { font-size: 11.5px; }
+
+/* Horizontal flow (e.g., the encoder → decoder → score pipeline) */
+.hflow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 2px; }
+.hflow .comp { flex: 1 1 110px; min-width: 104px; }
+.hflow .harrow { color: var(--accent); font-weight: 700; flex: 0 0 auto; }
+
+/* Run walkthrough timeline. The tick counter is page-scoped so
+   numbering continues across .run and .repeat blocks. */
+main { counter-reset: tick; }
+.run { display: grid; gap: 10px; margin: 16px 0; }
+.tick {
+  display: grid; grid-template-columns: 108px 1fr; gap: 14px;
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 11px 16px; background: var(--surface);
+  counter-increment: tick; position: relative;
+}
+.tick::before {
+  content: counter(tick);
+  position: absolute; left: -13px; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.tick .who {
+  font: 700 10.5px/1.5 var(--font-system);
+  text-transform: uppercase; letter-spacing: .05em;
+  padding-top: 2px; padding-left: 14px;
+}
+.who.designer { color: var(--muted); }
+.who.optimizer { color: var(--accent); }
+.who.env { color: var(--green); }
+.who.evaluator { color: var(--ink); }
+.tick .what { font-size: 14px; }
+.tick .what p { margin: 0 0 4px; }
+.tick .ledger {
+  margin-top: 5px; font-size: 12.5px; color: var(--muted);
+  border-left: 3px solid var(--line); padding-left: 10px;
+}
+.tick .ledger b { color: var(--green); font: 700 10.5px var(--font-system); letter-spacing: .05em; text-transform: uppercase; margin-right: 5px; }
+
+/* Repeat marker for iterated phases of a run */
+.repeat {
+  border: 1.5px dashed var(--line); border-radius: 12px;
+  padding: 14px 16px 6px; margin: 0; position: relative;
+}
+.repeat > .repeat-label {
+  position: absolute; top: -10px; left: 16px;
+  background: var(--bg); padding: 0 8px;
+  font: 700 11px/1.6 var(--font-system); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--accent);
+}
+.repeat .run { margin: 8px 0; }
+
+/* Optimization-specific marking. `.optim` on a comp, plane, card, or tick
+   colors the parts of an optimizer run that differ from the Eval flow;
+   unmarked elements match Eval. Kept last so `.optim` wins on combined
+   classes (e.g. `comp settled optim`). */
+:root { --optim: #6f42c1; --optim-soft: #f6f1fc; }
+.comp.optim { border-color: var(--optim); }
+.plane.optim { border-color: var(--optim); background: var(--optim-soft); }
+.plane.optim > .plane-label { color: var(--optim); }
+.card.optim { border-color: var(--optim); }
+.tick.optim { border-color: var(--optim); }
+.tick.optim::before { background: var(--optim); }
+
+@media (max-width: 760px) {
+  .tick { grid-template-columns: 1fr; gap: 4px; }
+}

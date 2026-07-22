@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<style>
+/* Candidate atlas — ultrawide comparative table. Reuses the family palette;
+   badge/chip styles mirror the candidates/ pages so states read identically. */
+
+/* Full-bleed: the table is the document. Prose blocks keep a readable measure. */
+main { max-width: none; padding: 36px 32px 72px; }
+.intro, .legend-note { max-width: 1150px; }
+
+/* Status badges — same states, colors, and text labels as the candidate pages.
+   Each state carries its own label, so it stays legible without color alone. */
+.badge {
+  display: inline-block; vertical-align: middle;
+  padding: 3px 11px; border-radius: 999px;
+  font: 700 11px/1.4 var(--font-system);
+  letter-spacing: .07em; text-transform: uppercase;
+  border: 1.5px solid transparent; white-space: nowrap;
+}
+.badge.adopt     { color: var(--green);  background: var(--green-soft);  border-color: var(--green); }
+.badge.backup    { color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.badge.ranked    { color: var(--ink);    background: var(--surface);     border-color: var(--muted); }
+.badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
+.badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
+
+/* Score chips — digits live here, not in prose. Same anatomy as the pages. */
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+.chip {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg);
+  font: 500 11px/1.4 var(--font-system); white-space: nowrap;
+}
+.chip .k { color: var(--muted); letter-spacing: .04em; text-transform: uppercase; font-size: 9.5px; }
+.chip .v { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.chip.total { background: var(--accent-soft); border-color: var(--accent); }
+.chip.total .v { color: var(--accent); }
+.chip.posthoc { border: 1px dashed var(--amber); background: var(--amber-soft); }
+.chip.posthoc .k, .chip.posthoc .v { color: var(--amber); }
+
+/* Dagger provenance marker — for the three folded-in rows scored post-hoc via
+   the same pipeline. Small superscript glyph next to the candidate name. */
+.dagger {
+  color: var(--amber); font-weight: 700; cursor: help;
+  font-size: 1.05em; margin-left: 3px; vertical-align: super; line-height: 1;
+}
+
+/* Verdict-health scan tag — one uppercase label per row before the sentences. */
+.vh-tag {
+  display: inline-block; margin-bottom: 5px;
+  font: 700 10px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase; white-space: nowrap;
+}
+.vh-tag.pass { color: var(--green); }
+.vh-tag.rescued { color: var(--amber); }
+.vh-tag.refuted { color: var(--red); }
+.vh-tag.none { color: var(--muted); }
+
+/* The atlas scroll container: one box owns both scroll axes so the header row
+   sticks vertically and the first two columns stick horizontally. */
+.atlas-wrap {
+  margin-top: 18px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface);
+  overflow: auto; max-height: calc(100vh - 20px);
+}
+table.atlas {
+  width: 100%; min-width: 2380px;
+  border-collapse: separate; border-spacing: 0;
+  font-size: 13.5px; line-height: 1.5;
+}
+.atlas th, .atlas td {
+  padding: 11px 14px; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+}
+.atlas thead th {
+  position: sticky; top: 0; z-index: 4;
+  background: #e9edf4; color: var(--muted);
+  font: 600 11px/1.4 var(--font-system);
+  letter-spacing: .06em; text-transform: uppercase;
+  box-shadow: inset 0 -2px 0 var(--line);
+}
+/* Sticky first two columns. Widths are fixed so the second column's left
+   offset is exact; box-sizing is border-box family-wide. */
+.atlas th:nth-child(1), .atlas td:nth-child(1) {
+  position: sticky; left: 0; z-index: 3;
+  width: 152px; min-width: 152px; max-width: 152px;
+}
+.atlas th:nth-child(2), .atlas td:nth-child(2) {
+  position: sticky; left: 152px; z-index: 3;
+  width: 226px; min-width: 226px; max-width: 226px;
+  box-shadow: inset -2px 0 0 var(--line);
+}
+.atlas thead th:nth-child(1), .atlas thead th:nth-child(2) { z-index: 6; }
+/* Generous minimum widths; every cell wraps, nothing truncates. */
+.atlas th:nth-child(3), .atlas td:nth-child(3) { min-width: 320px; }
+.atlas th:nth-child(4), .atlas td:nth-child(4) { min-width: 300px; }
+.atlas th:nth-child(5), .atlas td:nth-child(5) { min-width: 410px; }
+.atlas th:nth-child(6), .atlas td:nth-child(6) { min-width: 410px; }
+.atlas th:nth-child(7), .atlas td:nth-child(7) { min-width: 330px; }
+.atlas th:nth-child(8), .atlas td:nth-child(8) { min-width: 200px; }
+/* Zebra rows — .alt is assigned per band so the rhythm survives band breaks.
+   Sticky cells inherit the same opaque background. */
+.atlas tr.alt td { background: #f4f7fb; }
+.atlas tbody tr:last-child td { border-bottom: 0; }
+
+/* Band subheader rows: full-width, visually distinct, label pinned so it stays
+   visible while scrolling an ultrawide table horizontally. */
+.atlas tr.band td {
+  padding: 8px 14px;
+  font: 700 11.5px/1.5 var(--font-system);
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.atlas tr.band .bandlabel { position: sticky; left: 14px; display: inline-block; max-width: 90vw; }
+.atlas tr.band .bandnote { font-weight: 500; letter-spacing: .02em; text-transform: none; }
+.atlas tr.band.gatedband td { background: var(--amber-soft); color: var(--amber); border-top: 2px solid var(--amber); }
+.atlas tr.band.cutband td { background: var(--red-soft); color: var(--red); border-top: 2px solid var(--red); }
+
+/* Cell furniture */
+.atlas .cand-name { font-weight: 700; }
+.atlas .cand-id { color: var(--muted); font: 700 12px/1.2 var(--font-mono); margin-right: 4px; }
+.atlas .domain { display: block; margin-top: 4px; color: var(--muted); font-size: 11.5px; }
+.atlas .move { display: block; margin-top: 7px; color: var(--muted); font: 500 11.5px/1.45 var(--font-system); }
+.atlas .move .up { color: var(--green); font-weight: 700; }
+.atlas .move .down { color: var(--red); font-weight: 700; }
+.atlas .move .flat { color: var(--muted); font-weight: 700; }
+.atlas td p { margin: 0 0 7px; }
+.atlas td p:last-child { margin-bottom: 0; }
+.atlas .links-cell a { display: inline-block; margin: 0 6px 4px 0; }
+.atlas .linklabel { display: block; margin: 2px 0 1px; color: var(--muted); font: 700 9.5px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; }
+
+/* Footer legend */
+.legend { margin-top: 26px; }
+.legend .card ul { font-size: 13.5px; }
+</style>
+<title>whetstone-ai · Candidate Atlas — quick-test task selection</title>
+</head>
+<body>
+<main>
+<h1>Candidate Atlas: all 24 quick-test candidates, compared</h1>
+<div class="byline">whetstone-ai · 2026-07-21 · master comparative table</div>
+
+<div class="family-nav">
+  <a href="recommendations.html">Round 1</a>
+  <a href="recommendations-round2.html">Round 2 rescore</a>
+  <span class="here">Candidate atlas</span>
+  <a href="candidates/c19.html">Per-candidate pages</a>
+  <a href="landscape.html">Landscape</a>
+</div>
+
+<div class="intro">
+  <p>One table, every candidate, with the <span class="key">reasons</span> in the cells. Rows follow the <a href="recommendations-round2.html">round-2 implementation-aware ranking</a> (ranks 1&ndash;20), then a <span class="key">gated band</span> — c01, c05, c07, c15, ineligible at any implementation score because <a href="recommendations.html">round 1</a> refuted them without a concrete rescue. Each candidate links to its deep-dive page in <code>candidates/</code> and to the repo deep reads in <code>repos/</code>.</p>
+  <p><strong>Amendment (2026-07-21):</strong> the round-1 tie-breaker=1 exclusion is dropped; c10, c04, and c02 are folded into the official <a href="recommendations-round2.html">round-2 ranking</a> on equal terms, inserting at ranks 5, 7, and 12 (marked <span class="dagger">&dagger;</span>). Their I1&ndash;I6 scores came from the same pipeline; reasoning-gym run-verification carries over from c24 for c10 and c04, while c02 never met the run-verification bar. No previously published relative order changes — the table now holds 20 ranked + 4 gated = 24.</p>
+</div>
+
+<div class="atlas-wrap">
+<table class="atlas">
+<thead>
+<tr>
+  <th>Standing &amp; movement</th>
+  <th>Candidate</th>
+  <th>You know this as</th>
+  <th>What it is</th>
+  <th>Why it ranks here</th>
+  <th>Implementation &amp; risks</th>
+  <th>Verdict health</th>
+  <th>Links</th>
+</tr>
+</thead>
+<tbody>
+
+<!-- ============================ RANKED 1–20 ============================ -->
+
+<tr><!-- 1 · c19 -->
+  <td><span class="badge adopt">Adopt · #1</span>
+    <span class="move"><span class="up">&#9650;&#9650;</span> 27-tier mid-pack &rarr; adopt</span></td>
+  <td><span class="cand-id">c19</span><a class="cand-name" href="candidates/c19.html">Grid-World State Prediction</a>
+    <span class="domain">deterministic spatial simulation</span></td>
+  <td>Grid-world state tracking — the <a href="https://arxiv.org/abs/1502.05698">bAbI</a>/BabyAI &ldquo;predict the final state after a move sequence&rdquo; task, reframed to one derived fact and run on <a href="https://github.com/Farama-Foundation/Minigrid">Minigrid</a>.</td>
+  <td>The model reads a rendered Minigrid grid plus a seeded move sequence under invented commands and a wrap-vs-clamp convention, mentally simulates the walk, and reports one derived fact (e.g. the agent's final cell contents), scored strict 0/1.</td>
+  <td><p>Adopted because it is the only candidate pairing a run-verified I1=3 codebase with verification-only skeptic debt: Minigrid's seeding is confirmed byte-identical per seed, the entire diff is ~120&ndash;200 LOC of glue with zero repo edits, and no round-1 verdict demands redesign.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">3&middot;2&middot;1&middot;1&middot;2&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">14</span></span></div></td>
+  <td>Add Minigrid as a dependency (zero repo edits); write glue: seeded generator over stochastic-layout envs, invented-command / wrap-vs-clamp stepper, independent derived-fact oracle, strict 0/1 scorer; then freeze gates. Risks: the anti-one-shot convention layer is net-new logic; ~2&ndash;3 calibration gates remain. Deep read: <a href="repos/farama-foundation-minigrid.md">minigrid</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Sat below the round-1 finalist cut, so it never faced the adversarial lenses. The round-2 desk review priced its verdict debt as verification-only: the convention strata need a red-team gate before freeze, not a redesign.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c19.html">page</a><a href="repos/farama-foundation-minigrid.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/Farama-Foundation/Minigrid">Minigrid</a><a href="https://arxiv.org/abs/1502.05698">bAbI</a></td>
+</tr>
+
+<tr class="alt"><!-- 2 · c18 -->
+  <td><span class="badge backup">Backup · #2</span>
+    <span class="move"><span class="up">&#9650;&#9650;</span> 27-tier &rarr; backup</span></td>
+  <td><span class="cand-id">c18</span><a class="cand-name" href="candidates/c18.html">Depth-Controlled Synthetic Deduction (T/F/Unknown)</a>
+    <span class="domain">synthetic logic / multi-hop</span></td>
+  <td>RuleTaker / <a href="https://aclanthology.org/2021.findings-acl.317/">ProofWriter</a> / <a href="https://arxiv.org/abs/2210.01240">PrOntoQA</a>-style depth-binned synthetic deduction: facts plus if-then rules over fictional predicates, queried True/False/Unknown at controlled proof depth.</td>
+  <td>A seeded generator emits facts and if-then rules over fictional predicates at a controlled proof depth; the model answers one query True/False/Unknown in a single exact-match call, with depth strata supplying the difficulty ladder.</td>
+  <td><p>Backup because prontoqa is the other run-verified I1=3 generator: <code>--seed</code> reproduces gold JSON byte-identically and the glue is ~100 LOC. It also hedges the portfolio — the harness built here is ~80% of a c21 harness, keeping the round-1 winner alive at marginal cost.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">3&middot;2&middot;1&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">13</span></span></div></td>
+  <td>Subprocess prontoqa per depth stratum (run-verified deterministic), parse question/query/answer, make one exact-match LLM call, and add a ~30&ndash;50-line forward-chaining oracle plus a CSP stratum; no repo edits. Risks: definitional label, closed-world-vs-Unknown pinning, a Composed-postorder crash (use <code>--ordering random</code>), and a run-from-repo-root quirk. Deep read: <a href="repos/asaparov-prontoqa.md">prontoqa</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Never faced the round-1 lenses. Round-2 desk review found verification-only debt: pin the closed-world &ldquo;Unknown&rdquo; semantics and the definitional label before freeze; nothing structural was flagged.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c18.html">page</a><a href="repos/asaparov-prontoqa.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/asaparov/prontoqa">prontoqa</a><a href="https://arxiv.org/abs/2002.05867">RuleTaker</a></td>
+</tr>
+
+<tr><!-- 3 · c17 -->
+  <td><span class="badge ranked">Ranked #3</span>
+    <span class="move"><span class="up">&#9650;</span> 27-tier &rarr; podium</span></td>
+  <td><span class="cand-id">c17</span><a class="cand-name" href="candidates/c17.html">Invented-Gate Circuit Evaluation</a>
+    <span class="domain">boolean circuits / connectives</span></td>
+  <td>A synthetic boolean-circuit / invented-connective evaluator in the <a href="https://github.com/ctrl-gaurav/BeyondBench">BeyondBench</a> / <a href="https://arxiv.org/abs/2502.07980">CIRCUIT</a> line — a DAG of gates with randomized truth tables, built rather than borrowed.</td>
+  <td>A seeded DAG of logic gates whose truth tables are randomized per instance — gate names deliberately mean nothing standard — is evaluated on given inputs; the model outputs the resulting bit(s), scored by exact match against an independent evaluator.</td>
+  <td><p>Holds the podium on the best desk profile in the pool (top marks on moving parts, change-tolerance, and verdict debt simultaneously), and BeyondBench is run-verified. It stops short of the top two because the run confirmed an XOR-dropping bug and the invented-gate core is a small rewrite, not configuration.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;2&middot;1&middot;2&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">13</span></span></div></td>
+  <td>Vendor BeyondBench's <code>_make_expr</code>/<code>_eval_expr</code> (~25 lines), fix the verified XOR-dropping bug, write a table-driven invented-gate evaluator (~40 new lines), thread per-instance <code>random.Random</code>, reuse <code>\boxed{}</code> scoring; oracle independence held on 50/50 checks. Risks: the gate core is a rewrite; the XOR fix is a hard prerequisite; 50% single-bit guess floor. Deep read: <a href="repos/beyondbench.md">beyondbench</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Below the finalist cut in round 1. Round-2 review judged its debt verification-only: certify the invented gates are non-guessable and measure the single-bit guess floor; no structural repair needed.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c17.html">page</a><a href="repos/beyondbench.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/ctrl-gaurav/BeyondBench">BeyondBench</a><a href="https://arxiv.org/abs/2502.07980">CIRCUIT</a></td>
+</tr>
+
+<tr class="alt"><!-- 4 · c24 -->
+  <td><span class="badge ranked">Ranked #4</span>
+    <span class="move"><span class="up">&#9650;</span> 27-tier &rarr; top 5</span></td>
+  <td><span class="cand-id">c24</span><a class="cand-name" href="candidates/c24.html">Composite-Key Sorting &amp; Canonical Ordering</a>
+    <span class="domain">ordering under invented conventions</span></td>
+  <td><a href="https://arxiv.org/abs/2210.09261">BBH</a> <code>word_sorting</code> under invented composite conventions — sort tokens by a bespoke multi-level key nobody can guess, built on <a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a>, exact-match the canonical line.</td>
+  <td>Nonce tokens are sorted by a bespoke multi-level composite key with per-batch randomized tie-breakers that no natural-language prior can supply; the model must emit the exact canonical ordering as a single line, scored strict whole-string match.</td>
+  <td><p>Ranks fourth because reasoning-gym is a clean zero-edit dependency with run-verified per-item <code>Random(seed+idx)</code> determinism and the new subclass is only ~100&ndash;150 LOC. It trails c17 because the shared reference sorter couples strata, and the base scorer's substring partial credit must be strictly overridden.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;2&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">12</span></span></div></td>
+  <td>Consume reasoning-gym as a dependency; write the composite-key sorting subclass with randomized per-batch tie-breakers; override base scoring to strict 0/1; swap the Gutenberg corpus for nonce vocabulary; add ~30&ndash;50 LOC of glue. Risks: tie-breaker logic is net-new; a forgotten scoring override silently leaks partial credit. Deep read: <a href="repos/open-thought-reasoning-gym.md">reasoning-gym</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Not a round-1 finalist, so no lens verdicts exist. Round-2 review found only verification debt: certify the tie-breakers are non-guessable and police the strict-scoring override before freezing strata.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c24.html">page</a><a href="repos/open-thought-reasoning-gym.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a><a href="https://arxiv.org/abs/2210.09261">BBH</a></td>
+</tr>
+
+<tr><!-- 5 · c10 -->
+  <td><span class="badge ranked">Ranked #5</span>
+    <span class="move"><span class="up">&#9650;&#9650;</span> folded in &rarr; #5</span></td>
+  <td><span class="cand-id">c10</span><a class="cand-name" href="candidates/c10.html">Interlocking-Cycle Calendar &amp; Clock Arithmetic</a><span class="dagger" title="scored via the same pipeline post-hoc; reasoning-gym run-verification carries over from c24">&dagger;</span>
+    <span class="domain">constructed cyclic systems</span></td>
+  <td>Counterfactual modular arithmetic (<a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a>) as a Tzolk'in-style invented calendar of coprime named cycles (cf. <a href="https://arxiv.org/abs/2406.09170">Test of Time</a>).</td>
+  <td>An invented calendar interlocks several coprime named cycles; the model performs modular arithmetic across them to answer date/clock queries, and coprimality lets the scorer isolate exactly which cycle rule broke.</td>
+  <td><p>Folded into the official ranking at fifth under the 2026-07-21 amendment: dropping the tie-breaker=1 exclusion places its impl total of 12 exactly here (behind c24, ahead of c21 on the reuse-priority I1 tie-break). A genuinely solid design — independent coprime moduli give per-rule diagnosis — whose best repo, reasoning-gym, was run-verified in round 2 under c24; the coprime-cycle semantics are authored on top of that reused infra (~180&ndash;300 LOC of net-new logic).</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/1</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;1&middot;2&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">12</span></span></div></td>
+  <td>Vendor reasoning-gym (run-verified infra, clean <code>Random(seed+idx)</code> threading); subclass <code>ProceduralDataset</code> with sampled coprime cycle lengths; write an independent per-cycle modular oracle that never touches <code>datetime</code>; override the default partial-credit scoring to strict 0/1; add strata. Risks: net-new task logic sits on top of the reused infra; a strong modular prior may collapse the gap one-shot. Deep read: <a href="repos/reasoning-gym.md">reasoning-gym</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Eliminated before the finalist lenses ran, now folded into the official ranking. The post-hoc review found only verification-level debt but flags the modular-arithmetic prior as the untested one-shot risk.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c10.html">page</a><a href="repos/reasoning-gym.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a><a href="https://arxiv.org/abs/2406.09170">Test of Time</a></td>
+</tr>
+
+<tr class="alt"><!-- 6 · c21 -->
+  <td><span class="badge ranked">Ranked #6</span>
+    <span class="move"><span class="down">&#9660;&#9660;</span> round-1 winner &rarr; #6</span></td>
+  <td><span class="cand-id">c21</span><a class="cand-name" href="candidates/c21.html">Relational Micro-World with Invented Vocabulary</a>
+    <span class="domain">relational / kinship QA over nonce graphs</span></td>
+  <td><a href="https://arxiv.org/abs/1908.06177">CLUTRR</a>-style kinship/relational QA over nonce graphs with seeded relation rules and an invented closed answer vocabulary, generated on <a href="https://arxiv.org/abs/2210.01240">PrOntoQA</a> machinery.</td>
+  <td>A seeded graph of nonce entities is governed by invented relation rules; the model must traverse the graph to answer one relational query, choosing from an invented closed answer vocabulary as balanced multiple choice, one call per instance.</td>
+  <td><p>The round-1 winner and still the best theoretical task — the only finalist both skeptic lenses left standing with just minor caveats. It fell to fifth on build reality: the most intricate generator in the set plus four-plus pre-freeze calibration gates, even though its prontoqa base is run-verified.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">3&middot;2&middot;0&middot;0&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">11</span></span></div></td>
+  <td>Reuse the run-verified prontoqa base (<code>--OOD Composed --disjoint-concept-names</code>; force <code>--ordering random</code>). Build the graph sampler and traversal oracle, rejection-sample unique answers, balance the MC options, stratify, then clear four-plus pre-freeze gates. Risks: the pool's most intricate generator and heaviest calibration burden; c21's own strata were never run-verified. Deep read: <a href="repos/asaparov-prontoqa.md">prontoqa</a>.</td>
+  <td><span class="vh-tag pass">Survived both lenses — minor</span><br>The only finalist with no major-severity finding: optimization-path and measurement lenses both declined to refute, and every surviving caveat is a pinning or verification obligation inside artifacts the adaptation plan already builds.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c21.html">page</a><a href="repos/asaparov-prontoqa.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/asaparov/prontoqa">prontoqa</a><a href="https://arxiv.org/abs/1908.06177">CLUTRR</a></td>
+</tr>
+
+<tr><!-- 7 · c04 -->
+  <td><span class="badge ranked">Ranked #7</span>
+    <span class="move"><span class="up">&#9650;&#9650;</span> folded in &rarr; #7</span></td>
+  <td><span class="cand-id">c04</span><a class="cand-name" href="candidates/c04.html">Term-Rewriting to Normal Form</a><span class="dagger" title="scored via the same pipeline post-hoc; reasoning-gym run-verification carries over from c24">&dagger;</span>
+    <span class="domain">abstract rewriting systems</span></td>
+  <td>Abstract rewriting systems (ARS/TRS — <a href="https://www.cambridge.org/core/books/term-rewriting-and-all-that/71768055278D0DEF4FFC74722DE0D707">Baader &amp; Nipkow</a>): apply invented productions to a string until fixpoint, plus an L-system parallel-rewriting stratum, on <a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a>'s <code>ab.py</code>.</td>
+  <td>Invented production rules are applied to a start string until no rule fires (plus a parallel-rewriting L-system stratum); the model outputs the normal form, with confluence and termination enforced by the generator, scored exact match.</td>
+  <td><p>Folded into the official ranking at seventh under the 2026-07-21 amendment: its impl total of 11 ties c21/c11, and the reuse-priority I1 tie-break (I1=3) lands it above both. The sleeper of the pool and the strongest anti-one-shot design in it — abstract productions leave nothing to guess. reasoning-gym's <code>ab.py</code> is already a term-rewriting-to-normal-form task with an independent oracle and clean per-instance seeding (run-verified in round 2 under c24), earning I1=3; the rewrite-system task logic is authored on top of that reused infra.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/1</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">3&middot;2&middot;1&middot;0&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">11</span></span></div></td>
+  <td>Adopt the reasoning-gym substrate; clone-and-generalize <code>ab.py</code> (~150 LOC) into a seeded rewrite generator with invented rules and symbols (the shipped ones are fixed); enforce confluence and termination or fix a strategy; add latent-rule and capped L-system strata; calibrate difficulty and the temp-0 noise floor. Risks: adding one rule has global blast radius; four-plus pre-freeze gates; candidate-specific task logic sits on top of the reused infra. Deep read: <a href="repos/open-thought-reasoning-gym.md">reasoning-gym</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Eliminated before the lenses ran, now folded into the official ranking. The post-hoc review's residual worries are calibration-shaped — an unreachable ceiling and char-level temp-0 flips — not conceptual refutations.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c04.html">page</a><a href="repos/open-thought-reasoning-gym.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a><a href="https://arxiv.org/abs/2411.06409">confluence strategies</a></td>
+</tr>
+
+<tr class="alt"><!-- 8 · c11 -->
+  <td><span class="badge ranked">Ranked #8</span>
+    <span class="move"><span class="down">&#9660;</span> 28-tier finalist &rarr; #8</span></td>
+  <td><span class="cand-id">c11</span><a class="cand-name" href="candidates/c11.html">House-Convention Canonicalizer</a>
+    <span class="domain">serialization / normalization</span></td>
+  <td>Canonical-JSON / house-style normalization: invented serializer rules deviating from <a href="https://www.rfc-editor.org/info/rfc8785">RFC 8785 JCS</a>, whole-string exact match, with inputs from <a href="https://github.com/json-schema-faker/json-schema-faker">json-schema-faker</a>.</td>
+  <td>The model receives a JSON-ish value plus invented house serialization rules that deliberately deviate from RFC 8785 JCS and must emit the exact canonical string; headroom lives in the rules the prompt understates, scored whole-string match.</td>
+  <td><p>Sits sixth because json-schema-faker is run-verified (519/519 tests green) and the harness transfers directly to dr-serialize work, but the round-1 measurement lens refuted the original rule set: it needs a computation-heavy-rule diet and table-width policing, and its second objective is degenerate.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;1&middot;2&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">11</span></span></div></td>
+  <td>Reuse json-schema-faker (MIT) as the seeded input generator; author the ~200&ndash;350 LOC house-rule canonicalizer/oracle, optionally forking rfc8785.py; diet the computation-heavy rules, keep test tables wider than the demos, certify pre-freeze. Risks: unknowable ceiling if the diet is skipped, demo leakage, degenerate second objective. Deep reads: <a href="repos/json-schema-faker-json-schema-faker.md">json-schema-faker</a>, <a href="repos/trailofbits-rfc8785-py.md">rfc8785.py</a>.</td>
+  <td><span class="vh-tag rescued">Measurement refuted &rarr; rescued</span><br>The optimization-path lens did not refute it (major caveats); the measurement lens refuted it as specified — computation-heavy rules made the true ceiling 70&ndash;90% and unknowable — but the rule-set-diet rescue is concrete and bounded.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c11.html">page</a><a href="repos/json-schema-faker-json-schema-faker.md">repo review</a><a href="repos/trailofbits-rfc8785-py.md">rfc8785 review</a><span class="linklabel">External</span><a href="https://github.com/json-schema-faker/json-schema-faker">json-schema-faker</a><a href="https://www.rfc-editor.org/info/rfc8785">RFC 8785</a></td>
+</tr>
+
+<tr><!-- 9 · c22 -->
+  <td><span class="badge ranked">Ranked #9</span>
+    <span class="move"><span class="up">&#9650;</span> 26-tier &rarr; #9</span></td>
+  <td><span class="cand-id">c22</span><a class="cand-name" href="candidates/c22.html">Stacked Verifiable-Constraint Micro-Generation</a>
+    <span class="domain">instruction following / constrained generation</span></td>
+  <td>The <a href="https://arxiv.org/abs/2311.07911">IFEval</a> / <a href="https://arxiv.org/abs/2507.02833">IFBench</a> verifiable-checker family, restacked: a trivial micro-task under composed, deterministically-checkable constraints, scored strict all-pass.</td>
+  <td>A trivial micro-generation task (produce a tiny text) runs under a seeded stack of composed verifiable constraints, including conditional Selection constraints; the output counts only if every deterministic checker passes — strict all-pass 0/1 scoring.</td>
+  <td><p>Rises from the 26-tier because the checker reuse is real — IFBench's oracle library passes its 59-test suite verbatim — and its round-1 debt is verification-only. It stays below the podium because the stacking generator was never run-verified and the conditional Selection constraints alone carry the anti-one-shot load.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">11</span></span></div></td>
+  <td>Vendor the IFBench oracle read-only; write a seeded stacking generator (~60&ndash;100 LOC); add the Selection/discovery layer and a serializer; wire strict all-pass scoring. Risks: an unseeded module-global <code>random</code> makes the shipped code non-reproducible until threaded; the anti-one-shot defence is narrow; all-pass scoring can floor the training signal. Deep reads: <a href="repos/allenai-ifbench.md">ifbench</a>, <a href="repos/google-research-instruction-following-eval-ifeval.md">ifeval</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Sat in the 26-tier, below the finalist cut. Round-2 review found verification-level debt only, but flagged that the one-shot defence rests on a single mechanism — the conditional constraints — and needs an empirical check.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c22.html">page</a><a href="repos/allenai-ifbench.md">repo review</a><a href="repos/google-research-instruction-following-eval-ifeval.md">ifeval review</a><span class="linklabel">External</span><a href="https://github.com/allenai/IFBench">IFBench</a><a href="https://arxiv.org/abs/2311.07911">IFEval</a></td>
+</tr>
+
+<tr class="alt"><!-- 10 · c03 -->
+  <td><span class="badge ranked">Ranked #10</span>
+    <span class="move"><span class="down">&#9660;</span> round-1 backup &rarr; #10</span></td>
+  <td><span class="cand-id">c03</span><a class="cand-name" href="candidates/c03.html">Keyed Custom-Operator Expression Evaluation</a>
+    <span class="domain">invented operators / precedence</span></td>
+  <td>A <a href="https://github.com/google/BIG-bench/tree/main/bigbench/benchmark_tasks/multistep_arithmetic">BIG-bench multistep_arithmetic</a> generator with invented infix operators and a hidden precedence/wrap convention — counterfactual arithmetic in the <a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a> sense.</td>
+  <td>A multistep arithmetic expression uses invented infix operators governed by a per-instance operator/precedence/wrap table rather than PEMDAS; the model must apply the table literally and output one integer, scored exact match.</td>
+  <td><p>The round-1 backup, demoted to eighth: BIG-bench's oracle is <code>eval()</code> of the generator's own string — tautological once operators are invented — so the load-bearing evaluator is new code, and the skeptic-mandated foil-bank machinery keeps the implementation total at ten.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;1&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">10</span></span></div></td>
+  <td>Lift BIG-bench's ~40-line seeded recursion; rewrite the tautological <code>eval()</code> oracle as a real invented-operator evaluator; add opaque rule tokens, foil-bank rejection sampling, forced mod-boundary cases, and per-rung effect-size calibration. Risks: any legibility slip collapses rungs; the wrap rule is nearly invisible in outputs; never run-verified. Deep read: <a href="repos/google-big-bench-multistep-arithmetic-task.md">big-bench</a>.</td>
+  <td><span class="vh-tag pass">Survived both lenses — major caveats</span><br>Neither round-1 lens refuted it — the only candidate besides c21 left standing — but both flagged that all headroom lives in unstated conventions, so opaque tokens and foil banks are load-bearing fixes, not polish.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c03.html">page</a><a href="repos/google-big-bench-multistep-arithmetic-task.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/google/BIG-bench/tree/main/bigbench/benchmark_tasks/multistep_arithmetic">multistep_arithmetic</a><a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a></td>
+</tr>
+
+<tr><!-- 11 · c23 -->
+  <td><span class="badge ranked">Ranked #11</span>
+    <span class="move"><span class="up">&#9650;</span> 26-tier &rarr; #11</span></td>
+  <td><span class="cand-id">c23</span><a class="cand-name" href="candidates/c23.html">Hidden-Rule String-Transform Induction Ladder</a>
+    <span class="domain">compositional rule induction from I/O</span></td>
+  <td>Compositional rule induction from I/O demos — the <a href="https://arxiv.org/abs/2502.15823">InductionBench</a> / <a href="https://arxiv.org/abs/1908.08351">PCFG SET</a> / MiniSCAN latent-transform family.</td>
+  <td>The model sees input/output string pairs generated by a hidden composition of transforms and must induce the latent rule well enough to map a held-out input; ladder strata scale the number of composed rules, scored exact match.</td>
+  <td><p>A clean desk profile (localized changes, verification-only verdict debt) held to ninth by the codebase: InductionBench's algorithm is sound, but the code must be vendored — three verified import-time crashes plus PYTHONHASHSEED nondeterminism trip the failed-run rule that caps reuse at I1=1.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;2&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">10</span></span></div></td>
+  <td>Vendor two InductionBench files (oracle + generator, ~370 LOC), fix the three verified import crashes, thread a real seed — <code>sorted()</code> over set iteration kills the hash nondeterminism — add ~60&ndash;100 lines of single-call exact-match glue, and calibrate easy-strata reachability. Risks: unreachable ceiling, seed leakage, one-shot-guessable single-rule strata; the repo never ran as shipped. Deep read: <a href="repos/inductionbench-wenyueh-inductive-reasoning-benchma.md">inductionbench</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Below the finalist cut. Round-2 review left only verification obligations: confirm the easy strata are actually reachable and that the single-rule strata are not guessable in one shot.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c23.html">page</a><a href="repos/inductionbench-wenyueh-inductive-reasoning-benchma.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/Wenyueh/inductive_reasoning_benchmark">InductionBench</a><a href="https://arxiv.org/abs/1711.00350">SCAN</a></td>
+</tr>
+
+<tr class="alt"><!-- 12 · c02 -->
+  <td><span class="badge ranked">Ranked #12</span>
+    <span class="move"><span class="up">&#9650;&#9650;</span> folded in &rarr; #12</span></td>
+  <td><span class="cand-id">c02</span><a class="cand-name" href="candidates/c02.html">Fictional Mixed-Radix Unit Conversion</a><span class="dagger" title="scored via the same pipeline post-hoc; NUMCoT never run-verified">&dagger;</span>
+    <span class="domain">invented measurement systems</span></td>
+  <td><a href="https://arxiv.org/abs/2406.02864">NUMCoT</a>-style unit-conversion brittleness (cf. <a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a>), rebuilt as an invented mixed-radix ladder (grol/blen/mir) with a per-instance legend and exact reducer oracle.</td>
+  <td>Quantities in an invented mixed-radix unit ladder — grol/blen/mir with a per-instance legend — must be converted and reduced exactly; an independent place-weight computation path verifies the reducer oracle, scored 0/1.</td>
+  <td><p>Folded into the official ranking at twelfth under the 2026-07-21 amendment: its impl total of 10 ties c03/c23, and the reuse-priority I1 tie-break (I1=1) places it below both. NUMCoT documents real conversion brittleness, but the code read is harsh: its generator is dead code — unseeded (its <code>random_seed</code> variable is a category selector), never called by any entry point, hard-coded to real units, with a verified double-subtraction bug — so I1=1 and it never met the run-verification bar (below the I1&ge;2 threshold that carried c10/c04's reasoning-gym check over).</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/1</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;2&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">10</span></span></div></td>
+  <td>Rewrite NUMCoT's generator and oracle outright: seeded invented-ladder generator, exact reducer verified by an independent place-weight path, strata for rounding / signed-unit / simplification rules, single-call 0/1 glue, determinism and boundary tests. Risks: major surgery rather than glue; six-plus latent rules raise the calibration gate count; overlaps c01/c10; NUMCoT never run-verified. Deep read: <a href="repos/numcot.md">numcot</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Eliminated before the lenses ran, now folded into the official ranking. The post-hoc review found the design clean on paper but priced the rule count as a real calibration burden.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c02.html">page</a><a href="repos/numcot.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/CAS-SIAT-XinHai/NUMCoT">NUMCoT</a><a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a></td>
+</tr>
+
+<tr><!-- 13 · c06 -->
+  <td><span class="badge ranked">Ranked #13</span>
+    <span class="move"><span class="down">&#9660;</span> 28-tier finalist &rarr; #13</span></td>
+  <td><span class="cand-id">c06</span><a class="cand-name" href="candidates/c06.html">Artificial-Grammar Violation Classification</a>
+    <span class="domain">formal-language membership (MC)</span></td>
+  <td>Formal-language / subregular membership (<a href="https://arxiv.org/abs/2304.07687">MLRegTest</a>, Dyck; cf. <a href="https://arxiv.org/abs/2411.07107">FLaRe</a>), reframed as multiple-choice &ldquo;which rule class was violated.&rdquo;</td>
+  <td>Strings from seeded formal (subregular) languages are presented alongside one violating string; the model classifies which rule class was violated, choosing from an invented four-plus-way violation taxonomy as balanced multiple choice.</td>
+  <td><p>A 28-tier finalist held at tenth by calibration burden: the measurement rescue demands a non-mnemonic-instantiation red-team gate before anything freezes, and the rescued design moves headroom onto hidden rule tables — converging on what c21 and c03 already do more cleanly.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;0&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">9</span></span></div></td>
+  <td>Vendor MLRegTest automata plus an independent composition oracle; write a seeded sampler and an all-new violation taxonomy (both source repos are binary accept/reject only); balance classes; red-team the mnemonic-prompt floor. Risks: a convention-exploiting prompt floors near 50&ndash;60%, redundancy with c21/c03, pynini/rau dependencies; never run-verified. Deep reads: <a href="repos/heinz-jeffrey-subregular-learning-mlregtest-genera.md">mlregtest</a>, <a href="repos/rycolab-neural-network-recognizers-flare-generator.md">flare</a>.</td>
+  <td><span class="vh-tag rescued">Measurement refuted &rarr; rescued</span><br>Same round-1 profile as c11/c12: the optimization path survived with major caveats and the measurement lens refuted-then-rescued it. The rescue adds a red-team gate the cleaner candidates do not need.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c06.html">page</a><a href="repos/heinz-jeffrey-subregular-learning-mlregtest-genera.md">repo review</a><a href="repos/rycolab-neural-network-recognizers-flare-generator.md">flare review</a><span class="linklabel">External</span><a href="https://github.com/heinz-jeffrey/subregular-learning">subregular-learning</a><a href="https://arxiv.org/abs/2304.07687">MLRegTest</a></td>
+</tr>
+
+<tr class="alt"><!-- 14 · c09 -->
+  <td><span class="badge ranked">Ranked #14</span>
+    <span class="move"><span class="up">&#9650;</span> slight rise from 26-tier</span></td>
+  <td><span class="cand-id">c09</span><a class="cand-name" href="candidates/c09.html">Composable Cipher-Chain Decode to Closed Vocab</a>
+    <span class="domain">invented composable ciphers</span></td>
+  <td>A stacked-cipher decode benchmark in the <a href="https://arxiv.org/abs/2504.19093">CipherBank</a> lineage (cf. <a href="https://arxiv.org/abs/2504.19395">ICL CIPHERS</a>), reframed to a fixed closed vocabulary via 2&ndash;3 named structural reversible operations.</td>
+  <td>A message drawn from a fixed closed vocabulary is encoded by a seeded chain of two to three named structural reversible ciphers; the model decodes it and answers from a multiple-choice option bank, scored 0/1.</td>
+  <td><p>Edges c08 at eleventh on salvageable-code substance: CipherBank yields ~320 LOC of structural cipher primitives, but no reusable generator — seeding, chaining, and vocabulary are all net-new — and the character-noise risk already forced the closed-vocab/MC redesign that defines the candidate.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">9</span></span></div></td>
+  <td>Import CipherBank's five structural encoders; add seeded chain composition, a closed-vocab/nonce word source, and an MC option bank; reuse <code>compare_strings</code> for 0/1; calibrate layer-count strata. Risks: the missing generator caps reuse; temp-0 operation degradation is ungated; some primitives ship without licenses; the generator was never run-verified. Deep reads: <a href="repos/cipherbank.md">cipherbank</a>, <a href="repos/cryptox-cryptobench.md">cryptox</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Never faced the lenses. Round-2 review noted the biggest round-1 worry — character-level noise swamping the signal — was already retired by the closed-vocabulary redesign; what remains is verification.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c09.html">page</a><a href="repos/cipherbank.md">repo review</a><a href="repos/cryptox-cryptobench.md">cryptox review</a><span class="linklabel">External</span><a href="https://github.com/Leey21/CipherBank">CipherBank</a><a href="https://arxiv.org/abs/2504.19093">paper</a></td>
+</tr>
+
+<tr><!-- 15 · c08 -->
+  <td><span class="badge ranked">Ranked #15</span>
+    <span class="move"><span class="up">&#9650;</span> slight rise from 26-tier</span></td>
+  <td><span class="cand-id">c08</span><a class="cand-name" href="candidates/c08.html">Rosetta-to-Match-Up MC Linguistic Puzzles</a>
+    <span class="domain">linguistic-puzzle rule induction (MC)</span></td>
+  <td>Linguistic-puzzle rule induction in the <a href="https://arxiv.org/abs/2406.06196">LINGOLY</a> line, recast as <a href="https://arxiv.org/abs/2605.13408">Rosetta-to-Match-Up</a> multiple choice: a seeded conlang grammar with one latent rule per distractor.</td>
+  <td>A seeded conlang micro-grammar renders Rosetta-style translation pairs; the model must pick the correct translation from options that each differ from the truth by exactly one latent grammatical rule — multiple-choice rule induction, single-letter scoring.</td>
+  <td><p>Twelfth because LINGOLY is a frozen, human-authored dataset offering under 30 reusable LOC: puzzle generation — the genuinely hard part of the candidate — stays hand-built, even though the desk profile after that hurdle is clean, with no round-1 repair flags.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">26/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">9</span></span></div></td>
+  <td>Build a re-seedable conlang engine, Rosetta-pair renderer, one-rule-per-distractor MC builder, rule-based oracle, and single-letter scorer; pilot-validate distractor quality. Risks: ~300&ndash;600 LOC from scratch because LINGOLY has no generator, seeds, or distractor machinery; distractor leakage; the dataset's CC-BY-NC-ND license blocks direct reuse; never run-verified. Deep read: <a href="repos/lingoly-am-bean-lingoly.md">lingoly</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Below the finalist cut. Round-2 review left one verification obligation: pilot-confirm each distractor differs by exactly one latent rule, since a leaky distractor bank collapses the ladder into pattern-matching.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c08.html">page</a><a href="repos/lingoly-am-bean-lingoly.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/am-bean/lingOly">lingOly</a><a href="https://arxiv.org/abs/2406.06196">LINGOLY</a></td>
+</tr>
+
+<tr class="alt"><!-- 16 · c20 -->
+  <td><span class="badge ranked">Ranked #16</span>
+    <span class="move"><span class="down">&#9660;</span> 27-tier &rarr; #16</span></td>
+  <td><span class="cand-id">c20</span><a class="cand-name" href="candidates/c20.html">Invented Micro-Game Turn Resolution</a>
+    <span class="domain">invented game rules</span></td>
+  <td><a href="https://arxiv.org/abs/2504.11442">TextArena</a>-style &ldquo;resolve one deterministic turn of a made-up card/resource game,&rdquo; drawing on the <a href="https://arxiv.org/abs/2505.07215">gg-bench</a> generated-game corpus, reduced to one derived token.</td>
+  <td>One deterministic turn of an invented card/resource micro-game: the model reads the rulebook and the current state, resolves a seeded move, and reports a single derived token; the environment's <code>step()</code> serves as the oracle.</td>
+  <td><p>Falls to thirteenth because the round-1 reflection flags it as the highest design effort in the pool: rule-unambiguity validation is heavy and per-run, and gg-bench is a corpus of LLM-generated games — not a rule engine whose conventions we can pin or trust.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;1&middot;0&middot;1&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">8</span></span></div></td>
+  <td>Vendor gg-bench's frozen 1000-env corpus (sparse checkout; gymnasium+numpy only); global-seed then replay a seeded move prefix; use each env's <code>step()</code> as oracle; wire strata plus the heavy per-run unambiguous-rules gate. Risks: unthreaded seeding in ~142 envs, LLM-generated env code that may contradict its own rulebook, zero tests, and reuse never run-verified. Deep read: <a href="repos/gg-bench-measuring-general-intelligence-with-gener.md">gg-bench</a>.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Never faced the lenses. Round-2 review priced its debt as bounded but real: the oracle is not independent (the env is both generator and judge), and rulebook-vs-code mismatches must be audited per game.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c20.html">page</a><a href="repos/gg-bench-measuring-general-intelligence-with-gener.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/vivek3141/gg-bench">gg-bench</a><a href="https://arxiv.org/abs/2504.11442">TextArena</a></td>
+</tr>
+
+<tr><!-- 17 · c13 -->
+  <td><span class="badge ranked">Ranked #17</span>
+    <span class="move"><span class="down">&#9660;&#9660;</span> no reusable repo exists</span></td>
+  <td><span class="cand-id">c13</span><a class="cand-name" href="candidates/c13.html">Precedence-Ordered Decision-List Classification</a>
+    <span class="domain">policy / triage classification</span></td>
+  <td>A first-match ordered decision list — the <a href="https://arxiv.org/abs/1704.01701">CORELS</a> rule-list formalism — as a latent triage/policy label oracle (cf. <a href="https://arxiv.org/abs/2412.08972">RuleArena</a>).</td>
+  <td>Records of categorical features are labeled by a hidden first-match ordered decision list; the model must apply — or induce from demos — the precedence-ordered rules to classify a new record into an opaque label, single call, 0/1.</td>
+  <td><p>Fourteenth purely on reuse: no reusable repository exists, so every build hour is from-scratch, even though the desk profile is otherwise fine — the second oracle is trivial via exhaustive feature-grid closure and the only mandated audit targets shadowed rules.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">0&middot;2&middot;1&middot;1&middot;1&middot;2</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">7</span></span></div></td>
+  <td>Build from scratch: rule-list sampler, first-match executor, exhaustive feature-grid closure oracle, shadowed-rule coverage audit, opaque relabeling, and ceiling/floor gates. Risks: no codebase to lean on; shadowed rules silently break the diagnostic ladder; first-match ordering couples strata so one rule change ripples; never run-verified.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Below the finalist cut. Round-2 desk review (re-done by a follow-up agent after the first scorer failed, confirming every cell) found no repair flags — only the shadowed-rule audit as a verification gate.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c13.html">page</a><span class="linklabel">External</span><a href="https://arxiv.org/abs/1704.01701">CORELS</a><a href="https://arxiv.org/abs/2412.08972">RuleArena</a></td>
+</tr>
+
+<tr class="alt"><!-- 18 · c16 -->
+  <td><span class="badge ranked">Ranked #18</span>
+    <span class="move"><span class="down">&#9660;&#9660;</span> no reusable repo exists</span></td>
+  <td><span class="cand-id">c16</span><a class="cand-name" href="candidates/c16.html">Wason Implication-Compliance Classifier</a>
+    <span class="domain">conditional-rule compliance</span></td>
+  <td>The <a href="https://doi.org/10.1080/14640746808400161">Wason selection task</a> (if-P-then-Q rule checking), reframed as a single-call attribute-record compliance classifier (cf. <a href="https://aclanthology.org/2026.eacl-short.42/">deontic Wason in LLMs, EACL 2026</a>).</td>
+  <td>Attribute records are checked against if-P-then-Q implication rules; the model classifies compliance — including vacuous-truth and directionality traps — or names the violated rule as multiple choice, verified by a trivial boolean oracle.</td>
+  <td><p>Fifteenth because no reusable repository exists and the round-2 call is explicitly &ldquo;do not invest.&rdquo; It keeps a unique attraction — model-side residual headroom on vacuous truth and conditional directionality that survives even good prompts — but its empirical floor is hard to pin.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">0&middot;2&middot;1&middot;1&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">6</span></span></div></td>
+  <td>Build from scratch: seeded attribute-record and implication-rule sampler, trivial boolean oracle, which-rule-violated MC output, residual-headroom strata seeded with vacuous/directional traps, and empirical floor/ceiling gates. Risks: the floor resists pinning; a biconditional misread by the model skews the entire ladder; never run-verified.</td>
+  <td><span class="vh-tag none">No skeptic pass (round 1)</span><br>Never faced the lenses. Round-2 review priced its debt as bounded: the headroom claim is credible but must be demonstrated empirically, because a biconditional-reading model makes the ladder measure the wrong thing.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c16.html">page</a><span class="linklabel">External</span><a href="https://doi.org/10.1080/14640746808400161">Wason 1968</a><a href="https://aclanthology.org/2026.eacl-short.42/">EACL 2026</a></td>
+</tr>
+
+<tr><!-- 19 · c14 -->
+  <td><span class="badge ranked">Ranked #19</span>
+    <span class="move"><span class="down">&#9660;&#9660;&#9660;</span> 28-tier finalist &rarr; near-bottom</span></td>
+  <td><span class="cand-id">c14</span><a class="cand-name" href="candidates/c14.html">Instruction-Hierarchy Priority Ledger</a>
+    <span class="domain">authority / conflict resolution</span></td>
+  <td>The <a href="https://arxiv.org/abs/2502.08745">IHEval</a> / <a href="https://arxiv.org/abs/2404.13208">instruction-hierarchy</a> line — authority and conflict resolution among directives, recast as a synthetic nonce-tag priority ledger.</td>
+  <td>Directives arrive at different nonce-tag authority levels and conflict; a hidden per-run priority policy determines which directive wins, and the model must emit the resolved outcome, deterministically scored on an A&ndash;F answer set.</td>
+  <td><p>The strongest research upside in the pool — the IHEval line is exactly where 2025&ndash;2026 attention sits — lands sixteenth because no reusable codebase exists and it carries the heaviest calibration burden among eligible finalists: the writable ceiling is itself a measured gate, not an assumption.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">0&middot;2&middot;1&middot;0&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">5</span></span></div></td>
+  <td>Build from scratch: freeze one hidden policy per run behind a measured &ge;95% temp-0 ceiling gate; seed anti-prior flags and audit for dead strata; pin the feature-application order; throttle demos against delegated induction; deterministic A&ndash;F scoring. Risks: the ceiling may miss its gate outright; the policy permutation can leak through reflection; never run-verified.</td>
+  <td><span class="vh-tag rescued">Measurement refuted &rarr; rescued</span><br>Round 1: the optimization-path lens survived with major caveats; the measurement lens refuted it as scored, with concrete rescues — strike cross-split policy randomization, gate the ceiling, pin application order, kill the degenerate second objective.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c14.html">page</a><span class="linklabel">External</span><a href="https://arxiv.org/abs/2502.08745">IHEval</a><a href="https://arxiv.org/abs/2404.13208">Instruction Hierarchy</a></td>
+</tr>
+
+<tr class="alt"><!-- 20 · c12 -->
+  <td><span class="badge ranked">Ranked #20</span>
+    <span class="move"><span class="down">&#9660;&#9660;&#9660;</span> 28-tier finalist &rarr; bottom</span></td>
+  <td><span class="cand-id">c12</span><a class="cand-name" href="candidates/c12.html">Sigil-Schema Field Extraction &amp; Dialect Routing</a>
+    <span class="domain">structured extraction</span></td>
+  <td>Structured field extraction under invented markups (cf. <a href="https://arxiv.org/abs/2404.03868">EDC</a>, <a href="https://arxiv.org/abs/2507.21340">StructText</a>): sigil-tagged records, dialect routing, one normalized field per instance.</td>
+  <td>Records rendered in invented sigil-tagged markup dialects must be routed to the correct dialect, then one field extracted and normalized per instance, against same-type distractor fields and randomized implied-decimal conventions, scored 0/1.</td>
+  <td><p>Bottom of the ranked list: every repository discovered is frozen, LLM-driven, or the wrong shape, and it needs the most stratum surgery of the finalists — the checksum stratum must be removed and the fixed-width strata redesigned — before its 28-tier design is even buildable.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">0&middot;1&middot;0&middot;1&middot;1&middot;1</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">4</span></span></div></td>
+  <td>Build the seeded record generator from scratch; replace the arithmetic checksum stratum; redesign the fixed-width columns away from BPE-hostile exact offsets; mandate two-plus same-type distractors and randomized implied decimals; add per-stratum ceiling/floor gates. Risks: fully greenfield build; failures diagnose only at batch level; models can shortcut on the sigils themselves; never run-verified.</td>
+  <td><span class="vh-tag rescued">Measurement refuted &rarr; rescued</span><br>Round 1: optimization path survived; the measurement lens refuted it as specified — the checksum stratum broke guess floor, learnability, and ceiling at once — rescued by stratum redesign, which is precisely the surgery that sinks its implementation score.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c12.html">page</a><span class="linklabel">External</span><a href="https://arxiv.org/abs/2404.03868">EDC</a><a href="https://arxiv.org/abs/2507.21340">StructText</a></td>
+</tr>
+
+<!-- ============================ GATED BAND ============================ -->
+<tr class="band gatedband">
+  <td colspan="8"><span class="bandlabel">Gated — refuted in round 1 without a concrete rescue; ineligible at any implementation score. <span class="bandnote">Totals shown in parentheses for completeness only.</span></span></td>
+</tr>
+
+<tr><!-- gated · c01 -->
+  <td><span class="badge gated">Gated</span>
+    <span class="move"><span class="flat">&#9632;</span> unranked — verdict gate</span></td>
+  <td><span class="cand-id">c01</span><a class="cand-name" href="candidates/c01.html">Invented-Glyph Positional Base Arithmetic</a>
+    <span class="domain">constructed notation</span></td>
+  <td>The counterfactual non-decimal base-arithmetic probe from <a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a>, dressed in per-instance invented glyphs on <a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a>.</td>
+  <td>Arithmetic in a non-decimal base is rendered in per-instance invented glyphs; the model maps glyphs through a legend, computes in the counterfactual base, and outputs the glyph-string result, scored strict 0/1.</td>
+  <td><p>Ineligible despite decent reuse: round 1 refuted both lenses at major severity. The design is trapped between explicit specs (which one-shot it) and implicit quirks (which leave no writable ~100% reference prompt), and the encode direction has non-unique ground truth.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;1&middot;1&middot;0</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">(9)</span></span></div></td>
+  <td>Would subclass reasoning-gym's <code>base_conversion</code> (~80&ndash;120 LOC) with an invented-glyph legend, an oracle via standard conversion mapped through the legend, strict 0/1 scoring, and stratified quirks. The infrastructure is run-verified deterministic; the glyph layer never was. Risks: one-shot collapse, no known ceiling under implicit quirks, non-unique encode ground truth. Deep read: <a href="repos/open-thought-reasoning-gym.md">reasoning-gym</a>.</td>
+  <td><span class="vh-tag refuted">Both lenses refuted — major</span><br>Round 1 found no configuration that works: state the quirks and a competent prompt one-shots them; hide the quirks and no ~100% reference prompt is writable. No concrete rescue preserves the task.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c01.html">page</a><a href="repos/open-thought-reasoning-gym.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/open-thought/reasoning-gym">reasoning-gym</a><a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting?</a></td>
+</tr>
+
+<tr class="alt"><!-- gated · c05 -->
+  <td><span class="badge gated">Gated</span>
+    <span class="move"><span class="flat">&#9632;</span> unranked — verdict gate</span></td>
+  <td><span class="cand-id">c05</span><a class="cand-name" href="candidates/c05.html">Deterministic Execution &amp; State Tracking</a>
+    <span class="domain">state-machine simulation</span></td>
+  <td>State-machine simulation in the <a href="https://arxiv.org/abs/1502.05698">bAbI</a> lineage — run a small deterministic FSM/protocol/pointer machine (cf. <a href="https://arxiv.org/abs/2503.02854">(How) Do LMs Track State?</a>), report one derived final token.</td>
+  <td>A small deterministic FSM, protocol machine, or pointer machine executes a seeded trace; the model tracks the evolving state across the whole trace and reports one derived final token, scored exact match.</td>
+  <td><p>Ineligible despite a perfect round-1 rubric score: its latent rules are textbook protocol conventions a competent prompt states one-shot, and the trace-length dilemma — documented by its own citations — breaks the writable ceiling. The known fixes converge on what c21 and c03 already are.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">2&middot;2&middot;1&middot;0&middot;1&middot;0</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">(8)</span></span></div></td>
+  <td>Would lift a small seeded generator — belindal/state-tracking (MIT) or long-horizon-execution's dict-sum core — add the seeding both repos lack, and write ~60&ndash;90 LOC of exact-match glue. Risks: there is no bounded fix for the one-shot conventions or the trace-length dilemma; never run-verified as a finalist. Deep reads: <a href="repos/belindal-state-tracking.md">state-tracking</a>, <a href="repos/long-horizon-execution-measuring-execution.md">long-horizon-execution</a>.</td>
+  <td><span class="vh-tag refuted">Both lenses refuted — major</span><br>Round 1: long traces make the single-call ceiling unreachable, while short traces plus CoT leave a ladder one demo bootstrap collapses. The rubric's 28/28 did not price this in; the demotion was explicit.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c05.html">page</a><a href="repos/belindal-state-tracking.md">repo review</a><a href="repos/long-horizon-execution-measuring-execution.md">lhe review</a><span class="linklabel">External</span><a href="https://github.com/belindal/state-tracking">state-tracking</a><a href="https://arxiv.org/abs/2503.02854">state paper</a></td>
+</tr>
+
+<tr><!-- gated · c07 -->
+  <td><span class="badge gated">Gated</span>
+    <span class="move"><span class="flat">&#9632;</span> unranked — verdict gate</span></td>
+  <td><span class="cand-id">c07</span><a class="cand-name" href="candidates/c07.html">Case-Marked Micro-Conlang Translation</a>
+    <span class="domain">constructed-language morphology</span></td>
+  <td><a href="https://arxiv.org/abs/2309.16575">MTOB</a>'s grammar-book paradigm shrunk to quick-test scale: learn an in-context case-marked micro-grammar (cf. <a href="https://arxiv.org/abs/2510.07591">conlang probing</a>), translate one phrase.</td>
+  <td>An in-context micro-grammar with case marking — gloss table supplied — defines a tiny constructed language; the model translates one phrase, scored against a deterministic template-filler oracle, one call per instance.</td>
+  <td><p>Ineligible: refuted outright on the optimization path. The gloss table hands the latent morphology to the model in-context, and case-beats-word-order is the highest-prior rule in linguistics, so nothing is left to discover; the only rescue — MTOB-style withheld glosses — is a different candidate.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;1&middot;0</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">(7)</span></span></div></td>
+  <td>Would build the seeded morphology generator from scratch — the closest repo, InductionBench, has no case or gloss system, so its fit is &ldquo;essentially nil&rdquo; per the deep read — plus a deterministic template-filler oracle. Risks: one-shot collapse by construction; never run-verified.</td>
+  <td><span class="vh-tag refuted">Optimization path refuted — major</span><br>Round 1 concluded the task teaches the model its own answer key: with glosses in-context and the hard rule being linguistics' strongest prior, the incremental ladder never materializes. The rescue changes what the task is.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c07.html">page</a><span class="linklabel">External</span><a href="https://arxiv.org/abs/2309.16575">MTOB</a><a href="https://arxiv.org/abs/2508.06094">ConlangCrafter</a></td>
+</tr>
+
+<tr class="alt"><!-- gated · c15 -->
+  <td><span class="badge gated">Gated</span>
+    <span class="move"><span class="flat">&#9632;</span> unranked — verdict gate</span></td>
+  <td><span class="cand-id">c15</span><a class="cand-name" href="candidates/c15.html">Opaque-Codebook Remapped-Label Classification</a>
+    <span class="domain">classification under remapped labels</span></td>
+  <td>Flipped-label / semantically-unrelated-label ICL (<a href="https://arxiv.org/abs/2303.03846">Wei et al. 2023</a>; cf. <a href="https://arxiv.org/abs/2305.08298">symbol tuning</a>): short texts classified into opaque codes by a hidden feature-to-code rulebook.</td>
+  <td>Short texts are classified into opaque codes by a hidden feature-to-code rulebook that remaps or flips familiar label semantics; the model must follow the demonstrations over its priors, single-call 0/1 scoring.</td>
+  <td><p>Ineligible: the rule family is famous flipped-label literature, so a &ldquo;here are the rule types, induce the bindings from demos&rdquo; meta-prompt one-shots it. The floor is also immovable on cheap models, which the same literature shows cannot override label priors at all.</p>
+    <div class="chips"><span class="chip"><span class="k">R1</span><span class="v">28/2</span></span><span class="chip"><span class="k">I1&ndash;I6</span><span class="v">1&middot;2&middot;1&middot;1&middot;1&middot;0</span></span><span class="chip total"><span class="k">&Sigma;</span><span class="v">(7)</span></span></div></td>
+  <td>Would first confirm the target model can override label priors at all, then reimplement the generator (self-contained, single seeded RNG), persist codebooks with instances, and write single-call 0/1 scoring — the only repo found is a frozen dataset. Risks: meta-prompt guessability is structural; never run-verified. Deep read: <a href="repos/xdwang0726-icl-ll.md">icl-ll</a>.</td>
+  <td><span class="vh-tag refuted">Both lenses refuted — major</span><br>Round 1 judged that no redesign hides a rule family this famous: the literature itself is the answer key. No rescue preserves both the difficulty ladder and the task identity.</td>
+  <td class="links-cell"><span class="linklabel">Internal</span><a href="candidates/c15.html">page</a><a href="repos/xdwang0726-icl-ll.md">repo review</a><span class="linklabel">External</span><a href="https://github.com/xdwang0726/ICL_LL">ICL_LL</a><a href="https://arxiv.org/abs/2303.03846">Wei et al.</a></td>
+</tr>
+
+</tbody>
+</table>
+</div>
+
+<div class="section-head legend" id="legend"><h2>Legend</h2></div>
+<div class="grid-3">
+  <div class="card">
+    <h3>Badges follow the candidate pages</h3>
+    <p class="small"><span class="badge adopt">Adopt</span> the recommended build &middot; <span class="badge backup">Backup</span> the hedge &middot; <span class="badge ranked">Ranked #n</span> eligible, in round-2 order &middot; <span class="badge gated">Gated</span> refuted in round 1 without a concrete rescue, ineligible at any implementation score. A <span class="dagger">&dagger;</span> next to the candidate name marks a row folded into the official ranking by the 2026-07-21 amendment: scored via the same pipeline post-hoc; reasoning-gym run-verification carries over from c24 (c10/c04); c02 never run-verified.</p>
+  </div>
+  <div class="card">
+    <h3>Chips carry the numbers; prose carries the reasons</h3>
+    <p class="small"><span class="chip"><span class="k">R1</span><span class="v">27/2</span></span> round-1 rubric score / tie-breaker. <span class="chip"><span class="k">I1&ndash;I6</span><span class="v">3&middot;2&middot;1&middot;1&middot;2&middot;2</span></span> implementation rubric: reusable codebase (double-weighted), oracle independence, moving parts, calibration burden, change-tolerance, round-1 verdict debt. <span class="chip total"><span class="k">&Sigma;</span><span class="v">14</span></span> total = 2&middot;I1 + I2&hellip;I6, max 16; parenthesized for gated rows. Ranked order sorts by the tie-break chain: implementation total descending, then I1 descending (reuse priority), then round-1 rubric score, then round-1 tie-breaker.</p>
+  </div>
+  <div class="card">
+    <h3>Verdict-health tags summarize the round-1 lenses</h3>
+    <p class="small"><span class="vh-tag pass">Survived both lenses</span> neither adversarial lens refuted the design. <span class="vh-tag rescued">Measurement refuted &rarr; rescued</span> refuted as specified, with a concrete bounded rescue priced into I6. <span class="vh-tag refuted">Refuted</span> major-severity refutation with no rescue that preserves the task. <span class="vh-tag none">No skeptic pass</span> the candidate sat below the round-1 finalist tier, so only the round-2 desk review assessed its debt.</p>
+  </div>
+</div>
+
+<p class="small muted space-top">Built 2026-07-21 from <a href="recommendations.html">round 1</a>, the <a href="recommendations-round2.html">round-2 rescore</a>, the per-candidate pages in <a href="candidates/c19.html">candidates/</a>, and the repo deep reads in <code>repos/</code>. Row order, scores, and movement match the round-2 table cell-for-cell. Amended 2026-07-21: c10, c04, and c02 folded into the official ranking at ranks 5, 7, and 12 (marked <span class="dagger">&dagger;</span>); the tie-breaker=1 exclusion and the below-cut band are dropped, giving 20 ranked + 4 gated = 24.</p>
+
+</main>
+</body>
+</html>
