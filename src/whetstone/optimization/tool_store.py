@@ -373,6 +373,65 @@ class ToolCallStore:
                     )
             return decided
 
+    def refuse(
+        self,
+        call: ToolCall,
+        config: ToolConfig,
+        *,
+        refusal: ToolRefusal,
+    ) -> ToolCallStoreEntry:
+        """Durably record a non-capacity refusal (validation/budget/auth).
+
+        A capacity refusal is produced by :meth:`accept_or_refuse` as part of
+        the acceptance decision; this method records the *other* refusal
+        classes (a validation-rejected argument, a budget guard, an
+        authorization failure) as a durable refused Store Entry so the refusal
+        is inspectable evidence that never masquerades as a measurement and
+        debits **no** capacity. A capacity-class refusal is not accepted here —
+        capacity is the store's own accounting, decided only by
+        :meth:`accept_or_refuse`.
+
+        Idempotent: replaying the same key with the same refusal returns the
+        existing entry; an accepted/completed key, or a divergent refusal for
+        an existing key, conflicts and preserves the winner.
+        """
+        if refusal.refusal_class is RefusalClass.CAPACITY:
+            raise ValueError(
+                "a capacity refusal is decided only by accept_or_refuse; "
+                "refuse() records validation/budget/authorization refusals"
+            )
+        tool_config_hash = call.tool_config_hash
+        if tool_config_hash != config.identity_hash():
+            raise ValueError(
+                "Tool Call tool_config_hash does not match the Tool Config "
+                "Identity Hash"
+            )
+        args_hash = _args_hash(call)
+        with self._lock:
+            existing = self._load_entry(tool_config_hash, call.call_id)
+            if existing is not None:
+                if (
+                    existing.state is ToolCallState.REFUSED
+                    and existing.refusal == refusal
+                    and existing.request_args_content_hash == args_hash
+                ):
+                    return existing
+                raise ToolCallStoreConflictError(
+                    tool_config_hash=tool_config_hash,
+                    call_id=call.call_id,
+                    existing=existing,
+                    attempted_state=ToolCallState.REFUSED,
+                    detail="divergent transition for an existing key",
+                )
+            entry = ToolCallStoreEntry(
+                tool_config_hash=tool_config_hash,
+                call_id=call.call_id,
+                state=ToolCallState.REFUSED,
+                request_args_content_hash=args_hash,
+                refusal=refusal,
+            )
+            return self._bind_entry(tool_config_hash, call.call_id, entry)
+
     def _claim_capacity_slot(
         self, tool_config_hash: str, call_id: str, max_calls: int
     ) -> int | None:
