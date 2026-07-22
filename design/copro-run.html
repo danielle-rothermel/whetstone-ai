@@ -106,7 +106,7 @@
     <li><dfn class="term-name" id="copro-depth">Depth</dfn> — exact number of sequential proposal steps in the Optimization Run.</li>
     <li><dfn class="term-name" id="copro-seed-proposal">Seed Proposal</dfn> — round-1 proposal mode: the Proposal LM receives the starting candidates and their externally measured entries.</li>
     <li><dfn class="term-name" id="copro-history-proposal">History Proposal</dfn> — later-round proposal mode: the Proposal LM receives the complete Reward-ranked history produced through the preceding step.</li>
-    <li><dfn class="term-name" id="copro-attempt-history">Attempt History</dfn> — immutable ordered entries containing stable candidate identity, template, evaluation references, Reward, and provenance. Whetstone creates each new history version after external evaluation; COPRO reads it but never mutates it in place.</li>
+    <li><dfn class="term-name" id="copro-attempt-history">Attempt History</dfn> — immutable ordered entries containing stable candidate identity, template, evaluation references, Reward, and record-local provenance. Whetstone creates each new history version after external evaluation; COPRO reads it but never mutates it in place.</li>
   </ul>
 </div>
 
@@ -157,13 +157,13 @@
       <li><code>breadth=4</code> new candidates per proposal step</li>
       <li><code>depth=2</code> steps: round 1 is <a class="term-ref" href="#copro-seed-proposal">Seed Proposal</a>; round 2 is <a class="term-ref" href="#copro-history-proposal">History Proposal</a></li>
       <li>Each optimizer invocation receives an immutable <a class="term-ref" href="#copro-attempt-history">Attempt History</a> or reference and returns proposals plus an <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a></li>
-      <li>COPRO receives no Tool Spec, Runtime Tool Handle, or Tool Call Ledger and performs no evaluation</li>
+      <li>COPRO receives no Tool Config, Runtime Tool Handle, or Tool Call Store and performs no evaluation</li>
     </ul>
   </div>
   <div class="card">
     <h3>Official Evaluation</h3>
     <ul>
-      <li>Same official Eval Config as the eval experiment: HumanEval+ (164 tasks) @ pinned revision · 3 repeats · zstd-19</li>
+      <li>Same ordinary Eval Config as the eval experiment, bound through an Evaluation Context carrying the <code>official</code> role: HumanEval+ (164 tasks) @ pinned revision · 3 repeats · zstd-19</li>
       <li><b>Selection:</b> official-evaluate top 2 returned candidates, each across the 4 budget ratios</li>
     </ul>
     <p class="small muted space-top">Per Model Route: <code>attempt_count=10</code> externally measured candidates → <code>internal_rollout_count=200</code>; <code>official_rollout_count=D×official_task_count×official_repeat_count</code>, where <code>D≤8</code>. The illustrative nonconvergent case derives 3,936 official Rollouts.</p>
@@ -180,7 +180,7 @@
     <div class="comp node"><b>Candidate Variable</b><span class="note"><code>{user_prompt_template}</code> = Template A or Template B<hr>the initial candidates; every other variable is fixed for the run</span></div>
     <div class="comp node"><b>Fixed Provider Call Config Assignment</b><span class="note">encoder Provider Call Config ref/hash and decoder Provider Call Config ref/hash are fixed. Each complete identity includes Provider Service <code>openrouter</code>, protocol, requested Model <code>deepseek/deepseek-v4-flash</code>, temperature <code>1.0</code>, every sampling control and provider extension<hr>decoder prompt is fixed as in the eval experiment</span></div>
     <div class="comp node"><b>Variance Source</b><span class="note"><code>budget_ratio</code> ∈ {0.25, 0.5, 0.75, 1.0}<hr>spreads each candidate into 4 Graph Config materializations — its curve on the plot</span></div>
-    <div class="comp node"><b>Independent Eval Configs</b><span class="note"><code>step_eval_config_ref</code> binds <code>step_task_count=20</code> and <code>step_repeat_count=1</code> in an internal context; <code>official_eval_config_ref</code> binds <code>official_task_count=164</code> and <code>official_repeat_count=3</code> in an authorized official context. Both reference the identical facts-first Evaluation Procedure Config assigned on the Graph's Eval Node<hr>Sampling/Aggregation produce separate Eval Config identities, while the shared Procedure Config is already included in <code>graph_hash</code></span></div>
+    <div class="comp node"><b>Independent Eval Configs</b><span class="note"><code>step_eval_config_ref</code> binds <code>step_task_count=20</code> and <code>step_repeat_count=1</code> through a context carrying the <code>internal</code> <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Role</a>; <code>official_eval_config_ref</code> binds <code>official_task_count=164</code> and <code>official_repeat_count=3</code> through an authorized context carrying the <code>official</code> role. Both reference the identical facts-first Evaluation Procedure Config assigned on the Graph's Eval Node<hr>Sampling/Aggregation produce separate Eval Config identities, while the shared Procedure Config is already included in <code>graph_hash</code></span></div>
   </div>
 </div>
 
@@ -192,7 +192,7 @@
   </div>
 </div>
 
-<div class="callout"><b>Measurement and Reward.</b> <code>step_eval_config_ref</code> fixes Sampling = <code>step_task_count=20</code> named tasks × <code>step_repeat_count=1</code> + Evaluation Procedure + complete task Aggregation and references the identical canonical Evaluation Procedure Config assigned statically to the Graph's Eval Node. Whetstone validates and materializes every returned candidate, runs this evaluation outside the COPRO invocation, and applies <code>step_reward_policy_ref</code> to create Reward and the next immutable Attempt History. The official Eval Config changes Sampling/Aggregation only, so matching Graph Configs retain the same <code>graph_hash</code> while their <code>eval_config_hash</code> values differ; a Procedure Config change would change both hashes. Authority and realized-environment attestation remain Evaluation Context. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward.</div>
+<div class="callout"><b>Measurement and Reward.</b> <code>step_eval_config_ref</code> fixes Sampling = <code>step_task_count=20</code> named tasks × <code>step_repeat_count=1</code> + Evaluation Procedure + complete task Aggregation and references the identical canonical Evaluation Procedure Config assigned statically to the Graph's Eval Node. Whetstone validates and materializes every returned candidate, runs this evaluation outside the COPRO invocation, and applies <code>step_reward_policy_ref</code> to create Reward and the next immutable Attempt History. The ordinary Eval Config bound under the <code>official</code> Evaluation Role changes Sampling/Aggregation only, so matching Graph Configs retain the same <code>graph_hash</code> while their <code>eval_config_hash</code> values differ; a Procedure Config change would change both hashes. Authority and realized-environment attestation remain in Evaluation Context; an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward.</div>
 
 <div class="section-head" id="system"><h2>Run COPRO as Externally Evaluated Proposal Steps</h2></div>
 
@@ -259,7 +259,7 @@
       <div class="comp settled"><b>Eval Node · terminal role</b><span class="note">the shared Evaluation Procedure Config derives facts and scores; its ordinary Node Output becomes Graph Output unchanged</span></div>
     </div>
     <div class="comps space-top">
-      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">DBOS checkpoints retry-disabled Provider Call Attempt observations; one immutable Rollout Result nests Graph Run Result evidence and closes only through authoritative atomic binding</span></div>
+      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">within a <a class="term-ref" href="vocab_and_defs.html#term-platform-stage-attempt">Platform Stage Attempt</a>, DBOS checkpoints retry-disabled Provider Call Attempt observations; <a class="term-ref" href="vocab_and_defs.html#term-durability-replay">Durability Replay</a> reuses that checkpoint evidence, and one immutable Rollout Result nests Graph Run Result evidence and closes only through authoritative atomic binding</span></div>
     </div>
   </div>
 </div>
@@ -269,7 +269,7 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the registry values, starting candidates, mutation surface, step and official Eval Configs, Reward Policy, materialization axis, and Selection Policy. No evaluation interface is granted to COPRO.</p></div>
+    <div class="what"><p>Freezes the registry values, starting candidates, mutation surface, ordinary Eval Configs for the step and official-role contexts, Reward Policy, materialization axis, and Selection Policy. No evaluation interface is granted to COPRO.</p></div>
   </div>
   <div class="tick">
     <div class="who env">Whetstone</div>
@@ -311,11 +311,11 @@
   </div>
   <div class="tick optim">
     <div class="who env">Whetstone</div>
-    <div class="what"><p>Terminalizes the Optimization Run from measured H<sub>2</sub> and returns <code>requested_proposal_count=3</code> ordered proposals—illustratively P<sub>6</sub>, P<sub>2</sub>, and unchanged B—plus step/history references and advisory optimizer provenance.</p></div>
+    <div class="what"><p>Terminalizes the Optimization Run from measured H<sub>2</sub> and returns <code>requested_proposal_count=3</code> ordered proposals—illustratively P<sub>6</sub>, P<sub>2</sub>, and unchanged B—plus step/history references and record-local optimizer provenance.</p></div>
   </div>
   <div class="tick">
     <div class="who evaluator">Official Evaluator</div>
-    <div class="what"><p>Materializes <code>materialization_count=12</code> official slots, selects <code>selected_slot_count=8</code>, deduplicates to <code>D≤8</code>, and executes <code>official_rollout_count=D×official_task_count×official_repeat_count</code> under the authorized official Evaluation Context. The illustrative nonconvergent example derives 3,936 Rollouts.</p>
+    <div class="what"><p>Materializes <code>materialization_count=12</code> official slots, selects <code>selected_slot_count=8</code>, deduplicates to <code>D≤8</code>, and executes <code>official_rollout_count=D×official_task_count×official_repeat_count</code> under an authorized Evaluation Context carrying the <code>official</code> role. The illustrative nonconvergent example derives 3,936 Rollouts; the Official Evaluation Record certifies the referenced ordinary Rollout Results.</p>
       <div class="ledger"><b>output</b>authoritative bound Rollout Result refs and exactly <code>D</code> complete official aggregates</div>
     </div>
   </div>
@@ -332,7 +332,7 @@
     <h3>Proposal-only means proposal-only</h3>
     <ul>
       <li>A COPRO invocation receives candidates and immutable history and emits proposed mutations plus Evaluation Intent</li>
-      <li>It receives no Tool Spec, Runtime Tool Handle, Tool Call Ledger, Rollout Result, or mutable evaluation service</li>
+      <li>It receives no Tool Config, Runtime Tool Handle, Tool Call Store, Rollout Result, or mutable evaluation service</li>
       <li>Whetstone alone validates, materializes, evaluates, derives Reward, and creates the immutable Step Result</li>
     </ul>
   </div>
@@ -357,7 +357,7 @@
     <ul>
       <li><code>step_eval_config_ref</code> and <code>official_eval_config_ref</code> have independent Eval Config hashes and Evaluation Contexts</li>
       <li>Their shared Evaluation Procedure Config remains in Graph Config identity; Sampling and Aggregation distinguish measurement regimes</li>
-      <li>Only official authority and write path produce plot-eligible Results</li>
+      <li>Only ordinary Results referenced and certified by an authority-issued Official Evaluation Record are plot-eligible</li>
     </ul>
   </div>
   <div class="card">

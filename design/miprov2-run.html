@@ -74,13 +74,13 @@
     <tr><td>Algorithm hyperparameter</td><td><code id="local-param-proposal-temperature">proposal_temperature</code></td><td>1.0</td><td>Proposal-LM sampling temperature used while constructing the instruction pool.</td></tr>
     <tr><td>Algorithm hyperparameter</td><td><code id="local-param-sampler">sampler</code></td><td><code>tpe</code></td><td>Bayesian sampler used for trial suggestions and study updates.</td></tr>
     <tr><td>Algorithm hyperparameter</td><td><code id="local-param-seed">seed</code></td><td>9</td><td>Seed for reproducible pool construction, minibatch selection, sampling and tie-break inputs.</td></tr>
-    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-internal-eval-config">Internal Eval Config</a></td><td><code id="local-param-minibatch-task-count">minibatch_task_count</code></td><td>8</td><td>Tasks in each trial's minibatch measurement; not an optimizer hyperparameter.</td></tr>
-    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-internal-eval-config">Internal Eval Config</a></td><td><code id="local-param-full-eval-task-count">full_eval_task_count</code></td><td>35</td><td>Tasks in baseline and promotion full measurements.</td></tr>
-    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-internal-eval-config">Internal Eval Config</a></td><td><code id="local-param-internal-repeat-count">internal_repeat_count</code></td><td>1</td><td>Repeats per internal task.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-minibatch-task-count">minibatch_task_count</code></td><td>8</td><td>Tasks in each trial's minibatch measurement; not an optimizer hyperparameter.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-full-eval-task-count">full_eval_task_count</code></td><td>35</td><td>Tasks in baseline and promotion full measurements.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-internal-repeat-count">internal_repeat_count</code></td><td>1</td><td>Repeats per internal task.</td></tr>
     <tr><td>Output contract</td><td><code id="local-param-returned-proposal-count">returned_proposal_count</code></td><td>3</td><td>Required distinct, ordered, measured Optimization Proposals on success; final official evaluation covers every one.</td></tr>
     <tr><td>Example fixed axis</td><td><code id="local-param-fixed-ratio-count">fixed_ratio_count</code></td><td>4</td><td>Budget-ratio values expanded by the harness for each returned proposal.</td></tr>
-    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-official-eval-config">Official Eval Config</a></td><td><code id="local-param-official-task-count">official_task_count</code></td><td>164</td><td>Tasks in the official Task Set.</td></tr>
-    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-official-eval-config">Official Eval Config</a></td><td><code id="local-param-official-repeat-count">official_repeat_count</code></td><td>3</td><td>Repeats per official task.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>official</code> role)</td><td><code id="local-param-official-task-count">official_task_count</code></td><td>164</td><td>Tasks in the official Task Set.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>official</code> role)</td><td><code id="local-param-official-repeat-count">official_repeat_count</code></td><td>3</td><td>Repeats per official task.</td></tr>
     <tr><td>Derived count</td><td><code id="local-derived-combination-pool-size">combination_pool_size</code></td><td>24</td><td><a class="term-ref" href="#local-param-num-instruction-candidates"><code>num_instruction_candidates=6</code></a> × <a class="term-ref" href="#local-param-num-demo-set-candidates"><code>num_demo_set_candidates=4</code></a>.</td></tr>
     <tr><td>Derived count</td><td><code id="local-derived-scheduled-promotion-count">scheduled_promotion_count</code></td><td>3</td><td><code>ceil(</code><a class="term-ref" href="#local-param-num-trials"><code>num_trials=12</code></a><code> / </code><a class="term-ref" href="#local-param-minibatch-full-eval-steps"><code>minibatch_full_eval_steps=5</code></a><code>)</code>: after trials 5, 10 and 12.</td></tr>
     <tr><td>Derived count</td><td><code id="local-derived-planned-search-measurement-rollouts">planned_search_measurement_rollouts</code></td><td>236</td><td>Successful illustrative path: trial minibatches plus the default baseline and three completed promotions; excludes data-dependent bootstrap measurements. A recorded no-op promotion lowers the completed count.</td></tr>
@@ -107,7 +107,7 @@
     </ul>
   </div>
   <div class="card optim">
-    <h3>Two internal Eval Configs</h3>
+    <h3>Two Eval Configs bound under the <code>internal</code> Evaluation Role</h3>
     <ul>
       <li><b>Minibatch:</b> <a class="term-ref" href="#local-param-minibatch-task-count"><code>minibatch_task_count=8</code></a> × 1 repeat</li>
       <li><b>Full:</b> <a class="term-ref" href="#local-param-full-eval-task-count"><code>full_eval_task_count=35</code></a> × 1 repeat</li>
@@ -121,7 +121,7 @@
       <li>Success returns exactly <a class="term-ref" href="#local-param-returned-proposal-count"><code>returned_proposal_count=3</code></a> distinct, ordered, measured proposals</li>
       <li>A cardinality failure returns a failed Step Result and permits no official materialization</li>
       <li>Whetstone validates and officially evaluates every returned proposal across all four fixed ratios</li>
-      <li>Official Eval Config: HumanEval+ (164) at a pinned revision, three repeats, zstd-19</li>
+      <li>Eval Config bound under the <code>official</code> Evaluation Role: HumanEval+ (164) at a pinned revision, three repeats, zstd-19</li>
     </ul>
   </div>
 </div>
@@ -271,7 +271,7 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes Initial Candidates, the single-entry Mutation Surface, algorithm hyperparameters, two internal Eval Configs, the official Eval Config and the output contract. The Evaluation Procedure Config assigned to the graph is identical across internal and official contexts.</p></div>
+    <div class="what"><p>Freezes Initial Candidates, the single-entry Mutation Surface, algorithm hyperparameters, two ordinary Eval Configs for <code>internal</code>-role contexts, one ordinary Eval Config for the <code>official</code>-role context, and the output contract. The Evaluation Procedure Config assigned to the graph is identical across internal and official contexts.</p></div>
   </div>
 
   <div class="tick optim">
@@ -290,7 +290,7 @@
 
   <div class="tick optim">
     <div class="who optimizer">Baseline full step</div>
-    <div class="what"><p>Before search begins, the optimizer emits a <code>baseline_full</code> Evaluation Intent for the default program under the exact full internal Eval Config. Whetstone validates and fully evaluates it. The resulting full score is inserted into the TPE study and the default combination becomes evaluated only for that full Eval Config identity.</p>
+    <div class="what"><p>Before search begins, the optimizer emits a <code>baseline_full</code> Evaluation Intent for the default program under the exact full Eval Config bound through a context carrying the <code>internal</code> role. Whetstone validates and fully evaluates it. The resulting full score is inserted into the TPE study and the default combination becomes evaluated only for that Eval Config identity.</p>
       <div class="ledger"><b>result</b>35 Rollout references, aggregate/score, study-state reference and full-evaluation history for the default combination</div>
     </div>
   </div>
@@ -337,21 +337,21 @@
 
   <div class="tick">
     <div class="who evaluator">Evaluator</div>
-    <div class="what"><p>Executes exactly <code>D × </code><a class="term-ref" href="#local-param-official-task-count"><code>official_task_count=164</code></a><code> × </code><a class="term-ref" href="#local-param-official-repeat-count"><code>official_repeat_count=3</code></a> official <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Items</a> with no duplicate <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Keys</a>. Results retain their authorized official Evaluation Context and immutable evidence.</p>
-      <div class="ledger"><b>result</b><code>D × 164 × 3</code> official Rollout Results; 5,904 when <code>D=12</code></div>
+    <div class="what"><p>Executes exactly <code>D × </code><a class="term-ref" href="#local-param-official-task-count"><code>official_task_count=164</code></a><code> × </code><a class="term-ref" href="#local-param-official-repeat-count"><code>official_repeat_count=3</code></a> official <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Items</a> with no duplicate <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Keys</a>. Ordinary Results retain their authorized Evaluation Context carrying the <code>official</code> role and immutable evidence; the Official Evaluation Record certifies their references.</p>
+      <div class="ledger"><b>result</b><code>D × 164 × 3</code> ordinary Rollout Results certified by the Official Evaluation Record; 5,904 when <code>D=12</code></div>
     </div>
   </div>
 
   <div class="tick">
     <div class="who env">Evaluation harness</div>
-    <div class="what"><p>Aggregates complete official results and writes the plot manifest. Baseline reuse still requires matching <a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Keys</a>, official attestation and compatible environment.</p>
+    <div class="what"><p>Aggregates complete ordinary results referenced and certified by the Official Evaluation Record and writes the plot manifest. Baseline reuse still requires matching <a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Keys</a>, official attestation and compatible environment.</p>
       <div class="ledger"><b>result</b>exactly <code>D</code> official <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a></div>
     </div>
   </div>
 </div>
 
 <div class="section-head" id="output"><h2>What Lands on the Plot</h2></div>
-<p>All three returned Optimization Proposals receive final official evaluation. In the nonconvergent case, they produce three new four-point budget-response curves — 12 official Rollout Aggregates, each over 164 tasks × 3 repeats — beside eligible template A/B baselines. The optimization history remains queryable as measured search cost and provenance but stays outside the official plot: bootstrap measurements, the default-program full score, repeated minibatch observations, their per-combination means, and periodic/final promotion scores do not acquire official authority by being used in the study.</p>
+<p>All three returned Optimization Proposals receive final official evaluation. In the nonconvergent case, they produce three new four-point budget-response curves — 12 certified Rollout Aggregates, each over 164 tasks × 3 repeats — beside eligible template A/B baselines. The optimization history remains queryable as measured search cost and record-local provenance but stays outside the official plot: bootstrap measurements, the default-program full score, repeated minibatch observations, their per-combination means, and periodic/final promotion scores are not certified by being used in the study.</p>
 
 <div class="section-head" id="notes"><h2>Additional Notes</h2></div>
 <div class="grid-3">
