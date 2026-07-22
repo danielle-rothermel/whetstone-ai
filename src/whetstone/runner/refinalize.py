@@ -72,15 +72,48 @@ def _status_from(
     return "inconclusive"
 
 
+#: Terminal statistical statuses that are only valid on a COMPLETE official
+#: measurement (both arms resolved). Emitting any of these when an official arm
+#: never resolved (``baseline_official``/``best_official`` is None) is a
+#: certified-looking verdict from a partial vector -- the c18:a1 defect.
+_STATISTICAL_STATUSES: frozenset[str] = frozenset(
+    {"improved", "inconclusive", "no-improvement"}
+)
+
+
 def recompute_status(record: CellRecord) -> tuple[str, str]:
     """Recompute a cell's correct status from its persisted evidence.
 
-    Returns ``(status, reason)``. Only a ``halted`` cell whose evidence shows
-    every phase completed (``best_official`` present) is corrected: the
-    best-candidate official eval ran, so no work was cut short and ``halted``
-    is wrong. Its true status is the statistical status from the persisted
-    delta + delta CI. Any other cell keeps its recorded status (no change).
+    Returns ``(status, reason)``. Two corrections are made, both evidence-only
+    (no provider calls):
+
+    * A ``halted`` cell whose evidence shows every phase completed
+      (``best_official`` present) is corrected to its statistical status: the
+      best-candidate official eval ran, so no work was cut short and ``halted``
+      is wrong.
+    * A cell stamped a terminal STATISTICAL status (``improved`` /
+      ``inconclusive`` / ``no-improvement``) while an official arm never
+      resolved (``baseline_official`` or ``best_official`` is None) is
+      corrected to ``incomplete-arm``: that verdict was emitted off a partial
+      official vector (the c18:a1 defect -- naive=None yet no-improvement +
+      headroom emitted). It is not a certified result.
+
+    Any other cell keeps its recorded status (no change).
     """
+    if (
+        record.status in _STATISTICAL_STATUSES
+        and (record.baseline_official is None or record.best_official is None)
+    ):
+        which = []
+        if record.baseline_official is None:
+            which.append("naive")
+        if record.best_official is None:
+            which.append("best")
+        return "incomplete-arm", (
+            f"terminal statistical status {record.status!r} emitted on an "
+            f"INCOMPLETE official arm ({', '.join(which)}=None): a certified "
+            "verdict off a partial vector; superseded by 'incomplete-arm'"
+        )
     if record.status != "halted":
         return record.status, "not halted; unchanged"
     if record.best_official is None:
@@ -130,12 +163,19 @@ def refinalize_cell(
     note_parts = [REFINALIZED_NOTE, reason]
     if original.escalation_note:
         note_parts.append(f"original note: {original.escalation_note}")
-    corrected = original.model_copy(
-        update={
-            "status": new_status,
-            "escalation_note": "; ".join(note_parts),
-        }
-    )
+    update: dict[str, object] = {
+        "status": new_status,
+        "escalation_note": "; ".join(note_parts),
+    }
+    # A correction to ``incomplete-arm`` must also STRIP the certified-looking
+    # headroom / no-headroom determination the bad line carried (they were
+    # emitted off a partial official vector). The superseding line records no
+    # such verdict.
+    if new_status == "incomplete-arm":
+        update["headroom_delta"] = None
+        update["headroom_ci95"] = None
+        update["no_demonstrable_headroom"] = None
+    corrected = original.model_copy(update=update)
     ledger.append_cell(corrected)
     return RefinalizeOutcome(
         original=original, corrected=corrected, changed=True, reason=reason

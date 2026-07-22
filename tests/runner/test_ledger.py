@@ -303,6 +303,25 @@ def test_spend_for_cell_includes_crashed_attempt(tmp_path: Path) -> None:
     assert gaps_a1 == []
 
 
+def test_spend_for_cell_pairs_by_cell_id_under_interleaving(
+    tmp_path: Path,
+) -> None:
+    # The c18:a1 spend=0.0 defect: CONCURRENT cells interleave their
+    # before/after snapshots into one shared spend.jsonl, so the record right
+    # after a cell's `before` may be a DIFFERENT cell's `before`. Pairing must
+    # be by cell_id (this cell's own next `after`), not the globally-next
+    # record. Here c18:a1 before -> [c23 before, c19 before] -> c18:a1 after:
+    # the true delta (0.804) must be attributed, not $0.00.
+    ledger = Ledger(root=tmp_path)
+    _spend(ledger, "eval:c18:a1", "before", 87.086)   # this cell's before
+    _spend(ledger, "eval:c23:a0", "before", 87.086)   # a concurrent cell
+    _spend(ledger, "eval:c19:a0", "before", 87.086)   # another concurrent cell
+    _spend(ledger, "eval:c18:a1", "after", 86.282)    # this cell's own after
+    total, gaps = ledger.spend_for_cell("eval:c18:a1")
+    assert total == pytest.approx(0.804, abs=1e-3)
+    assert gaps == []
+
+
 def test_spend_for_cell_reports_unbounded_trailing_before(
     tmp_path: Path,
 ) -> None:

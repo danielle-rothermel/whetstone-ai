@@ -40,6 +40,7 @@ from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.budget import BudgetGuard, CreditsSnapshot
 from whetstone.runner.eval_run import (
+    SplitEvaluation,
     evaluate_split,
     official_instances,
 )
@@ -249,6 +250,58 @@ def _status_from(
     if delta_ci is not None and delta_ci.excludes_zero():
         return "improved"
     return "inconclusive"
+
+
+def _arm_incomplete_detail(
+    label: str, evaluation: SplitEvaluation | None
+) -> str:
+    """A ``arm=rows_failed=.. rows_missing=.. ..`` detail for a failed arm.
+
+    Uses the driven evaluation's row accounting when available (the naive arm
+    may have come from cache, so its evaluation is None -- then only the label
+    is reported).
+    """
+    if evaluation is None:
+        return label
+    agg = evaluation.aggregate
+    return (
+        f"{label}(rows_present={agg.rows_present} "
+        f"rows_failed={agg.rows_failed} rows_missing={agg.rows_missing} "
+        f"rows_invalid={agg.rows_invalid})"
+    )
+
+
+def _incomplete_arm_note(
+    *,
+    baseline_score: float | None,
+    best_score: float | None,
+    baseline_eval: SplitEvaluation | None,
+    best_eval: SplitEvaluation | None,
+) -> str | None:
+    """A note naming which official arm(s) never resolved, or None if complete.
+
+    An official arm is INCOMPLETE when its aggregate scalar is ``None`` (under
+    PROPAGATE, some planned rollout rows never landed as a present score even
+    after FIX 2's bounded re-drive). A per-task vector still has one entry per
+    task (absent repeats count 0), so the vector cannot be trusted to stand in
+    for the arm: the cell must not emit a headroom / no-headroom determination
+    or a terminal statistical status off it. Returns a human-readable note
+    naming the failed arm(s) + their row accounting for the ledger, or ``None``
+    when both arms resolved cleanly.
+    """
+    failed: list[str] = []
+    if baseline_score is None:
+        failed.append(_arm_incomplete_detail("naive", baseline_eval))
+    if best_score is None:
+        failed.append(_arm_incomplete_detail("best", best_eval))
+    if not failed:
+        return None
+    return (
+        "incomplete official arm(s) -- aggregate never resolved after the "
+        "bounded re-drive; no headroom/no-improvement determination emitted "
+        "(certified output requires a complete official vector): "
+        + ", ".join(failed)
+    )
 
 
 def _escalation_allowed(
@@ -498,6 +551,9 @@ def run_cell(
         )
     )
     ceiling_official: float | None
+    # The driven baseline evaluation (None when the naive arm came from cache):
+    # carries the row-completeness accounting used by the incomplete-arm guard.
+    baseline_eval: SplitEvaluation | None = None
     if cache is not None:
         baseline_score = cache.naive_official
         naive_per_task = cache.naive_per_task
@@ -536,6 +592,7 @@ def run_cell(
                 f"0/{planned} successful rollouts (every rollout failed). "
                 "This is a plumbing failure; no cell line recorded."
             )
+        baseline_eval = baseline
         baseline_score = baseline.score
         naive_per_task = baseline.per_task_scores
         naive_counts = baseline.per_task_counts
@@ -623,6 +680,25 @@ def run_cell(
     best_per_task = best.per_task_scores
     best_counts = best.per_task_counts
 
+    # --- Incomplete-official-arm guard (before ANY determination). ---
+    # An official arm whose aggregate never resolved (``score is None`` under
+    # PROPAGATE -- some rollouts failed after FIX 2's bounded re-drive) has an
+    # UNTRUSTWORTHY scalar even though its per-task vector still has one entry
+    # per task (a failed task's absent repeats count 0, so the vector LOOKS
+    # complete). Emitting headroom / no-demonstrable-headroom / a terminal
+    # statistical status off that partial vector produces certified-looking
+    # output from an incomplete measurement (the c18:a1 defect: naive=None yet
+    # headroom + no-improvement emitted). So when either official arm is
+    # incomplete we STOP here: no headroom, no gate flag, no statistical
+    # status -- the cell finalizes as ``incomplete-arm`` naming the failed
+    # arm(s)/rows, keeps its partials for a resume, and reports real spend.
+    incomplete_note = _incomplete_arm_note(
+        baseline_score=baseline_score,
+        best_score=best_score,
+        baseline_eval=baseline_eval,
+        best_eval=best,
+    )
+
     # --- Bootstrap intervals over TASKS (seed fixed per cell). ---
     # All intervals resample the exchangeable unit (the task) via a per-cell
     # fixed seed; paired variants (delta, headroom) reuse the SAME resample
@@ -641,13 +717,21 @@ def run_cell(
     # from the cached/driven ceiling vs naive per-task vectors); the Eval row
     # ADDITIONALLY sets the no-demonstrable-headroom gate flag it establishes
     # once per env (other cells leave the flag None, interpreting against it).
-    headroom_ci = _paired_or_none(naive_per_task, ceiling_per_task, seed)
-    headroom_delta = (
-        headroom_ci.point if headroom_ci is not None else None
-    )
-    no_headroom: bool | None = None
-    if is_eval_row and headroom_ci is not None:
-        no_headroom = not headroom_ci.excludes_zero()
+    # BUT an incomplete official arm must NEVER emit a headroom / no-headroom
+    # determination: those would be certified-looking verdicts from a partial
+    # measurement (the c18:a1 defect). When incomplete, they stay None.
+    if incomplete_note is None:
+        headroom_ci = _paired_or_none(naive_per_task, ceiling_per_task, seed)
+        headroom_delta = (
+            headroom_ci.point if headroom_ci is not None else None
+        )
+        no_headroom: bool | None = None
+        if is_eval_row and headroom_ci is not None:
+            no_headroom = not headroom_ci.excludes_zero()
+    else:
+        headroom_ci = None
+        headroom_delta = None
+        no_headroom = None
 
     pooled_counts = {
         "naive": sum(naive_counts),
@@ -656,7 +740,14 @@ def run_cell(
 
     escalated = False
     escalation_note = ""
-    status = _status_from(delta, delta_ci)
+    # An incomplete official arm finalizes as ``incomplete-arm`` -- NOT a
+    # terminal statistical status. ``_status_from(None, None)`` would return
+    # ``no-improvement`` (a certified-looking no-improvement verdict), so we
+    # override it here and record which arm/rows failed.
+    if incomplete_note is not None:
+        status = "incomplete-arm"
+    else:
+        status = _status_from(delta, delta_ci)
 
     # --- 5. Escalation: inconclusive cell auto-doubles official repeats. ---
     # Run ADDITIONAL repeats on BOTH the naive and best arms, POOL the new
@@ -767,6 +858,8 @@ def run_cell(
     notes: list[str] = []
     if escalation_note:
         notes.append(escalation_note)
+    if incomplete_note is not None and status == "incomplete-arm":
+        notes.append(incomplete_note)
     if concurrency_halved:
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"
@@ -826,12 +919,15 @@ def run_cell(
     ledger.append_cell(record)
     # A cleanly-completed (non-halted) cell has its authoritative result in the
     # ledger, so the per-call partial log is no longer needed -- drop it. A
-    # halted cell KEEPS its partial so a resume can pick up the recorded calls.
-    if status != "halted":
+    # halted OR incomplete-arm cell KEEPS its partial so a resume can pick up
+    # the recorded calls (an incomplete arm re-drives only the failed rows).
+    if status not in ("halted", "incomplete-arm"):
         partial_log.delete()
     # The Eval row establishes the per-env official cache (naive + ceiling
-    # scalars AND per-task vectors) so later optimizer cells reuse it.
-    if is_eval_row and cache is None:
+    # scalars AND per-task vectors) so later optimizer cells reuse it. NEVER
+    # cache an incomplete arm: caching None/partial vectors would poison every
+    # downstream optimizer cell for this (env, task-model).
+    if is_eval_row and cache is None and incomplete_note is None:
         ledger.append_env_cache(
             EnvOfficialCache(
                 env=config.env,

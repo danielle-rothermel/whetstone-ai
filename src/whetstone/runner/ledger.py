@@ -46,6 +46,12 @@ FULL_CONFIG_EVAL_HASH = "__full_config__"
 #: The closed set of cell statuses from the validation-plan schema.
 #: ``inconclusive`` was added by the statistical-confidence upgrade: a positive
 #: delta whose paired CI still spans 0 is inconclusive (not ``improved``).
+#: ``incomplete-arm`` was added by the incomplete-official-arm fix: an official
+#: arm (naive/best) whose aggregate never resolved (score None -- some rollouts
+#: failed after the bounded re-drive) MUST NOT emit a headroom / no-headroom
+#: determination or a terminal statistical status. The cell finalizes as
+#: ``incomplete-arm`` carrying which arm/rows failed, and is NOT a certified
+#: result (it is not a completed terminal status: a re-run supersedes it).
 CELL_STATUSES: frozenset[str] = frozenset(
     {
         "improved",
@@ -53,6 +59,7 @@ CELL_STATUSES: frozenset[str] = frozenset(
         "no-improvement",
         "plumbing-retry",
         "halted",
+        "incomplete-arm",
     }
 )
 
@@ -442,19 +449,25 @@ class Ledger:
         Sums the credits deltas over every recorded ``before`` snapshot for
         ``cell_id`` using the ``spend.jsonl`` before/after pairs, INCLUDING
         crashed attempts. Credits (``remaining_usd``) are monotonically
-        non-increasing and the log is append-only chronological, so each
-        ``before`` snapshot's consumption is ``before.remaining -
-        next_snapshot.remaining`` where ``next_snapshot`` is the immediately
-        following record in the file. For a cleanly-completed attempt that next
-        record is this cell's own ``after``; for a CRASHED attempt (a
-        ``before`` with no matching ``after``) it is the NEXT snapshot of any
-        cell, which captures the credits the crashed attempt burned before
-        dying. The final trailing ``before`` with nothing after it cannot be
-        bounded and is reported as a gap.
+        non-increasing and the log is append-only chronological.
+
+        A cleanly-completed attempt is bounded by THIS CELL'S OWN next
+        ``after`` snapshot (matched by ``cell_id``), not just the following
+        record. Concurrent cells interleave their before/after snapshots into
+        one shared ``spend.jsonl`` (e.g. the c18:a1 defect: the record right
+        after c18:a1's ``before`` was a DIFFERENT cell's ``before``, so the
+        old "next record" heuristic mis-bounded the spend to $0.00 while the
+        true ``eval:c18:a1:after`` sat two records later). Pairing by cell_id
+        is correct under interleaving.
+
+        For a CRASHED attempt (a ``before`` with no matching ``after`` before
+        this cell's next ``before``) the spend is bounded by the NEXT snapshot
+        of any cell in file order, which captures the credits the crashed
+        attempt burned before dying. A final trailing ``before`` with nothing
+        after it cannot be bounded and is reported as a gap.
 
         Returns ``(total_usd, gaps)``: the summed spend and a list of
-        human-readable notes for any unpairable snapshot (e.g. a still-running
-        or last-in-file crashed attempt with no following snapshot).
+        human-readable notes for any unpairable snapshot.
         """
         records = self.spend_records()
         # Index snapshots that carry a usable remaining_usd, in file order.
@@ -468,30 +481,55 @@ class Ledger:
         for pos, (idx, rec) in enumerate(usable):
             if rec.cell_id != cell_id or rec.phase != "before":
                 continue
+            assert rec.remaining_usd is not None
+            # Find THIS cell's own next ``after`` (clean completion), stopping
+            # if this cell's NEXT ``before`` appears first (that after belongs
+            # to a later attempt, and this before is a crash).
+            matched_after: SpendRecord | None = None
+            crashed = False
+            for _, cand in usable[pos + 1:]:
+                if cand.cell_id == cell_id and cand.phase == "before":
+                    crashed = True
+                    break
+                if cand.cell_id == cell_id and cand.phase == "after":
+                    matched_after = cand
+                    break
+            if matched_after is not None:
+                assert matched_after.remaining_usd is not None
+                delta = rec.remaining_usd - matched_after.remaining_usd
+                if delta < 0:
+                    gaps.append(
+                        f"non-monotonic credits between records {idx} and "
+                        f"this cell's after (delta {delta:.4f}); skipped"
+                    )
+                    continue
+                total += delta
+                continue
+            # No clean matching after -> a crashed attempt (or last-in-file).
+            # Bound it by the next usable snapshot of any cell in file order.
             if pos + 1 >= len(usable):
+                _reason = "crashed/running last-in-file" if crashed else (
+                    "no following snapshot to bound its spend"
+                )
                 gaps.append(
                     f"attempt with before snapshot at record {idx} has no "
-                    "following snapshot to bound its spend (crashed/running "
-                    "last-in-file); consumption unaccounted"
+                    f"following snapshot to bound its spend ({_reason}); "
+                    "consumption unaccounted"
                 )
                 continue
             _, nxt = usable[pos + 1]
-            assert rec.remaining_usd is not None
             assert nxt.remaining_usd is not None
             delta = rec.remaining_usd - nxt.remaining_usd
             if delta < 0:
-                # Credits should not increase; a negative delta means a
-                # top-up or reordering -- record it as a gap, contribute 0.
                 gaps.append(
                     f"non-monotonic credits between records {idx} and the "
                     f"next snapshot (delta {delta:.4f}); skipped"
                 )
                 continue
-            if nxt.cell_id != cell_id or nxt.phase != "after":
-                gaps.append(
-                    f"attempt with before snapshot at record {idx} had no "
-                    f"matching after (crashed); bounded by the next snapshot "
-                    f"({nxt.cell_id}:{nxt.phase}) -> ${delta:.4f}"
-                )
+            gaps.append(
+                f"attempt with before snapshot at record {idx} had no "
+                f"matching after (crashed); bounded by the next snapshot "
+                f"({nxt.cell_id}:{nxt.phase}) -> ${delta:.4f}"
+            )
             total += delta
         return total, gaps
