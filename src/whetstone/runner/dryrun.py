@@ -47,6 +47,7 @@ from whetstone.envs.rollout_definition import (
     initial_candidate,
     render_prompt,
 )
+from whetstone.envs.sampling import SamplingOverrides
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
     FakeProposerTransport,
@@ -218,6 +219,7 @@ def run_dry_cell(
     attempt: int = 0,
     lane: str = "openrouter",
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
+    overrides: SamplingOverrides | None = None,
 ) -> CellOutcome:
     """Run one fake-transport cell end-to-end and append its ledger line.
 
@@ -225,11 +227,17 @@ def run_dry_cell(
     (naive == best), any proposing optimizer drives the improvement script (the
     injected winning template beats the naive baseline). Returns the
     :class:`CellOutcome`; the ledger line lands under ``root``.
+
+    ``overrides`` (a :class:`SamplingOverrides`) exercises the reduced-sampling
+    path end-to-end (``--official-n`` / ``--official-repeats``): it folds into
+    the official Eval Config identity so the dry cell records the overrides and
+    keys the env cache by the reduced hash.
     """
+    overrides = overrides or SamplingOverrides()
     pool_n = _pool_n_per_stratum(env)
     experiment = build_env_experiment(
         env, model=DRYRUN_TASK_MODEL, pool_n_per_stratum=pool_n,
-        split_sizes=(2, 2, 2),
+        split_sizes=(2, 2, 2), overrides=overrides,
     )
     if optimizer == "eval":
         reply = _correct_reply(experiment)
@@ -263,6 +271,7 @@ def run_dry_cell(
         split_sizes=(2, 2, 2),
         execution_mode=execution_mode,
         window_notes="dry-run-fake (no live paid call)",
+        sampling_overrides=overrides,
     )
     ledger = Ledger(root=root)
     ledger.load()

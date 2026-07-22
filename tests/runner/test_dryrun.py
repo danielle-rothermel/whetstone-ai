@@ -13,8 +13,14 @@ from pathlib import Path
 
 import pytest
 
+from whetstone.envs.factory import build_env_experiment
+from whetstone.envs.sampling import SamplingOverrides
 from whetstone.runner.cli import main
-from whetstone.runner.dryrun import run_dry_cell
+from whetstone.runner.dryrun import (
+    DRYRUN_TASK_MODEL,
+    _pool_n_per_stratum,
+    run_dry_cell,
+)
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
 
@@ -91,6 +97,75 @@ def test_dry_cell_runs_every_env_without_crashing(tmp_path: Path) -> None:
         assert outcome.record.status in ("improved", "no-improvement")
         assert outcome.record.baseline_official is not None
         assert outcome.record.best_official is not None
+
+
+def test_dry_cell_with_sampling_overrides_end_to_end(tmp_path: Path) -> None:
+    # A reduced-sampling dry cell runs end-to-end: the overrides are recorded
+    # on the ledger line, only the first-N official tasks are evaluated, and
+    # the env cache is keyed by the REDUCED official eval_config_hash (so it
+    # would MISS a full-config cache). The dry official split is (2,2,2), so
+    # official-n=1 is a strict reduction.
+    outcome = run_dry_cell(
+        env="c11",
+        optimizer="eval",
+        root=tmp_path,
+        execution_mode=ExecutionMode.IN_PROCESS,
+        overrides=SamplingOverrides(official_n=1, official_repeats=2),
+    )
+    r = outcome.record
+    assert r.sampling_overrides.official_n == 1
+    assert r.sampling_overrides.official_repeats == 2
+    # The official arms were driven at the overridden repeat count.
+    assert r.official_repeats_used == 2
+    assert r.status in ("improved", "no-improvement", "inconclusive")
+    ledger = Ledger(root=tmp_path)
+    # The reduced cache line is keyed by the reduced official eval_config_hash,
+    # so a full-config read (the full hash) MISSES it and vice versa -- the
+    # reduced cell is a distinct Eval Config identity.
+    reduced = build_env_experiment(
+        "c11", model=DRYRUN_TASK_MODEL,
+        pool_n_per_stratum=_pool_n_per_stratum("c11"),
+        split_sizes=(2, 2, 2),
+        overrides=SamplingOverrides(official_n=1, official_repeats=2),
+    )
+    reduced_hash = (
+        reduced.eval_configs.official.eval_config.config_identity_hash
+    )
+    assert ledger.env_cache_for(
+        "c11", task_model=DRYRUN_TASK_MODEL, eval_config_hash=reduced_hash,
+    ) is not None
+    full = build_env_experiment(
+        "c11", model=DRYRUN_TASK_MODEL,
+        pool_n_per_stratum=_pool_n_per_stratum("c11"),
+        split_sizes=(2, 2, 2),
+    )
+    full_hash = full.eval_configs.official.eval_config.config_identity_hash
+    assert full_hash != reduced_hash
+    assert ledger.env_cache_for(
+        "c11", task_model=DRYRUN_TASK_MODEL, eval_config_hash=full_hash,
+    ) is None
+
+
+def test_cli_dry_run_fake_with_sampling_override_flags(tmp_path: Path) -> None:
+    # The --official-n / --official-repeats flags flow through the dry-run CLI
+    # path into the recorded sampling_overrides (no --live needed).
+    code = main(
+        [
+            "--root", str(tmp_path),
+            "--execution-mode", "in-process",
+            "cell",
+            "--optimizer", "eval",
+            "--env", "c11",
+            "--official-n", "1",
+            "--official-repeats", "2",
+            "--dry-run-fake",
+        ]
+    )
+    assert code == 0
+    loaded = Ledger(root=tmp_path).load()
+    assert len(loaded) == 1
+    assert loaded[0].sampling_overrides.official_n == 1
+    assert loaded[0].sampling_overrides.official_repeats == 2
 
 
 def test_cli_dry_run_fake_needs_no_live_flag(tmp_path: Path) -> None:

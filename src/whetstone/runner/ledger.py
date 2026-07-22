@@ -24,14 +24,24 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 __all__ = [
     "CELL_STATUSES",
+    "FULL_CONFIG_EVAL_HASH",
     "CellArtifacts",
     "CellModels",
     "CellRecord",
+    "CellSamplingOverrides",
     "EnvOfficialCache",
     "Ledger",
     "SpendRecord",
     "cell_key",
 ]
+
+#: The migration sentinel for :attr:`EnvOfficialCache.eval_config_hash`. Old
+#: cache lines predate the eval-config-hash key field; they resolve to this
+#: full-config sentinel, and :meth:`Ledger.env_cache_for` matches such lines
+#: ONLY for a read that itself uses the full-config default (an
+#: ``eval_config_hash=None`` lookup) -- a reduced-sampling read never matches
+#: them. Mirrors the ``task_model`` nano-default migration.
+FULL_CONFIG_EVAL_HASH = "__full_config__"
 
 #: The closed set of cell statuses from the validation-plan schema.
 #: ``inconclusive`` was added by the statistical-confidence upgrade: a positive
@@ -54,6 +64,24 @@ class CellModels(BaseModel):
 
     task: StrictStr
     proposer: StrictStr
+
+
+class CellSamplingOverrides(BaseModel):
+    """The ``sampling_overrides`` sub-object of a cell record.
+
+    Records the reduced-sampling overrides a cell was run under
+    (``--official-n`` / ``--official-repeats``). ``None`` fields mean "spec
+    default" (no
+    override). Both fold into the composite Eval Config Identity Hash, so this
+    is the auditable record of WHY a reduced cell has a distinct Eval Config
+    identity (and got a cache MISS against the full-config entry). Absent field
+    on an old line -> both None (a full-config cell).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    official_n: int | None = None
+    official_repeats: int | None = None
 
 
 class CellArtifacts(BaseModel):
@@ -118,6 +146,12 @@ class CellRecord(BaseModel):
     window_notes: StrictStr = ""
     status: StrictStr
     artifacts: CellArtifacts = Field(default_factory=CellArtifacts)
+    #: The reduced-sampling overrides this cell ran under (``--official-n`` /
+    #: ``--official-repeats``); both None = spec-default (full config). Extends
+    #: the schema minimally; absent on old lines -> both None.
+    sampling_overrides: CellSamplingOverrides = Field(
+        default_factory=CellSamplingOverrides
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> CellRecord:
@@ -160,14 +194,27 @@ class EnvOfficialCache(BaseModel):
     CI) WITHOUT re-driving the naive baseline. Established once per (env,
     task-model) by the Eval-row (``optimizer=eval``) cell.
 
-    The cache is keyed by ``(env, task_model)`` (FIX 7): the task model folds
-    into the Provider Call Config identity (graph_hash), so naive/ceiling
-    vectors measured under one task model (e.g. ``openai/gpt-5-nano``) are NOT
-    comparable to a candidate measured under a different task model (e.g.
-    ``deepseek/deepseek-v4-flash``). A deepseek cell must never pair against
-    cached nano vectors. ``task_model`` defaults to the canonical nano slug so
-    pre-FIX-7 cache lines (which had no task-model field) resolve to the nano
-    key.
+    The cache is keyed by ``(env, task_model, eval_config_hash)``. The task
+    model folds into the Provider Call Config identity (graph_hash), so
+    naive/ceiling vectors measured under one task model (e.g.
+    ``openai/gpt-5-nano``) are NOT comparable to a candidate measured under a
+    different task model (e.g. ``deepseek/deepseek-v4-flash``) (FIX 7). The
+    ``eval_config_hash`` is the composite Eval Config Identity Hash of the
+    OFFICIAL split -- it folds in the official Task Set (ordering + membership)
+    and the Repeat Plan repeat count -- so vectors measured under a reduced
+    sampling (fewer official-n, or different official-repeats -> a different
+    ``eval_config_hash``) are NOT comparable to the full-config vectors and get
+    a cache MISS. A reduced-sampling cell (e.g. c23 with ``--official-n`` /
+    ``--official-repeats``) thus drives its own naive/ceiling arms rather than
+    pairing against the full-config entry for the same ``(env, task_model)``.
+
+    Migration defaults: ``task_model`` defaults to the canonical nano slug so
+    pre-FIX-7 cache lines (no task-model field) resolve to the nano key.
+    ``eval_config_hash`` defaults to the sentinel :data:`FULL_CONFIG_EVAL_HASH`
+    so old cache lines (no eval-config-hash field) resolve to the FULL-config
+    identity -- and, per :meth:`Ledger.env_cache_for`, they are matched ONLY by
+    a read that itself requests the full-config default (an
+    ``eval_config_hash=None`` lookup), never by a reduced-sampling read.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -183,6 +230,13 @@ class EnvOfficialCache(BaseModel):
     #: own naive/ceiling arms. Defaults to the canonical nano slug so old cache
     #: lines (no field) key to nano.
     task_model: StrictStr = "openai/gpt-5-nano"
+    #: The composite Eval Config Identity Hash (official split) the cached
+    #: vectors were measured under. Part of the cache key: a cell with a
+    #: different official Eval Config identity (reduced official-n / repeats ->
+    #: a different hash) gets a cache MISS and drives its own arms. Defaults to
+    #: the full-config sentinel so old cache lines (no field) resolve to the
+    #: full-config identity, matched only by full-config (default) reads.
+    eval_config_hash: StrictStr = FULL_CONFIG_EVAL_HASH
 
     def to_line(self) -> str:
         return json.dumps(self.model_dump(mode="json"), sort_keys=True)
@@ -286,17 +340,41 @@ class Ledger:
         return None
 
     def env_cache_for(
-        self, env: str, *, task_model: str | None = None
+        self,
+        env: str,
+        *,
+        task_model: str | None = None,
+        eval_config_hash: str | None = None,
+        default_config: bool = False,
     ) -> EnvOfficialCache | None:
-        """The cached Eval-row official scores + vectors for (env, task_model).
+        """Cached Eval-row scores + vectors for (env, task_model, eval hash).
 
-        Returns the most recent cache line matching ``env`` AND -- when
-        ``task_model`` is given -- the SAME task model (FIX 7). The task model
-        folds into the graph identity, so a deepseek cell must never reuse
-        cached nano vectors: a differing task model is a cache MISS (returns
-        ``None``), and the caller drives + caches its own naive/ceiling arms.
-        ``task_model=None`` matches on env only (back-compat for callers that
-        don't distinguish). ``None`` overall when no matching Eval row has run.
+        Returns the most recent cache line matching ``env`` AND -- when given
+        -- the SAME ``task_model`` (FIX 7) AND the SAME ``eval_config_hash``
+        (the composite Eval Config Identity Hash of the official split). Both
+        fold into the identity of the cached vectors:
+
+        * A differing task model is a cache MISS (a deepseek cell must never
+          reuse cached nano vectors -- different graph identity).
+        * A differing ``eval_config_hash`` is a cache MISS (a reduced-sampling
+          cell -- fewer official-n or different official-repeats -> a different
+          hash -- must never pair against the full-config vectors).
+
+        On a MISS the method returns ``None`` and the caller drives + caches
+        its own naive/ceiling arms.
+
+        Migration default: OLD cache lines predate the eval-config-hash field
+        and carry the full-config sentinel (:data:`FULL_CONFIG_EVAL_HASH`).
+        They are matchable ONLY by a read that itself uses the DEFAULT (full)
+        config -- pass ``default_config=True`` (the runner sets this when the
+        cell has no sampling overrides). Under that flag a stored sentinel line
+        matches when its OTHER key fields (env, task model) match, regardless
+        of the requested ``eval_config_hash``; a reduced-sampling read
+        (``default_config=False``) never matches a sentinel line. Lines written
+        with a concrete hash always match by exact ``eval_config_hash``.
+        ``task_model=None`` matches on env only (back-compat); an
+        ``eval_config_hash=None`` read only compares the hash when a concrete
+        value is supplied.
         """
         if not self.env_cache_path.exists():
             return None
@@ -309,6 +387,16 @@ class Ledger:
             if record.env != env:
                 continue
             if task_model is not None and record.task_model != task_model:
+                continue
+            is_sentinel = record.eval_config_hash == FULL_CONFIG_EVAL_HASH
+            if is_sentinel:
+                # Old (fieldless) line: only a default-config read may match.
+                if not default_config:
+                    continue
+            elif (
+                eval_config_hash is not None
+                and record.eval_config_hash != eval_config_hash
+            ):
                 continue
             latest = record
         return latest

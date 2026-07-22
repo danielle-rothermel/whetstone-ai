@@ -191,6 +191,33 @@ def build_eval_config(
 
 
 @dataclass(frozen=True, slots=True)
+class SamplingOverrides:
+    """Reduced-sampling overrides for the OFFICIAL split's Sampling Config.
+
+    Both are identity-bearing per the Sampling Config contract, so a cell that
+    passes either gets a DIFFERENT official ``eval_config_hash`` than the
+    spec-default (full) config -- the composite Eval Config Identity Hash folds
+    in the official Task Set (ordering + membership) and Repeat Plan repeat
+    count.
+
+    * ``official_n`` selects a deterministic ordered subset of the official
+      Task Set: the FIRST-N instances in pool (Task Set) order. First-N is the
+      selection rule so the subset is reproducible and identity-bearing (a
+      different N -> a different Task Set identity -> a different
+      ``eval_config_hash``). ``None`` keeps the full official split.
+    * ``official_repeats`` overrides the official Repeat Plan's repeat count
+      (the internal split is untouched). ``None`` keeps the spec-default.
+    """
+
+    official_n: int | None = None
+    official_repeats: int | None = None
+
+    def is_noop(self) -> bool:
+        """True when neither override is set (spec-default sampling)."""
+        return self.official_n is None and self.official_repeats is None
+
+
+@dataclass(frozen=True, slots=True)
 class EnvSplitSampling:
     """The sampling artifacts for one split (internal_eval or official)."""
 
@@ -365,6 +392,7 @@ def build_eval_configs(
     completeness: Completeness = Completeness.PROPAGATE,
     repeats: int = DEFAULT_REPEATS,
     split_sizes: tuple[int, int, int] | None = None,
+    overrides: SamplingOverrides | None = None,
 ) -> EnvEvalConfigs:
     """Build the internal + official Eval Configs from ``pool``'s splits.
 
@@ -375,9 +403,37 @@ def build_eval_configs(
     ``split_sizes`` defaults to the env's committed spec-default split
     (:meth:`EnvSpec.default_split_sizes`); tests pass an explicit tiny
     ``(internal, official, held_out)`` split for a small pool.
+
+    ``overrides`` (a :class:`SamplingOverrides`) reduces the OFFICIAL split's
+    sampling only: ``official_n`` takes the first-N of the ordered official
+    Task Set (identity-bearing subset), ``official_repeats`` overrides the
+    official Repeat Plan count. Both change the official ``eval_config_hash``;
+    the internal split is never affected. ``None`` keeps the spec-default.
     """
     split = _split(env, pool, split_sizes)
     aggregation = build_aggregation_config(env, completeness=completeness)
+
+    ov = overrides or SamplingOverrides()
+    official_instances = split.official
+    if ov.official_n is not None:
+        if ov.official_n < 1:
+            raise ValueError(
+                f"official_n override must be >= 1; got {ov.official_n}"
+            )
+        if ov.official_n > len(official_instances):
+            raise ValueError(
+                f"official_n override {ov.official_n} exceeds the official "
+                f"split size {len(official_instances)}"
+            )
+        # Deterministic ordered-subset selection: first-N in Task Set order.
+        official_instances = official_instances[: ov.official_n]
+    official_repeats = (
+        ov.official_repeats if ov.official_repeats is not None else repeats
+    )
+    if official_repeats < 1:
+        raise ValueError(
+            f"official_repeats override must be >= 1; got {official_repeats}"
+        )
 
     internal = _build_split_sampling(
         env,
@@ -390,10 +446,10 @@ def build_eval_configs(
     official = _build_split_sampling(
         env,
         split_role=OFFICIAL,
-        instances=split.official,
+        instances=official_instances,
         procedure=procedure,
         aggregation=aggregation,
-        repeats=repeats,
+        repeats=official_repeats,
     )
 
     internal_ids = set(internal.task_set.task_identities)
@@ -426,6 +482,7 @@ __all__ = [
     "EnvEvalConfigs",
     "EnvSplitSampling",
     "HeldOutReferencedError",
+    "SamplingOverrides",
     "SplitOverlapError",
     "build_aggregation_config",
     "build_eval_config",

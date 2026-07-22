@@ -26,6 +26,7 @@ from whetstone.envs.rollout_definition import (
 from whetstone.envs.sampling import (
     Completeness,
     EnvEvalConfigs,
+    SamplingOverrides,
     build_eval_configs,
 )
 from whetstone.optimization.reward import RewardPolicy
@@ -68,6 +69,7 @@ def build_env_experiment(
     completeness: Completeness = Completeness.PROPAGATE,
     repeats: int = DEFAULT_REPEATS,
     split_sizes: tuple[int, int, int] | None = None,
+    overrides: SamplingOverrides | None = None,
 ) -> EnvExperiment:
     """Build one env's complete experiment: the single validation entry point.
 
@@ -86,6 +88,11 @@ def build_env_experiment(
     split_sizes:
         Override the env's committed spec-default pool split (tests pass a
         tiny ``(internal, official, held_out)`` split for a small pool).
+    overrides:
+        Reduced-sampling overrides for the OFFICIAL split only
+        (:class:`SamplingOverrides`): ``official_n`` (first-N ordered subset)
+        and ``official_repeats``. Both change the official ``eval_config_hash``
+        so a reduced cell is a DISTINCT Eval Config identity from the full one.
 
     The internal and official Eval Configs share the Rollout Definition's
     Evaluation Procedure Config identity, so ``graph_hash`` is stable across
@@ -102,6 +109,7 @@ def build_env_experiment(
         completeness=completeness,
         repeats=repeats,
         split_sizes=split_sizes,
+        overrides=overrides,
     )
     # The Rollout Definition's Procedure identity is the one both Eval Configs
     # fold in -- assert the partition holds at construction so a divergence is
@@ -125,5 +133,6 @@ def build_env_experiment(
 
 __all__ = [
     "EnvExperiment",
+    "SamplingOverrides",
     "build_env_experiment",
 ]

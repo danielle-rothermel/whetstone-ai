@@ -30,6 +30,7 @@ from whetstone.envs.rollout_definition import (
     initial_candidate,
     render_prompt,
 )
+from whetstone.envs.sampling import SamplingOverrides
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.schema import Candidate
 from whetstone.runner.budget import BudgetGuard
@@ -173,7 +174,7 @@ def _winner_internal_gold(experiment) -> dict[str, str]:
 
 def _config(
     env_name, *, optimizer, rollout, proposer, official_repeats=5,
-    canonical=True, task_model=TASK_MODEL,
+    canonical=True, task_model=TASK_MODEL, overrides=None,
 ):
     return CellConfig(
         optimizer=optimizer,
@@ -192,6 +193,7 @@ def _config(
         pool_n_per_stratum=_pool_n(env_name),
         split_sizes=SPLIT,
         execution_mode=ExecutionMode.IN_PROCESS,
+        sampling_overrides=overrides or SamplingOverrides(),
     )
 
 
@@ -398,6 +400,80 @@ class _NaiveCallCountingTransport:
             request=request, policy=self.policy, raw_request=raw_request,
             outcome=_response(text),
         )
+
+
+def test_reduced_sampling_cell_misses_full_config_cache(
+    tmp_path: Path,
+) -> None:
+    # The c23 scenario: an Eval row under the FULL official config caches the
+    # (c23, nano, full-config-hash) vectors. A later REDUCED-sampling cell
+    # (fewer official-n + fewer official-repeats -> a DIFFERENT composite Eval
+    # Config Identity Hash) must NOT pair against the full-config cache for the
+    # same (env, task_model): it gets a MISS and drives its own naive arm.
+    env_name = "c23"
+    exp = _experiment(env_name)
+    env = env_spec(env_name)
+    ceiling = ceiling_candidate(env)
+    official = _official(exp)
+    ceiling_gold = {
+        render_prompt(env, ceiling, inst): inst.gold for inst in official
+    }
+    ledger = Ledger(root=tmp_path)
+
+    # 1. Full-config Eval row: establishes the (c23, nano, full) cache.
+    full_rollout = PhasedTransport(
+        winner_gold_first={}, winner_gold_rest={},
+        other_gold=ceiling_gold, first_pass_calls=0,
+    )
+    full_eval = _config(
+        env_name, optimizer="eval", rollout=full_rollout,
+        proposer=ScriptedProposer(()),
+    )
+    run_cell(full_eval, ledger=ledger)
+    # The full-config cache line exists (a default-config read HITs it).
+    full_hash = (
+        exp.eval_configs.official.eval_config.config_identity_hash
+    )
+    assert ledger.env_cache_for(
+        env_name, task_model=TASK_MODEL, eval_config_hash=full_hash,
+    )
+    # A reduced-config read (official-n=2, repeats=1) MISSES the full entry.
+    reduced_exp = build_env_experiment(
+        env_name, model=TASK_MODEL, pool_n_per_stratum=_pool_n(env_name),
+        split_sizes=SPLIT,
+        overrides=SamplingOverrides(official_n=2, official_repeats=1),
+    )
+    reduced_hash = (
+        reduced_exp.eval_configs.official.eval_config.config_identity_hash
+    )
+    assert reduced_hash != full_hash
+    assert (
+        ledger.env_cache_for(
+            env_name, task_model=TASK_MODEL, eval_config_hash=reduced_hash,
+        )
+        is None
+    )
+
+    # 2. A reduced-sampling copro cell: cache-miss -> drives its own naive arm.
+    # The winning template is the c23 naive template + a brace-free suffix so
+    # it renders for c23 (all placeholders preserved) yet is a distinct prompt.
+    naive_template = str(
+        initial_candidate(env).payload[MUTATION_FIELD]
+    )
+    c23_win = naive_template + "\n(Answer precisely.)"
+    counting = _NaiveCallCountingTransport(env=env, other_gold=ceiling_gold)
+    reduced_cell = _config(
+        env_name, optimizer="copro", rollout=counting,
+        proposer=ScriptedProposer((c23_win,)),
+        overrides=SamplingOverrides(official_n=2, official_repeats=1),
+    )
+    outcome = run_cell(reduced_cell, ledger=ledger)
+    r = outcome.record
+    # The overrides are recorded on the cell line.
+    assert r.sampling_overrides.official_n == 2
+    assert r.sampling_overrides.official_repeats == 1
+    # It drove the naive baseline itself (cache MISS): >0 naive official calls.
+    assert counting.naive_official_calls > 0
 
 
 def test_eval_row_no_demonstrable_headroom_when_ceiling_ties_naive(

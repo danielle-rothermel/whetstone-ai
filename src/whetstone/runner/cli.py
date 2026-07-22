@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from whetstone.envs.sampling import SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import (
@@ -233,6 +234,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cell.add_argument(
+        "--official-n",
+        type=int,
+        default=None,
+        help=(
+            "reduced-sampling override: evaluate only the FIRST-N official "
+            "tasks (deterministic ordered subset of the official Task Set). "
+            "Default None = the env spec-default official split size. Folds "
+            "into the composite Eval Config Identity Hash, so a reduced cell "
+            "is a DISTINCT Eval Config identity (cache MISS vs the "
+            "full-config entry). Recorded in cells.jsonl sampling_overrides."
+        ),
+    )
+    cell.add_argument(
+        "--official-repeats",
+        type=int,
+        default=None,
+        help=(
+            "reduced-sampling override: official-split repeats (baseline/"
+            "ceiling/best arms). Default None = the env spec default. Folds "
+            "into the composite Eval Config Identity Hash (a different value "
+            "-> a cache MISS vs the full-config entry) and is the count the "
+            "official arms are driven at. Recorded in sampling_overrides."
+        ),
+    )
+    cell.add_argument(
         "--non-canonical",
         action="store_true",
         help="mark this cell non-canonical (a debug/iteration cell)",
@@ -405,6 +431,10 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
         attempt=args.attempt,
         lane=args.lane,
         execution_mode=decision.mode,
+        overrides=SamplingOverrides(
+            official_n=getattr(args, "official_n", None),
+            official_repeats=getattr(args, "official_repeats", None),
+        ),
     )
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
@@ -465,6 +495,10 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         window_notes=decision.reason,
         concurrency=args.concurrency,
         max_wall_seconds=args.max_wall_seconds,
+        sampling_overrides=SamplingOverrides(
+            official_n=getattr(args, "official_n", None),
+            official_repeats=getattr(args, "official_repeats", None),
+        ),
     )
     credits_fetcher = (
         openrouter_credits_fetcher(task_route.key_env)

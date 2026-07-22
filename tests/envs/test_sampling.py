@@ -17,6 +17,7 @@ from whetstone.envs.sampling import (
     INTERNAL_EVAL,
     OFFICIAL,
     Completeness,
+    SamplingOverrides,
     build_eval_configs,
 )
 from whetstone.graph.eval_config import validate_eval_identity_partition
@@ -187,3 +188,101 @@ def test_eval_config_for_dispatch() -> None:
     )
     with pytest.raises(KeyError):
         configs.eval_config_for("held_out")
+
+
+# --- Reduced-sampling overrides (--official-n / --official-repeats). ---
+
+_OFFICIAL_N = 4  # a c23 official split large enough to reduce below.
+
+
+def _c23_configs(*, overrides: SamplingOverrides | None = None):
+    """c23 eval configs over a (4, 4, 4) split, optionally reduced."""
+    env = env_spec("c23")
+    pool = env.generate_pool(n_per_stratum=4)
+    procedure = env_procedure_config(env)
+    return build_eval_configs(
+        env,
+        pool=pool,
+        procedure=procedure,
+        split_sizes=(4, _OFFICIAL_N, 4),
+        overrides=overrides,
+    )
+
+
+def test_no_override_matches_spec_default_official_hash() -> None:
+    # A no-op override yields the SAME official eval_config_hash as passing no
+    # override at all: the default (full) config identity is unchanged.
+    full = _c23_configs().official.eval_config.config_identity_hash
+    noop = (
+        _c23_configs(overrides=SamplingOverrides())
+        .official.eval_config.config_identity_hash
+    )
+    assert noop == full
+
+
+def test_official_n_override_changes_eval_config_hash() -> None:
+    # Reducing official-n is identity-bearing: a different official Task Set ->
+    # a different composite Eval Config Identity Hash.
+    full = _c23_configs().official.eval_config.config_identity_hash
+    reduced = (
+        _c23_configs(overrides=SamplingOverrides(official_n=2))
+        .official.eval_config.config_identity_hash
+    )
+    assert reduced != full
+
+
+def test_official_repeats_override_changes_eval_config_hash() -> None:
+    # A different Repeat Plan count -> a different eval_config_hash.
+    full = _c23_configs().official.eval_config.config_identity_hash
+    reduced = (
+        _c23_configs(overrides=SamplingOverrides(official_repeats=1))
+        .official.eval_config.config_identity_hash
+    )
+    assert reduced != full
+
+
+def test_official_n_is_first_n_deterministic_ordered_subset() -> None:
+    # The official-n override selects the FIRST-N of the ordered official Task
+    # Set (deterministic ordered subset), and re-running is byte-stable.
+    full_ids = _c23_configs().official.task_set.task_identities
+    reduced = _c23_configs(overrides=SamplingOverrides(official_n=2))
+    reduced_ids = reduced.official.task_set.task_identities
+    assert reduced_ids == full_ids[:2]
+    # Determinism: an identical rebuild yields the identical subset + hash.
+    again = _c23_configs(overrides=SamplingOverrides(official_n=2))
+    assert again.official.task_set.task_identities == reduced_ids
+    assert (
+        again.official.eval_config.config_identity_hash
+        == reduced.official.eval_config.config_identity_hash
+    )
+
+
+def test_override_leaves_internal_split_untouched() -> None:
+    # Only the OFFICIAL split's identity moves; the internal one is unchanged.
+    full = _c23_configs()
+    reduced = _c23_configs(
+        overrides=SamplingOverrides(official_n=2, official_repeats=1)
+    )
+    assert (
+        reduced.internal.eval_config.config_identity_hash
+        == full.internal.eval_config.config_identity_hash
+    )
+
+
+def test_official_n_over_split_size_rejected() -> None:
+    with pytest.raises(ValueError, match="exceeds the official split size"):
+        _c23_configs(overrides=SamplingOverrides(official_n=_OFFICIAL_N + 1))
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_official_n_below_one_rejected(bad: int) -> None:
+    with pytest.raises(ValueError, match="official_n override must be >= 1"):
+        _c23_configs(overrides=SamplingOverrides(official_n=bad))
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_official_repeats_below_one_rejected(bad: int) -> None:
+    with pytest.raises(
+        ValueError, match="official_repeats override must be >= 1"
+    ):
+        _c23_configs(overrides=SamplingOverrides(official_repeats=bad))

@@ -8,9 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from whetstone.runner.ledger import (
+    FULL_CONFIG_EVAL_HASH,
     CellArtifacts,
     CellModels,
     CellRecord,
+    EnvOfficialCache,
     Ledger,
     SpendRecord,
 )
@@ -60,6 +62,8 @@ def test_cell_record_exact_schema_fields() -> None:
         "naive_ci95", "ceiling_ci95", "delta_ci95", "headroom_delta",
         "headroom_ci95", "no_demonstrable_headroom", "official_repeats_used",
         "escalated", "escalation_note", "pooled_observation_counts",
+        # Reduced-sampling overrides (--official-n / --official-repeats).
+        "sampling_overrides",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
@@ -152,6 +156,81 @@ def test_ceiling_cache_lookup(tmp_path: Path) -> None:
     ledger.append_cell(_record(ceiling_official=0.87))
     assert ledger.ceiling_for("c11") == 0.87
     assert ledger.ceiling_for("c22") is None
+
+
+def _cache(**overrides: object) -> EnvOfficialCache:
+    base = {
+        "env": "c11",
+        "naive_official": 0.2,
+        "ceiling_official": 0.9,
+        "naive_per_task": (0.2, 0.2),
+        "ceiling_per_task": (0.9, 0.9),
+        "official_repeats_used": 5,
+        "task_model": "openai/gpt-5-nano",
+        "eval_config_hash": "full-config-hash",
+    }
+    base.update(overrides)
+    return EnvOfficialCache(**base)  # type: ignore[arg-type]
+
+
+def test_env_cache_keyed_by_eval_config_hash(tmp_path: Path) -> None:
+    # A cell whose official Eval Config identity differs (reduced sampling ->
+    # a different eval_config_hash) MISSES the full-config cache entry for the
+    # same (env, task_model); the matching-hash read HITS.
+    ledger = Ledger(root=tmp_path)
+    ledger.append_env_cache(_cache(eval_config_hash="full-config-hash"))
+    hit = ledger.env_cache_for(
+        "c11",
+        task_model="openai/gpt-5-nano",
+        eval_config_hash="full-config-hash",
+    )
+    assert hit is not None
+    miss = ledger.env_cache_for(
+        "c11",
+        task_model="openai/gpt-5-nano",
+        eval_config_hash="reduced-config-hash",
+    )
+    assert miss is None
+
+
+def test_old_cache_line_defaults_to_full_config_sentinel() -> None:
+    # A pre-migration cache line (no eval_config_hash field) resolves to the
+    # full-config sentinel.
+    line = (
+        '{"env": "c11", "naive_official": 0.2, "ceiling_official": 0.9, '
+        '"naive_per_task": [0.2], "ceiling_per_task": [0.9], '
+        '"official_repeats_used": 5, "task_model": "openai/gpt-5-nano"}'
+    )
+    record = EnvOfficialCache.model_validate_json(line)
+    assert record.eval_config_hash == FULL_CONFIG_EVAL_HASH
+
+
+def test_old_sentinel_line_matches_only_default_config_reads(
+    tmp_path: Path,
+) -> None:
+    # An old sentinel cache line is matchable ONLY by a full-config
+    # (default_config=True) read -- a reduced-sampling read never reuses it.
+    ledger = Ledger(root=tmp_path)
+    ledger.append_env_cache(_cache(eval_config_hash=FULL_CONFIG_EVAL_HASH))
+    # Reduced-sampling read (a concrete hash, default_config=False): MISS.
+    assert (
+        ledger.env_cache_for(
+            "c11",
+            task_model="openai/gpt-5-nano",
+            eval_config_hash="reduced-config-hash",
+        )
+        is None
+    )
+    # Full-config read (default_config=True): HIT regardless of requested hash.
+    assert (
+        ledger.env_cache_for(
+            "c11",
+            task_model="openai/gpt-5-nano",
+            eval_config_hash="full-config-hash",
+            default_config=True,
+        )
+        is not None
+    )
 
 
 def test_reload_from_disk(tmp_path: Path) -> None:

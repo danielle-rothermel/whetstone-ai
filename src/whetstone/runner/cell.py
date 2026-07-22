@@ -27,11 +27,12 @@ from __future__ import annotations
 import hashlib
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dr_store import MemoryBackend, ObjectStore
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.sampling import SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import ProposerConfig, ProposerTransport
@@ -47,6 +48,7 @@ from whetstone.runner.ledger import (
     CellArtifacts,
     CellModels,
     CellRecord,
+    CellSamplingOverrides,
     EnvOfficialCache,
     Ledger,
     SpendRecord,
@@ -119,6 +121,29 @@ class CellConfig:
     #: Whole-cell wall deadline (seconds). On breach: finish in-flight, persist
     #: partials, exit with ``status=halted`` and a recorded halt reason.
     max_wall_seconds: float = DEFAULT_CELL_MAX_WALL_SECONDS
+    #: Reduced-sampling overrides for the OFFICIAL split (``--official-n`` /
+    #: ``--official-repeats``). Both fold into the composite Eval Config
+    #: Identity Hash (a reduced cell is a DISTINCT Eval Config identity, so it
+    #: gets a cache MISS against the full-config entry). ``official_repeats``,
+    #: when set, is ALSO the count the official arms are driven at (overriding
+    #: :attr:`official_repeats`). A no-op default keeps the spec-default
+    #: sampling and full-config cache identity.
+    sampling_overrides: SamplingOverrides = field(
+        default_factory=SamplingOverrides
+    )
+
+    def official_repeats_effective(self) -> int:
+        """Official repeats actually driven: the override, else the default."""
+        if self.sampling_overrides.official_repeats is not None:
+            return self.sampling_overrides.official_repeats
+        return self.official_repeats
+
+    def record_overrides(self) -> CellSamplingOverrides:
+        """The ``sampling_overrides`` sub-object for this cell's line."""
+        return CellSamplingOverrides(
+            official_n=self.sampling_overrides.official_n,
+            official_repeats=self.sampling_overrides.official_repeats,
+        )
 
 
 @dataclass(slots=True)
@@ -309,12 +334,14 @@ def _halted_before_optimize(
         ),
         baseline_official=baseline_score, ceiling_official=ceiling_official,
         best_official=None, delta=None, ci95=None,
-        official_repeats_used=config.official_repeats, escalated=False,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
         escalation_note="; ".join(notes), pooled_observation_counts={},
         internal_evals_count=0, optimizer_steps=0,
         spend_usd=_spend_between(spend_before, spend_after), wall_s=wall_s,
         lane=config.lane, window_notes=config.window_notes, status="halted",
         artifacts=CellArtifacts(official_record_before=baseline_before_ref),
+        sampling_overrides=config.record_overrides(),
     )
     ledger.append_cell(record)
     return CellOutcome(
@@ -431,12 +458,23 @@ def run_cell(
         model=config.task_model,
         pool_n_per_stratum=config.pool_n_per_stratum,
         split_sizes=config.split_sizes,
+        overrides=config.sampling_overrides,
     )
     naive = experiment.initial_candidate
     official = official_instances(experiment)
 
-    official_repeats = config.official_repeats
+    official_repeats = config.official_repeats_effective()
     is_eval_row = config.optimizer == "eval"
+    # The composite Eval Config Identity Hash of the official split -- folds in
+    # the (possibly overridden) official Task Set + Repeat Plan, so a reduced-
+    # sampling cell has a DISTINCT identity from the full-config one. It is
+    # part of the env cache key: a reduced cell gets a MISS against a
+    # full-config entry for the same (env, task-model). ``default_config`` (no
+    # overrides) additionally lets a full-config read match OLD sentinel lines.
+    eval_config_hash = (
+        experiment.eval_configs.official.eval_config.config_identity_hash
+    )
+    default_config = config.sampling_overrides.is_noop()
 
     # --- 1. Baseline naive + ceiling official arms (per-task vectors too). ---
     # Point 6 of the statistical-confidence directive: the Eval row establishes
@@ -452,7 +490,12 @@ def run_cell(
     cache = (
         None
         if is_eval_row
-        else ledger.env_cache_for(config.env, task_model=config.task_model)
+        else ledger.env_cache_for(
+            config.env,
+            task_model=config.task_model,
+            eval_config_hash=eval_config_hash,
+            default_config=default_config,
+        )
     )
     ceiling_official: float | None
     if cache is not None:
@@ -778,6 +821,7 @@ def run_cell(
             official_record_before=baseline_before_ref,
             official_record_after=best.artifact_ref.content_hash,
         ),
+        sampling_overrides=config.record_overrides(),
     )
     ledger.append_cell(record)
     # A cleanly-completed (non-halted) cell has its authoritative result in the
@@ -797,6 +841,7 @@ def run_cell(
                 ceiling_per_task=ceiling_per_task,
                 official_repeats_used=official_repeats,
                 task_model=config.task_model,
+                eval_config_hash=eval_config_hash,
             )
         )
     return CellOutcome(
