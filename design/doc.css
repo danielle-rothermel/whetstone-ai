@@ -43,6 +43,9 @@ a { color: var(--accent); }
   font-weight: 600;
 }
 .term-verb { color: var(--term-verb); }
+.term-name.term-implementation-implemented { color: var(--green); }
+.term-name.term-implementation-planned { color: var(--amber); }
+.term-name.term-implementation-uncaptured { color: var(--red); }
 .term-ref {
   color: var(--term-ref);
   text-decoration: underline dotted;
