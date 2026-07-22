@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<style>
+.agent-step-loop-scroll { overflow-x: auto; margin: 12px 0 6px; }
+.agent-step-loop {
+  position: relative; min-width: 720px; height: 405px; box-sizing: border-box;
+  border: 1.5px dashed var(--optim); border-radius: 12px; background: var(--optim-soft);
+}
+.agent-step-loop-label {
+  position: absolute; z-index: 3; top: 10px; left: 18px;
+  font: 700 11px/1.5 var(--font-system); letter-spacing: .06em;
+  text-transform: uppercase; color: var(--optim);
+}
+.agent-loop-node {
+  position: absolute; z-index: 2; width: 34%; min-height: 116px;
+  box-sizing: border-box; margin: 0;
+}
+.agent-loop-decision { left: 4%; top: 70px; }
+.agent-loop-call { right: 4%; top: 70px; }
+.agent-loop-result { right: 4%; top: 250px; }
+.agent-loop-final { left: 4%; top: 250px; }
+.agent-loop-connectors {
+  position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; overflow: visible;
+}
+.agent-loop-connectors > path {
+  fill: none; stroke: var(--optim); stroke-width: 2.25;
+  vector-effect: non-scaling-stroke;
+}
+.agent-loop-path-label {
+  position: absolute; z-index: 3; padding: 2px 7px; border-radius: 999px;
+  background: var(--optim-soft); color: var(--optim);
+  font: 700 10.5px/1.35 var(--font-system); text-align: center;
+}
+.agent-loop-call-label { left: 42%; top: 105px; width: 16%; }
+.agent-loop-result-label { right: 4.5%; top: 213px; width: 18%; }
+.agent-loop-back-label { left: 39%; top: 218px; width: 22%; }
+.agent-loop-exit-label { left: 4%; top: 207px; width: 25%; }
+</style>
+<title>Codex CLI Agent Optimization Run Design</title>
+</head>
+<body>
+<main>
+<h1>Codex CLI Agent Optimization Run Design</h1>
+<div class="byline">whetstone-ai · 2026-07-20</div>
+
+<div class="family-nav">
+  <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <a href="gepa-run.html">GEPA</a>
+  <span class="here">Codex CLI agent</span>
+  <a href="quick-test-rubric.html">Quick Test</a>
+</div>
+
+<div class="intro">
+  <p>One <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> contains exactly one opaque, long-running, tool-using <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a>. Its serializable <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> crosses into the Codex CLI process; one <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> returns the final proposals and evidence. Subsequent <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a> remains authoritative.</p>
+</div>
+
+<p class="small muted">Purple marks what this run adds or changes relative to the Eval run; everything unmarked matches it.</p>
+
+<div class="callout"><b>Algorithm-local vocabulary</b> — defined here because these terms are specific to this optimizer, not shared Whetstone ontology terms:
+  <ul>
+    <li><strong id="local-bridge">bridge</strong> — the transport that exposes the toolkit to a process we don't own and carries <a class="term-ref" href="vocab_and_defs.html#term-tool-call">tool calls</a> and results across the process boundary (MCP in this example). Needed because this is the only doc where the contract leaves our process.</li>
+    <li><strong id="local-control-cost">control cost</strong> — the optimizer's own resource use (agent tokens, wall clock), reported when the agent exits. Advisory metadata for comparing optimizers, never a score. Needed because an agentic optimizer has overhead its <a class="term-ref" href="vocab_and_defs.html#term-tool-call">tool calls</a> don't show.</li>
+  </ul>
+</div>
+
+<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<h3 id="registry">Configuration, contract, and observation registry</h3>
+<p class="small muted">Codex exposes no algorithm hyperparameters. Process settings, Tool Config limits, output requirements, post-run observations, and derived maxima remain separate categories.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Category</th><th>Stable names and illustrative values</th><th>Contract role</th></tr></thead>
+  <tbody>
+    <tr><td>Algorithm hyperparameters</td><td><code>algorithm_hyperparameters=[]</code></td><td>The opaque Codex decision process exposes none to Whetstone.</td></tr>
+    <tr><td>Process and agent configuration</td><td><code>agent_process=codex_cli</code>; <code>agent_model=gpt-5.6</code>; <code>optimization_step_count=1</code></td><td>Fixes execution and the one-Step Run shape; it does not describe the agent's internal strategy.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> configuration</td><td><code id="local-param-max-evaluation-calls">max_evaluation_calls=20</code>; <code>tool_name=evaluate_candidate</code>; <code>tool_config_ref=&lt;pinned config&gt;</code></td><td>At most 20 accepted unique call identities across retry/restart. The valid observed range is <code>0..max_evaluation_calls</code>; identical-ID replay does not consume another slot, and 20 calls are never required.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> (<code>internal</code> role)</td><td><code id="local-param-internal-task-count">internal_task_count=20</code>; <code id="local-param-internal-repeat-count">internal_repeat_count=1</code></td><td>Whetstone-owned measurement performed by each accepted evaluation call.</td></tr>
+    <tr><td>Output contract</td><td><code id="local-param-returned-proposal-count">returned_proposal_count=4</code></td><td>Required base-bound <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> in the Step Result.</td></tr>
+    <tr><td>Materialization configuration</td><td><code id="local-param-fixed-ratio-count">fixed_ratio_count=4</code>; <code>budget_ratio_values=[0.25, 0.5, 0.75, 1.0]</code></td><td>Harness-owned axis expanded only after the Step Result returns.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> (<code>official</code> role)</td><td><code id="local-param-official-task-count">official_task_count=164</code>; <code id="local-param-official-repeat-count">official_repeat_count=3</code></td><td>Authorized official measurement after optimization; independent of internal tool evaluation.</td></tr>
+    <tr><td>Illustrative observations</td><td><code id="local-param-observed-tool-call-count">observed_tool_call_count=18</code>; <code>observed_probe_call_count=6</code>; <code>observed_refine_call_count=9</code>; <code>observed_confirm_call_count=3</code></td><td>Post-run evidence for this walkthrough, not configuration or required behavior; <code>6+9+3=18</code>.</td></tr>
+    <tr><td>Derived maxima and totals</td><td><code>max_internal_rollout_count=max_evaluation_calls×internal_task_count×internal_repeat_count=400</code>; <code>observed_internal_rollout_count=observed_tool_call_count×internal_task_count×internal_repeat_count=360</code>; <code>max_graph_lm_call_count=max_internal_rollout_count×2=800</code>; <code>official_materialization_count=returned_proposal_count×fixed_ratio_count=16</code>; <code>official_rollout_count=D×official_task_count×official_repeat_count</code></td><td>Consequences, never independent knobs or promised consumption. The illustrative nonconvergent case has <code>D=16</code> and derives 7,872 official Rollouts.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="grid-4">
+  <div class="card">
+    <h3>Reused from the Eval run</h3>
+    <ul>
+      <li>Same dr-graph <a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used by Whetstone in the <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> role: <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> → <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> → <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a></li>
+      <li>Same 4 <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Routes</a>, displayed as (<a class="term-ref" href="vocab_and_defs.html#term-provider-service">Provider Service</a>, requested Model) while complete output-affecting <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> refs/hashes contribute to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</li>
+      <li>Variance source: <code>budget_ratio</code> = 0.25, 0.5, 0.75, 1.0</li>
+      <li>HumanEval+ (164 <a class="term-ref" href="vocab_and_defs.html#term-task">tasks</a>) @ pinned revision · 3 <a class="term-ref" href="vocab_and_defs.html#term-repeat">repeats</a> · zstd-19</li>
+      <li>Same ordinary <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> bound under the <code>official</code> role</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Mutation surface &amp; initial candidates</h3>
+    <ul>
+      <li>Mutation surface: the encoder <code>{user_prompt_template}</code> — nothing else may change</li>
+      <li>Starting <a class="term-ref" href="vocab_and_defs.html#term-experiment-candidate">Experiment Candidates</a>: templates <strong>A</strong> and <strong>B</strong> across four <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Routes</a>; fixed ratio axes remain harness-owned</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Toolkit: one tool</h3>
+    <p class="small muted space-top"><code>evaluate_candidate</code> — full definition below.</p>
+    <ul>
+      <li>Input: one named <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a> plus one proposed encoder user prompt template</li>
+      <li>Runs that route at <code>budget_ratio=0.5</code> under a cheaper internal <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a>: <code>internal_task_count=20</code> pinned <a class="term-ref" href="vocab_and_defs.html#term-task">tasks</a> and <code>internal_repeat_count=1</code></li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-tool-capacity">Tool Capacity</a>: <a class="term-ref" href="#local-param-max-evaluation-calls"><code>max_evaluation_calls=20</code></a> accepted unique call identities maximum; the agent may stop after any count from 0 through 20</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Limit, output contract, selection</h3>
+    <ul>
+      <li><code>max_evaluation_calls=20</code> limits accepted unique identities; it does not require the agent to call the tool. Derived ceilings are <code>max_internal_rollout_count=400</code> and <code>max_graph_lm_call_count=800</code></li>
+      <li>Output contract: <code>returned_proposal_count=4</code> ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, one per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a></li>
+      <li>Selection: official-evaluate all 4 valid <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a></li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+
+<div class="plane">
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> <span class="sub">· the single Step's frozen, serializable input; rendered as a prompt plus files</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Starting Candidates &amp; Fixed Axes</b><span class="note">templates A/B × four <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Routes</a> and four ratios over one <a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as the <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a><hr>each complete assignment emits one concrete <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> plus one <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a></span></div>
+    <div class="comp node optim"><b><a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">Mutation Surface</a></b><span class="note">encoder <code>{user_prompt_template}</code> only<hr>outside it, each proposal must match its named starting candidate — the diff check's yardstick</span></div>
+    <div class="comp node optim"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a></b><span class="note">the Step Request serializes one concrete Config; it references the versioned <a class="term-ref" href="vocab_and_defs.html#term-tool-definition">Tool Definition</a> and configures endpoint, ordinary <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> to bind under the <code>internal</code> role, <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>, <code>max_evaluation_calls=20</code>, timeout/policies, Tool Call Store namespace, idempotency and refusal. Eval Sampling and Aggregation measure without altering a <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a>; the <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> must reference the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned to that Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a></span></div>
+    <div class="comp node optim"><b>Output contract</b><span class="note"><code>returned_proposal_count=4</code>, one ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposal</a> for each named <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a><hr>the harness schema and diff check validate proposals; rationale remains record-local <a class="term-ref" href="vocab_and_defs.html#term-provenance">provenance</a>, never a score</span></div>
+  </div>
+</div>
+
+<div class="plane space-top optim">
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a>: <code>evaluate_candidate</code> <span class="sub">· concrete serializable Config referencing a versioned Definition</span></div>
+  <div class="comps">
+    <div class="comp node"><b>Input</b><span class="note">stable call ID, one allowed <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, and one proposed encoder template using <code>MAX_BUDGET</code> and <code>INPUT_CODE</code></span></div>
+    <div class="comp node"><b>Materialization</b><span class="note">sets the complete output-affecting <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> for the chosen base and template at <code>budget_ratio=0.5</code> → one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> plus one <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a>; binds the tool's <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> independently</span></div>
+    <div class="comp node"><b>Cheaper <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a></b><span class="note"><code>internal_task_count=20</code> pinned tasks · <code>internal_repeat_count=1</code> · same facts-first <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> and metrics as <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a><hr>Sampling and Aggregation distinguish its <code>eval_config_hash</code>; the shared Procedure Config is already in <code>graph_hash</code>, and its <code>internal</code> <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Role</a> comes from <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a></span></div>
+    <div class="comp node"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a></b><span class="note"><code>internal_task_count×internal_repeat_count=20</code> <a class="term-ref" href="vocab_and_defs.html#term-rollout">Rollout</a> refs, <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>/version, aggregate <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>, request/response evidence, usage, cost and <a class="term-ref" href="vocab_and_defs.html#term-provenance">provenance</a>; identical call-ID replay is idempotent</span></div>
+    <div class="comp node"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-call-store">Tool Call Store</a> &amp; <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handle</a></b><span class="note">Whetstone store key = <code>(tool_config_hash, call_id)</code>; owns acceptance/refusal/completion and enforces <code>max_evaluation_calls=20</code> accepted unique identities across restart. Identical-key replay returns the completed Result without spending another slot. The <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handle</a> is constructed from the <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> and never serialized</span></div>
+  </div>
+</div>
+
+<div class="callout"><b>Measurement and <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>.</b> <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> remains Sampling + Evaluation Procedure + Aggregation and references the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned statically to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>. Procedure changes therefore change both <code>graph_hash</code> and <code>eval_config_hash</code>; Sampling/Aggregation changes affect only <code>eval_config_hash</code>. This cheaper <a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">internal evaluation</a> uses the same facts-first Procedure Config as <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a>, so matching <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> retain the same <code>graph_hash</code>; role, authority when official, and realized-environment attestation remain in <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>, while an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. The <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> separately owns pass ↑ / compression ↓ <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>. Official evaluation computes <a class="term-ref" href="vocab_and_defs.html#term-objective-vector">Objective Vectors</a>/Aggregates, never <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>. Provider evidence retains least-processed request and response or failure bodies alongside normalized usage, cost and diagnostics; agent conversation evidence and control usage remain separate optimizer evidence.</div>
+
+<div class="section-head" id="system"><h2>One Out-of-Process Optimization Step Inside the Run</h2></div>
+
+<div class="flow">
+  <div class="plane">
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> configuration <span class="sub">· exactly one Step; all inputs frozen</span></div>
+    <div class="comps">
+      <div class="comp settled"><b>Materializer</b><span class="note"><a class="term-ref" href="vocab_and_defs.html#term-initial-candidate">Initial Candidates</a> and fixed axes in; after the Step Result, <code>official_materialization_count=returned_proposal_count×fixed_ratio_count=16</code> <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs</span></div>
+      <div class="comp settled optim"><b>Mutation surface · Toolkit · Output contract</b><span class="note">as specified above — the whole interface the agent gets; Codex exposes no algorithm hyperparameters</span></div>
+      <div class="comp settled optim"><b>Selection: official-evaluate all 4 valid <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a></b><span class="note">named, hashed policy; preserves agent order as selection input</span></div>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a> Context</b><span class="note">binds <code>official_task_count=164</code> and <code>official_repeat_count=3</code>, the authorized write path, and realized-environment attestation</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>the single <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> crosses the process boundary as a prompt plus files and serializes the <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a>; the <a class="term-ref" href="#local-bridge">bridge</a> exposes its Runtime Tool Handle</span> <span class="glyph">▼</span></div>
+
+  <div class="agent-step-loop-scroll">
+    <div class="agent-step-loop" role="group" aria-label="The single opaque Optimization Step: agent decision calls the evaluation tool, Tool Result returns to the decision through a back-edge, and agent stop or the evaluation-call maximum exits to final proposals.">
+      <div class="agent-step-loop-label">Exactly one opaque, long-running <a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a> · Codex CLI process boundary</div>
+      <svg class="agent-loop-connectors" viewBox="0 0 1000 405" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <defs>
+          <marker id="codex-loop-arrowhead" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L8,4 L0,8 Z" fill="var(--optim)" stroke="none"></path>
+          </marker>
+        </defs>
+        <path d="M380 128 H620" marker-end="url(#codex-loop-arrowhead)"></path>
+        <path d="M790 186 V250" marker-end="url(#codex-loop-arrowhead)"></path>
+        <path d="M620 308 C500 308 500 214 210 214 V186" marker-end="url(#codex-loop-arrowhead)"></path>
+        <path d="M100 186 V250" marker-end="url(#codex-loop-arrowhead)"></path>
+      </svg>
+      <div class="comp settled optim agent-loop-node agent-loop-decision"><b>Opaque agent decision</b><span class="note">The Step Request is in-process. Codex may draft, revise, inspect prior Tool Results, make another Tool Call, or stop; Whetstone observes no internal strategy state machine.</span></div>
+      <div class="comp settled optim agent-loop-node agent-loop-call"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-call">Tool Call</a></b><span class="note">Stable call identity and candidate cross the <a class="term-ref" href="#local-bridge">bridge</a>. The Runtime Tool Handle binds services; the Tool Call Store accepts a new identity only below <code>max_evaluation_calls</code>.</span></div>
+      <div class="comp settled optim agent-loop-node agent-loop-result"><b><a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a></b><span class="note">Reward, internal Rollout refs, evidence, usage, cost, and record-local provenance return to Codex. Identical-ID replay is idempotent and consumes no new slot.</span></div>
+      <div class="comp settled optim agent-loop-node agent-loop-final"><b>Final proposals and evidence</b><span class="note">The agent may stop after any 0..20 accepted unique calls. At 20, another new identity is refused, but replay and Step finalization remain available.</span></div>
+      <div class="agent-loop-path-label agent-loop-call-label">new call</div>
+      <div class="agent-loop-path-label agent-loop-result-label">evaluation completes</div>
+      <div class="agent-loop-path-label agent-loop-back-label">Tool Result back-edge</div>
+      <div class="agent-loop-path-label agent-loop-exit-label">agent-stop / maximum exit</div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>the agent-stop / maximum path prepares final proposals and evidence for the sole Step Result</span> <span class="glyph">▼</span></div>
+
+  <div class="plane optim">
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> <span class="sub">· the sole Step's serialized cross-process return</span></div>
+    <div class="comps">
+      <div class="comp settled optim"><b>Final proposals</b><span class="note"><code>returned_proposal_count=4</code> ordered, stable-ID, base-bound <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, written as JSON and parsed against the shared schema</span></div>
+      <div class="comp settled optim"><b>Step evidence</b><span class="note">Step Request identity; accepted/refused/completed Tool Call Store Entries and Tool Result references; agent conversation evidence; control usage, cost, wall clock, and record-local provenance</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span>the Optimization Run terminalizes after this one Step Result; official validation and evaluation begin afterward</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label">Evaluation harness <span class="sub">· runs <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a></span></div>
+    <div class="comps">
+      <div class="comp settled optim"><b>Validation &amp; materialization</b><span class="note">the harness validates all 4 <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>: each binds exactly one allowed base and changes only encoder <code>{user_prompt_template}</code>; it then expands every valid proposal over four ratios and emits 16 <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs</span></div>
+      <div class="comp settled optim"><b>Selection &amp; deduplication</b><span class="note">the <a class="term-ref" href="vocab_and_defs.html#term-selection-policy">evaluate-all Selection Policy</a> selects all 16 ordered <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> slots, then deduplicates the selected records by full <code>graph_hash</code> to <code>D ≤ 16</code> admitted graphs</span></div>
+      <div class="comp settled"><b>Evaluator</b><span class="note">runs <code>official_rollout_count=D×official_task_count×official_repeat_count</code>; the illustrative nonconvergent example has <code>D=16</code> and derives 7,872 <a class="term-ref" href="vocab_and_defs.html#term-rollout">Rollouts</a></span></div>
+      <div class="comp settled"><b>Platform mapping &amp; <a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a></b><span class="note">one <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Item</a>/<code>execute-rollout</code> Stage per <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a>. Whetstone derives collision-free labels from every exact <code>(provider, protocol, model)</code> identity and applies all relevant labels to multi-route work. Mandatory empty-selector and exact-label capacities all apply for the full ADMITTED Stage, including backoff; dr-platform supplies only generic enforcement. See the <a href="quick-test-rubric.html#provider-concurrency-control">bounded control contract</a></span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Key</a> = (<code>graph_hash</code>, <code>eval_config_hash</code>, <a class="term-ref" href="vocab_and_defs.html#term-task">task</a>, <a class="term-ref" href="vocab_and_defs.html#term-repeat">repeat</a>); <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> adds context ID</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-rollout">Rollout</a> execution <span class="sub">· graph nodes inside one execute-rollout Platform Stage</span></div>
+    <div class="hflow">
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-external-input">Graph External Inputs</a></b><span class="note"><code>input_code</code> = <code>task.gt_code_wo_comments</code>, <code>tests</code> = <code>task.tests</code> via dr-code; these runtime values are outside <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> identity</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note">the complete <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> ref/hash is output-affecting and contributes to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity; Request references it + <a class="term-ref" href="vocab_and_defs.html#term-transcript">Transcript</a>; nonblank accepted native text becomes <a class="term-ref" href="vocab_and_defs.html#term-generation">Generation</a></span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b>Decoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note"><a class="term-ref" href="vocab_and_defs.html#term-provider-execution-policy">Provider Execution Policy</a> owns timeout, credentials and native retries=0. dr-providers retains least-processed request and response or failure bodies without authorization or credential material</span></div>
+      <span class="harrow">→</span>
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a> · sole terminal role</b><span class="note">its static <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assignment is included in <code>graph_hash</code>; <a class="term-ref" href="vocab_and_defs.html#term-submission-text">Submission Text</a> → <a class="term-ref" href="vocab_and_defs.html#term-code-artifact">Code Artifacts</a> → <a class="term-ref" href="vocab_and_defs.html#term-metric-fact">Metric Facts</a>/Records + integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a><hr>the procedure derives per-observation score; Aggregation reduces. Its ordinary validated <a class="term-ref" href="vocab_and_defs.html#term-node-output">Node Output</a> becomes <a class="term-ref" href="vocab_and_defs.html#term-graph-output">Graph Output</a> unchanged on success</span></div>
+    </div>
+    <div class="comps space-top">
+      <div class="comp substrate"><b>Replay &amp; terminality</b><span class="note">this valid graph has exactly one sink Node; terminal is its role, not a Node Type. Within one <a class="term-ref" href="vocab_and_defs.html#term-platform-stage-attempt">Platform Stage Attempt</a>, DBOS checkpoints retry-disabled <a class="term-ref" href="vocab_and_defs.html#term-provider-call-attempt">Provider Call Attempt</a> observations; <a class="term-ref" href="vocab_and_defs.html#term-durability-replay">Durability Replay</a> reconstructs <a class="term-ref" href="vocab_and_defs.html#term-node-outcome">Node Outcomes</a> and the <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a> from checkpoint evidence. That ordinary logical Result contains <a class="term-ref" href="vocab_and_defs.html#term-graph-run">Graph Run</a> identity, <a class="term-ref" href="vocab_and_defs.html#term-external-input">Graph External Inputs</a>, terminal Outcome, relevant <a class="term-ref" href="vocab_and_defs.html#term-provider-call-attempt">Provider Call Attempt</a> records or references and record-local <a class="term-ref" href="vocab_and_defs.html#term-provenance">provenance</a>, and per-Node Outcomes, execution order and evidence. It has no Platform Stage Attempt state or separate persistence path: it is nested in the one immutable authoritative <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> whose atomic binding closes the Stage; FAILED+unbound gates operator retry</span></div>
+    </div>
+  </div>
+
+  <div class="flow-arrow"><span><code>official_rollout_count=D×official_task_count×official_repeat_count</code> ordinary <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> referenced for certification flow to aggregation; the illustrative nonconvergent case derives 7,872</span> <span class="glyph">▼</span></div>
+
+  <div class="plane">
+    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> &amp; analysis <span class="sub">· immutable facts, then derived views</span></div>
+    <div class="comps">
+      <div class="comp settled"><b><a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a></b><span class="note">one authoritative binding per <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a>; each ordinary Result contains its reconstructed <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a> as nested execution evidence, and the Official Evaluation Record certifies its reference. A different-ref identity conflict never overwrites it, marks the conflicting attempt successful, or authorizes retry replacement. Deliberate re-evaluation uses a new context or <a class="term-ref" href="vocab_and_defs.html#term-repeat">Repeat</a></span></div>
+      <div class="comp settled"><b>Aggregation</b><span class="note">exactly <code>D</code> aggregates by distinct admitted <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>; the nonconvergent example has 16, and exhausted infrastructure failure makes one incomplete</span></div>
+      <div class="comp settled"><b>Analysis</b><span class="note">4 Model Route-specific proposal curves across the ratios; baselines may be reused only with matching keys, official attestation and compatible environment</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="run"><h2>Full Run Walkthrough: One Step with <a class="term-ref" href="#local-param-observed-tool-call-count"><code>observed_tool_call_count=18</code></a></h2></div>
+
+<div class="run">
+  <div class="tick optim">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes candidates, axes, <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">mutation surface</a>, output contract, process configuration, and one concrete <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> referencing the versioned <code>evaluate_candidate</code> Definition. The Config owns internal measurement, <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>, endpoint, Tool Call Store/refusal policy, and <code>max_evaluation_calls=20</code>.</p></div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Creates the Run's only <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> and spawns Codex CLI. The rendered Request crosses the process boundary with the serialized <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a>, while the <a class="term-ref" href="#local-bridge">bridge</a> exposes the non-serializable <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handle</a> bound to its durable <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store">Tool Call Store</a> namespace.</p></div>
+  </div>
+</div>
+
+<p class="small muted"><b>Illustrative observations inside the one opaque Step.</b> These are sequential evidence summaries, not phases configured by Whetstone.</p>
+<div class="run">
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Illustrative observed probe:</em> drafts six differently shaped encoder templates — terse spec, pseudocode, invariants-first — and calls <code>evaluate_candidate</code> on each to map the space. The post-run label and <code>observed_probe_call_count=6</code> are evidence summaries, not an exposed phase or parameter.</p>
+        <div class="ledger"><b>output</b>6 × 20 internal <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> referenced by <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a>; 6 accepted unique identities of the 20 maximum</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Illustrative observed refinement:</em> iterates on two promising directions — tightening wording, trading description length against decoder success — with <code>observed_refine_call_count=9</code> more accepted unique calls. How it chose these variants is invisible to, and irrelevant to, the contract.</p>
+        <div class="ledger"><b>output</b>9 more calls' <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a>; 15 accepted unique identities cumulatively</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p><em>Illustrative observed confirmation:</em> re-runs final <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> with new call IDs, then elects to stop after <code>observed_confirm_call_count=3</code> more calls. The Tool Call Store returns completed Results for identical keys, would refuse a 21st accepted unique identity, and restores accounting after <a class="term-ref" href="#local-bridge">bridge</a> restart. Two available slots remain unused by agent choice.</p>
+        <div class="ledger"><b>output</b><code>observed_tool_call_count=6+9+3=18</code> within <code>0..max_evaluation_calls</code>; <code>observed_internal_rollout_count=18×20×1=360</code> internal <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a></div>
+      </div>
+    </div>
+</div>
+
+<div class="run">
+  <div class="tick optim">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>Writes the one <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> with exactly <code>returned_proposal_count=4</code> ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>. Each has a stable proposal ID and binds one of the four <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Routes</a> plus its proposed template; no route is duplicated or omitted. Annotations are record-local <a class="term-ref" href="vocab_and_defs.html#term-provenance">provenance</a>, never <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a> or an official <a class="term-ref" href="vocab_and_defs.html#term-objective">Objective</a>.</p>
+      <div class="ledger"><b>output</b>serialized Step Result with final proposals and Tool Call/Result references, parsed against the shared schema</div>
+    </div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>The agent exits; the harness validates and commits the immutable Step Result, attaches agent conversation evidence and token usage as <a class="term-ref" href="#local-control-cost">control cost</a>, and terminalizes the one-Step Optimization Run. This run is now comparable to COPRO or GEPA on total resources consumed.</p>
+      <div class="ledger"><b>output</b><a class="term-ref" href="#local-control-cost">control cost</a>: agent tokens + wall clock; 18 <a class="term-ref" href="vocab_and_defs.html#term-tool-call">Tool Calls</a>' costs already itemized</div>
+    </div>
+  </div>
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Validates all <code>returned_proposal_count=4</code> <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> as distinct allowed bases with template-only mutations, preserves agent order, then expands them to <code>official_materialization_count=16</code> <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs. The <a class="term-ref" href="vocab_and_defs.html#term-selection-policy">evaluate-all Selection Policy</a> selects all 16 ordered record slots, deduplicates the selected records by full <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>, and admits <code>D≤16</code> graphs. <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Records</a> and <a class="term-ref" href="vocab_and_defs.html#term-official-plot-manifest">Official Plot Manifests</a> MUST preserve the ordered mapping from every selected <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference, including when multiple selected records share one graph and aggregate.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Submits exactly <code>official_rollout_count=D×official_task_count×official_repeat_count</code> <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Items</a> with no duplicate <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Keys</a>; the illustrative nonconvergent example has <code>D=16</code> and derives 7,872. Every logical provider attempt runs in one <code>@DBOS.step(retries_allowed=False)</code> with native retries zero; within a <a class="term-ref" href="vocab_and_defs.html#term-platform-stage-attempt">Platform Stage Attempt</a>, DBOS checkpoints completed typed observations and <a class="term-ref" href="vocab_and_defs.html#term-durability-replay">Durability Replay</a> reconstructs <a class="term-ref" href="vocab_and_defs.html#term-node-outcome">Node Outcomes</a> and the <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a>. dr-store persists one immutable <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> containing that nested evidence, not an attempt ledger or a separate <a class="term-ref" href="vocab_and_defs.html#term-graph-run-result">Graph Run Result</a>, and atomic binding remains authoritative.</p>
+      <div class="ledger"><b>output</b>authoritative bound refs or explicit FAILED Stages; dr-platform does not own uniqueness</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates complete ordinary <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a> referenced and certified by the <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> only. The illustrative <code>observed_internal_rollout_count=360</code> internal Results remain queryable but lack official authority. Exhausted infrastructure failures keep aggregates incomplete; deliberate re-evaluation needs a new context or <a class="term-ref" href="vocab_and_defs.html#term-repeat">Repeat</a>.</p>
+      <div class="ledger"><b>output</b>exactly <code>D</code> <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a> by distinct <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>; 16 in the explicit nonconvergent example</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: four base-bound <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> against matched baselines</h2></div>
+
+<p>In the stated nonconvergent case, the four <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> each produce one base-specific curve of 4 <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a>: <a class="term-ref" href="vocab_and_defs.html#term-average-binary-test-pass-rate">Average Binary Test Pass Rate</a> vs <a class="term-ref" href="vocab_and_defs.html#term-mean-compression-ratio">Mean Compression Ratio</a> derived from integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a>. Converged <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hashes</a> deduplicate aggregate identity. Baseline reuse requires matching <a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Keys</a>, attestation and environment compatibility.</p>
+
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+
+<div class="grid-3">
+  <div class="card optim">
+    <h3>The single-Step contract crosses the boundary</h3>
+    <ul>
+      <li>The Optimization Run contains exactly one opaque, long-running, tool-using Optimization Step; no intermediate Step boundary is inferred from Tool Calls</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> out as a prompt plus files; serialized <a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> with final proposals/evidence back as JSON; tools over a <a class="term-ref" href="#local-bridge">bridge</a></li>
+      <li>Nothing downstream changes: the diff check, selection, Evaluator, and analysis cannot tell the transport apart</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Tool limit and output enforcement</h3>
+    <ul>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-tool-definition">Tool Definition</a> defines interface; <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> configures policy; <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store">Tool Call Store</a> owns call/<a class="term-ref" href="vocab_and_defs.html#term-tool-capacity">Tool Capacity</a> state; <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handle</a> binds services</li>
+      <li><code>max_evaluation_calls=20</code> allows 0 through 20 accepted unique identities; it is a ceiling, not a target. Same-ID replay consumes no new slot, and the 21st new identity is refused</li>
+      <li>The required shape is <code>returned_proposal_count=4</code> base-bound proposals; schema validation rejects duplicate/missing bases, while qualitative strategy remains opaque</li>
+      <li>The observed 6/9/3 probe/refine/confirm split is only an illustrative post-run interpretation, never a state machine or hyperparameter</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">Internal Evaluation</a> vs <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a></h3>
+    <ul>
+      <li>The tool's <a class="term-ref" href="vocab_and_defs.html#term-rollout">Rollouts</a> bind a cheaper <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> — smaller <a class="term-ref" href="vocab_and_defs.html#term-task-set">task set</a>, 1 <a class="term-ref" href="vocab_and_defs.html#term-repeat">repeat</a>, same facts-first <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a>. The shared procedure assignment is in <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> identity, so matching internal and official variants retain the same <code>graph_hash</code></li>
+      <li>The authorized <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> carries the <code>official</code> role, authority, and attestation; only the <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Results</a>, and equal hashes never promote internal results</li>
+      <li>The agent may evaluate however its tools allow — "evaluate" alone is the general verb</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Maximums, observations, and cost</h3>
+    <ul>
+      <li><code>max_internal_rollout_count=400</code> and <code>max_graph_lm_call_count=800</code> are derived ceilings, not promised usage; this walkthrough observes <code>observed_tool_call_count=18</code> and <code>observed_internal_rollout_count=360</code></li>
+      <li><code>official_rollout_count=D×official_task_count×official_repeat_count</code>; the illustrative nonconvergent case has <code>D=16</code> and derives 7,872 official Rollouts</li>
+      <li><a class="term-ref" href="#local-control-cost">Control cost</a> (agent tokens, wall clock) is captured at exit — advisory metadata for comparing optimizers, never a score</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Sample holdout is the designer's call</h3>
+    <ul>
+      <li>Whether the tool's <code>internal_task_count=20</code> subset may contain official-evaluation <a class="term-ref" href="vocab_and_defs.html#term-task">tasks</a> is left to experimental designers — the question is sharpest in this doc, and this design does not litigate it</li>
+      <li>The hashes keep the two measurement regimes separate either way</li>
+    </ul>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

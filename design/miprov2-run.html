@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<title>MIPROv2 Run Design</title>
+</head>
+<body>
+<main>
+<h1>MIPROv2 Run Design</h1>
+<div class="byline">whetstone-ai · 2026-07-22</div>
+
+<div class="family-nav">
+  <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <span class="here">MIPROv2</span>
+  <a href="gepa-run.html">GEPA</a>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+  <a href="quick-test-rubric.html">Quick Test</a>
+</div>
+
+<div class="intro">
+  <p>A MIPROv2 <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> is an ordered history of single <a class="term-ref" href="#local-optimization-step">Optimization Steps</a>: initialize and bootstrap candidate pools, fully evaluate the default program, run seeded TPE minibatch trials, periodically and finally promote the best eligible combination to full evaluation, then complete with ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>. Each optimizer invocation only proposes candidates and an <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a>. Whetstone validates, materializes and evaluates outside that invocation, persists an immutable <a class="term-ref" href="#local-optimization-step-result">Optimization Step Result</a>, and passes its references to the next invocation.</p>
+</div>
+
+<p class="small muted">Purple marks the optimization machinery; everything unmarked follows the Eval run. The step boundary is deliberate: optimizer code never executes evaluation.</p>
+
+<div class="callout">
+  <b>Algorithm-local vocabulary</b> — these anchors describe this MIPROv2 protocol without adding shared Whetstone vocabulary:
+  <ul>
+    <li><span class="key" id="local-optimization-step">Optimization Step</span> — one restartable transition within an <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>. It consumes one immutable <a class="term-ref" href="#local-optimization-step-request">Optimization Step Request</a> and ends only after Whetstone persists its immutable <a class="term-ref" href="#local-optimization-step-result">Optimization Step Result</a>.</li>
+    <li><span class="key" id="local-optimization-step-request">Optimization Step Request</span> — the serializable input to one optimizer invocation: run identity, step index and kind, immutable prior Step Result and history references, pool identities, sampler/study-state reference, fixed hyperparameters, budget state and output contract. It contains no mutable evaluator capability.</li>
+    <li><span class="key" id="local-optimization-step-result">Optimization Step Result</span> — Whetstone's immutable record of one completed step: accepted candidates, resolved Evaluation Intents, measurement and aggregate references, observed scores, updated history/study-state references, budget accounting and terminal status. The next Step Request references it; it is never edited in place.</li>
+    <li><span class="key" id="local-evaluation-intent">Evaluation Intent</span> — an immutable optimizer-produced request for Whetstone to measure a named candidate or <a class="term-ref" href="#local-combination">combination</a>. It selects the candidate/combination identity, exact target <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> reference and identity, required <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> role/policy, purpose (<code>bootstrap</code>, <code>baseline_full</code>, <code>minibatch</code> or <code>promotion_full</code>), and a correlation key back to the run and step. Task/repeat scope comes from the target Eval Config. An intent contains no score or result and does not itself perform evaluation.</li>
+    <li><span class="key" id="local-instruction">instruction</span> — directive text in the encoder user prompt template, apart from the <a class="term-ref" href="#local-demo-block">demo block</a> and prompt variables.</li>
+    <li><span class="key" id="local-demo-block">demo block</span> — a formatted run of few-shot ground-truth-code → encoded-representation pairs in the encoder user prompt template.</li>
+    <li><span class="key" id="local-demo-set">demo set</span> — one particular choice of pairs for the demo block; the empty set counts.</li>
+    <li><span class="key" id="local-combination">combination</span> — one (instruction, demo set) pair assembled into a complete encoder user prompt template.</li>
+    <li><span class="key" id="local-proposal-lm">proposal LM</span> — the LM called to draft instructions; it is optimizer-side compute, not a node of the Graph.</li>
+    <li><span class="key" id="local-trial">trial</span> — one sampler step that may choose a previously sampled combination and requests one minibatch measurement.</li>
+    <li><span class="key" id="local-cardinality-failure">cardinality failure</span> — an explicit failed terminal Step Result when required pool or returned-proposal cardinality cannot be met. It prevents official materialization.</li>
+  </ul>
+  In this page, <span class="key">unevaluated</span> always means “no completed Step Result records a measurement of this exact combination under the exact target Eval Config identity.” Full evaluation under one Eval Config does not make the combination evaluated under another.
+</div>
+
+<div class="callout">
+  <b>Algorithm-local identity.</b> MIPROv2 owns three versioned identity domains. Each owner selects the stated <a class="term-ref" href="vocab_and_defs.html#term-identity-payload">Identity Payload</a>, wraps it in <code>{schema, schema_version, payload}</code>, and computes the full lowercase SHA-256 <a class="term-ref" href="vocab_and_defs.html#term-identity-hash">Identity Hash</a> over canonical identity JSON.
+  <ul>
+    <li><span class="key" id="local-demo-set-identity-document">Demo Set Identity Document</span> — <code>schema=miprov2.demo-set</code>, <code>schema_version=1</code>; payload selects the ordered demo pairs with exact <code>ground_truth_code</code> and <code>encoded_representation</code>. Its <span class="key" id="local-demo-set-identity-hash">Demo Set Identity Hash</span> establishes demo-set equality.</li>
+    <li><span class="key" id="local-instruction-identity-document">Instruction Identity Document</span> — <code>schema=miprov2.instruction</code>, <code>schema_version=1</code>; payload selects exact validated <code>instruction_text</code>. Attempt nonce, evidence and cost are excluded. Its <span class="key" id="local-instruction-identity-hash">Instruction Identity Hash</span> establishes instruction equality.</li>
+    <li><span class="key" id="local-trial-combination-identity-document">Trial Combination Identity Document</span> — <code>schema=miprov2.trial-combination</code>, <code>schema_version=1</code>; payload selects the full instruction and demo-set Identity Hashes. Trial ID and scores are excluded. Its <span class="key" id="local-trial-combination-identity-hash">Trial Combination Identity Hash</span> groups repeated trials and establishes combination equality.</li>
+  </ul>
+  A <a class="term-ref" href="vocab_and_defs.html#term-content-hash">Content Hash</a> covers a complete persisted object for storage integrity and never substitutes for these identities.
+</div>
+
+<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<h3>Registry: hyperparameters, evaluation configuration, output contract and derived counts</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Category</th><th>Canonical name</th><th>Example</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-num-trials">num_trials</code></td><td>12</td><td>Number of TPE minibatch <a class="term-ref" href="#local-trial">trial</a> steps. Repeated combination identities are allowed.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-minibatch-full-eval-steps">minibatch_full_eval_steps</code></td><td>5</td><td>Promote after every five minibatch trials and once after the final trial if it is off-cadence.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-num-demo-set-candidates">num_demo_set_candidates</code></td><td>4</td><td>Frozen demo-set pool size, including the empty set.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-max-bootstrapped-demos">max_bootstrapped_demos</code></td><td>3</td><td>Maximum bootstrapped demonstrations in one nonempty demo-set candidate.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-max-labeled-demos">max_labeled_demos</code></td><td>0</td><td>Maximum labeled demonstrations added to one demo set in this example.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-num-instruction-candidates">num_instruction_candidates</code></td><td>6</td><td>Frozen instruction-pool size: templates A/B plus four accepted proposal-LM instructions.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-instruction-attempt-cap">instruction_attempt_cap</code></td><td>12</td><td>Maximum proposal-LM attempts to obtain the required distinct valid instruction identities.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-proposal-temperature">proposal_temperature</code></td><td>1.0</td><td>Proposal-LM sampling temperature used while constructing the instruction pool.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-sampler">sampler</code></td><td><code>tpe</code></td><td>Bayesian sampler used for trial suggestions and study updates.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><code id="local-param-seed">seed</code></td><td>9</td><td>Seed for reproducible pool construction, minibatch selection, sampling and tie-break inputs.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-minibatch-task-count">minibatch_task_count</code></td><td>8</td><td>Tasks in each trial's minibatch measurement; not an optimizer hyperparameter.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-full-eval-task-count">full_eval_task_count</code></td><td>35</td><td>Tasks in baseline and promotion full measurements.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>internal</code> role)</td><td><code id="local-param-internal-repeat-count">internal_repeat_count</code></td><td>1</td><td>Repeats per internal task.</td></tr>
+    <tr><td>Output contract</td><td><code id="local-param-returned-proposal-count">returned_proposal_count</code></td><td>3</td><td>Required distinct, ordered, measured Optimization Proposals on success; final official evaluation covers every one.</td></tr>
+    <tr><td>Example fixed axis</td><td><code id="local-param-fixed-ratio-count">fixed_ratio_count</code></td><td>4</td><td>Budget-ratio values expanded by the harness for each returned proposal.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>official</code> role)</td><td><code id="local-param-official-task-count">official_task_count</code></td><td>164</td><td>Tasks in the official Task Set.</td></tr>
+    <tr><td><a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> setting (<code>official</code> role)</td><td><code id="local-param-official-repeat-count">official_repeat_count</code></td><td>3</td><td>Repeats per official task.</td></tr>
+    <tr><td>Derived count</td><td><code id="local-derived-combination-pool-size">combination_pool_size</code></td><td>24</td><td><a class="term-ref" href="#local-param-num-instruction-candidates"><code>num_instruction_candidates=6</code></a> × <a class="term-ref" href="#local-param-num-demo-set-candidates"><code>num_demo_set_candidates=4</code></a>.</td></tr>
+    <tr><td>Derived count</td><td><code id="local-derived-scheduled-promotion-count">scheduled_promotion_count</code></td><td>3</td><td><code>ceil(</code><a class="term-ref" href="#local-param-num-trials"><code>num_trials=12</code></a><code> / </code><a class="term-ref" href="#local-param-minibatch-full-eval-steps"><code>minibatch_full_eval_steps=5</code></a><code>)</code>: after trials 5, 10 and 12.</td></tr>
+    <tr><td>Derived count</td><td><code id="local-derived-planned-search-measurement-rollouts">planned_search_measurement_rollouts</code></td><td>236</td><td>Successful illustrative path: trial minibatches plus the default baseline and three completed promotions; excludes data-dependent bootstrap measurements. A recorded no-op promotion lowers the completed count.</td></tr>
+    <tr><td>Derived count</td><td><code id="local-derived-official-materialization-count">official_materialization_count</code></td><td>12</td><td>Three returned proposals × four ratios; all returned proposals receive final official evaluation.</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small muted space-top"><b>Linked example arithmetic:</b> trial measurements = <a class="term-ref" href="#local-param-num-trials"><code>num_trials=12</code></a> × <a class="term-ref" href="#local-param-minibatch-task-count"><code>minibatch_task_count=8</code></a> × <a class="term-ref" href="#local-param-internal-repeat-count"><code>internal_repeat_count=1</code></a> = 96 Rollouts. On the successful illustrative path, full search measurements = (one default baseline + <a class="term-ref" href="#local-derived-scheduled-promotion-count"><code>scheduled_promotion_count=3</code></a>) × <a class="term-ref" href="#local-param-full-eval-task-count"><code>full_eval_task_count=35</code></a> × 1 = 140 Rollouts. Therefore <a class="term-ref" href="#local-derived-planned-search-measurement-rollouts"><code>planned_search_measurement_rollouts=236</code></a>, excluding bootstrap work because accepted-demo yield is data-dependent; each no-op promotion subtracts 35 from completed work. Official work is <code>D × </code><a class="term-ref" href="#local-param-official-task-count"><code>official_task_count=164</code></a><code> × </code><a class="term-ref" href="#local-param-official-repeat-count"><code>official_repeat_count=3</code></a>; with 12 nonconvergent materializations, <code>D=12</code> and the total is 5,904.</p>
+
+<div class="grid-4">
+  <div class="card">
+    <h3>1 <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a></h3>
+    <p class="small muted space-top">The same model plays encoder and decoder, as in the Eval experiment.</p>
+    <ul><li>openrouter, <code>deepseek/deepseek-v4-flash</code></li></ul>
+    <p class="small muted space-top">The complete encoder and decoder <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> references and identities remain output-affecting. Other Model Routes get independent Optimization Runs.</p>
+  </div>
+  <div class="card optim">
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-initial-candidate">Initial Candidates</a> &amp; <a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">Mutation Surface</a></h3>
+    <ul>
+      <li>Default program: encoder template A with the empty demo set</li>
+      <li>Initial candidates: encoder templates A and B</li>
+      <li>Mutation surface: encoder <code>{user_prompt_template}</code> only</li>
+      <li>Internal axes: instruction × demo set, assembled to plain template text before validation</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Two Eval Configs bound under the <code>internal</code> Evaluation Role</h3>
+    <ul>
+      <li><b>Minibatch:</b> <a class="term-ref" href="#local-param-minibatch-task-count"><code>minibatch_task_count=8</code></a> × 1 repeat</li>
+      <li><b>Full:</b> <a class="term-ref" href="#local-param-full-eval-task-count"><code>full_eval_task_count=35</code></a> × 1 repeat</li>
+      <li>Both fix Sampling and Aggregation policy and use the same graph-assigned <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a></li>
+      <li>Evaluation authority stays with Whetstone between optimizer invocations</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Result and official-evaluation contract</h3>
+    <ul>
+      <li>Success returns exactly <a class="term-ref" href="#local-param-returned-proposal-count"><code>returned_proposal_count=3</code></a> distinct, ordered, measured proposals</li>
+      <li>A cardinality failure returns a failed Step Result and permits no official materialization</li>
+      <li>Whetstone validates and officially evaluates every returned proposal across all four fixed ratios</li>
+      <li>Eval Config bound under the <code>official</code> Evaluation Role: HumanEval+ (164) at a pinned revision, three repeats, zstd-19</li>
+    </ul>
+  </div>
+</div>
+
+<div class="section-head" id="specified"><h2>Run Configurations and Step Boundary</h2></div>
+
+<div class="plane">
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> <span class="sub">· identical to the Eval experiment</span></div>
+  <div class="hflow">
+    <div class="comp node"><b>Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note">input: <code>input_code</code><br>output: encoded representation<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b>Decoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a></b><span class="note">decoder prompt and complete Provider Call Config remain fixed</span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b><a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a></b><span class="note">static Evaluation Procedure Config reference/identity is part of Graph Config identity; emits metric facts and integer description-length evidence</span></div>
+  </div>
+</div>
+
+<div class="plane optim">
+  <div class="plane-label" id="mipro-run-diagram-title">High-level MIPROv2 Optimization Run <span class="sub">· external evaluation loop and completion exit</span></div>
+  <figure class="mipro-run-diagram" aria-labelledby="mipro-run-diagram-title" aria-describedby="mipro-run-diagram-caption">
+    <div class="mipro-run-map">
+      <div class="mipro-run-lane mipro-run-lane--optimizer">MIPROv2 algorithm / optimizer</div>
+      <div class="mipro-run-lane mipro-run-lane--whetstone">Whetstone evaluation boundary</div>
+
+      <svg class="mipro-run-connectors" viewBox="0 0 1200 800" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        <defs>
+          <marker id="mipro-arrow-optimizer" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+          <marker id="mipro-arrow-whetstone" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z"></path>
+          </marker>
+        </defs>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M350 122 V146"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M594 176 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 206 V218 H500 V230"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 290 V302 H150 V314"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M294 344 H306"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 344 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 374 V428 H694"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 458 V482"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer mipro-run-path--loop" d="M406 512 H68 V344 H6"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M550 542 V566"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 596 H806"></path>
+        <path class="mipro-run-path mipro-run-path--whetstone" d="M950 626 V680 H694"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer mipro-run-path--loop" d="M306 680 H38 V362 H6"></path>
+
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M500 710 V722 H550 V734"></path>
+        <path class="mipro-run-path mipro-run-path--optimizer" d="M694 764 H806"></path>
+
+        <text class="mipro-run-path-label" x="700" y="164" text-anchor="middle">baseline path</text>
+        <text class="mipro-run-path-label" x="235" y="292" text-anchor="middle">seeded TPE trial loop</text>
+        <text class="mipro-run-path-label" x="750" y="332" text-anchor="middle">minibatch Intent</text>
+        <text class="mipro-run-path-label" x="190" y="500" text-anchor="middle">more trials · no promotion boundary</text>
+        <text class="mipro-run-path-label" x="665" y="552" text-anchor="middle">cadence or final boundary</text>
+        <text class="mipro-run-path-label" x="750" y="584" text-anchor="middle">promotion_full Intent</text>
+        <text class="mipro-run-path-label" x="120" y="668" text-anchor="middle">next trial</text>
+        <text class="mipro-run-path-label" x="610" y="724" text-anchor="middle">final trial completed</text>
+        <text class="mipro-run-path-label" x="750" y="752" text-anchor="middle">completion exit</text>
+      </svg>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--init">
+        <strong>Initialization / bootstrap <a class="term-ref" href="#local-optimization-step">Steps</a></strong>
+        <span>Build candidate pools and demo evidence</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--baseline">
+        <strong>Default candidate</strong>
+        <span><code>baseline_full</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--baseline-eval">
+        <strong>External full evaluation</strong>
+        <span>Ordinary Whetstone <a href="eval-run.html">Eval run</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--seed">
+        <strong><a class="term-ref" href="#local-optimization-step-result">Step Result</a> / seed study</strong>
+        <span>Baseline score enters study state</span>
+      </div>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-request">
+        <strong>Trial <a class="term-ref" href="#local-optimization-step-request">Step Request</a></strong>
+        <span>Seeded sampler chooses a combination</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-intent">
+        <strong>Candidate + <code>minibatch</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></strong>
+        <span>Optimizer proposes; it does not evaluate</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--minibatch-eval">
+        <strong>External minibatch evaluation</strong>
+        <span>Validate, materialize, execute and aggregate</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--trial-result">
+        <strong><a class="term-ref" href="#local-optimization-step-result">Step Result</a> / append observation / update mean</strong>
+        <span>Persist measurement references and updated study state</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--boundary">
+        <strong>Promotion boundary?</strong>
+        <span>Periodic cadence or final trial boundary</span>
+      </div>
+
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--promotion">
+        <strong>Highest eligible mean combination</strong>
+        <span><code>promotion_full</code> <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a></span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--whetstone mipro-run-node--promotion-eval">
+        <strong>External full evaluation</strong>
+        <span>Exact target full Eval Config</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--full-result">
+        <strong>Full-score <a class="term-ref" href="#local-optimization-step-result">Step Result</a> / update study</strong>
+        <span>Continue the trial loop or complete</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--optimizer mipro-run-node--completion">
+        <strong>Completion <a class="term-ref" href="#local-optimization-step">Step</a></strong>
+        <span>Order distinct measured combinations</span>
+      </div>
+      <div class="mipro-run-node mipro-run-node--output mipro-run-node--proposals">
+        <strong>Ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a></strong>
+        <span>Terminal run output</span>
+      </div>
+    </div>
+    <figcaption class="mipro-run-caption" id="mipro-run-diagram-caption">MIPROv2 owns candidate selection and study-state transitions in the purple lane. Each Evaluation Intent crosses into the green Whetstone lane for external evaluation; its immutable Step Result returns to the optimizer. Minibatch trials loop until periodic or final promotion, then the final completed trial exits through the Completion Step to ordered proposals.</figcaption>
+  </figure>
+</div>
+
+<div class="plane">
+  <div class="plane-label">One external-evaluation <a class="term-ref" href="#local-optimization-step">Optimization Step</a> <span class="sub">· repeated within one Optimization Run</span></div>
+  <div class="hflow">
+    <div class="comp optim"><b>Immutable Step Request</b><span class="note">prior Step Result/history/state refs<br>pool identities + budgets<br>step index and kind</span></div>
+    <span class="harrow">→</span>
+    <div class="comp optim"><b>Optimizer invocation</b><span class="note">pure transition<br>returns candidate(s) + zero or more Evaluation Intents</span></div>
+    <span class="harrow">→</span>
+    <div class="comp settled"><b>Whetstone boundary</b><span class="note">validate against Mutation Surface<br>materialize Graph Config + Materialization Record<br>bind exact Eval Config and Evaluation Context<br>plan and execute Rollouts; aggregate</span></div>
+    <span class="harrow">→</span>
+    <div class="comp optim"><b>Immutable Step Result</b><span class="note">resolved intents + measurement refs<br>scores + updated history/study-state refs<br>input to the next request</span></div>
+  </div>
+</div>
+
+<div class="callout">
+  <b>Boundary invariant.</b> An optimizer invocation cannot validate a final graph, materialize it, select task/repeat work, execute a Rollout, or manufacture a score. Whetstone resolves each Evaluation Intent against the exact referenced Eval Config, performs those operations through the ordinary evaluation path, and records the evidence in the Step Result. A retry with the same immutable inputs must recover or reproduce the same transition identity; later state is carried by a new object reference, never mutation.
+</div>
+
+<div class="section-head" id="run"><h2>Full Run Walkthrough</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes Initial Candidates, the single-entry Mutation Surface, algorithm hyperparameters, two ordinary Eval Configs for <code>internal</code>-role contexts, one ordinary Eval Config for the <code>official</code>-role context, and the output contract. The Evaluation Procedure Config assigned to the graph is identical across internal and official contexts.</p></div>
+  </div>
+
+  <div class="tick optim">
+    <div class="who optimizer">Step 0 · initialize</div>
+    <div class="what"><p>The first Step Request has no prior result. The optimizer records <a class="term-ref" href="#local-param-sampler"><code>sampler=tpe</code></a> and <a class="term-ref" href="#local-param-seed"><code>seed=9</code></a>, registers the default combination, and emits bootstrap candidates and bootstrap Evaluation Intents as needed to construct demo evidence. Whetstone evaluates each intent externally; subsequent bootstrap Step Requests reference those Step Results until four valid demo-set identities exist.</p>
+      <div class="ledger"><b>result</b><a class="term-ref" href="#local-param-num-demo-set-candidates"><code>num_demo_set_candidates=4</code></a>, each bounded by <a class="term-ref" href="#local-param-max-bootstrapped-demos"><code>max_bootstrapped_demos=3</code></a> and <a class="term-ref" href="#local-param-max-labeled-demos"><code>max_labeled_demos=0</code></a>; bootstrap measurement count is recorded, not assumed</div>
+    </div>
+  </div>
+
+  <div class="tick optim">
+    <div class="who optimizer">Pool construction</div>
+    <div class="what"><p>The proposal LM attempts instructions at <a class="term-ref" href="#local-param-proposal-temperature"><code>proposal_temperature=1.0</code></a>. Templates A/B and accepted generated text use the same Instruction Identity Document. Duplicate text may consume an attempt but cannot add a pool member. Reaching <a class="term-ref" href="#local-param-instruction-attempt-cap"><code>instruction_attempt_cap=12</code></a> before six distinct valid identities produces a cardinality failure.</p>
+      <div class="ledger"><b>result</b><a class="term-ref" href="#local-param-num-instruction-candidates"><code>num_instruction_candidates=6</code></a> × <a class="term-ref" href="#local-param-num-demo-set-candidates"><code>num_demo_set_candidates=4</code></a> = <a class="term-ref" href="#local-derived-combination-pool-size"><code>combination_pool_size=24</code></a>; the pool is then frozen</div>
+    </div>
+  </div>
+
+  <div class="tick optim">
+    <div class="who optimizer">Baseline full step</div>
+    <div class="what"><p>Before search begins, the optimizer emits a <code>baseline_full</code> Evaluation Intent for the default program under the exact full Eval Config bound through a context carrying the <code>internal</code> role. Whetstone validates and fully evaluates it. The resulting full score is inserted into the TPE study and the default combination becomes evaluated only for that Eval Config identity.</p>
+      <div class="ledger"><b>result</b>35 Rollout references, aggregate/score, study-state reference and full-evaluation history for the default combination</div>
+    </div>
+  </div>
+
+  <div class="repeat">
+    <div class="repeat-label">TPE search · <a class="term-ref" href="#local-param-num-trials"><code>num_trials=12</code></a> minibatch trial steps</div>
+    <div class="run">
+      <div class="tick optim">
+        <div class="who optimizer">Trial step</div>
+        <div class="what"><p>The seeded sampler chooses any combination in the frozen pool, including one used by an earlier trial, and emits one <code>minibatch</code> Evaluation Intent. Whetstone measures it under the exact minibatch Eval Config and persists the Step Result. The study groups observations by Trial Combination Identity Hash and uses the arithmetic mean of all minibatch scores for that combination; repeated trials add observations rather than replacing them.</p>
+          <div class="ledger"><b>each result</b><a class="term-ref" href="#local-param-minibatch-task-count"><code>minibatch_task_count=8</code></a> Rollout references + minibatch score + updated per-combination count, sum and mean + study-state reference</div>
+        </div>
+      </div>
+
+      <div class="tick optim">
+        <div class="who optimizer">Promotion step</div>
+        <div class="what"><p>After every <a class="term-ref" href="#local-param-minibatch-full-eval-steps"><code>minibatch_full_eval_steps=5</code></a> trial results, choose the combination with the highest mean minibatch score that remains unevaluated under the exact target full Eval Config; use stable identity-hash tie-breaks. Emit one <code>promotion_full</code> Evaluation Intent. Whetstone performs the full evaluation, and the next Step Result feeds that full score into the TPE study.</p>
+          <div class="ledger"><b>cadence</b>after trials 5 and 10 in this example; each successful promotion records 35 Rollout references and a full score</div>
+        </div>
+      </div>
+
+      <div class="tick optim">
+        <div class="who optimizer">Final promotion step</div>
+        <div class="what"><p>After trial 12, because the run ended off the five-step cadence, perform the same highest-mean eligibility check and full evaluation once more. Promotion remains cadence-driven throughout the search. If every trial-observed combination is already fully evaluated under the target Eval Config, persist a deterministic no-op Step Result with that reason and no Evaluation Intent.</p>
+          <div class="ledger"><b>result</b><a class="term-ref" href="#local-derived-scheduled-promotion-count"><code>scheduled_promotion_count=3</code></a> opportunities at trials 5, 10 and 12; actual completed full measurements and no-ops remain explicit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tick optim">
+    <div class="who optimizer">Completion step</div>
+    <div class="what"><p>The completion Step Request references the entire immutable run history and final study state. It orders combinations with completed full scores first by full score, then fills remaining positions from distinct trial-observed combinations by mean minibatch score; both tiers use deterministic identity-hash tie-breaks. It returns exactly <a class="term-ref" href="#local-param-returned-proposal-count"><code>returned_proposal_count=3</code></a> distinct measured proposals. Completion does not add unscheduled internal evaluations. Fewer than three distinct measured combinations is a cardinality failure, never an unmeasured fallback.</p>
+      <div class="ledger"><b>result</b>terminal Optimization Result with three ordered proposals, their combination identities, source Step Result and measurement references, tier/rank evidence and complete optimization cost</div>
+    </div>
+  </div>
+
+  <div class="tick optim">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Revalidates all three proposals against the Mutation Surface, expands each across <a class="term-ref" href="#local-param-fixed-ratio-count"><code>fixed_ratio_count=4</code></a>, and persists 12 Graph Configs and 12 Materialization Records. The Selection Policy admits every returned proposal for final official evaluation. Planning deduplicates only identical full <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hashes</a>, producing <code>D ≤ 12</code> distinct official graphs while preserving the ordered proposal/materialization-to-result lineage.</p>
+      <div class="ledger"><b>result</b><a class="term-ref" href="#local-derived-official-materialization-count"><code>official_materialization_count=12</code></a>; every returned proposal has official work or an explicit shared-graph mapping</div>
+    </div>
+  </div>
+
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Executes exactly <code>D × </code><a class="term-ref" href="#local-param-official-task-count"><code>official_task_count=164</code></a><code> × </code><a class="term-ref" href="#local-param-official-repeat-count"><code>official_repeat_count=3</code></a> official <a class="term-ref" href="vocab_and_defs.html#term-rollout-work-item">Rollout Work Items</a> with no duplicate <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Keys</a>. Ordinary Results retain their authorized Evaluation Context carrying the <code>official</code> role and immutable evidence; the Official Evaluation Record certifies their references.</p>
+      <div class="ledger"><b>result</b><code>D × 164 × 3</code> ordinary Rollout Results certified by the Official Evaluation Record; 5,904 when <code>D=12</code></div>
+    </div>
+  </div>
+
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates complete ordinary results referenced and certified by the Official Evaluation Record and writes the plot manifest. Baseline reuse still requires matching <a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Keys</a>, official attestation and compatible environment.</p>
+      <div class="ledger"><b>result</b>exactly <code>D</code> official <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a></div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What Lands on the Plot</h2></div>
+<p>All three returned Optimization Proposals receive final official evaluation. In the nonconvergent case, they produce three new four-point budget-response curves — 12 certified Rollout Aggregates, each over 164 tasks × 3 repeats — beside eligible template A/B baselines. The optimization history remains queryable as measured search cost and record-local provenance but stays outside the official plot: bootstrap measurements, the default-program full score, repeated minibatch observations, their per-combination means, and periodic/final promotion scores are not certified by being used in the study.</p>
+
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="grid-3">
+  <div class="card optim">
+    <h3>One mutation, two internal axes</h3>
+    <ul>
+      <li>The contract exposes one Mutation Surface entry: encoder <code>{user_prompt_template}</code>.</li>
+      <li>MIPROv2 assembles instruction + demo block to plain template text before Whetstone validates the candidate.</li>
+      <li>The pool freezes after initialization; search recombines pool members and does not invent instructions mid-trial.</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Evaluation stays external</h3>
+    <ul>
+      <li>Evaluation Intents identify desired measurements; Eval Configs determine task/repeat scope.</li>
+      <li>Only Whetstone materializes Graph Configs, creates work, executes Rollouts and records scores.</li>
+      <li>Internal and official contexts remain distinct even when they share a graph and Evaluation Procedure Config.</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Faithful search semantics</h3>
+    <ul>
+      <li>Fully evaluate the default program before the first trial.</li>
+      <li>Allow repeated combinations and average their minibatch scores by combination.</li>
+      <li>At cadence and final boundaries, fully evaluate the highest mean-minibatch combination not yet evaluated under that exact full Eval Config, then feed the full score into the study.</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Identity and retry behavior</h3>
+    <ul>
+      <li>Trial identity and combination identity are different: multiple trials may reference the same combination hash.</li>
+      <li>Step Requests and Results are immutable and reference-addressed, so restart does not depend on optimizer process memory.</li>
+      <li>Changing Eval Config identity changes evaluation eligibility and measurement history.</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Contract fit</h3>
+    <ul>
+      <li>Hyperparameters, Eval Config values, output cardinality and derived counts are separately registered.</li>
+      <li>Proposal schema and allowed diffs are hard validation behavior; sampler strategy remains optimizer-owned.</li>
+      <li>The final official evaluation covers every returned proposal and is not a reuse of internal promotion evidence.</li>
+    </ul>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

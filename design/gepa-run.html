@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<link rel="stylesheet" href="flow.css">
+<style>
+.gepa-figure{margin:0}.gepa-scroll{overflow-x:auto;padding-bottom:3px}.gepa-map{position:relative;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:44px repeat(9,96px);row-gap:12px;min-width:960px;width:100%;height:1016px;overflow:hidden;border:1px solid #d8cbed;border-radius:10px;background:linear-gradient(to right,#fbf8ff 0 75%,#f4faf6 75% 100%)}
+.gepa-map::after{content:"";position:absolute;z-index:0;inset:0 auto 0 75%;border-left:1px dashed #9fc9a9}.gepa-lane{z-index:4;padding:11px 14px;border-bottom:1px solid;font:700 10.5px/1.4 var(--font-system);letter-spacing:.07em;text-transform:uppercase}.gepa-lane.opt{grid-column:1/10;color:var(--optim);border-color:#d8cbed;background:#f2eafa}.gepa-lane.wh{grid-column:10/13;color:var(--green);border-color:#b9dac1;background:var(--green-soft)}
+.gepa-group{z-index:0;border-radius:10px;pointer-events:none}.gepa-group span{position:absolute;margin:-10px 0 0 14px;padding:1px 7px;background:#fbf8ff;font:700 10px/1.5 var(--font-system);letter-spacing:.05em;text-transform:uppercase}.gepa-group.outer{grid-column:1/13;grid-row:2/9;margin:1px 10px;border:1.5px solid var(--optim);background:rgb(246 241 252/22%)}.gepa-group.outer span{color:var(--optim)}.gepa-group.inner{grid-column:3/10;grid-row:4/7;margin:8px 12px;border:1.5px dashed #a36d27}.gepa-group.inner span{color:#8a5d1f}
+.gepa-svg{position:absolute;z-index:1;inset:0;width:100%;height:100%}.gepa-path{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}.gepa-path.opt{stroke:var(--optim);marker-end:url(#gepa-arrow-opt)}.gepa-path.wh{stroke:var(--green);marker-end:url(#gepa-arrow-wh)}.gepa-path.inner{stroke:#a36d27;marker-end:url(#gepa-arrow-inner);stroke-dasharray:4 4}.gepa-path.loop{stroke-dasharray:5 4}#gepa-arrow-opt path{fill:var(--optim)}#gepa-arrow-wh path{fill:var(--green)}#gepa-arrow-inner path{fill:#a36d27}.gepa-label{fill:var(--muted);paint-order:stroke;stroke:#fbf8ff;stroke-width:5px;stroke-linejoin:round;font:500 10.5px var(--font-system)}
+.gepa-node{z-index:3;align-self:stretch;min-width:0;margin:6px;padding:8px 10px;border:1.5px solid;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgb(27 35 51/8%);font-size:11px;line-height:1.25}.gepa-node strong{display:block;font:700 11.8px/1.25 var(--font-system)}.gepa-node>span{display:block;margin-top:2px;color:var(--muted)}.gepa-node code{padding:0 2px;font-size:9.8px}.gepa-node.opt{border-color:var(--optim)}.gepa-node.wh{border-color:var(--green);background:#fcfffc}.gepa-node.output{border-color:var(--accent);background:var(--accent-soft)}
+.gepa-config{grid-column:2/9;grid-row:2}.gepa-request{grid-column:10/13;grid-row:2}.gepa-restore{grid-column:1/4;grid-row:3}.gepa-parent{grid-column:4/7;grid-row:3}.gepa-reflect{grid-column:4/7;grid-row:4}.gepa-child{grid-column:7/10;grid-row:4}.gepa-full{grid-column:7/10;grid-row:5}.gepa-update{grid-column:4/7;grid-row:5}.gepa-result{grid-column:4/8;grid-row:6}.gepa-status{grid-column:4/7;grid-row:7;border-style:dashed}.gepa-complete{grid-column:3/7;grid-row:8}.gepa-failed{grid-column:7/10;grid-row:8}.gepa-official{grid-column:10/13;grid-row:9}.gepa-analysis{grid-column:10/13;grid-row:10}.gepa-caption{margin:9px 4px 0;color:var(--muted);font-size:12.5px}@media(max-width:760px){.gepa-scroll{border-right:1px dashed #d8cbed}.gepa-map{width:960px}}
+</style>
+<title>GEPA Run Design</title>
+</head>
+<body>
+<main>
+<h1>GEPA Run Design</h1>
+<div class="byline">whetstone-ai · 2026-07-20</div>
+
+<div class="family-nav">
+  <a href="vocab_and_defs.html">Vocab &amp; Defs</a>
+  <a href="concrete-changes.html">Concrete Changes</a>
+  <a href="eval-run.html">Eval</a>
+  <a href="copro-run.html">COPRO</a>
+  <a href="miprov2-run.html">MIPROv2</a>
+  <span class="here">GEPA</span>
+  <a href="codex-agent-run.html">Codex CLI agent</a>
+  <a href="quick-test-rubric.html">Quick Test</a>
+</div>
+
+<div class="intro">
+  <p>GEPA is a multi-step <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>. Each outer request executes exactly one durable, structured, tool-using <a class="term-ref" href="#gepa-optimization-step">GEPA step</a> and returns one immutable <a class="term-ref" href="#gepa-step-result">Step Result</a>; the next <a class="term-ref" href="#gepa-step-request">Step Request</a> consumes prior result and state references. A step may select a <a class="term-ref" href="#gepa-parent">parent</a>, obtain fresh <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a>, reflect and propose a <a class="term-ref" href="#gepa-child">child</a>, compare it on the same <a class="term-ref" href="#gepa-minibatch">minibatch</a>, fully evaluate an accepted child, and update optimizer state. Those are internal subphases, never separate outer request kinds. Only the completed run returns ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> for official evaluation.</p>
+</div>
+
+<p class="small muted">Purple marks what differs from the Eval run — the optimization machinery; everything unmarked matches the eval design.</p>
+
+<div class="callout"><b>Algorithm-local vocabulary</b> — defined here because these terms are specific to this optimizer, not shared Whetstone ontology terms:
+  <ul>
+    <li><b><dfn class="term-name" id="gepa-optimization-step">GEPA step</dfn></b> — one restartable optimizer invocation within the umbrella <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a>. It owns the complete select → diagnose → reflect → compare → accept → full-evaluate → update transition, even when an early terminal condition skips later subphases.</li>
+    <li><b><dfn class="term-name" id="gepa-step-request">Step Request</dfn></b> — the one immutable outer input shape for every <a class="term-ref" href="#gepa-optimization-step">GEPA step</a>: run/step/config identities, deterministic seed or prior RNG state, immutable prior <a class="term-ref" href="#gepa-step-result">Step Result</a> and <a class="term-ref" href="#gepa-state-snapshot">state snapshot</a> references, initial candidates when no prior state exists, <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Configs</a>, and remaining budgets.</li>
+    <li><b><dfn class="term-name" id="gepa-step-result">Step Result</dfn></b> — one immutable durable result for a <a class="term-ref" href="#gepa-optimization-step">GEPA step</a>, sufficient to audit the transition and restart the next step without replaying successful effects.</li>
+    <li><b><dfn class="term-name" id="gepa-state-snapshot">state snapshot</dfn></b> — immutable post-step references to the <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a>, <a class="term-ref" href="#gepa-per-task-frontier">per-instance/objective frontiers</a>, optional <a class="term-ref" href="#gepa-archive">active archive</a>, RNG state, and budget counters. The next request consumes it by reference; no mutable in-memory object is the restart authority.</li>
+    <li><b><dfn class="term-name" id="gepa-whetstone-variant">Whetstone multi-objective GEPA variant</dfn></b> — the named <code>whetstone_multi_objective/v1</code> experiment extension: same-minibatch strict Pareto improvement across correctness ↑ and compression ↓, followed by full 24-task evaluation, plus an optional capacity-32 active index. It is not claimed to be exact upstream GEPA.</li>
+    <li><b><dfn class="term-name" id="gepa-proposal-catalog">proposal catalog</dfn></b> — optimizer-owned, append-only index of every canonical, valid, unique proposal evaluated in the run, including proposals later rejected, dominated or evicted. Needed: final return fallback must not depend on <a class="term-ref" href="#gepa-archive">active archive</a> membership.</li>
+    <li><b><dfn class="term-name" id="gepa-archive">archive</dfn></b> — optional capacity-32 active index in the <a class="term-ref" href="#gepa-whetstone-variant">Whetstone multi-objective GEPA variant</a>. It caches <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a>, frontier, <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>, and Rollout references for bounded active-state operations; eviction removes only cache membership and never changes the durable catalog or frontiers.</li>
+    <li><b><dfn class="term-name" id="gepa-archive-policy">archive policy</dfn></b> — variant-only identity-bearing configuration fixing <a class="term-ref" href="#gepa-param-archive-capacity"><code>archive_capacity = 32</code></a> and deterministic eviction. It is an experiment extension, not reference GEPA acceptance or frontier semantics.</li>
+    <li><b><dfn class="term-name" id="gepa-archive-nondominated-set">Whetstone experiment nondominated set</dfn></b> — reporting view over all accepted, fully evaluated <a class="term-ref" href="#gepa-proposal-catalog">catalog</a> entries under correctness ↑ and compression ↓. The legacy fragment ID is retained for stable links; the view is not limited by <a class="term-ref" href="#gepa-archive">archive</a> eviction.</li>
+    <li><b><dfn class="term-name" id="gepa-parent">parent</dfn> / <dfn class="term-name" id="gepa-child">child</dfn></b> — the candidate a mutation starts from and the candidate it produces. Needed: describes lineage during evolution.</li>
+    <li><b><dfn class="term-name" id="gepa-reflection-lm">reflection LM</dfn></b> — the optimizer-owned LM that reads <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projections</a> and writes a mutated encoder template. Needed: distinguishes it from the encoder and decoder LMs inside rollouts.</li>
+    <li><b><dfn class="term-name" id="gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</dfn></b> — a versioned, size-limited selection of preprocessing and code-test facts resolved from Rollout references; it records truncation and never replaces the source results. Rollout Trace is page-local shorthand for this projection, not a normative Trace or Result. Needed: it is GEPA's reflective evidence.</li>
+    <li><b><dfn class="term-name" id="gepa-per-task-frontier">per-instance/objective frontier</dfn></b> — durable mapping from each full-evaluation task and objective to its best accepted candidates; <a class="term-ref" href="#gepa-parent">parents</a> are sampled from its union. This is reference-shaped diversity state and stays distinct from the official plot's Pareto Front.</li>
+    <li><b><dfn class="term-name" id="gepa-minibatch">comparison minibatch</dfn></b> — the exact sampled task IDs used both for the <a class="term-ref" href="#gepa-parent">parent</a>'s fresh diagnostic evaluation and the <a class="term-ref" href="#gepa-child">child</a>'s acceptance evaluation in one <a class="term-ref" href="#gepa-optimization-step">GEPA step</a>.</li>
+  </ul>
+</div>
+
+<div class="callout">
+  <b>Reference semantics and the named extension.</b> Reference GEPA accepts only a child that strictly improves on its parent on the same sampled minibatch, then fully evaluates the accepted child and updates per-instance/objective frontiers. This page preserves that ordering. The <a class="term-ref" href="#gepa-whetstone-variant">Whetstone multi-objective GEPA variant</a> defines “strictly improves” as strict Pareto improvement on the same minibatch—no objective worsens and at least one improves—and uses the fixed 24-task, two-objective evaluation only after acceptance. Its capacity-32 <a class="term-ref" href="#gepa-archive">archive</a> is a bounded active index, not the semantic frontier or acceptance authority.
+</div>
+
+<div class="section-head" id="hyperparameters"><h2>Algorithm Hyperparameter Registry</h2></div>
+
+<p class="small muted">Only the first group controls GEPA's search behavior. The remaining names make example evaluation settings, output cardinalities, and derived totals explicit without promoting them into algorithm hyperparameters.</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Classification</th><th>Canonical name</th><th>Example value</th><th>Role</th></tr></thead>
+  <tbody>
+    <tr class="term-group"><th colspan="4" scope="colgroup">GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-minibatch-size"><code>minibatch_size</code></dfn></td><td><code>3</code> tasks</td><td>Same sampled task IDs used for fresh parent diagnostics and child acceptance comparison in each step.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls</code></dfn></td><td><code>8</code></td><td>Global cap on reflection LM calls, including invalid or duplicate outputs.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><span id="gepa-param-max-reflection-attempts-per-iteration"></span><dfn id="gepa-param-max-reflection-attempts-per-step"><code>max_reflection_attempts_per_step</code></dfn></td><td><code>3</code></td><td>Internal retry bound in one step, within the global reflection LM call cap. The legacy iteration anchor remains for stable links.</td></tr>
+    <tr><td>Algorithm hyperparameter</td><td><dfn id="gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts</code></dfn></td><td><code>400</code></td><td>Hard budget guard for optimization Rollouts, distinct from the smaller example-derived plan.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Whetstone multi-objective GEPA variant settings</th></tr>
+    <tr><td>Variant identity</td><td><dfn id="gepa-param-variant"><code>gepa_variant</code></dfn></td><td><code>whetstone_multi_objective/v1</code></td><td>Names the experiment extension and prevents it from being mistaken for exact reference GEPA.</td></tr>
+    <tr><td>Variant acceptance policy</td><td><dfn id="gepa-param-acceptance-policy"><code>acceptance_policy</code></dfn></td><td><code>same_minibatch_strict_pareto/v1</code></td><td>Accept only when child correctness/compression on the parent's exact comparison minibatch is no worse on either objective and strictly better on at least one.</td></tr>
+    <tr><td>Variant active-index bound</td><td><dfn id="gepa-param-archive-capacity"><code>archive_capacity</code></dfn></td><td><code>32</code></td><td>Bounds optional active cache membership; eviction never deletes catalog or frontier history and never changes acceptance.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Eval Config and example experimental settings — not GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Example setting</td><td><dfn id="gepa-setting-initial-candidate-count"><code>initial_candidate_count</code></dfn></td><td><code>2</code></td><td>Templates A and B used to seed this walkthrough.</td></tr>
+    <tr><td>Eval Config setting (<code>internal</code> role)</td><td><dfn id="gepa-setting-objective-task-count"><code>objective_task_count</code></dfn></td><td><code>24</code></td><td>Fixed full-evaluation population used only after a child passes same-minibatch acceptance.</td></tr>
+    <tr><td>Eval Config setting (<code>internal</code> role)</td><td><dfn id="gepa-setting-optimization-repeat-count"><code>optimization_repeat_count</code></dfn></td><td><code>1</code></td><td>Repeat count for internal objective and diagnostic evaluation.</td></tr>
+    <tr><td>Example fixed-axis setting</td><td><dfn id="gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio</code></dfn></td><td><code>0.5</code></td><td>Budget ratio used by optimization tools in this walkthrough.</td></tr>
+    <tr><td>Eval Config setting (<code>official</code> role)</td><td><dfn id="gepa-setting-official-task-count"><code>official_task_count</code></dfn></td><td><code>164</code></td><td>Pinned HumanEval+ task count for official evaluation.</td></tr>
+    <tr><td>Eval Config setting (<code>official</code> role)</td><td><dfn id="gepa-setting-official-repeat-count"><code>official_repeat_count</code></dfn></td><td><code>3</code></td><td>Repeat count for official evaluation.</td></tr>
+    <tr><td>Example Variance Source</td><td><dfn id="gepa-setting-budget-ratio-values"><code>budget_ratio_values</code></dfn></td><td><code>(0.25, 0.5, 0.75, 1.0)</code></td><td>Four fixed-axis selections expanded after proposal validation.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Output and selection cardinalities — not GEPA algorithm hyperparameters</th></tr>
+    <tr><td>Optimization Result contract</td><td><dfn id="gepa-contract-proposal-return-count"><code>proposal_return_count</code></dfn></td><td><code>4</code></td><td>Required ordered Optimization Proposal count on success.</td></tr>
+    <tr><td>Example Selection Policy</td><td><dfn id="gepa-contract-official-selection-count"><code>official_selection_count</code></dfn></td><td><code>3</code></td><td>Returned proposal groups selected for official evaluation.</td></tr>
+
+    <tr class="term-group"><th colspan="4" scope="colgroup">Derived totals — formulas, not parameters</th></tr>
+    <tr><td>Derived</td><td><dfn id="gepa-derived-materialization-count"><code>materialization_count</code></dfn></td><td><code>proposal_return_count × len(budget_ratio_values) = 4 × 4 = 16</code></td><td>Graph Config and Materialization Record pairs emitted before selection.</td></tr>
+    <tr><td>Derived upper bound</td><td><dfn id="gepa-derived-max-admitted-graph-count"><code>max_admitted_graph_count</code></dfn></td><td><code>official_selection_count × len(budget_ratio_values) = 3 × 4 = 12</code></td><td>Maximum distinct admitted Graph Hashes before convergence lowers <code>D</code>.</td></tr>
+    <tr><td>Derived</td><td><dfn id="gepa-derived-official-rollout-count"><code>official_rollout_count</code></dfn></td><td><code>D × official_task_count × official_repeat_count</code>; at <code>D=12</code>, <code>5,904</code></td><td>Official Rollout count after selected Graph Hash deduplication.</td></tr>
+    <tr><td>Derived example maximum</td><td><dfn id="gepa-derived-optimization-step-count"><code>optimization_step_count</code></dfn></td><td><code>max_reflection_lm_calls = 8</code></td><td>Eight steps only in the all-valid, one-reflection-call-per-step example; retries can exhaust the call cap in fewer steps.</td></tr>
+    <tr><td>Derived example maximum</td><td><dfn id="gepa-derived-planned-optimization-rollout-count"><code>planned_optimization_rollout_count</code></dfn></td><td><code>2 × 24 + 8 × (3 + 3 + 24) = 288</code></td><td>Seed full evaluation plus, per all-accepted step, parent diagnostic + child comparison on the same minibatch + accepted-child full evaluation; below <code>max_optimization_rollouts = 400</code>.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="section-head" id="target"><h2>Example Setup</h2></div>
+
+<div class="grid-4">
+  <div class="card optim">
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-mutation-surface">Mutation Surface</a> &amp; <a class="term-ref" href="vocab_and_defs.html#term-initial-candidate">Initial Candidates</a></h3>
+    <ul>
+      <li>Mutation surface: <code>{user_prompt_template}</code> on the Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> — nothing else may change</li>
+      <li>Initial candidates: encoder Templates <strong>A</strong> and <strong>B</strong> (full text in the <a href="eval-run.html#target">eval doc</a>)</li>
+      <li>One GEPA run per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a> — the same 4 routes as the eval experiment; each route resolves to a complete output-affecting <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> identity that contributes to <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</li>
+    </ul>
+    <p class="small muted space-top">This walkthrough follows (openrouter, <code>deepseek/deepseek-v4-flash</code>).</p>
+  </div>
+  <div class="card optim">
+    <h3>Toolkit</h3>
+    <ul>
+      <li><code>evaluate_minibatch</code> — evaluates one candidate on caller-supplied stable task IDs of size <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> × <a class="term-ref" href="#gepa-setting-optimization-repeat-count"><code>optimization_repeat_count = 1</code></a> at <a class="term-ref" href="#gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio = 0.5</code></a>; returns one <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a> referenced by a terminal <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store-entry">Tool Call Store Entry</a>, with Rollout references, objective values, and a <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a>. Parent and child calls in one step MUST name the same task IDs.</li>
+      <li><code>evaluate_subset</code> — fully evaluates an accepted child on <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> tasks × <a class="term-ref" href="#gepa-setting-optimization-repeat-count"><code>optimization_repeat_count = 1</code></a> at <a class="term-ref" href="#gepa-setting-optimization-budget-ratio"><code>optimization_budget_ratio = 0.5</code></a>; returns one <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a> referenced by a terminal Tool Call Store Entry, with Rollout references and per-instance/objective values used to update frontiers.</li>
+    </ul>
+    <p class="small muted space-top">Each <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> references a versioned <a class="term-ref" href="vocab_and_defs.html#term-tool-definition">Tool Definition</a> and supplies endpoint, an ordinary <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> to bind under the <code>internal</code> role, <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>, capacity/timeout/policy refs, Tool Call Store namespace, idempotency and refusal rules. Every <a class="term-ref" href="#gepa-step-request">Step Request</a> serializes the same pinned configs and policy identities; <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> are reconstructed and never serialize. The Whetstone <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store">Tool Call Store</a>, keyed by <code>(tool_config_hash, call_id)</code>, owns acceptance/refusal/completion/capacity across retry and restart. A tool invocation is usable only through its terminal Tool Call Store Entry, <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>, and referenced Rollout Results.</p>
+  </div>
+  <div class="card optim">
+    <h3>Optimization Budget &amp; Return</h3>
+    <ul>
+      <li><a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a> across reflective mutation attempts</li>
+      <li>Hard budget: <a class="term-ref" href="#gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts = 400</code></a></li>
+      <li>Run return: <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>, or a failed <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> with no official materialization; every nonterminal request still returns one durable <a class="term-ref" href="#gepa-step-result">Step Result</a></li>
+    </ul>
+    <p class="small muted space-top">Guidance: "evolve the encoder user prompt template using fresh same-minibatch evidence." Guidance does not override <a class="term-ref" href="#gepa-param-acceptance-policy"><code>acceptance_policy = same_minibatch_strict_pareto/v1</code></a>.</p>
+  </div>
+  <div class="card">
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a></h3>
+    <ul>
+      <li>Unchanged from the eval design: HumanEval+ <a class="term-ref" href="#gepa-setting-official-task-count"><code>official_task_count = 164</code></a> @ pinned revision · <a class="term-ref" href="#gepa-setting-official-repeat-count"><code>official_repeat_count = 3</code></a> · zstd-19 ÷ reference length</li>
+      <li><a class="term-ref" href="vocab_and_defs.html#term-variance-source">Variance Source</a>: <a class="term-ref" href="#gepa-setting-budget-ratio-values"><code>budget_ratio_values = (0.25, 0.5, 0.75, 1.0)</code></a></li>
+      <li>Selection: <a class="term-ref" href="#gepa-contract-official-selection-count"><code>official_selection_count = 3</code></a> returned candidate groups</li>
+    </ul>
+    <p class="small muted space-top"><a class="term-ref" href="#gepa-derived-official-rollout-count"><code>official_rollout_count = D × official_task_count × official_repeat_count</code></a>, where <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D ≤ max_admitted_graph_count = 12</code></a>; <code>5,904</code> only in the explicit nonconvergent example.</p>
+  </div>
+</div>
+
+<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+
+<div class="plane">
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> <span class="sub">· one artifact/identity, identical to the eval design</span></div>
+  <div class="hflow">
+    <div class="comp node"><b>Encoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> (Config)</b><span class="note">output-affecting components include complete <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> ref/hash and templates/KVs<hr>mutation surface: <code>{user_prompt_template}</code> only</span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b>Decoder <a class="term-ref" href="vocab_and_defs.html#term-llm-call-node">LLM Call Node</a> (Config)</b><span class="note">complete <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> and prompt are fixed outside the mutation surface</span></div>
+    <span class="harrow">→</span>
+    <div class="comp node"><b><a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a> (Config) · terminal role</b><span class="note">static <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> ref/hash is included in <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> identity; facts first: <a class="term-ref" href="vocab_and_defs.html#term-submission-text">Submission Text</a>, <a class="term-ref" href="vocab_and_defs.html#term-preprocessing-trace">Preprocessing Trace</a>, <a class="term-ref" href="vocab_and_defs.html#term-code-artifact">Code Artifact</a> refs, <a class="term-ref" href="vocab_and_defs.html#term-metric-fact">Metric Facts</a>/Records and integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a><hr>the procedure derives per-observation score; Aggregation reduces. This sole sink's ordinary validated <a class="term-ref" href="vocab_and_defs.html#term-node-output">Node Output</a> becomes <a class="term-ref" href="vocab_and_defs.html#term-graph-output">Graph Output</a> unchanged on success</span></div>
+  </div>
+</div>
+
+<div class="flow-arrow"><span>a <a class="term-ref" href="#gepa-child">child</a> candidate differs from its <a class="term-ref" href="#gepa-parent">parent</a> in exactly one variable</span> <span class="glyph">▼</span></div>
+
+<div class="plane optim">
+  <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> Example <span class="sub">· <a class="term-ref" href="#gepa-child">child</a> candidate G5 (evolved template) at budget_ratio 0.5</span></div>
+  <div class="comps">
+    <div class="comp node optim"><b>Encoder Prompt Template Config</b><span class="note"><code>{user_prompt_template}</code> = G5<br><code>{system_prompt_template}</code> = empty<br><code>{prompt_kvs}</code> = <code>{"budget_ratio": 0.5}</code><hr>G5 written by the <a class="term-ref" href="#gepa-reflection-lm">reflection LM</a> in step 5; excerpt: "State the function's signature, the edge cases the tests exercise, and the return types — omit narrative."</span></div>
+    <div class="comp node"><b>Inherited Configuration Assignments</b><span class="note">the output-affecting <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> components, including encoder + decoder <a class="term-ref" href="vocab_and_defs.html#term-provider-call-config">Provider Call Config</a> refs/hashes, temperature, decoder prompt, and the <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>'s <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> ref/hash, are byte-identical to the <a class="term-ref" href="#gepa-parent">parent</a> outside <code>{user_prompt_template}</code>; the resulting <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> is one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a><hr>Eval Sampling/Aggregation, <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>, and materialization lineage are independent of <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> identity</span></div>
+  </div>
+</div>
+
+<div class="callout"><b>Measurement and acceptance.</b> Each <a class="term-ref" href="#gepa-optimization-step">GEPA step</a> samples one <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> comparison minibatch and evaluates both <a class="term-ref" href="#gepa-parent">parent</a> and <a class="term-ref" href="#gepa-child">child</a> on those exact task IDs. <a class="term-ref" href="#gepa-param-acceptance-policy"><code>acceptance_policy = same_minibatch_strict_pareto/v1</code></a> is the named Whetstone extension of reference GEPA's strict-improvement gate. Only an accepted child receives the <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> full internal evaluation used to update per-instance/objective frontiers. <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> remains Sampling + Evaluation Procedure + Aggregation and references the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned statically to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>. Internal and official evaluation use the same facts-first procedure, so matching <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> retain <code>graph_hash</code>; Sampling/Aggregation changes only <code>eval_config_hash</code>. The <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> carries role, authority when official, and attestation; only an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies ordinary results as official.</div>
+
+<div class="section-head" id="system"><h2>Repeated Durable GEPA Steps, Then Official Evaluation</h2></div>
+
+<div class="plane optim">
+  <div class="plane-label" id="gepa-diagram-title">Repeated durable GEPA steps <span class="sub">· nested reflection and step loops with explicit exits</span></div>
+  <figure class="gepa-figure" aria-labelledby="gepa-diagram-title" aria-describedby="gepa-diagram-caption">
+    <div class="gepa-scroll" role="region" aria-label="Scrollable GEPA nested-loop diagram" tabindex="0">
+      <div class="gepa-map">
+        <div class="gepa-lane opt">GEPA algorithm / optimizer</div><div class="gepa-lane wh">Whetstone tool and harness boundary</div>
+        <div class="gepa-group outer" aria-hidden="true"><span>Outer GEPA Step loop · continue creates one next Step Request</span></div>
+        <div class="gepa-group inner" aria-hidden="true"><span>Bounded reflection retry loop</span></div>
+        <svg class="gepa-svg" viewBox="0 0 1200 1016" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <defs><marker id="gepa-arrow-opt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker><marker id="gepa-arrow-wh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker><marker id="gepa-arrow-inner" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker></defs>
+          <path class="gepa-path wh" d="M894 104H1050V152"></path><path class="gepa-path wh" d="M1050 152V158H150V164"></path>
+          <path class="gepa-path opt" d="M294 212H306"></path><path class="gepa-path opt" d="M450 260V272"></path><path class="gepa-path opt" d="M594 320H606"></path><path class="gepa-path wh" d="M750 368V380"></path><path class="gepa-path opt" d="M706 428H594"></path><path class="gepa-path opt" d="M500 476V488"></path>
+          <path class="gepa-path inner" d="M306 320H260V282H450V272"></path>
+          <path class="gepa-path opt" d="M550 584V596"></path><path class="gepa-path opt loop" d="M306 644H28V50H1050V56"></path><path class="gepa-path opt" d="M450 692V704"></path><path class="gepa-path opt" d="M550 692V696H750V704"></path><path class="gepa-path wh" d="M594 752H1050V812"></path><path class="gepa-path wh" d="M1050 908V920"></path>
+          <text class="gepa-label" x="590" y="158" text-anchor="middle">one request enters one invocation</text><text class="gepa-label" x="620" y="700">complete</text><text class="gepa-label" x="760" y="700">failed</text>
+        </svg>
+        <div class="gepa-node opt gepa-config"><strong>Frozen <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> configuration</strong><span><a class="term-ref" href="#gepa-param-variant"><code>gepa_variant=whetstone_multi_objective/v1</code></a>; deterministic seed; A/B; template-only mutation; archive/return policies; budgets; pinned diagnostic, comparison, and full-evaluation <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Configs</a></span></div>
+        <div class="gepa-node wh gepa-request"><strong><a class="term-ref" href="#gepa-step-request">Step Request</a></strong><span>Run/step/config identities, prior <a class="term-ref" href="#gepa-step-result">Step Result</a>/<a class="term-ref" href="#gepa-state-snapshot">state</a> refs, and reconstructed tool handles</span></div>
+        <div class="gepa-node opt gepa-restore"><strong>Restore &amp; select</strong><span>Verify identities and refs; restore RNG; seed A/B on first use; sample a <a class="term-ref" href="#gepa-parent">parent</a> from the <a class="term-ref" href="#gepa-per-task-frontier">frontiers</a></span></div>
+        <div class="gepa-node opt gepa-parent"><strong>Fresh parent diagnostic</strong><span><code>evaluate_minibatch(parent, task_ids)</code>: store-backed <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>, objectives, Rollout refs, bounded trace projection</span></div>
+        <div class="gepa-node opt gepa-reflect"><strong>Reflect &amp; validate</strong><span><a class="term-ref" href="#gepa-reflection-lm">Reflection LM</a> proposes; canonicalization, uniqueness, and <a class="term-ref" href="vocab_and_defs.html#term-diff-check">Diff Check</a>; at most <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-step"><code>3</code></a> attempts</span></div>
+        <div class="gepa-node opt gepa-child"><strong>Same-minibatch child call</strong><span><code>evaluate_minibatch(child, same task_ids)</code>; <a class="term-ref" href="#gepa-param-acceptance-policy"><code>same_minibatch_strict_pareto/v1</code></a></span></div>
+        <div class="gepa-node opt gepa-full"><strong>Accepted-child full evaluation</strong><span>Only after acceptance: <code>evaluate_subset(child)</code> returns a store-backed result and <a class="term-ref" href="#gepa-setting-objective-task-count"><code>24×1</code></a> Rollout refs</span></div>
+        <div class="gepa-node opt gepa-update"><strong>Update durable state</strong><span>Append catalog; update frontiers; apply archive delta; decrement budgets; compute status</span></div>
+        <div class="gepa-node opt gepa-result"><strong>One immutable <a class="term-ref" href="#gepa-step-result">Step Result</a> + state snapshot</strong><span>Identities/RNG; tool, Rollout, reflection and diff evidence; acceptance inputs; state delta; budgets; exactly one status</span></div>
+        <div class="gepa-node opt gepa-status"><strong><code>continue | complete | failed</code></strong><span>No hidden fourth status; no internal subphase response escapes as an outer result</span></div>
+        <div class="gepa-node output gepa-complete"><strong><code>complete</code> → terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></strong><span>Exactly <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count=4</code></a> ordered proposals plus all Step Result refs</span></div>
+        <div class="gepa-node opt gepa-failed"><strong><code>failed</code> exit</strong><span>Persist causal failure and restart evidence; rejection or exhausted reflection can still be a successful transition</span></div>
+        <div class="gepa-node wh gepa-official"><strong>Official materialization &amp; selection</strong><span><a class="term-ref" href="#gepa-derived-materialization-count"><code>16</code></a> records; three groups × four ratios; deduplicate to <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D≤12</code></a></span></div>
+        <div class="gepa-node wh gepa-analysis"><strong>Official Rollouts &amp; analysis</strong><span><a class="term-ref" href="#gepa-derived-official-rollout-count"><code>D×official_task_count×official_repeat_count</code></a>; authorized aggregates/Pareto Front; internal Tool Results never gain official authority</span></div>
+      </div>
+    </div>
+    <figcaption class="gepa-caption" id="gepa-diagram-caption">Each Whetstone Step Request enters one GEPA invocation. The amber inner loop retries only invalid or duplicate reflection output and reuses prior tool effects; the purple outer loop commits one durable Step Result before <code>continue</code> creates the next request. Only <code>complete</code> reaches official evaluation.</figcaption>
+  </figure>
+</div>
+
+<div class="callout"><b>Step Result restart minimum.</b> Every <a class="term-ref" href="#gepa-step-result">Step Result</a> contains all of: run/step/config identities; deterministic seed and RNG state; parent and lineage; sampled tasks and evaluation/tool hashes; parent and child result references; bounded trace projection and truncation; reflection evidence, attempts, and cost; canonical child and diff validation; acceptance inputs, decision, and policy; accepted-child full-evaluation references; catalog/frontier/archive delta; remaining budgets; and <code>continue|complete|failed</code>. Absence of any applicable field is explicit and typed, never inferred from a missing event.</div>
+
+<div class="section-head" id="run"><h2>Detailed Walkthrough: Repeated Step Requests and Durable Step Results</h2></div>
+
+<div class="run">
+  <div class="tick">
+    <div class="who designer">Designer</div>
+    <div class="what"><p>Freezes <a class="term-ref" href="#gepa-param-variant"><code>gepa_variant = whetstone_multi_objective/v1</code></a>, starting candidates A/B, mutation surface, deterministic run seed, <a class="term-ref" href="#gepa-param-acceptance-policy"><code>acceptance_policy = same_minibatch_strict_pareto/v1</code></a>, diagnostic/comparison and full-evaluation <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Configs</a>, variant <a class="term-ref" href="#gepa-archive-policy">archive policy</a>, and budgets. Tool Configs reference versioned Tool Definitions and own Eval Config, Reward Policy, endpoint, Tool Call Store namespace, capacity, timeout, idempotency, and refusal configuration.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Issues step 1's <a class="term-ref" href="#gepa-step-request">Step Request</a> under one <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> identity. It contains no prior Step Result/state refs, so it carries A/B; later requests carry immutable prior refs instead. The harness reconstructs non-serializable <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> and binds the pinned <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store">Tool Call Store</a> namespaces.</p></div>
+  </div>
+</div>
+
+<div class="repeat">
+  <div class="repeat-label">One request → one GEPA step → one Step Result</div>
+  <div class="run">
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>Validates run/step/config identities, prior references, budgets, and deterministic continuation state. On first use only, it calls <code>evaluate_subset</code> for A and B, seeds the <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a> and <a class="term-ref" href="#gepa-per-task-frontier">per-instance/objective frontiers</a>, and records two terminal Tool Results plus their Tool Call Store Entries with <code>initial_candidate_count × objective_task_count = 2 × 24 = 48</code> Rollout refs. It then samples a <a class="term-ref" href="#gepa-parent">parent</a> from the frontier union using the persisted RNG state.</p>
+        <div class="ledger"><b>durable evidence</b>seed Tool Result/Rollout refs when applicable; pre-step state refs; sampled parent and lineage; pre/post selection RNG state</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer via tool</div>
+      <div class="what"><p>Samples stable task IDs with <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> and invokes <code>evaluate_minibatch(parent, task_ids)</code>. The call obtains fresh parent behavior for this step; it does not substitute a cached full-evaluation row for same-minibatch comparison.</p>
+        <div class="ledger"><b>tool output</b>terminal Tool Call Store Entry and Tool Result ref/hash; exactly 3 parent Rollout Result refs; objective inputs; bounded Rollout Trace projection ref/hash, projection version, and truncation</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>The <a class="term-ref" href="#gepa-reflection-lm">reflection LM</a> reads the parent template and fresh <a class="term-ref" href="#gepa-bounded-rollout-trace-projection">bounded Rollout Trace projection</a>, then proposes a child. Canonicalization, schema validation, uniqueness, and Diff Check enforce the template-only mutation surface. Invalid or duplicate output records provider evidence and retries only this internal reflection subphase with a deterministic <code>(run_id, step_index, attempt_index)</code> nonce, bounded by <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-step"><code>max_reflection_attempts_per_step = 3</code></a> and <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>.</p>
+        <div class="ledger"><b>durable evidence</b>every reflection request/response or failure reference, attempt nonce, validation outcome, normalized usage/cost, canonical child assignment and identity, and diff evidence</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer via tool</div>
+      <div class="what"><p>For a valid unique child, invokes <code>evaluate_minibatch(child, task_ids)</code> with the exact parent diagnostic task IDs and matching comparison Eval Config. The <a class="term-ref" href="#gepa-whetstone-variant">Whetstone multi-objective GEPA variant</a> accepts only strict Pareto improvement: neither minibatch objective worsens and at least one improves. Equality, a trade-off, or regression rejects the child for this step. This is the named multi-objective extension of reference GEPA's same-minibatch strict-improvement gate.</p>
+        <div class="ledger"><b>tool output</b>separate terminal Tool Call Store Entry and Tool Result ref/hash; exactly 3 child Rollout Result refs; parent/child acceptance inputs, acceptance-policy hash, and deterministic decision</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer via tool</div>
+      <div class="what"><p>If accepted, calls <code>evaluate_subset(child)</code> under the pinned <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> bound through a context carrying the <code>internal</code> role: <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> × <a class="term-ref" href="#gepa-setting-optimization-repeat-count"><code>optimization_repeat_count = 1</code></a>. Only this accepted-child full evaluation updates the per-instance/objective frontiers. Rejected children skip the call; their proposal, comparison evidence, and rejection remain durable.</p>
+        <div class="ledger"><b>tool output</b>for acceptance, terminal Tool Result ref/hash + 24 full-evaluation Rollout Result refs and per-instance/objective values; otherwise an explicit not-applicable reason, never a fabricated empty result</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>Appends the canonical valid child and evidence to the <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a>, updates frontiers only when accepted and fully evaluated, and applies the variant <a class="term-ref" href="#gepa-archive">active archive</a> delta. At <a class="term-ref" href="#gepa-param-archive-capacity"><code>archive_capacity = 32</code></a>, deterministic eviction removes cache membership only; it cannot erase catalog/frontier history or reverse acceptance. The step decrements Rollout and reflection-call budgets and freezes the next <a class="term-ref" href="#gepa-state-snapshot">state snapshot</a>.</p>
+        <div class="ledger"><b>state delta</b>catalog/frontier/archive before/after refs and typed delta; budget consumed/remaining; post-step RNG state</div>
+      </div>
+    </div>
+    <div class="tick optim">
+      <div class="who optimizer">Optimizer</div>
+      <div class="what"><p>Returns exactly one immutable <a class="term-ref" href="#gepa-step-result">Step Result</a> with the complete restart minimum and status <code>continue</code>, <code>complete</code>, or <code>failed</code>. Invalid/refused/rejected algorithm outcomes are recorded transitions; <code>failed</code> is reserved for a causal inability to produce the durable step result or a terminal run condition that cannot satisfy its contract.</p>
+        <div class="ledger"><b>output</b>one Step Result Object Reference/content hash and one post-step state-snapshot ref; no internal subphase response escapes as another outer result</div>
+      </div>
+    </div>
+    <div class="tick">
+      <div class="who env">Evaluation harness</div>
+      <div class="what"><p>On <code>continue</code>, verifies the committed references and issues the next request with the same run/config identities, incremented step identity, and immutable prior Step Result/state refs. This is the outer loop back-edge shown above. It never converts internal diagnostic, reflection, comparison, full-evaluation, or update subphases into request kinds.</p></div>
+    </div>
+  </div>
+</div>
+
+<div class="run">
+  <div class="tick optim">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>In the all-valid example, <a class="term-ref" href="#gepa-derived-optimization-step-count"><code>optimization_step_count = max_reflection_lm_calls = 8</code></a>. It derives the upper plan <a class="term-ref" href="#gepa-derived-planned-optimization-rollout-count"><code>planned_optimization_rollout_count = initial_candidate_count × objective_task_count + optimization_step_count × (minibatch_size + minibatch_size + objective_task_count) = 2 × 24 + 8 × (3 + 3 + 24) = 288</code></a>, below <a class="term-ref" href="#gepa-param-max-optimization-rollouts"><code>max_optimization_rollouts = 400</code></a>. Rejected children omit the 24-task full evaluation; invalid/duplicate reflection retries add no Rollouts and may consume the global call cap in fewer than eight steps.</p></div>
+  </div>
+  <div class="tick optim">
+    <div class="who optimizer">Optimizer</div>
+    <div class="what"><p>The terminal <code>complete</code> Step Result returns <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> unique accepted, fully evaluated proposals ordered from the durable <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a> and <a class="term-ref" href="#gepa-per-task-frontier">frontier</a> state under the frozen variant return policy. The harness persists the umbrella <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> with every Step Result reference. If the contract cannot be met, the run terminates failed and official materialization does not begin.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Validates all four proposals and expands <a class="term-ref" href="#gepa-derived-materialization-count"><code>materialization_count = proposal_return_count × len(budget_ratio_values) = 4 × 4 = 16</code></a> Graph Config/Materialization Record pairs. The Selection Policy selects <a class="term-ref" href="#gepa-contract-official-selection-count"><code>official_selection_count = 3</code></a> groups as 12 ordered slots, then deduplicates by full Graph Hash to <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D ≤ max_admitted_graph_count = 12</code></a>. Official records preserve every selected record → Graph Hash → result/aggregate mapping.</p></div>
+  </div>
+  <div class="tick">
+    <div class="who evaluator">Evaluator</div>
+    <div class="what"><p>Submits exactly <a class="term-ref" href="#gepa-derived-official-rollout-count"><code>official_rollout_count = D × official_task_count × official_repeat_count</code></a> Rollout Work Items with no duplicate Rollout Execution Keys. At <code>D = 12</code>, <code>official_rollout_count = 12 × 164 × 3 = 5,904</code>. Each immutable Rollout Result retains its nested Graph Run Result and provider/operational evidence; atomic binding remains authoritative.</p>
+      <div class="ledger"><b>output</b>authoritative bound Rollout Result refs or explicit FAILED stages; no internal Tool Result is promoted to official evidence</div>
+    </div>
+  </div>
+  <div class="tick">
+    <div class="who env">Evaluation harness</div>
+    <div class="what"><p>Aggregates complete ordinary Rollout Results referenced and certified by the <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> into Average Binary Test Pass Rate and Mean Compression Ratio. In the explicit nonconvergent case, the three selected evolved proposals produce 12 Rollout Aggregates across four ratios; eligible A/B baselines may be reused only with matching Rollout Keys, official attestation, certification, and environment compatibility.</p>
+      <div class="ledger"><b>output</b>exactly <code>D</code> selected distinct-hash aggregates plus eligible baselines; official analysis never reads internal acceptance as truth</div>
+    </div>
+  </div>
+</div>
+
+<div class="section-head" id="output"><h2>What lands on the plot: five curves per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, and only official results</h2></div>
+
+<p>Per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, eligible A/B baselines and three evolved templates retain separately attributable ratio slots, while converged slots share the planned/result-key set and <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregate</a> for their <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>. The resulting distinct-hash aggregates are each averaged over 164 tasks × 3 repeats; in the explicit nonconvergent example they form <span class="key">five candidate curves</span> with four aggregates each. The natural readings are whether evolution beat the starting templates and how the official Pareto Front moves. Internal <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> never appear here; their <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Contexts</a> lack official authority.</p>
+
+<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+
+<div class="grid-3">
+  <div class="card optim">
+    <h3>Frontiers, cache, and official front</h3>
+    <ul>
+      <li>The durable <a class="term-ref" href="#gepa-per-task-frontier">per-instance/objective frontiers</a> update only after same-minibatch acceptance and accepted-child full evaluation; their union steers parent sampling</li>
+      <li>The capacity-32 <a class="term-ref" href="#gepa-archive">archive</a> is a Whetstone variant cache. Eviction cannot delete frontier/catalog truth or change acceptance</li>
+      <li>The <a class="term-ref" href="#gepa-archive-nondominated-set">Whetstone experiment nondominated set</a> is an internal reporting/return view; the plot's Pareto Front is recomputed from official Rollout Aggregates</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3><a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">Internal Evaluation</a> vs <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a></h3>
+    <ul>
+      <li>Tool and official measurement policies have independent <code>eval_config_hash</code> identities. Their identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> is included in <code>graph_hash</code>; only Sampling/Aggregation remain outside it</li>
+      <li>The authorized <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> carries the <code>official</code> role, authority, and attestation; only the Official Evaluation Record certifies referenced ordinary Results as official, and reuse also requires a compatible environment</li>
+      <li>The 3-task comparison minibatch and 24-task accepted-child full evaluation are separate Eval Config sampling scopes bound under the <code>internal</code> role; whether the 24 tasks overlap the official 164 is left to experimental designers</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Durable optimizer state crosses step boundaries by reference</h3>
+    <ul>
+      <li>Every <a class="term-ref" href="#gepa-step-result">Step Result</a> references an immutable post-step <a class="term-ref" href="#gepa-state-snapshot">state snapshot</a>; the next request never relies on surviving process memory</li>
+      <li>The append-only <a class="term-ref" href="#gepa-proposal-catalog">proposal catalog</a> and frontiers retain durable proposal/evaluation history; the variant <a class="term-ref" href="#gepa-archive">archive</a> only bounds active cache membership</li>
+      <li>All three resolve <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> through terminal <a class="term-ref" href="vocab_and_defs.html#term-tool-call-store-entry">Tool Call Store Entries</a>; Tool Results and referenced Rollout Results remain immutable in dr-store</li>
+      <li>The <a class="term-ref" href="vocab_and_defs.html#term-result-store">Result Store</a> separately owns only the authoritative <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> → <a class="term-ref" href="vocab_and_defs.html#term-rollout-result">Rollout Result</a> <a class="term-ref" href="vocab_and_defs.html#term-object-reference">Object Reference</a> binding</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Candidate = one plotted line</h3>
+    <ul>
+      <li>A <a class="term-ref" href="#gepa-child">child</a> inherits everything outside the mutation surface from its <a class="term-ref" href="#gepa-parent">parent</a></li>
+      <li>Each proposal emits 4 <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a>/<a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a> pairs — the fixed ratio axis unrolled into its curve</li>
+      <li>Ordered multi-return: 4 candidates back, the frozen selection policy decides how many go on</li>
+    </ul>
+  </div>
+  <div class="card optim">
+    <h3>Versus reference GEPA</h3>
+    <ul>
+      <li>Reference-shaped: reflective mutation from fresh behavior; parent and child comparison on the same minibatch; strict improvement before accepted-child full evaluation; per-instance/objective frontier updates and diverse parent sampling</li>
+      <li>Named extension: <a class="term-ref" href="#gepa-whetstone-variant"><code>whetstone_multi_objective/v1</code></a> interprets strict improvement as correctness/compression strict Pareto improvement and adds a non-authoritative capacity-32 active cache</li>
+      <li>Whetstone integration: repeated durable <a class="term-ref" href="#gepa-optimization-step">GEPA steps</a>, immutable Step Results/state refs, bounded Rollout Trace projections, and concrete Tool Configs/Runtime Tool Handles/Tool Call Store Entries</li>
+      <li>dspy's GEPA is reference-only, never a dependency</li>
+    </ul>
+  </div>
+</div>
+
+</main>
+</body>
+</html>

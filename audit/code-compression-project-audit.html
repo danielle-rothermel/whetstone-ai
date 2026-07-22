@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<title>Code Compression Experiment Report</title>
+<style>
+  .metric { color: var(--accent); font: 800 30px/1 var(--font-system); }
+  .label { margin-top: 7px; color: var(--muted); font: 600 11.5px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; }
+  .status { display: inline-block; padding: 2px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 600 11.5px/1.5 var(--font-system); white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .progress-track { height: 10px; overflow: hidden; border-radius: 999px; background: #e3e8ef; }
+  .progress-fill { width: 89.19%; height: 100%; background: var(--accent); }
+  .progress-label { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font-size: 13px; }
+  .experiment { margin-top: 58px; scroll-margin-top: 24px; }
+  .experiment-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 12px; border-bottom: 2px solid var(--line); }
+  .experiment-head h2 { max-width: 900px; font-size: 24px; line-height: 1.25; }
+  .experiment-kicker { margin-bottom: 5px; color: var(--muted); font: 600 12px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; }
+  .experiment-kicker a { text-decoration: none; }
+  .linear-link { flex: none; margin-top: 3px; font: 600 13px/1.4 var(--font-system); text-decoration: none; }
+  .target { margin-top: 18px; padding: 20px 24px; border: 1px solid var(--line); border-left: 5px solid var(--accent); border-radius: 12px; background: var(--surface); }
+  .target h3 { margin-bottom: 7px; }
+  .target p:last-child { margin-bottom: 0; }
+  .result-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr); gap: 18px; margin-top: 18px; }
+  .result-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .result-shell > h3 { margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--line); background: #f1f4f9; font-size: 14px; letter-spacing: .04em; }
+  .result-fields { display: grid; grid-template-columns: minmax(160px, .38fr) minmax(0, 1fr); margin: 0; }
+  .result-fields dt,
+  .result-fields dd { margin: 0; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .result-fields dt { color: var(--muted); font: 600 12px/1.5 var(--font-system); }
+  .result-fields dt:last-of-type,
+  .result-fields dd:last-of-type { border-bottom: 0; }
+  .blank-field { min-height: 42px; border-left: 1px solid var(--line); background: repeating-linear-gradient(135deg, #fbfcfe, #fbfcfe 10px, #f5f7fa 10px, #f5f7fa 20px); }
+  .blank-field.large { min-height: 106px; }
+  .progress-log { margin-top: 18px; }
+  .progress-log td { height: 58px; }
+  .progress-log td:first-child { width: 140px; }
+  .progress-log td:last-child { width: 34%; }
+  .empty-row td { background: repeating-linear-gradient(135deg, #fff, #fff 10px, #fafbfc 10px, #fafbfc 20px); }
+  .report-sequence { display: flex; align-items: stretch; gap: 10px; }
+  .report-sequence .node { flex: 1; min-height: 84px; padding: 12px 14px; border: 1.5px solid #9aa7bd; border-radius: 10px; background: var(--surface); text-align: center; }
+  .report-sequence .node small { display: block; margin-top: 4px; color: var(--muted); font-size: 12.5px; }
+  .report-sequence .arr { display: flex; align-items: center; color: #8b96a9; font-size: 20px; }
+  .audit-counts td:first-child { width: 160px; }
+  @media (max-width: 900px) {
+    .experiment-head { display: block; }
+    .linear-link { display: inline-block; margin-top: 10px; }
+    .result-grid { grid-template-columns: 1fr; }
+    .result-fields { grid-template-columns: 1fr; }
+    .result-fields dt { padding-bottom: 4px; border-bottom: 0; }
+    .blank-field { border-left: 0; }
+    .progress-log td:first-child,
+    .progress-log td:last-child { width: auto; }
+    .report-sequence { flex-direction: column; }
+    .report-sequence .arr { justify-content: center; transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body class="with-toc">
+<nav class="toc" aria-label="Contents">
+  <div class="brand">Experiment report</div>
+  <a href="#overview">Overview</a>
+  <a href="#state">Code state</a>
+  <a href="#sequence">Run sequence</a>
+  <div class="group">Experimental results</div>
+  <a href="#res-7">RES-7 · Baseline</a>
+  <a href="#res-8">RES-8 · Coarse sweep</a>
+  <a href="#res-2">RES-2 · Headroom</a>
+  <a href="#res-3">RES-3 · COPRO</a>
+  <div class="group">Audit record</div>
+  <a href="#audit">Project snapshot</a>
+</nav>
+
+<main>
+<h1>Code Compression Experiment Report</h1>
+<div class="byline">whetstone-ai · living results report · 2026-07-19</div>
+
+<div class="hero" id="overview">
+  Four experimental runs remain: an <span class="key">uncompressed baseline</span>, a <span class="key">coarse compression sweep</span>, the <span class="key">headroom Go/No-Go</span>, and a <span class="key">COPRO optimization test</span>. No run has started and no result is populated. This page is the shared report surface: each section defines the intended outcome, reserves the result fields and artifacts that will support the claim, and provides an empty progress log for implementation and run updates.
+</div>
+
+<div class="grid-4 space-top">
+  <div class="card"><div class="metric">4</div><div class="label">experiments queued</div></div>
+  <div class="card"><div class="metric">0</div><div class="label">runs started</div></div>
+  <div class="card"><div class="metric">0</div><div class="label">results recorded</div></div>
+  <div class="card"><div class="metric">Jul 20</div><div class="label">Linear due date</div></div>
+</div>
+
+<div class="card space-top">
+  <h3>Linear project progress is 89%</h3>
+  <div class="progress-track" aria-label="Linear project progress: 89 percent"><div class="progress-fill"></div></div>
+  <div class="progress-label"><span>33 completed issues</span><span>4 non-canceled issues remain</span></div>
+</div>
+
+<div class="section-head" id="state"><h2>The result templates are ready; the experiment system is not</h2></div>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Surface</th><th>Current evidence</th><th>Report implication</th></tr></thead>
+  <tbody>
+    <tr><td>Whetstone core</td><td>8 source files, 576 production lines, 47 passing tests; lint and type checks pass.</td><td>Failure semantics and the LM provider boundary are ready to build on.</td></tr>
+    <tr><td>Experiment execution</td><td>No sweep runner, experiment graph, persistence layer, or result-publication path remains.</td><td>Implementation progress belongs in the logs below until the first reproducible run exists.</td></tr>
+    <tr><td>COPRO</td><td>The prior optimization subsystem was removed in Whetstone PR&nbsp;#55.</td><td>RES-3 stays empty until a current COPRO execution path is implemented.</td></tr>
+    <tr><td>Visualization</td><td>Unitbench retains the sweep, confidence, compression, pipeline, and heatmap components, currently backed by fixture contracts.</td><td>Result artifacts can reuse those views once a current publication boundary exists.</td></tr>
+    <tr><td>dr-* foundation</td><td><code>dr_code.metrics</code> exists and dr-platform has a staged-work API; Whetstone does not yet compose them into an experiment pipeline.</td><td>The implementation should target current contracts, not restore the deleted design.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p class="callout">
+  Detailed repository evidence remains in <a href="current-state-and-dependencies.html">Whetstone’s current-state and dependency audit</a>. The empty fields below are intentional: they represent results and progress that have not happened yet.
+</p>
+
+<div class="section-head" id="sequence"><h2>The four reports follow the experimental decision chain</h2></div>
+
+<div class="flow report-sequence" aria-label="Experimental report sequence">
+  <div class="node"><strong>RES-7 · Baseline</strong><small>Run the N=3 baseline and verify the system works end to end</small></div>
+  <div class="arr">→</div>
+  <div class="node"><strong>RES-8 · Coarse sweep</strong><small>Locate the compression–correctness elbow across a broad budget grid</small></div>
+  <div class="arr">→</div>
+  <div class="node"><strong>RES-2 · Headroom</strong><small>Resolve whether a workable compression band exists</small></div>
+  <div class="arr">→</div>
+  <div class="node"><strong>RES-3 · COPRO</strong><small>Test whether encoder-prompt optimization shifts the frontier</small></div>
+</div>
+
+<section class="experiment" id="res-7">
+  <div class="experiment-head">
+    <div>
+      <div class="experiment-kicker"><a href="https://linear.app/danielle-rothermel/issue/RES-7">RES-7</a> · Backlog · Due July 20, 2026</div>
+      <h2>The N=3 sweep establishes the baseline and verifies the system</h2>
+    </div>
+    <a class="linear-link" href="https://linear.app/danielle-rothermel/issue/RES-7">Open RES-7 in Linear ↗</a>
+  </div>
+
+  <div class="target">
+    <h3>Target outcome</h3>
+    <p>Run every task with the fixed model set and <span class="key">N=3</span>, without a compression budget. Use the sweep to establish the baseline and verify that the experiment system works end to end: tasks execute, failures are surfaced clearly, and results are recorded for the next sweep.</p>
+    <p class="muted"><strong>Decision unlocked:</strong> whether the system works well enough to proceed to the coarse compression sweep.</p>
+  </div>
+
+  <div class="result-grid">
+    <div class="result-shell">
+      <h3>Target results</h3>
+      <dl class="result-fields">
+        <dt>Run and config reference</dt><dd class="blank-field"></dd>
+        <dt>Model set</dt><dd class="blank-field"></dd>
+        <dt>Task and sample coverage</dt><dd class="blank-field"></dd>
+        <dt>Baseline pass rate</dt><dd class="blank-field"></dd>
+        <dt>End-to-end system check</dt><dd class="blank-field"></dd>
+      </dl>
+    </div>
+    <div class="result-shell">
+      <h3>Conclusion and artifacts</h3>
+      <dl class="result-fields">
+        <dt>Interpretation</dt><dd class="blank-field large"></dd>
+        <dt>Dataset / report links</dt><dd class="blank-field large"></dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="progress-log">
+    <h3>Progress log</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Progress</th><th>Evidence / next action</th></tr></thead>
+        <tbody><tr class="empty-row"><td></td><td></td><td></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="experiment" id="res-8">
+  <div class="experiment-head">
+    <div>
+      <div class="experiment-kicker"><a href="https://linear.app/danielle-rothermel/issue/RES-8">RES-8</a> · Backlog · Due July 20, 2026</div>
+      <h2>The coarse sweep locates the compression–correctness elbow</h2>
+    </div>
+    <a class="linear-link" href="https://linear.app/danielle-rothermel/issue/RES-8">Open RES-8 in Linear ↗</a>
+  </div>
+
+  <div class="target">
+    <h3>Target outcome</h3>
+    <p>Run all tasks over a <span class="key">broad target-compression grid</span> with the fixed model set and <span class="key">N=3</span>. Measure achieved compression and correctness at every budget, expose failure and cost behavior, and identify the elbow where pass rate moves from near-baseline toward collapse.</p>
+    <p class="muted"><strong>Decision unlocked:</strong> which compression interval deserves a denser sweep and how much replication that decision requires.</p>
+  </div>
+
+  <div class="result-grid">
+    <div class="result-shell">
+      <h3>Target results</h3>
+      <dl class="result-fields">
+        <dt>Run and config reference</dt><dd class="blank-field"></dd>
+        <dt>Budget grid and N</dt><dd class="blank-field"></dd>
+        <dt>Achieved compression range</dt><dd class="blank-field"></dd>
+        <dt>Pass-rate curve</dt><dd class="blank-field"></dd>
+        <dt>Elbow candidate</dt><dd class="blank-field"></dd>
+        <dt>Wall time and cost</dt><dd class="blank-field"></dd>
+      </dl>
+    </div>
+    <div class="result-shell">
+      <h3>Conclusion and artifacts</h3>
+      <dl class="result-fields">
+        <dt>Interpretation</dt><dd class="blank-field large"></dd>
+        <dt>Plots / dataset links</dt><dd class="blank-field large"></dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="progress-log">
+    <h3>Progress log</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Progress</th><th>Evidence / next action</th></tr></thead>
+        <tbody><tr class="empty-row"><td></td><td></td><td></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="experiment" id="res-2">
+  <div class="experiment-head">
+    <div>
+      <div class="experiment-kicker"><a href="https://linear.app/danielle-rothermel/issue/RES-2">RES-2</a> · Backlog · Due July 20, 2026</div>
+      <h2>The fine sweep resolves whether a workable compression band exists</h2>
+    </div>
+    <a class="linear-link" href="https://linear.app/danielle-rothermel/issue/RES-2">Open RES-2 in Linear ↗</a>
+  </div>
+
+  <div class="target">
+    <h3>Target outcome</h3>
+    <p>Run the calibrated fine sweep and produce the headroom heatmap: <span class="key">achieved compression ratio</span> on X, <span class="key">per-task average pass rate</span> on Y, and <span class="key">task count</span> as color. Deliver a Go/No-Go judgment on whether a non-degenerate band preserves enough correctness under meaningful compression to justify optimization.</p>
+    <p class="muted"><strong>Decision unlocked:</strong> whether COPRO proceeds, and the confirmed compression band and N it should use.</p>
+  </div>
+
+  <div class="result-grid">
+    <div class="result-shell">
+      <h3>Target results</h3>
+      <dl class="result-fields">
+        <dt>Run and config reference</dt><dd class="blank-field"></dd>
+        <dt>Fine range and N</dt><dd class="blank-field"></dd>
+        <dt>Workable compression band</dt><dd class="blank-field"></dd>
+        <dt>Correctness in band</dt><dd class="blank-field"></dd>
+        <dt>Variance / confidence</dt><dd class="blank-field"></dd>
+        <dt>Go / No-Go verdict</dt><dd class="blank-field"></dd>
+      </dl>
+    </div>
+    <div class="result-shell">
+      <h3>Conclusion and artifacts</h3>
+      <dl class="result-fields">
+        <dt>Interpretation</dt><dd class="blank-field large"></dd>
+        <dt>Heatmap / dataset links</dt><dd class="blank-field large"></dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="progress-log">
+    <h3>Progress log</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Progress</th><th>Evidence / next action</th></tr></thead>
+        <tbody><tr class="empty-row"><td></td><td></td><td></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="experiment" id="res-3">
+  <div class="experiment-head">
+    <div>
+      <div class="experiment-kicker"><a href="https://linear.app/danielle-rothermel/issue/RES-3">RES-3</a> · Backlog · Due July 20, 2026</div>
+      <h2>The COPRO run tests whether prompt optimization shifts the frontier</h2>
+    </div>
+    <a class="linear-link" href="https://linear.app/danielle-rothermel/issue/RES-3">Open RES-3 in Linear ↗</a>
+  </div>
+
+  <div class="target">
+    <h3>Target outcome</h3>
+    <p>Run COPRO against the workable compression band at calibrated N and compare the optimized encoder prompt with the unoptimized reference. Determine whether optimization <span class="key">measurably shifts the compression–correctness frontier</span>, and pair the estimate with an <span class="key">overfitting and leakage spot-check</span>.</p>
+    <p class="muted"><strong>Claim tested:</strong> functionality-aware encoder optimization improves the Pareto frontier rather than merely fitting surface form.</p>
+  </div>
+
+  <div class="result-grid">
+    <div class="result-shell">
+      <h3>Target results</h3>
+      <dl class="result-fields">
+        <dt>Run and optimizer config</dt><dd class="blank-field"></dd>
+        <dt>Compression band and N</dt><dd class="blank-field"></dd>
+        <dt>Reference frontier</dt><dd class="blank-field"></dd>
+        <dt>Optimized frontier</dt><dd class="blank-field"></dd>
+        <dt>Effect size / uncertainty</dt><dd class="blank-field"></dd>
+        <dt>Leakage / overfit check</dt><dd class="blank-field"></dd>
+      </dl>
+    </div>
+    <div class="result-shell">
+      <h3>Conclusion and artifacts</h3>
+      <dl class="result-fields">
+        <dt>Interpretation</dt><dd class="blank-field large"></dd>
+        <dt>Plots / prompts / data links</dt><dd class="blank-field large"></dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="progress-log">
+    <h3>Progress log</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Progress</th><th>Evidence / next action</th></tr></thead>
+        <tbody><tr class="empty-row"><td></td><td></td><td></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<div class="section-head" id="audit"><h2>The audit snapshot accounts for every project issue</h2></div>
+
+<div class="grid-4">
+  <div class="card"><div class="metric">49</div><div class="label">issues audited</div></div>
+  <div class="card"><div class="metric">33</div><div class="label">done</div></div>
+  <div class="card"><div class="metric">12</div><div class="label">canceled</div></div>
+  <div class="card"><div class="metric">4</div><div class="label">open experiments</div></div>
+</div>
+
+<div class="table-wrap space-top">
+<table class="audit-counts">
+  <thead><tr><th>Audit fact</th><th>Current state</th></tr></thead>
+  <tbody>
+    <tr><td>Open Linear issues</td><td><a href="https://linear.app/danielle-rothermel/issue/RES-7">RES-7</a>, <a href="https://linear.app/danielle-rothermel/issue/RES-8">RES-8</a>, <a href="https://linear.app/danielle-rothermel/issue/RES-2">RES-2</a>, and <a href="https://linear.app/danielle-rothermel/issue/RES-3">RES-3</a>.</td></tr>
+    <tr><td>Status</td><td>All four are Backlog.</td></tr>
+    <tr><td>Due date</td><td>All four are due July 20, 2026.</td></tr>
+    <tr><td>Results state</td><td>No run, result, artifact, or progress entry is recorded in this report.</td></tr>
+    <tr><td>Project target</td><td>September 24, 2026 in Linear; internal presentable-results and draft target is August 31.</td></tr>
+  </tbody>
+</table>
+</div>
+
+</main>
+</body>
+</html>
