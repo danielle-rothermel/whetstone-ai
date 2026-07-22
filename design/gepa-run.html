@@ -6,6 +6,14 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
+<style>
+.gepa-figure{margin:0}.gepa-scroll{overflow-x:auto;padding-bottom:3px}.gepa-map{position:relative;display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:44px repeat(9,96px);row-gap:12px;min-width:960px;width:100%;height:1016px;overflow:hidden;border:1px solid #d8cbed;border-radius:10px;background:linear-gradient(to right,#fbf8ff 0 75%,#f4faf6 75% 100%)}
+.gepa-map::after{content:"";position:absolute;z-index:0;inset:0 auto 0 75%;border-left:1px dashed #9fc9a9}.gepa-lane{z-index:4;padding:11px 14px;border-bottom:1px solid;font:700 10.5px/1.4 var(--font-system);letter-spacing:.07em;text-transform:uppercase}.gepa-lane.opt{grid-column:1/10;color:var(--optim);border-color:#d8cbed;background:#f2eafa}.gepa-lane.wh{grid-column:10/13;color:var(--green);border-color:#b9dac1;background:var(--green-soft)}
+.gepa-group{z-index:0;border-radius:10px;pointer-events:none}.gepa-group span{position:absolute;margin:-10px 0 0 14px;padding:1px 7px;background:#fbf8ff;font:700 10px/1.5 var(--font-system);letter-spacing:.05em;text-transform:uppercase}.gepa-group.outer{grid-column:1/13;grid-row:2/9;margin:1px 10px;border:1.5px solid var(--optim);background:rgb(246 241 252/22%)}.gepa-group.outer span{color:var(--optim)}.gepa-group.inner{grid-column:3/10;grid-row:4/7;margin:8px 12px;border:1.5px dashed #a36d27}.gepa-group.inner span{color:#8a5d1f}
+.gepa-svg{position:absolute;z-index:1;inset:0;width:100%;height:100%}.gepa-path{fill:none;stroke-width:2;vector-effect:non-scaling-stroke}.gepa-path.opt{stroke:var(--optim);marker-end:url(#gepa-arrow-opt)}.gepa-path.wh{stroke:var(--green);marker-end:url(#gepa-arrow-wh)}.gepa-path.inner{stroke:#a36d27;marker-end:url(#gepa-arrow-inner);stroke-dasharray:4 4}.gepa-path.loop{stroke-dasharray:5 4}#gepa-arrow-opt path{fill:var(--optim)}#gepa-arrow-wh path{fill:var(--green)}#gepa-arrow-inner path{fill:#a36d27}.gepa-label{fill:var(--muted);paint-order:stroke;stroke:#fbf8ff;stroke-width:5px;stroke-linejoin:round;font:500 10.5px var(--font-system)}
+.gepa-node{z-index:3;align-self:stretch;min-width:0;margin:6px;padding:8px 10px;border:1.5px solid;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgb(27 35 51/8%);font-size:11px;line-height:1.25}.gepa-node strong{display:block;font:700 11.8px/1.25 var(--font-system)}.gepa-node>span{display:block;margin-top:2px;color:var(--muted)}.gepa-node code{padding:0 2px;font-size:9.8px}.gepa-node.opt{border-color:var(--optim)}.gepa-node.wh{border-color:var(--green);background:#fcfffc}.gepa-node.output{border-color:var(--accent);background:var(--accent-soft)}
+.gepa-config{grid-column:2/9;grid-row:2}.gepa-request{grid-column:10/13;grid-row:2}.gepa-restore{grid-column:1/4;grid-row:3}.gepa-parent{grid-column:4/7;grid-row:3}.gepa-reflect{grid-column:4/7;grid-row:4}.gepa-child{grid-column:7/10;grid-row:4}.gepa-full{grid-column:7/10;grid-row:5}.gepa-update{grid-column:4/7;grid-row:5}.gepa-result{grid-column:4/8;grid-row:6}.gepa-status{grid-column:4/7;grid-row:7;border-style:dashed}.gepa-complete{grid-column:3/7;grid-row:8}.gepa-failed{grid-column:7/10;grid-row:8}.gepa-official{grid-column:10/13;grid-row:9}.gepa-analysis{grid-column:10/13;grid-row:10}.gepa-caption{margin:9px 4px 0;color:var(--muted);font-size:12.5px}@media(max-width:760px){.gepa-scroll{border-right:1px dashed #d8cbed}.gepa-map{width:960px}}
+</style>
 <title>GEPA Run Design</title>
 </head>
 <body>
@@ -162,73 +170,40 @@
 
 <div class="section-head" id="system"><h2>Repeated Durable GEPA Steps, Then Official Evaluation</h2></div>
 
-<div class="flow">
-  <div class="plane">
-    <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> configuration <span class="sub">· frozen before step 1; umbrella identity spans every step</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b>Algorithm and variant</b><span class="note"><a class="term-ref" href="#gepa-param-variant"><code>gepa_variant = whetstone_multi_objective/v1</code></a>; <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a>; <a class="term-ref" href="#gepa-param-max-reflection-lm-calls"><code>max_reflection_lm_calls = 8</code></a>; deterministic seed</span></div>
-      <div class="comp settled optim"><b>Authorized tools</b><span class="note">pinned diagnostic/comparison and full-evaluation <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a>; Whetstone reconstructs <a class="term-ref" href="vocab_and_defs.html#term-runtime-tool-handle">Runtime Tool Handles</a> and binds <a class="term-ref" href="vocab_and_defs.html#term-tool-call-ledger">Tool Call Ledgers</a> for each request</span></div>
-      <div class="comp settled optim"><b>State and output contract</b><span class="note">A/B initial candidates; mutation surface; <a class="term-ref" href="#gepa-archive-policy">archive policy</a>; <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a>; immutable prior-result/state references after step 1</span></div>
-    </div>
-  </div>
-
-  <div class="flow-arrow"><span>one <a class="term-ref" href="#gepa-step-request">Step Request</a> enters exactly one outer <a class="term-ref" href="#gepa-optimization-step">GEPA step</a></span> <span class="glyph">▼</span></div>
-
-  <div class="repeat">
-    <div class="repeat-label">One outer GEPA step · bounded internal tool/reflection loop</div>
-    <div class="plane optim">
-      <div class="plane-label"><a class="term-ref" href="#gepa-optimization-step">GEPA step</a> N <span class="sub">· one invocation; internal subphases are not outer request kinds</span></div>
-      <div class="hflow">
-        <div class="comp settled optim"><b>Restore &amp; select</b><span class="note">verify run/step/config identities and prior refs; restore RNG; seed A/B on first use; sample a <a class="term-ref" href="#gepa-parent">parent</a> from the <a class="term-ref" href="#gepa-per-task-frontier">per-instance/objective frontiers</a></span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Fresh parent diagnostic</b><span class="note"><code>evaluate_minibatch(parent, task_ids)</code> returns a terminal ledgered <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>, Rollout refs, objectives, and bounded trace projection</span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Reflect &amp; validate</b><span class="note">the <a class="term-ref" href="#gepa-reflection-lm">reflection LM</a> proposes a child; canonicalization and <a class="term-ref" href="vocab_and_defs.html#term-diff-check">Diff Check</a> enforce the mutation surface and uniqueness</span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Same-minibatch child call</b><span class="note"><code>evaluate_minibatch(child, same task_ids)</code> returns its own terminal ledgered Tool Result and Rollout refs; <a class="term-ref" href="#gepa-param-acceptance-policy"><code>acceptance_policy = same_minibatch_strict_pareto/v1</code></a></span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Accepted-child full evaluation</b><span class="note">only after acceptance, <code>evaluate_subset(child)</code> returns a ledgered Tool Result and <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> × 1 Rollout refs</span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Update</b><span class="note">append catalog entry; update per-instance/objective frontiers; apply variant active-archive delta; decrement budgets; compute status</span></div>
+<div class="plane optim">
+  <div class="plane-label" id="gepa-diagram-title">Repeated durable GEPA steps <span class="sub">· nested reflection and step loops with explicit exits</span></div>
+  <figure class="gepa-figure" aria-labelledby="gepa-diagram-title" aria-describedby="gepa-diagram-caption">
+    <div class="gepa-scroll" role="region" aria-label="Scrollable GEPA nested-loop diagram" tabindex="0">
+      <div class="gepa-map">
+        <div class="gepa-lane opt">GEPA algorithm / optimizer</div><div class="gepa-lane wh">Whetstone tool and harness boundary</div>
+        <div class="gepa-group outer" aria-hidden="true"><span>Outer GEPA Step loop · continue creates one next Step Request</span></div>
+        <div class="gepa-group inner" aria-hidden="true"><span>Bounded reflection retry loop</span></div>
+        <svg class="gepa-svg" viewBox="0 0 1200 1016" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <defs><marker id="gepa-arrow-opt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker><marker id="gepa-arrow-wh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker><marker id="gepa-arrow-inner" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z"></path></marker></defs>
+          <path class="gepa-path wh" d="M894 104H1050V152"></path><path class="gepa-path wh" d="M1050 152V158H150V164"></path>
+          <path class="gepa-path opt" d="M294 212H306"></path><path class="gepa-path opt" d="M450 260V272"></path><path class="gepa-path opt" d="M594 320H606"></path><path class="gepa-path wh" d="M750 368V380"></path><path class="gepa-path opt" d="M706 428H594"></path><path class="gepa-path opt" d="M500 476V488"></path>
+          <path class="gepa-path inner" d="M306 320H260V282H450V272"></path>
+          <path class="gepa-path opt" d="M550 584V596"></path><path class="gepa-path opt loop" d="M306 644H28V50H1050V56"></path><path class="gepa-path opt" d="M450 692V704"></path><path class="gepa-path opt" d="M550 692V696H750V704"></path><path class="gepa-path wh" d="M594 752H1050V812"></path><path class="gepa-path wh" d="M1050 908V920"></path>
+          <text class="gepa-label" x="590" y="158" text-anchor="middle">one request enters one invocation</text><text class="gepa-label" x="620" y="700">complete</text><text class="gepa-label" x="760" y="700">failed</text>
+        </svg>
+        <div class="gepa-node opt gepa-config"><strong>Frozen <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> configuration</strong><span><a class="term-ref" href="#gepa-param-variant"><code>gepa_variant=whetstone_multi_objective/v1</code></a>; deterministic seed; A/B; template-only mutation; archive/return policies; budgets; pinned diagnostic, comparison, and full-evaluation <a class="term-ref" href="vocab_and_defs.html#term-tool-spec">Tool Specs</a></span></div>
+        <div class="gepa-node wh gepa-request"><strong><a class="term-ref" href="#gepa-step-request">Step Request</a></strong><span>Run/step/config identities, prior <a class="term-ref" href="#gepa-step-result">Step Result</a>/<a class="term-ref" href="#gepa-state-snapshot">state</a> refs, and reconstructed tool handles</span></div>
+        <div class="gepa-node opt gepa-restore"><strong>Restore &amp; select</strong><span>Verify identities and refs; restore RNG; seed A/B on first use; sample a <a class="term-ref" href="#gepa-parent">parent</a> from the <a class="term-ref" href="#gepa-per-task-frontier">frontiers</a></span></div>
+        <div class="gepa-node opt gepa-parent"><strong>Fresh parent diagnostic</strong><span><code>evaluate_minibatch(parent, task_ids)</code>: ledgered <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Result</a>, objectives, Rollout refs, bounded trace projection</span></div>
+        <div class="gepa-node opt gepa-reflect"><strong>Reflect &amp; validate</strong><span><a class="term-ref" href="#gepa-reflection-lm">Reflection LM</a> proposes; canonicalization, uniqueness, and <a class="term-ref" href="vocab_and_defs.html#term-diff-check">Diff Check</a>; at most <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-step"><code>3</code></a> attempts</span></div>
+        <div class="gepa-node opt gepa-child"><strong>Same-minibatch child call</strong><span><code>evaluate_minibatch(child, same task_ids)</code>; <a class="term-ref" href="#gepa-param-acceptance-policy"><code>same_minibatch_strict_pareto/v1</code></a></span></div>
+        <div class="gepa-node opt gepa-full"><strong>Accepted-child full evaluation</strong><span>Only after acceptance: <code>evaluate_subset(child)</code> returns a ledgered result and <a class="term-ref" href="#gepa-setting-objective-task-count"><code>24×1</code></a> Rollout refs</span></div>
+        <div class="gepa-node opt gepa-update"><strong>Update durable state</strong><span>Append catalog; update frontiers; apply archive delta; decrement budgets; compute status</span></div>
+        <div class="gepa-node opt gepa-result"><strong>One immutable <a class="term-ref" href="#gepa-step-result">Step Result</a> + state snapshot</strong><span>Identities/RNG; tool, Rollout, reflection and diff evidence; acceptance inputs; state delta; budgets; exactly one status</span></div>
+        <div class="gepa-node opt gepa-status"><strong><code>continue | complete | failed</code></strong><span>No hidden fourth status; no internal subphase response escapes as an outer result</span></div>
+        <div class="gepa-node output gepa-complete"><strong><code>complete</code> → terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></strong><span>Exactly <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count=4</code></a> ordered proposals plus all Step Result refs</span></div>
+        <div class="gepa-node opt gepa-failed"><strong><code>failed</code> exit</strong><span>Persist causal failure and restart evidence; rejection or exhausted reflection can still be a successful transition</span></div>
+        <div class="gepa-node wh gepa-official"><strong>Official materialization &amp; selection</strong><span><a class="term-ref" href="#gepa-derived-materialization-count"><code>16</code></a> records; three groups × four ratios; deduplicate to <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D≤12</code></a></span></div>
+        <div class="gepa-node wh gepa-analysis"><strong>Official Rollouts &amp; analysis</strong><span><a class="term-ref" href="#gepa-derived-official-rollout-count"><code>D×official_task_count×official_repeat_count</code></a>; authorized aggregates/Pareto Front; internal Tool Results never gain official authority</span></div>
       </div>
-      <div class="flow-arrow"><span class="glyph">↺</span><span><b>bounded inner back-edge:</b> invalid or duplicate reflection output records evidence and retries only the reflect/validate subphase, up to <a class="term-ref" href="#gepa-param-max-reflection-attempts-per-step"><code>max_reflection_attempts_per_step = 3</code></a> and the global call budget; successful tool effects are reused from their ledgers</span></div>
     </div>
-  </div>
-
-  <div class="flow-arrow"><span>commit exactly one immutable <a class="term-ref" href="#gepa-step-result">Step Result</a> and post-step <a class="term-ref" href="#gepa-state-snapshot">state snapshot</a></span> <span class="glyph">▼</span></div>
-
-  <div class="plane optim">
-    <div class="plane-label">Durable step boundary <span class="sub">· sufficient for audit and restart</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b>Identity &amp; deterministic continuation</b><span class="note">run ID; step ID/index; request/config/policy hashes; deterministic seed and post-step RNG state; prior Step Result/state refs; parent identity and lineage</span></div>
-      <div class="comp settled optim"><b>Evaluation &amp; tool evidence</b><span class="note">sampled task IDs; every Tool Call ID/spec/ledger/result hash; parent/child Rollout Result refs; full-evaluation refs; bounded projection version, content ref/hash, and truncation</span></div>
-      <div class="comp settled optim"><b>Reflection &amp; child evidence</b><span class="note">reflection attempts, provider evidence, request/response or failure refs, token/cost totals; canonical child assignment and identity; validation and diff evidence</span></div>
-      <div class="comp settled optim"><b>Decision &amp; state delta</b><span class="note">parent/child same-minibatch objective inputs; acceptance decision and policy hash; catalog/frontier/archive before/after refs and delta; remaining Rollout/reflection budgets</span></div>
-      <div class="comp settled optim"><b>Terminal status</b><span class="note">exactly one of <code>continue</code>, <code>complete</code>, or <code>failed</code>, with typed reason; <code>complete</code> includes the ordered run proposals used by the terminal Optimization Result</span></div>
-    </div>
-  </div>
-
-  <div class="flow-arrow"><span class="glyph">↺</span><span><b>outer back-edge — <code>continue</code>:</b> the harness creates the next <a class="term-ref" href="#gepa-step-request">Step Request</a> from immutable prior Step Result/state refs and returns to the single outer GEPA-step box; it does not issue diagnose, reflect, evaluate, accept, or update requests</span></div>
-
-  <div class="plane">
-    <div class="plane-label">Outer-loop exits <span class="sub">· no hidden fourth status</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b><code>complete</code></b><span class="note">persist the terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a> with exactly <a class="term-ref" href="#gepa-contract-proposal-return-count"><code>proposal_return_count = 4</code></a> ordered proposals and all Step Result references; then begin official materialization</span></div>
-      <div class="comp breach optim"><b><code>failed</code></b><span class="note">persist causal failure and restart evidence; no official materialization. A durable rejected child or exhausted reflection attempt can still be a successful step transition and need not mean operational failure</span></div>
-    </div>
-  </div>
-
-  <div class="flow-arrow"><span>only a completed <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> crosses into official validation, materialization, selection, and evaluation</span> <span class="glyph">▼</span></div>
-
-  <div class="plane">
-    <div class="plane-label">Official evaluation harness <span class="sub">· authoritative and independent of internal tool evaluation</span></div>
-    <div class="comps">
-      <div class="comp settled"><b>Validation &amp; materialization</b><span class="note"><a class="term-ref" href="#gepa-derived-materialization-count"><code>materialization_count = proposal_return_count × len(budget_ratio_values) = 4 × 4 = 16</code></a> Graph Config/Materialization Record pairs</span></div>
-      <div class="comp settled"><b>Selection &amp; deduplication</b><span class="note"><a class="term-ref" href="#gepa-contract-official-selection-count"><code>official_selection_count = 3</code></a> groups × four ratios; deduplicate by full Graph Hash to <a class="term-ref" href="#gepa-derived-max-admitted-graph-count"><code>D ≤ max_admitted_graph_count = 12</code></a></span></div>
-      <div class="comp settled"><b>Official Rollouts</b><span class="note"><a class="term-ref" href="#gepa-derived-official-rollout-count"><code>official_rollout_count = D × official_task_count × official_repeat_count</code></a>; internal Tool Results never acquire official authority</span></div>
-      <div class="comp settled"><b>Analysis</b><span class="note">authorized Rollout Aggregates and Pareto Front; preserve selected Materialization Record → Graph Hash → result/aggregate lineage</span></div>
-    </div>
-  </div>
+    <figcaption class="gepa-caption" id="gepa-diagram-caption">Each Whetstone Step Request enters one GEPA invocation. The amber inner loop retries only invalid or duplicate reflection output and reuses prior tool effects; the purple outer loop commits one durable Step Result before <code>continue</code> creates the next request. Only <code>complete</code> reaches official evaluation.</figcaption>
+  </figure>
 </div>
 
 <div class="callout"><b>Step Result restart minimum.</b> Every <a class="term-ref" href="#gepa-step-result">Step Result</a> contains all of: run/step/config identities; deterministic seed and RNG state; parent and lineage; sampled tasks and evaluation/tool hashes; parent and child result references; bounded trace projection and truncation; reflection evidence, attempts, and cost; canonical child and diff validation; acceptance inputs, decision, and policy; accepted-child full-evaluation references; catalog/frontier/archive delta; remaining budgets; and <code>continue|complete|failed</code>. Absence of any applicable field is explicit and typed, never inferred from a missing event.</div>

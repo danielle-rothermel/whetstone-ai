@@ -6,6 +6,75 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
+<style>
+/* COPRO run geometry. HTML owns the content and reading order; SVG only joins nodes. */
+.copro-run-diagram { margin: 0; }
+.copro-run-scroll { overflow-x: auto; padding-bottom: 3px; }
+.copro-run-map {
+  position: relative; display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-rows: 44px repeat(7, 90px); row-gap: 12px;
+  min-width: 900px; width: 100%; height: 758px; overflow: hidden;
+  border: 1px solid #d8cbed; border-radius: 10px;
+  background: linear-gradient(to right, #fbf8ff 0 66.666%, #f4faf6 66.666% 100%);
+}
+.copro-run-map::after {
+  content: ""; position: absolute; z-index: 0; inset: 0 auto 0 66.666%;
+  border-left: 1px dashed #9fc9a9;
+}
+.copro-run-lane {
+  z-index: 3; padding: 11px 14px; border-bottom: 1px solid;
+  font: 700 10.5px/1.4 var(--font-system); letter-spacing: .07em; text-transform: uppercase;
+}
+.copro-run-lane--optimizer { grid-column: 1 / 9; color: var(--optim); border-color: #d8cbed; background: #f2eafa; }
+.copro-run-lane--whetstone { grid-column: 9 / 13; color: var(--green); border-color: #b9dac1; background: var(--green-soft); }
+.copro-run-group {
+  z-index: 0; grid-column: 1 / 13; grid-row: 3 / 7; margin: 1px 10px;
+  border: 1.5px dashed var(--optim); border-radius: 10px; background: rgb(246 241 252 / 35%);
+}
+.copro-run-group span {
+  position: absolute; margin: -10px 0 0 14px; padding: 1px 7px; background: #fbf8ff;
+  color: var(--optim); font: 700 10px/1.5 var(--font-system); letter-spacing: .05em; text-transform: uppercase;
+}
+.copro-run-connectors { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; }
+.copro-run-path { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.copro-run-path--optimizer { stroke: var(--optim); marker-end: url(#copro-arrow-optimizer); }
+.copro-run-path--whetstone { stroke: var(--green); marker-end: url(#copro-arrow-whetstone); }
+.copro-run-path--loop { stroke-dasharray: 5 4; }
+#copro-arrow-optimizer path { fill: var(--optim); }
+#copro-arrow-whetstone path { fill: var(--green); }
+.copro-run-path-label {
+  fill: var(--muted); paint-order: stroke; stroke: #fbf8ff; stroke-width: 5px;
+  stroke-linejoin: round; font: 500 10.5px var(--font-system);
+}
+.copro-run-node {
+  z-index: 2; align-self: stretch; min-width: 0; margin: 6px; padding: 8px 10px;
+  border: 1.5px solid; border-radius: 8px; background: #fff;
+  box-shadow: 0 1px 2px rgb(27 35 51 / 8%); font-size: 11.5px; line-height: 1.28;
+}
+.copro-run-node strong { display: block; font: 700 12px/1.25 var(--font-system); }
+.copro-run-node > span { display: block; margin-top: 2px; color: var(--muted); }
+.copro-run-node code { padding: 0 2px; font-size: 10px; }
+.copro-run-node--optimizer { border-color: var(--optim); }
+.copro-run-node--whetstone { border-color: var(--green); background: #fcfffc; }
+.copro-run-node--output { border-color: var(--accent); background: var(--accent-soft); }
+.copro-run-node--config { grid-column: 2 / 8; grid-row: 2; }
+.copro-run-node--initial { grid-column: 9 / 12; grid-row: 2; }
+.copro-run-node--request { grid-column: 1 / 4; grid-row: 3; }
+.copro-run-node--invoke { grid-column: 4 / 7; grid-row: 3; }
+.copro-run-node--response { grid-column: 7 / 9; grid-row: 3; }
+.copro-run-node--evaluate { grid-column: 9 / 12; grid-row: 4; }
+.copro-run-node--history { grid-column: 9 / 12; grid-row: 5; }
+.copro-run-node--result { grid-column: 4 / 8; grid-row: 5; }
+.copro-run-node--decision { grid-column: 4 / 7; grid-row: 6; border-style: dashed; }
+.copro-run-node--terminal { grid-column: 3 / 8; grid-row: 7; }
+.copro-run-node--official { grid-column: 9 / 12; grid-row: 8; }
+.copro-run-caption { margin: 9px 4px 0; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 760px) {
+  .copro-run-scroll { border-right: 1px dashed #d8cbed; }
+  .copro-run-map { width: 900px; }
+}
+</style>
 <title>COPRO Optimization Run Design</title>
 </head>
 <body>
@@ -128,67 +197,52 @@
 <div class="section-head" id="system"><h2>Run COPRO as Externally Evaluated Proposal Steps</h2></div>
 
 <div class="flow">
-  <div class="plane">
-    <div class="plane-label">Optimization Run configuration <span class="sub">· frozen before the first step</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b>Algorithm config</b><span class="note"><code>copro_variant=whetstone_multi_seed/v1</code>; <code>breadth=4</code>; <code>depth=2</code>; pinned <code>proposal_lm_config_ref</code></span></div>
-      <div class="comp settled optim"><b>Run input</b><span class="note"><code>initial_candidates=[A, B]</code>; <code>initial_candidate_count=2</code> is derived; only <code>mutation_field=user_prompt_template</code> may change</span></div>
-      <div class="comp settled optim"><b>Step measurement config</b><span class="note"><code>step_eval_config_ref</code>, <code>step_eval_budget_ratio=0.5</code>, and <code>step_reward_policy_ref</code> are harness-owned. Whetstone binds them while fulfilling Evaluation Intent; COPRO receives no evaluation capability</span></div>
-      <div class="comp settled"><b>Official config</b><span class="note"><code>requested_proposal_count=3</code>; <code>official_selected_proposal_count=2</code>; four <code>variance_source_values</code>; authorized <code>official_eval_config_ref</code></span></div>
-    </div>
-  </div>
-
-  <div class="flow-arrow"><span>Whetstone evaluates A and B externally and creates immutable <a class="term-ref" href="#copro-attempt-history">Attempt History</a> H<sub>0</sub></span> <span class="glyph">▼</span></div>
-
-  <div class="repeat optim">
-    <div class="repeat-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-step">Optimization Step</a> loop · <code>step_index=1..depth</code></div>
-    <div class="plane optim">
-      <div class="plane-label">Proposal-only optimizer boundary <span class="sub">· round 1 = Seed Proposal; later rounds = History Proposal</span></div>
-      <div class="hflow">
-        <div class="comp settled optim"><b><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a></b><span class="note"><code>proposal_mode=seed_proposal</code> at <code>step_index=1</code>, otherwise <code>proposal_mode=history_proposal</code>; immutable H<sub>step_index−1</sub> entries/ref; mutation surface; <code>breadth=4</code>; <code>proposal_lm_config_ref</code></span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>COPRO invocation</b><span class="note">Proposal LM reads the supplied seeds/history and emits exactly <code>breadth</code> new candidates; it performs no candidate evaluation and has no evaluation capability</span></div>
-        <span class="harrow">→</span>
-        <div class="comp settled optim"><b>Proposal-only response</b><span class="note">candidate batch plus <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a> naming the intended config, budget ratio, candidate identities, and required evidence</span></div>
-      </div>
-    </div>
-
-    <div class="flow-arrow"><span>Whetstone validates, materializes, and evaluates the returned batch outside COPRO</span> <span class="glyph">▼</span></div>
-
-    <div class="plane">
-      <div class="plane-label">Committed step completion <span class="sub">· authoritative external evaluation and immutable state transition</span></div>
-      <div class="hflow">
-        <div class="comp settled optim"><b><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> S<sub>step_index</sub></b><span class="note">request and batch; Evaluation Intent; Materialization/evaluation refs; Rewards; H<sub>step_index−1</sub>→H<sub>step_index</sub>; Proposal LM evidence and cost</span></div>
-        <span class="harrow">←</span>
-        <div class="comp settled"><b>Immutable ranked history H<sub>step_index</sub></b><span class="note">Whetstone applies <code>step_reward_policy_ref</code> and commits the measured batch; <code>step_rollout_count=breadth×step_task_count×step_repeat_count=80</code></span></div>
-        <span class="harrow">←</span>
-        <div class="comp settled"><b>External evaluation</b><span class="note">each Result retains Graph/Eval identities, facts, scores, evidence, cost, and internal Evaluation Context</span></div>
-      </div>
-    </div>
-
-    <div class="flow-arrow"><span class="glyph">↖</span> <span><b>BACK EDGE:</b> when <code>step_index&lt;depth</code>, committed S<sub>step_index</sub> and H<sub>step_index</sub> become the next Optimization Step Request's immutable inputs</span> <span class="glyph">↩</span></div>
-  </div>
-
-  <div class="flow-arrow"><span><b>DEPTH / TERMINATION EXIT:</b> when <code>step_index=depth=2</code>, S<sub>2</sub> and measured H<sub>2</sub> exit the loop to final selection</span> <span class="glyph">▼</span></div>
-
   <div class="plane optim">
-    <div class="plane-label">Optimization Run terminalization <span class="sub">· final selection never precedes the last external evaluation</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b>Fixed final order</b><span class="note">maximum pass rate, then minimum compression, then stable candidate ID; illustrative return P<sub>6</sub>, P<sub>2</sub>, B</span></div>
-      <div class="comp settled optim"><b><a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></b><span class="note">exactly three ordered Optimization Proposals plus S<sub>1</sub>/S<sub>2</sub>, H<sub>2</sub>, Proposal LM evidence, and run cost as advisory provenance</span></div>
-    </div>
-  </div>
+    <div class="plane-label" id="copro-run-diagram-title">High-level COPRO Optimization Run <span class="sub">· proposal-only steps with an externally evaluated, closed outer loop</span></div>
+    <figure class="copro-run-diagram" aria-labelledby="copro-run-diagram-title" aria-describedby="copro-run-diagram-caption">
+      <div class="copro-run-scroll" role="region" aria-label="Scrollable COPRO loop diagram" tabindex="0">
+        <div class="copro-run-map">
+          <div class="copro-run-lane copro-run-lane--optimizer">COPRO algorithm / optimizer</div>
+          <div class="copro-run-lane copro-run-lane--whetstone">Whetstone evaluation harness</div>
+          <div class="copro-run-group" aria-hidden="true"><span>Optimization Step loop · step_index=1..depth</span></div>
+          <svg class="copro-run-connectors" viewBox="0 0 1200 758" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            <defs>
+              <marker id="copro-arrow-optimizer" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z"></path></marker>
+              <marker id="copro-arrow-whetstone" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z"></path></marker>
+            </defs>
+            <path class="copro-run-path copro-run-path--whetstone" d="M790 101 H806"></path>
+            <path class="copro-run-path copro-run-path--whetstone" d="M950 146 V166 H150 V164"></path>
+            <path class="copro-run-path copro-run-path--optimizer" d="M294 203 H306"></path>
+            <path class="copro-run-path copro-run-path--optimizer" d="M594 203 H606"></path>
+            <path class="copro-run-path copro-run-path--whetstone" d="M794 203 H950 V260"></path>
+            <path class="copro-run-path copro-run-path--whetstone" d="M950 350 V362"></path>
+            <path class="copro-run-path copro-run-path--whetstone" d="M806 407 H694"></path>
+            <path class="copro-run-path copro-run-path--optimizer" d="M550 452 V464"></path>
+            <path class="copro-run-path copro-run-path--optimizer copro-run-path--loop" d="M394 509 H32 V203 H6"></path>
+            <path class="copro-run-path copro-run-path--optimizer" d="M450 554 V566"></path>
+            <path class="copro-run-path copro-run-path--whetstone" d="M500 656 V713 H806"></path>
+            <text class="copro-run-path-label" x="600" y="155" text-anchor="middle">H₀ measured before round 1</text>
+            <text class="copro-run-path-label" x="860" y="246" text-anchor="middle">Evaluation Intent</text>
+            <text class="copro-run-path-label" x="180" y="496" text-anchor="middle">more depth · next immutable request</text>
+            <text class="copro-run-path-label" x="540" y="562" text-anchor="start">depth reached</text>
+            <text class="copro-run-path-label" x="800" y="701" text-anchor="end">completed run only</text>
+          </svg>
 
-  <div class="flow-arrow"><span>official validation, materialization, selection, and evaluation begin only after the Optimization Run is terminal</span> <span class="glyph">▼</span></div>
-
-  <div class="plane">
-    <div class="plane-label">Official evaluation harness <span class="sub">· authoritative and independent of step measurement</span></div>
-    <div class="comps">
-      <div class="comp settled optim"><b>Validation &amp; materialization</b><span class="note"><code>materialization_count=requested_proposal_count×variance_source_count=12</code> Graph Config/Materialization Record pairs under <code>variance_source_values</code></span></div>
-      <div class="comp settled optim"><b>Selection &amp; deduplication</b><span class="note"><code>selected_slot_count=official_selected_proposal_count×variance_source_count=8</code>; deduplicate selected records by full <code>graph_hash</code> to <code>D≤8</code>. The third proposal's four records remain retained but unselected</span></div>
-      <div class="comp settled"><b>Official Evaluator</b><span class="note"><code>official_rollout_count=D×official_task_count×official_repeat_count</code>; the illustrative nonconvergent example has <code>D=8</code> and derives 3,936 authoritative Rollout Results</span></div>
-      <div class="comp settled"><b>Authority boundary</b><span class="note">only <code>official_eval_config_ref</code>, its authorized Evaluation Context, and the official write path confer officialness; step Results remain internal evidence</span></div>
-    </div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--config"><strong>Frozen run configuration</strong><span><code>copro_variant=whetstone_multi_seed/v1</code>; <code>breadth=4</code>; <code>depth=2</code>; A/B; template-only mutation; pinned Proposal LM, step measurement, Reward, materialization, selection, and official configs</span></div>
+          <div class="copro-run-node copro-run-node--whetstone copro-run-node--initial"><strong>Evaluate starting candidates</strong><span>Externally measure A/B and commit immutable <a class="term-ref" href="#copro-attempt-history">Attempt History</a> H<sub>0</sub></span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--request"><strong><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a></strong><span>Seed Proposal at step 1; then History Proposal with immutable H<sub>step_index−1</sub>; <code>breadth=4</code></span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--invoke"><strong>COPRO invocation</strong><span>Proposal LM reads supplied history and emits four new templates; no evaluation capability</span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--response"><strong>Proposal-only response</strong><span>Candidate batch + <a class="term-ref" href="vocab_and_defs.html#term-evaluation-intent">Evaluation Intent</a></span></div>
+          <div class="copro-run-node copro-run-node--whetstone copro-run-node--evaluate"><strong>External step evaluation</strong><span>Validate, materialize, execute, and retain Graph/Eval identities, evidence, scores, and cost</span></div>
+          <div class="copro-run-node copro-run-node--whetstone copro-run-node--history"><strong>Commit ranked H<sub>step_index</sub></strong><span>Apply <code>step_reward_policy_ref</code>; <code>step_rollout_count=80</code></span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--result"><strong><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-result">Optimization Step Result</a> S<sub>step_index</sub></strong><span>Request, batch, Intent, evaluation refs, Rewards, history transition, Proposal LM evidence, and cost</span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--decision"><strong>Depth reached?</strong><span><code>step_index&lt;depth</code> closes the loop; <code>step_index=depth=2</code> exits</span></div>
+          <div class="copro-run-node copro-run-node--optimizer copro-run-node--output copro-run-node--terminal"><strong>Terminal <a class="term-ref" href="vocab_and_defs.html#term-optimization-result">Optimization Result</a></strong><span>Fixed Reward order; exactly three proposals plus S<sub>1</sub>/S<sub>2</sub>, H<sub>2</sub>, Proposal LM evidence, and advisory run cost</span></div>
+          <div class="copro-run-node copro-run-node--whetstone copro-run-node--official"><strong>Official evaluation harness</strong><span>Validate/materialize 12 records; select eight slots; deduplicate to D≤8; execute <code>D×164×3</code> authoritative Rollouts</span></div>
+        </div>
+      </div>
+      <figcaption class="copro-run-caption" id="copro-run-diagram-caption">COPRO only proposes in the purple lane. Whetstone measures every batch in the green lane and commits immutable history before the next request. The dashed back-edge is the depth-bounded outer loop; only its depth exit can produce ordered proposals for official evaluation.</figcaption>
+    </figure>
   </div>
 
   <div class="flow-arrow"><span>Rollout Key = (<code>graph_hash</code>, <code>eval_config_hash</code>, task, repeat); Rollout Execution Key adds <code>evaluation_context_id</code></span> <span class="glyph">▼</span></div>
