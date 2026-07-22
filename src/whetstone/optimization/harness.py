@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from dr_store import ObjectStore
+from dr_store import BindingConflictError, BindStatus, ObjectStore
 
 from whetstone.optimization.adapters import AdapterOutput, OptimizerAdapter
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
@@ -131,10 +131,14 @@ class OptimizationHarness:
 
     Owns request validation, execution-mode dispatch, external evaluation,
     finalization, restart/idempotency, budgets, evidence, and terminal
-    Optimization Result assembly. Persistence is content-addressed through
-    dr-store; the authoritative per-Step binding lives in an in-store map keyed
-    by the Step identity so the restart position is derivable exclusively from
-    persisted Results.
+    Optimization Result assembly. Every authoritative datum is durable in
+    dr-store: records are content-addressed through ``put``/``get`` and the
+    per-Step Step-Result binding + the per-Step proposal checkpoint are atomic
+    ``bind``/``resolve`` entries. The harness carries no authoritative process
+    state, so a *fresh* harness instance over the same durable backend
+    resolves the exact restart position from the store alone — never rerunning
+    a completed proposal invocation, re-debiting tool capacity, or re-executing
+    a persisted Step.
     """
 
     def __init__(
@@ -148,21 +152,45 @@ class OptimizationHarness:
         self._store = store
         self._evaluation_service = evaluation_service
         self._tool_executor = tool_executor
-        self._tool_store = tool_store or ToolCallStore()
-        # Authoritative Step identity -> Step Result reference binding. This is
-        # the only per-Step authority; it is content-addressed, never a mutable
-        # optimizer pickle.
-        self._step_result_bindings: dict[str, TypedRef] = {}
-        # Durable proposal-output checkpoints keyed by Step identity.
-        self._checkpoints: dict[str, TypedRef] = {}
+        self._tool_store = tool_store or ToolCallStore(store)
 
     @property
     def tool_store(self) -> ToolCallStore:
         return self._tool_store
 
     @staticmethod
-    def _step_key(run_id: str, step_index: int) -> str:
-        return f"{run_id}#{step_index}"
+    def _result_binding_key(run_id: str, step_index: int) -> str:
+        """Opaque durable key binding a Step identity to its Step Result."""
+        return f"whetstone.optimization_step_result:{run_id}#{step_index}"
+
+    @staticmethod
+    def _checkpoint_binding_key(run_id: str, step_index: int) -> str:
+        """Opaque durable key binding a Step identity to its proposal ckpt."""
+        return f"whetstone.optimization_step_checkpoint:{run_id}#{step_index}"
+
+    def _resolve_result_binding(
+        self, run_id: str, step_index: int
+    ) -> TypedRef | None:
+        reference = self._store.resolve(
+            self._result_binding_key(run_id, step_index)
+        )
+        if reference is None:
+            return None
+        return TypedRef(
+            schema_name=reference.schema, content_hash=reference.content_hash
+        )
+
+    def _resolve_checkpoint_binding(
+        self, run_id: str, step_index: int
+    ) -> TypedRef | None:
+        reference = self._store.resolve(
+            self._checkpoint_binding_key(run_id, step_index)
+        )
+        if reference is None:
+            return None
+        return TypedRef(
+            schema_name=reference.schema, content_hash=reference.content_hash
+        )
 
     # -- persistence helpers -------------------------------------------------
 
@@ -183,12 +211,11 @@ class OptimizationHarness:
     ) -> TypedRef | None:
         """Return the persisted Step Result reference for a Step, or None.
 
-        The restart position is read exclusively from this authoritative
-        binding — never reconstructed from process memory.
+        The restart position is read exclusively from dr-store's durable
+        binding table — never reconstructed from process memory — so a fresh
+        harness instance resolves the identical reference.
         """
-        return self._step_result_bindings.get(
-            self._step_key(run_id, step_index)
-        )
+        return self._resolve_result_binding(run_id, step_index)
 
     # -- the durable Step -----------------------------------------------------
 
@@ -217,11 +244,12 @@ class OptimizationHarness:
                 f"mode {request.mode.value!r}"
             )
 
-        step_key = self._step_key(request.run_id, request.step_index)
-
-        # 2. Restart/idempotency FIRST: resolve any existing Step Result and
-        #    reuse it before invoking adapter code or external effects.
-        existing_ref = self._step_result_bindings.get(step_key)
+        # 2. Restart/idempotency FIRST: resolve any existing Step Result from
+        #    dr-store's durable binding and reuse it before invoking adapter
+        #    code or external effects.
+        existing_ref = self._resolve_result_binding(
+            request.run_id, request.step_index
+        )
         if existing_ref is not None:
             existing_result = self._load_result(existing_ref)
             if existing_result.request_ref == request_ref:
@@ -240,7 +268,7 @@ class OptimizationHarness:
             resolved_intents: tuple[IntentResolution, ...] = ()
             tool_evidence: tuple[ToolEvidence, ...] = ()
         elif request.mode is StepMode.PROPOSAL_ONLY:
-            output = self._run_proposal(request, adapter, step_key)
+            output = self._run_proposal(request, adapter)
             resolved_intents = self._resolve_intents(output)
             tool_evidence = ()
         elif request.mode is StepMode.TOOL_USING:
@@ -282,19 +310,29 @@ class OptimizationHarness:
         )
         result_ref = self._put_result(result)
 
-        # Bind the Step Result under the Step identity (absent->bind;
-        # divergent->conflict). A back-edge is forbidden until this exists.
-        bound = self._step_result_bindings.get(step_key)
-        if bound is not None:
-            if bound != result_ref:
-                raise StepResultConflictError(
-                    run_id=request.run_id,
-                    step_index=request.step_index,
-                    existing=bound,
-                    requested=result_ref,
-                )
-            return self._load_result(bound), bound
-        self._step_result_bindings[step_key] = result_ref
+        # Bind the Step Result under the Step identity in dr-store's atomic
+        # binding table (absent->bind; same->idempotent; divergent->conflict).
+        # A back-edge is forbidden until this durable binding exists.
+        try:
+            status = self._store.bind(
+                self._result_binding_key(
+                    request.run_id, request.step_index
+                ),
+                result_ref.reference,
+            )
+        except BindingConflictError as conflict:
+            existing = TypedRef(
+                schema_name=conflict.existing.schema,
+                content_hash=conflict.existing.content_hash,
+            )
+            raise StepResultConflictError(
+                run_id=request.run_id,
+                step_index=request.step_index,
+                existing=existing,
+                requested=result_ref,
+            ) from conflict
+        if status is BindStatus.IDEMPOTENT:
+            return self._load_result(result_ref), result_ref
         return result, result_ref
 
     # -- mode handlers --------------------------------------------------------
@@ -315,11 +353,14 @@ class OptimizationHarness:
         self,
         request: OptimizationStepRequest,
         adapter: OptimizerAdapter,
-        step_key: str,
     ) -> AdapterOutput:
-        # Crash-resume: if a proposal checkpoint exists for this Step, reuse it
-        # and never rerun a completed proposal invocation.
-        existing_ckpt = self._checkpoints.get(step_key)
+        # Crash-resume: if a durable proposal checkpoint exists for this Step,
+        # reuse it and never rerun a completed proposal invocation. The
+        # checkpoint binding is resolved from dr-store, so a fresh harness
+        # instance reuses it exactly as an in-process replay would.
+        existing_ckpt = self._resolve_checkpoint_binding(
+            request.run_id, request.step_index
+        )
         if existing_ckpt is not None:
             return self._load_checkpoint(existing_ckpt)
 
@@ -329,12 +370,14 @@ class OptimizationHarness:
                 "a proposal-only Step issues no Tool Calls"
             )
         # Durably checkpoint the typed adapter output BEFORE resolving intents,
-        # so a crash during resolution reuses the checkpoint.
+        # so a crash during resolution reuses the checkpoint. Persist the body
+        # (content-addressed) and atomically bind it under the Step identity.
         ref, _status = self._store.put(
             ADAPTER_CHECKPOINT_SCHEMA, output.record_content()
         )
-        self._checkpoints[step_key] = TypedRef(
-            schema_name=ref.schema, content_hash=ref.content_hash
+        self._store.bind(
+            self._checkpoint_binding_key(request.run_id, request.step_index),
+            ref,
         )
         return output
 

@@ -79,6 +79,34 @@ def test_crash_during_intent_resolution_reuses_checkpoint() -> None:
     assert harness.resolve_step_result("run-copro", 0) == ref
 
 
+def test_fresh_harness_after_intent_crash_reuses_durable_checkpoint() -> None:
+    # Cross-PROCESS restart probe (finding (a)): the authoritative checkpoint
+    # lives in dr-store, not in a process dict, so a FRESH harness over the
+    # same store never reruns a completed proposal invocation.
+    store = make_store()
+    inner = RecordingEvaluationService(store)
+    adapter = CountingProposalAdapter()
+    request = proposal_request()
+
+    crashed = OptimizationHarness(
+        store=store, evaluation_service=_RaiseOnceEvaluator(inner)
+    )
+    with pytest.raises(RuntimeError, match="crash during external"):
+        crashed.run_step(request, adapter)
+    assert adapter.invocations == 1
+    assert crashed.resolve_step_result("run-copro", 0) is None
+
+    # Brand-new harness instance (no shared memory). It must resolve the
+    # durable checkpoint and NOT re-invoke the proposal adapter (1 -> 1).
+    fresh = OptimizationHarness(
+        store=store, evaluation_service=RecordingEvaluationService(store)
+    )
+    result, ref = fresh.run_step(request, adapter)
+    assert adapter.invocations == 1  # never rerun across the restart
+    assert result.status is StepStatus.CONTINUE
+    assert fresh.resolve_step_result("run-copro", 0) == ref
+
+
 def test_crash_after_tool_completion_replays_idempotently() -> None:
     store = make_store()
     executor = RecordingToolExecutor()
@@ -97,6 +125,34 @@ def test_crash_after_tool_completion_replays_idempotently() -> None:
     assert harness.tool_store.accepted_count(tch) == 1
 
 
+def test_fresh_harness_after_tool_completion_keeps_capacity() -> None:
+    # Cross-PROCESS restart probe (finding (b)): tool capacity/state is durable
+    # in dr-store, so a FRESH harness (with a FRESH ToolCallStore over the same
+    # store) sees the completed call and never re-debits capacity.
+    store = make_store()
+    executor = RecordingToolExecutor()
+    harness = OptimizationHarness(store=store, tool_executor=executor)
+    adapter = ToolUsingAdapter(call_ids=("c1",))
+    request = tool_request()
+
+    result_a, ref_a = harness.run_step(request, adapter)
+    tch = request.tool_configs[0].identity_hash()
+    assert harness.tool_store.accepted_count(tch) == 1
+
+    # Brand-new harness + brand-new ToolCallStore over the SAME dr-store. The
+    # accounting is restored from the store; the replay debits nothing new and
+    # returns the identical Step Result.
+    fresh = OptimizationHarness(
+        store=store, tool_executor=RecordingToolExecutor()
+    )
+    assert fresh.tool_store.accepted_count(tch) == 1  # restored, not zero
+    result_b, ref_b = fresh.run_step(request, adapter)
+    assert ref_a == ref_b
+    assert result_a == result_b
+    # Exactly-once across the restart.
+    assert fresh.tool_store.accepted_count(tch) == 1
+
+
 def test_crash_after_step_result_persistence_is_idempotent() -> None:
     store = make_store()
     harness = OptimizationHarness(store=store)
@@ -108,6 +164,40 @@ def test_crash_after_step_result_persistence_is_idempotent() -> None:
     result_b, ref_b = harness.run_step(request, adapter)
     assert ref_a == ref_b
     assert result_a == result_b
+
+
+def test_fresh_harness_after_step_result_short_circuits_replay() -> None:
+    # Cross-PROCESS restart probe (finding (c)): the Step Result binding is
+    # durable, so a FRESH harness resolves resolve_step_result() != None and
+    # short-circuits to idempotent replay rather than re-executing the Step.
+    store = make_store()
+    request = pure_request()
+
+    first = OptimizationHarness(store=store)
+    result_a, ref_a = first.run_step(request, IdentityOptimizerAdapter())
+
+    fresh = OptimizationHarness(store=store)
+    # The durable binding is visible to a brand-new instance BEFORE any run.
+    resolved = fresh.resolve_step_result(request.run_id, request.step_index)
+    assert resolved == ref_a
+    # A counting adapter proves the Step is NOT re-executed on replay.
+    adapter = _CountingIdentityAdapter()
+    result_b, ref_b = fresh.run_step(request, adapter)
+    assert ref_a == ref_b
+    assert result_a == result_b
+    assert adapter.invocations == 0  # short-circuited, never re-executed
+
+
+class _CountingIdentityAdapter(IdentityOptimizerAdapter):
+    """Identity adapter that records whether it was invoked."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.invocations = 0
+
+    def invoke(self, request, handles):  # type: ignore[override]
+        self.invocations += 1
+        return super().invoke(request, handles)
 
 
 def test_divergent_result_for_same_step_conflicts() -> None:

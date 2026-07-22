@@ -40,10 +40,12 @@ def test_proposal_step_checkpoints_and_resolves_outside_invocation() -> None:
     assert resolution.evaluation_evidence_refs
     # The Intent itself embeds no score.
     assert "score" not in resolution.intent.model_dump()
-    # The typed adapter output was durably checkpointed.
-    ckpt_ref = harness._checkpoints[
-        harness._step_key(request.run_id, request.step_index)
-    ]
+    # The typed adapter output was durably checkpointed in dr-store's binding
+    # table (not in process memory), so a fresh harness would resolve it.
+    ckpt_ref = harness._resolve_checkpoint_binding(
+        request.run_id, request.step_index
+    )
+    assert ckpt_ref is not None
     assert ckpt_ref.schema_name == ADAPTER_CHECKPOINT_SCHEMA
 
 
@@ -68,14 +70,15 @@ def test_restart_reuses_checkpoint_without_rerunning_proposal() -> None:
     request = proposal_request()
     # First pass invokes and checkpoints, then crashes DURING intent resolution
     # by using an evaluator that raises once.
-    harness._run_proposal(  # invoke + checkpoint
-        request, adapter, harness._step_key(request.run_id, request.step_index)
-    )
+    harness._run_proposal(request, adapter)  # invoke + durable checkpoint
     assert adapter.invocations == 1
-    # Now a full run_step replays: the checkpoint is reused, the completed
-    # proposal invocation is NOT rerun.
-    result, _ref = harness.run_step(request, adapter)
-    assert adapter.invocations == 1  # never rerun
+
+    # A brand-new harness over the SAME store (no shared process memory, as
+    # after a real process restart) replays: the durable checkpoint is reused
+    # and the completed proposal invocation is NOT rerun.
+    fresh = OptimizationHarness(store=store, evaluation_service=evaluator)
+    result, _ref = fresh.run_step(request, adapter)
+    assert adapter.invocations == 1  # never rerun across restart
     assert result.status is StepStatus.CONTINUE
     assert len(result.resolved_intents) == 1
 
