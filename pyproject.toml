@@ -13,6 +13,7 @@ dependencies = [
     "dr-providers",
     "dr-serialize",
     "dr-store",
+    "whetstone-envs",
 ]
 
 [dependency-groups]
@@ -35,6 +36,7 @@ dev = [
 #   dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
 #   dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
 #   dr-store = { git = "https://github.com/danielle-rothermel/dr-store", branch = "main" }
+#   whetstone-envs = { git = "https://github.com/danielle-rothermel/whetstone-envs", branch = "main" }
 [tool.uv.sources]
 dr-code = { path = "../dr-code", editable = true }
 dr-graph = { path = "../dr-graph", editable = true }
@@ -42,6 +44,7 @@ dr-platform = { path = "../dr-platform", editable = true }
 dr-providers = { path = "../dr-providers", editable = true }
 dr-serialize = { path = "../dr-serialize", editable = true }
 dr-store = { path = "../dr-store", editable = true }
+whetstone-envs = { path = "../whetstone-envs", editable = true }
 
 [build-system]
 requires = ["hatchling"]
