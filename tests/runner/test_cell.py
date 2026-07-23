@@ -643,6 +643,34 @@ def test_cell_power_stage_on_writes_artifact_and_sets_sizes(
     assert (tmp_path / power_ref).exists()
 
 
+def test_powered_cell_records_nonzero_spend_when_fetcher_reports_delta(
+    tmp_path: Path,
+) -> None:
+    # Spend-attribution regression guard (tasks 6-9 heartbeat-$0 scare): a cell
+    # run WITH the power stage on the openrouter lane must still attribute the
+    # OpenRouter credits delta to the cell line. The fetcher reports a real
+    # usage delta (616.0 -> 616.5 total_usage == $0.50 burned), and the
+    # recorded spend_usd must reflect it -- not collapse to $0.
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env, optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=ScriptedProposer((WIN,)),
+        power_config=_power_cfg(),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # The openrouter completion path sums this cell's before/after credits
+    # delta from spend.jsonl; the $0.50 burn must land on the line.
+    assert r.spend_usd == pytest.approx(0.5)
+    assert r.spend_usd > 0.0
+
+
 # --- Rollout-output sidecar (qualitative prompt->output logging) -----------
 
 
