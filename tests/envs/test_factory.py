@@ -104,7 +104,10 @@ def _correct_generation(env, instance) -> str:
 def test_build_env_experiment_returns_all_five_deliverables(
     env_name: str,
 ) -> None:
-    exp = build_env_experiment(env_name, model=_MODEL)
+    # The factory contract (five deliverables + shared Procedure identity) is
+    # N-independent, so build over a tiny pool -- avoids the full-N c18/c18h
+    # PrOntoQA regeneration this parametrization would otherwise pay twice.
+    exp = _tiny_experiment(env_name)
     d = exp.as_dict()
     assert set(d) == {
         "rollout_definition",

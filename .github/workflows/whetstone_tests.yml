@@ -64,3 +64,34 @@ jobs:
         run: uv sync --frozen
       - name: Unit tests
         run: ./scripts/ci/unit.sh
+
+  slow-tests:
+    name: Slow tests
+    runs-on: depot-ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      # dr-* git deps are private; route their fetches through a read-only
+      # fine-grained PAT.
+      - name: Authorize private dr-* git deps
+        run: git config --global url."https://x-access-token:${{ secrets.GH_DR_ORG_REPOS_READ_TOKEN }}@github.com/danielle-rothermel/".insteadOf "https://github.com/danielle-rothermel/"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install uv with caching
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      # The slow tier is deselected from the default fast run (the `slow`
+      # marker in pyproject.toml); this job runs ONLY that tier so it still
+      # runs on every push/PR -- deselected-by-default is not never-run.
+      - name: Slow tests
+        run: ./scripts/ci/slow.sh

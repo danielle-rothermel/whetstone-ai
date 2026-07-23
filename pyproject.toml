@@ -63,6 +63,16 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Two-tier suite. The default run deselects the `slow` tier so the everyday
+# `uv run pytest` stays fast (< 60s); the slow tier (full-N c18h PrOntoQA
+# pool regeneration -- the ~18s subprocess build that pins the committed pool
+# shape) runs as its own CI job via `-m slow`. Deselected-by-default does NOT
+# mean never-run: see the `slow-tests` job in
+# .github/workflows/whetstone_tests.yml and tests/README.md.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: irreducibly >5s (full-N c18h PrOntoQA pool regeneration); deselected by default, run explicitly with -m slow",
+]
 
 [tool.pyright]
 venvPath = "."
