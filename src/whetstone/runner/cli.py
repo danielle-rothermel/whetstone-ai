@@ -1477,22 +1477,29 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         if getattr(args, "dry_run_fake", False)
         else _live_transport(route)
     )
-    report = run_task_screen(
-        model=route.model,
-        transport=transport,
-        execution_policy=route.execution_policy,
-        budget_ratio=args.budget_ratio,
-        reasoning_effort=effort,
-        temperature=_temperature_arg(args),
-        repeats=args.repeats,
-        variants=variants,
-        rename_token=rename_token,
-        limit=args.limit,
-        concurrency=args.concurrency,
-        partial_log=partials,
-        sidecar_path=sidecar,
-        events=EventStream(root=root),
-    )
+    from whetstone.runner.task_screen import ScreenKeyLocked
+    try:
+        report = run_task_screen(
+            model=route.model,
+            transport=transport,
+            execution_policy=route.execution_policy,
+            budget_ratio=args.budget_ratio,
+            reasoning_effort=effort,
+            temperature=_temperature_arg(args),
+            repeats=args.repeats,
+            variants=variants,
+            rename_token=rename_token,
+            limit=args.limit,
+            concurrency=args.concurrency,
+            partial_log=partials,
+            sidecar_path=sidecar,
+            events=EventStream(root=root),
+        )
+    except ScreenKeyLocked as exc:
+        # One writer per (model, effort) sidecar: another live screen holds the
+        # key. Refuse loudly (non-zero) rather than racing its sidecar/summary.
+        sys.stderr.write(f"SCREEN KEY LOCKED: {exc}\n")
+        return 2
     path = report.write(root)
     summary = report.arm_summary()
     deltas = report.rename_deltas()

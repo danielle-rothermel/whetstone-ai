@@ -23,6 +23,10 @@ The event types (all pushed the instant the runner observes them, not polled):
   bare string dump of an exception).
 * :data:`ARM_INCOMPLETE` -- the incomplete-official-arm transient-failure class
   (currently only visible deep in the logs).
+* :data:`SCREEN_KEY_LOCKED` -- a second writer REFUSED to start on a screen key
+  (model, ratio, effort) already held by a live process. The one-writer-per-key
+  rule is an invariant, not a hand-serialized convention; refusing loudly (no
+  wait, no retry) prevents the cross-resume torn-summary defect class.
 * :data:`LATENCY_SNAPSHOT` -- per-model rolling median call latency at each
   heartbeat window.
 * :data:`TRACEBACK` -- an unhandled exception surfaced as an event BEFORE the
@@ -66,6 +70,7 @@ __all__ = [
     "EVENT_MARKERS",
     "LATENCY_SNAPSHOT",
     "RATE_LIMIT_PRESSURE",
+    "SCREEN_KEY_LOCKED",
     "TRACEBACK",
     "EventStream",
     "EventUnit",
@@ -78,6 +83,7 @@ __all__ = [
     "is_rate_limit_code",
     "latency_snapshot_event",
     "rate_limit_pressure_event",
+    "screen_key_locked_event",
     "traceback_event",
 ]
 
@@ -92,6 +98,7 @@ ATTEMPT_SKIPPED = "attempt_skipped"
 CELL_FINALIZED = "cell_finalized"
 CELL_FAILED = "cell_failed"
 ARM_INCOMPLETE = "arm_incomplete"
+SCREEN_KEY_LOCKED = "screen_key_locked"
 LATENCY_SNAPSHOT = "latency_snapshot"
 TRACEBACK = "traceback"
 
@@ -106,6 +113,7 @@ EVENT_MARKERS: dict[str, str] = {
     CELL_FINALIZED: "CELL-FINALIZED",
     CELL_FAILED: "CELL-FAILED",
     ARM_INCOMPLETE: "ARM-INCOMPLETE",
+    SCREEN_KEY_LOCKED: "SCREEN-KEY-LOCKED",
     LATENCY_SNAPSHOT: "LATENCY-SNAPSHOT",
     TRACEBACK: "TRACEBACK",
 }
@@ -373,6 +381,31 @@ def arm_incomplete_event(
         at=at or _utc_now(),
         unit=unit,
         fields={"detail": detail},
+    )
+
+
+def screen_key_locked_event(
+    *,
+    unit: EventUnit,
+    screen_key: str,
+    lock_path: str,
+    at: str | None = None,
+) -> RunEvent:
+    """A second writer REFUSED to start on an already-held screen key.
+
+    Screen artifacts are keyed per (model, ratio, effort); a live process holds
+    an advisory ``flock`` on ``<key>.lock`` for its lifetime. When a second
+    process finds the lock held it does NOT wait or retry -- it refuses loudly:
+    two writers on one key race the summary rewrite (last-writer-wins can leave
+    the summary describing a SUBSET of the sidecar) and resume off a stale
+    snapshot (the cross-resume incident). ``screen_key`` names the contested
+    key and ``lock_path`` the lock file the holder owns.
+    """
+    return _event(
+        SCREEN_KEY_LOCKED,
+        at=at or _utc_now(),
+        unit=unit,
+        fields={"screen_key": screen_key, "lock_path": lock_path},
     )
 
 

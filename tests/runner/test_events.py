@@ -45,6 +45,7 @@ from whetstone.runner.events import (
     EVENTS_SCHEMA,
     LATENCY_SNAPSHOT,
     RATE_LIMIT_PRESSURE,
+    SCREEN_KEY_LOCKED,
     TRACEBACK,
     EventStream,
     EventUnit,
@@ -52,6 +53,7 @@ from whetstone.runner.events import (
     emit_traceback_on_unhandled,
     latency_snapshot_event,
     rate_limit_pressure_event,
+    screen_key_locked_event,
 )
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
@@ -153,11 +155,12 @@ def test_markers_cover_every_event_and_preserve_grep_signatures() -> None:
     # 429|rate.limit|halved|RATE-LIMIT|Traceback watcher grammar + extends it.
     assert set(EVENT_MARKERS) == {
         RATE_LIMIT_PRESSURE, ATTEMPT_SKIPPED, CELL_FINALIZED, CELL_FAILED,
-        ARM_INCOMPLETE, LATENCY_SNAPSHOT, TRACEBACK,
+        ARM_INCOMPLETE, SCREEN_KEY_LOCKED, LATENCY_SNAPSHOT, TRACEBACK,
     }
     assert len(set(EVENT_MARKERS.values())) == len(EVENT_MARKERS)
     assert EVENT_MARKERS[RATE_LIMIT_PRESSURE] == "RATE-LIMIT PRESSURE"
     assert EVENT_MARKERS[TRACEBACK] == "TRACEBACK"
+    assert EVENT_MARKERS[SCREEN_KEY_LOCKED] == "SCREEN-KEY-LOCKED"
     # The marker line is a single greppable token + id + sorted key=val fields.
     e = rate_limit_pressure_event(
         unit=_unit(), rate_limit_rows=3, concurrency_halved=True,
@@ -166,6 +169,21 @@ def test_markers_cover_every_event_and_preserve_grep_signatures() -> None:
     marker = e.marker_line()
     assert marker.startswith("RATE-LIMIT PRESSURE eval:c11:a0 ")
     assert "rate_limit_rows=3" in marker
+
+
+def test_screen_key_locked_event_names_key_and_lock() -> None:
+    # The refuse-to-start event carries the contested key + lock path and fires
+    # the loud SCREEN-KEY-LOCKED grep marker.
+    e = screen_key_locked_event(
+        unit=EventUnit(screen_id="screen:m_enone", model="m"),
+        screen_key="screen:m_enone",
+        lock_path="/root/task_screen/ed1_m_enone.lock",
+    )
+    assert e.event == SCREEN_KEY_LOCKED
+    assert e.marker == "SCREEN-KEY-LOCKED"
+    assert e.fields["screen_key"] == "screen:m_enone"
+    assert e.fields["lock_path"] == "/root/task_screen/ed1_m_enone.lock"
+    assert e.marker_line().startswith("SCREEN-KEY-LOCKED screen:m_enone ")
 
 
 def test_latency_snapshot_is_null_not_zero_when_unknown() -> None:

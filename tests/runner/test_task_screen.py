@@ -772,3 +772,182 @@ def test_reasoning_honored_flags_detect_ignore() -> None:
     ])
     assert flags2[key]["honored"] is True
     assert flags2[key]["note"] is None
+
+
+# --- Task 27: per-(model, effort) sidecar lock + atomic summary rewrite ----
+
+
+def test_sidecar_lock_path_drops_ratio_keeps_model_effort(
+    tmp_path: Path,
+) -> None:
+    # The lock guards the SIDECAR (keyed by model+effort, no ratio). It lives
+    # beside the sidecar, named for the same (model, effort) key.
+    from whetstone.runner.task_screen import sidecar_lock_path
+
+    d = tmp_path / "task_screen"
+    sidecar = d / "ed1_google_gemini_enone.outputs.jsonl"
+    lock = sidecar_lock_path(sidecar)
+    assert lock == d / "ed1_google_gemini_enone.lock"
+    # No budget_ratio component anywhere in the lock name -- two ratios of the
+    # same model+effort share one sidecar and MUST serialize on one lock.
+    assert "r0" not in lock.name and "r1" not in lock.name
+
+
+def test_screen_lock_second_start_refuses_typed(tmp_path: Path) -> None:
+    # While one process holds the lock, a second start on the SAME key refuses
+    # with the typed ScreenKeyLocked failure -- no wait, no retry.
+    from whetstone.runner.task_screen import (
+        ScreenKeyLocked,
+        screen_key_lock,
+    )
+
+    lock = tmp_path / "ed1_m_enone.lock"
+    with screen_key_lock(lock, screen_key="screen:m_enone"):
+        with pytest.raises(ScreenKeyLocked) as excinfo:
+            with screen_key_lock(lock, screen_key="screen:m_enone"):
+                pass
+    msg = str(excinfo.value)
+    assert "screen:m_enone" in msg  # names the contested key
+    assert "one writer per" in msg  # states the standing rule
+    assert "wait for the holder" in msg  # suggests waiting
+
+
+def test_screen_lock_released_on_normal_exit(tmp_path: Path) -> None:
+    # After a clean block exit the lock is free -- a re-acquire succeeds.
+    from whetstone.runner.task_screen import screen_key_lock
+
+    lock = tmp_path / "ed1_m_enone.lock"
+    with screen_key_lock(lock, screen_key="screen:m_enone"):
+        pass
+    # Re-acquiring must not raise (the lock was released).
+    with screen_key_lock(lock, screen_key="screen:m_enone"):
+        pass
+
+
+def test_screen_lock_released_on_exception(tmp_path: Path) -> None:
+    # An exception raised INSIDE the block still releases the lock (finally).
+    from whetstone.runner.task_screen import screen_key_lock
+
+    lock = tmp_path / "ed1_m_enone.lock"
+    with pytest.raises(RuntimeError, match="boom"):
+        with screen_key_lock(lock, screen_key="screen:m_enone"):
+            raise RuntimeError("boom")
+    # The lock is free despite the exception -- re-acquire succeeds.
+    with screen_key_lock(lock, screen_key="screen:m_enone"):
+        pass
+
+
+def test_screen_lock_refusal_emits_marker_and_event(tmp_path: Path) -> None:
+    # A refused start fires the loud SCREEN-KEY-LOCKED marker AND an
+    # events.jsonl event when the event stream is available.
+    from whetstone.runner.events import (
+        EVENT_MARKERS,
+        SCREEN_KEY_LOCKED,
+        EventStream,
+    )
+    from whetstone.runner.task_screen import ScreenKeyLocked, screen_key_lock
+
+    markers: list[str] = []
+    events = EventStream(root=tmp_path, marker_sink=markers.append)
+    lock = tmp_path / "ed1_m_enone.lock"
+    with screen_key_lock(lock, screen_key="screen:m_enone"):
+        with pytest.raises(ScreenKeyLocked):
+            with screen_key_lock(
+                lock, screen_key="screen:m_enone", events=events,
+                marker_sink=markers.append,
+            ):
+                pass
+    # The loud greppable marker fired.
+    assert any(EVENT_MARKERS[SCREEN_KEY_LOCKED] in m for m in markers)
+    # And a typed event landed on the stream.
+    emitted = [e for e in events.load() if e.event == SCREEN_KEY_LOCKED]
+    assert len(emitted) == 1
+    assert emitted[0].fields["screen_key"] == "screen:m_enone"
+    assert emitted[0].fields["lock_path"] == str(lock)
+
+
+def test_screen_run_refuses_second_writer_on_shared_sidecar(
+    tmp_path: Path,
+) -> None:
+    # Two same-(model, effort) screens sharing ONE sidecar: while one holds the
+    # lock, a second run_task_screen refuses. Simulates the concurrency race by
+    # holding the derived sidecar lock, then starting a second screen.
+    from whetstone.runner.task_screen import (
+        ScreenKeyLocked,
+        screen_key_lock,
+        sidecar_lock_path,
+    )
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    sidecar = (
+        tmp_path / "task_screen"
+        / "ed1_qwen_qwen3_coder_flash.outputs.jsonl"
+    )
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    held = sidecar_lock_path(sidecar)
+    with screen_key_lock(held, screen_key="held"):
+        with pytest.raises(ScreenKeyLocked):
+            run_task_screen(
+                model="qwen/qwen3-coder-flash",
+                transport=_all_pass_reply(tasks),
+                execution_policy=execution_policy(max_attempts=1),
+                tasks=tasks, repeats=1, concurrency=1,
+                sidecar_path=sidecar,
+            )
+
+
+def test_screen_run_holds_then_releases_sidecar_lock(tmp_path: Path) -> None:
+    # A normal screen run acquires and RELEASES the sidecar lock -- a second
+    # run on the same key afterward succeeds (no leaked lock).
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    sidecar = (
+        tmp_path / "task_screen"
+        / "ed1_qwen_qwen3_coder_flash.outputs.jsonl"
+    )
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    for _ in range(2):
+        run_task_screen(
+            model="qwen/qwen3-coder-flash",
+            transport=_all_pass_reply(tasks),
+            execution_policy=execution_policy(max_attempts=1),
+            tasks=tasks, repeats=1, concurrency=1, sidecar_path=sidecar,
+        )
+    # Both runs completed; the lock is not held after the loop.
+
+
+def test_summary_rewrite_is_atomic_no_partial_on_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The summary write goes through a temp file + os.replace(): a crash AT the
+    # replace leaves the PRIOR summary intact (never torn) and no temp behind.
+    import json as _json
+
+    import whetstone.runner.task_screen as ts_mod
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    report = run_task_screen(
+        model="qwen/qwen3-coder-flash",
+        transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=1,
+    )
+    # First write lands a valid summary.
+    path = report.write(tmp_path)
+    original = path.read_text()
+    assert _json.loads(original)["schema"] == SCREEN_SCHEMA
+
+    # Simulate a crash right at the atomic swap: the temp file is fully
+    # written, then os.replace() raises. The final path must be untouched (the
+    # prior valid summary) and the finally-cleanup removes the temp file.
+    def _boom_replace(src: object, dst: object) -> None:
+        raise OSError("crash at replace")
+
+    monkeypatch.setattr(ts_mod.os, "replace", _boom_replace)
+    with pytest.raises(OSError, match="crash at replace"):
+        report.write(tmp_path)
+
+    # The FINAL summary is still the prior valid one (never torn) and parses.
+    assert path.read_text() == original
+    _json.loads(path.read_text())
+    # No torn temp file left behind (finally cleaned it up).
+    assert list(path.parent.glob(".*.tmp.*")) == []

@@ -32,9 +32,13 @@ plus a cross-model summary table for the paper's contamination section.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 import re
-from collections.abc import Callable, Sequence
+import sys
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -54,9 +58,26 @@ from whetstone.runner.events import (
     is_rate_limit_code,
     latency_snapshot_event,
     rate_limit_pressure_event,
+    screen_key_locked_event,
 )
 
 SCREEN_SCHEMA = "whetstone.runner.task_screen/v2"
+
+
+class ScreenKeyLocked(RuntimeError):
+    """A second writer refused to start on an already-held screen key.
+
+    Screen artifacts share a per-(model, effort) mutable sidecar + partial log
+    (the ``budget_ratio`` is a ROW field, not part of the sidecar name -- two
+    ratios of the same model+effort legally append to ONE sidecar). A live
+    process holds an advisory ``flock`` on ``<sidecar-stem>.lock`` for its
+    whole lifetime; a second process that finds it held raises this rather than
+    racing. Two writers on one sidecar race the summary rewrite (last-writer
+    -wins can leave the summary describing a SUBSET of the sidecar) and resume
+    off a stale snapshot -- the cross-resume incident. THE RULE: one writer per
+    (model, effort) sidecar. There is no retry -- refusing loudly is correct;
+    wait for the standing holder to exit, then re-run.
+    """
 
 #: The neutral name-only wrapper (recorded in the artifact for repro).
 NAME_ONLY_WRAPPER = "Write a Python function named {name}."
@@ -154,6 +175,82 @@ def _median(values: list[float]) -> float | None:
     if len(ordered) % 2:
         return ordered[mid]
     return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+# --- Per-key advisory lock (one writer per sidecar) --------------------------
+
+
+def sidecar_lock_path(sidecar_path: Path) -> Path:
+    """The advisory-lock path guarding a screen ``sidecar_path``.
+
+    The lock lives beside the sidecar it protects, named for the SAME
+    per-(model, effort) key: ``ed1_<tag><suffix>.outputs.jsonl`` ->
+    ``ed1_<tag><suffix>.lock``. The ``budget_ratio`` is deliberately NOT in the
+    name -- two ratios of one model+effort share the sidecar (ratio is a row
+    field), so they MUST serialize on the same lock.
+    """
+    name = sidecar_path.name
+    stem = name[: -len(".outputs.jsonl")] if name.endswith(
+        ".outputs.jsonl"
+    ) else sidecar_path.stem
+    return sidecar_path.with_name(f"{stem}.lock")
+
+
+@contextlib.contextmanager
+def screen_key_lock(
+    lock_path: Path,
+    *,
+    screen_key: str,
+    events: EventStream | None = None,
+    unit: EventUnit | None = None,
+    marker_sink: Callable[[str], None] | None = None,
+) -> Iterator[None]:
+    """Hold an advisory ``flock`` on ``lock_path`` for the block's lifetime.
+
+    Acquires ``fcntl.flock(LOCK_EX | LOCK_NB)`` -- a NON-blocking exclusive
+    lock. If a live process already holds it, this does NOT wait or retry: it
+    emits the loud ``SCREEN-KEY-LOCKED`` stderr marker (+ a
+    :func:`screen_key_locked_event` when an ``events`` stream is available) and
+    raises :class:`ScreenKeyLocked` -- one writer per key is an invariant, not
+    a convention. On normal exit AND on any exception raised inside the block
+    the lock is released and the file handle closed (flock also drops when the
+    process dies, so a crash never leaks it).
+    """
+    sink = marker_sink or (lambda line: sys.stderr.write(line + "\n"))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            marker = (
+                f"SCREEN-KEY-LOCKED {screen_key} lock_path={lock_path} "
+                f"-- one writer per (model, effort) sidecar; another process "
+                f"holds this key. Wait for it to exit, then re-run."
+            )
+            with contextlib.suppress(Exception):
+                sink(marker)
+            if events is not None:
+                with contextlib.suppress(Exception):
+                    events.emit(
+                        screen_key_locked_event(
+                            unit=unit or EventUnit(screen_id=screen_key),
+                            screen_key=screen_key,
+                            lock_path=str(lock_path),
+                        )
+                    )
+            handle.close()
+            raise ScreenKeyLocked(
+                f"screen key {screen_key!r} is already held (lock "
+                f"{lock_path}); one writer per (model, effort) sidecar -- "
+                f"wait for the holder to exit, then re-run."
+            ) from exc
+        yield
+    finally:
+        with contextlib.suppress(Exception):
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        with contextlib.suppress(Exception):
+            handle.close()
 
 
 # --- Canonical-prompt splitting (the four direct arms) -----------------------
@@ -633,7 +730,18 @@ class TaskScreenReport:
             self.model, self.budget_ratio, self.reasoning_effort
         )
         path = out_dir / f"{stem}.json"
-        path.write_text(json.dumps(self.as_dict(), indent=2, sort_keys=True))
+        # ATOMIC rewrite: write to a temp file in the SAME directory, then
+        # os.replace() it onto the final path. os.replace is atomic within a
+        # filesystem, so a reader (or a crashed writer) never observes a torn /
+        # partial summary -- either the whole old file or the whole new one.
+        body = json.dumps(self.as_dict(), indent=2, sort_keys=True)
+        tmp = out_dir / f".{stem}.json.tmp.{os.getpid()}"
+        try:
+            tmp.write_text(body)
+            os.replace(tmp, path)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
         return path
 
 
@@ -658,6 +766,7 @@ def run_task_screen(
     scorer: Callable[..., CodeScore] | None = None,
     partial_log: PartialLog | None = None,
     sidecar_path: Path | None = None,
+    lock_path: Path | None = None,
     events: EventStream | None = None,
 ) -> TaskScreenReport:
     """Screen the HumanEval+ pool for one task model -> a per-model report.
@@ -670,8 +779,87 @@ def run_task_screen(
     inspection (no wall-clock in identity). RESUMABLE: each completed row
     appends to ``partial_log`` (+ its output to ``sidecar_path``), and a
     re-run restores recorded rows instead of re-paying for them.
+
+    CONCURRENCY-SAFE: when a ``sidecar_path`` (or explicit ``lock_path``) is
+    given, the screen holds an advisory ``flock`` on ``<sidecar>.lock`` for its
+    whole lifetime and REFUSES to start (raising :class:`ScreenKeyLocked`) if a
+    second process already holds it -- one writer per (model, effort) sidecar.
     """
     from whetstone.envs.ed1 import ED1_DATASET_REVISION, load_ed1_tasks
+
+    # One-writer-per-sidecar invariant: the sidecar + partial log are keyed by
+    # (model, effort) ONLY (budget_ratio is a row field, so two ratios share
+    # the file). Hold an advisory flock on <sidecar>.lock for the whole screen
+    # so a concurrent same-(model, effort) writer refuses to start rather than
+    # racing the summary rewrite / resume snapshot (the cross-resume incident).
+    resolved_lock = lock_path or (
+        sidecar_lock_path(sidecar_path) if sidecar_path is not None else None
+    )
+    eff = effort_suffix(reasoning_effort)
+    with contextlib.ExitStack() as _lock_stack:
+        if resolved_lock is not None:
+            _lock_stack.enter_context(
+                screen_key_lock(
+                    resolved_lock,
+                    screen_key=f"screen:{model_tag(model)}{eff}",
+                    events=events,
+                    unit=EventUnit(
+                        screen_id=f"screen:{model}{eff}", model=model,
+                    ),
+                )
+            )
+        return _run_task_screen_locked(
+            model=model,
+            transport=transport,
+            execution_policy=execution_policy,
+            budget_ratio=budget_ratio,
+            reasoning_effort=reasoning_effort,
+            temperature=temperature,
+            repeats=repeats,
+            variants=variants,
+            rename_token=rename_token,
+            tasks=tasks,
+            limit=limit,
+            prefer_snapshot=prefer_snapshot,
+            concurrency=concurrency,
+            scorer=scorer,
+            partial_log=partial_log,
+            sidecar_path=sidecar_path,
+            events=events,
+            _load_ed1_tasks=load_ed1_tasks,
+            _dataset_revision=ED1_DATASET_REVISION,
+        )
+
+
+def _run_task_screen_locked(
+    *,
+    model: str,
+    transport: TransportCall,
+    execution_policy: ProviderExecutionPolicy,
+    budget_ratio: float,
+    reasoning_effort: str | None,
+    temperature: float | None,
+    repeats: int,
+    variants: Sequence[str] | None,
+    rename_token: str,
+    tasks: Sequence[Ed1Instance] | None,
+    limit: int | None,
+    prefer_snapshot: bool,
+    concurrency: int,
+    scorer: Callable[..., CodeScore] | None,
+    partial_log: PartialLog | None,
+    sidecar_path: Path | None,
+    events: EventStream | None,
+    _load_ed1_tasks: Callable[..., Sequence[Ed1Instance]],
+    _dataset_revision: str,
+) -> TaskScreenReport:
+    """The screen body, run under the held per-(model, effort) lock.
+
+    Byte-identical to the pre-lock single-process behavior -- the lock is a
+    concurrency guard only, it does not touch keying / identity / artifacts.
+    """
+    load_ed1_tasks = _load_ed1_tasks
+    ED1_DATASET_REVISION = _dataset_revision
 
     scorer = scorer or score_ed1_submission
     arms = tuple(variants) if variants is not None else SCREEN_ARMS
@@ -1090,6 +1278,7 @@ __all__ = [
     "SCREEN_ARMS",
     "SCREEN_SCHEMA",
     "PromptParts",
+    "ScreenKeyLocked",
     "TaskScreenReport",
     "TaskScreenRow",
     "cross_model_summary",
@@ -1101,6 +1290,8 @@ __all__ = [
     "rename_identifier",
     "renamed_task",
     "run_task_screen",
+    "screen_key_lock",
     "screen_stem",
+    "sidecar_lock_path",
     "split_prompt",
 ]
