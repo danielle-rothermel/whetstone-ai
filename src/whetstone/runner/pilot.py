@@ -58,6 +58,13 @@ from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import TransportCall, run_provider_call
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.budget import CreditsSnapshot
+from whetstone.runner.events import (
+    EventStream,
+    EventUnit,
+    is_rate_limit_code,
+    latency_snapshot_event,
+    rate_limit_pressure_event,
+)
 
 __all__ = [
     "PILOT_REPEATS",
@@ -592,6 +599,7 @@ def run_pilot(
     concurrency: int = DEFAULT_CONCURRENCY,
     max_wall_seconds: float = DEFAULT_PILOT_MAX_WALL_SECONDS,
     partial_log: PartialLog | None = None,
+    events: EventStream | None = None,
 ) -> PilotReport:
     """Run the checklist-B pilot for one env and return its report.
 
@@ -721,6 +729,33 @@ def run_pilot(
         status_note = (
             f"whole-run wall deadline {max_wall_seconds:.0f}s reached; "
             "dispatch stopped, in-flight calls finished"
+        )
+    # Push run telemetry (task 24): a rate_limit_pressure event when the run
+    # saw any 429/rate-limit rows or a halving, plus a latency_snapshot. Keyed
+    # by a screen-level id (a pilot has no attempt). The pilot call records
+    # carry no per-call latency, so the snapshot is honestly null-coverage.
+    if events is not None:
+        unit = EventUnit(
+            screen_id=f"pilot:{env}:{model}", env=env, lane=lane, model=model
+        )
+        rate_limit_rows = sum(
+            1 for c in calls if is_rate_limit_code(c.failure_code)
+        )
+        if rate_limit_rows or concurrency_halved:
+            events.emit(
+                rate_limit_pressure_event(
+                    unit=unit,
+                    rate_limit_rows=rate_limit_rows,
+                    concurrency_halved=concurrency_halved,
+                    guard_timeouts=0,
+                    window_label="pilot",
+                )
+            )
+        events.emit(
+            latency_snapshot_event(
+                unit=unit, median_latency_s=None, coverage=0,
+                window_label="pilot",
+            )
         )
     return PilotReport(
         env=env,
