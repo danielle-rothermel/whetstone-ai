@@ -95,6 +95,9 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     # c22h inherits c22's constraint-heavy deepseek default (the c22-column
     # convention; overridable via --task-model for the pilot / anchor).
     "c22h": DEEPSEEK_TASK_MODEL,
+    # c18h inherits base c18's deepseek default (same entailment task family);
+    # overridable via --task-model (the c18h headroom pilot/anchor runs nano).
+    "c18h": DEEPSEEK_TASK_MODEL,
 }
 
 
@@ -109,6 +112,10 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
 #: ``eval_config_hash`` from a strict one. Value: ``(missing_data, fraction)``.
 COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
     "c18": ("skip", 0.02),
+    # c18h shares c18's deepseek matrix default, so it inherits the same
+    # bounded skip tolerance for the flaky-under-concurrency deepseek anchor.
+    # (A nano cell is not flaky and simply never exercises the tolerance.)
+    "c18h": ("skip", 0.02),
 }
 
 

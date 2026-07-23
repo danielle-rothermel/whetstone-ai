@@ -57,19 +57,30 @@ class PoolPreset(Protocol):
 #: ``HARD_PRESET`` (:data:`_ENV_POOL_PRESET`) -- the hardest configuration of
 #: the original IFEval suite, with no hidden-information design change. A
 #: distinct env id keeps its ledger rows / cells / eval-config identities
-#: separate from base c22's.
-ENV_NAMES: tuple[str, ...] = ("c22", "c22h", "c11", "c19", "c18", "c23")
+#: separate from base c22's. ``c18h`` is the analogous c18 hard-mode variant:
+#: the SAME c18 modules generated from c18's ``HARD_PRESET`` -- the hardest
+#: upstream-PrOntoQA configuration along c18's depth + distractor axes (deeper
+#: chains D5/D8/D10, distractors ON where the pinned upstream can honor them),
+#: again with no hidden-information change and a distinct env id.
+ENV_NAMES: tuple[str, ...] = (
+    "c22", "c22h", "c11", "c19", "c18", "c18h", "c23",
+)
 
 #: The underlying ``whetstone_envs`` package a bound env id loads its
 #: generate/oracle/prompts surfaces from. Defaults to the env id itself; only
-#: ``c22h`` differs (it reuses the c22 modules with a different pool preset).
-_ENV_MODULE_NAME: dict[str, str] = {"c22h": "c22"}
+#: the hard-mode variants differ (each reuses its base env's modules with a
+#: different pool preset).
+_ENV_MODULE_NAME: dict[str, str] = {"c22h": "c22", "c18h": "c18"}
 
 #: The named generation preset a bound env id generates its pool from, when it
 #: is a *variant* of another env's default pool. The value is the attribute
-#: name of a ``Preset`` on the env's generate module. Only ``c22h`` uses one
-#: (``HARD_PRESET``); every other env generates its committed default pool.
-_ENV_POOL_PRESET: dict[str, str] = {"c22h": "HARD_PRESET"}
+#: name of a ``Preset`` on the env's generate module. Only the hard-mode
+#: variants use one (``HARD_PRESET``); every other env generates its committed
+#: default pool.
+_ENV_POOL_PRESET: dict[str, str] = {
+    "c22h": "HARD_PRESET",
+    "c18h": "HARD_PRESET",
+}
 
 
 #: The two provenance markers a :class:`TokenEstimate` may carry. A
@@ -137,6 +148,17 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
         # naive live-measured; ceiling 2448 measured PRE extraction fix.
         naive=1306, ceiling=2448, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
+    "c18h": TokenEstimate(
+        # Inherited from c18's live-measured means scaled x1.5 for the deeper
+        # (D8/D10) chains: naive 1306 -> 1959, ceiling 2448 -> 3672. A longer
+        # chain means a longer facts+rules block and (for the ceiling probe) a
+        # longer step-by-step derivation, so the base c18 estimate would
+        # under-budget the token-sanity check. Overwritten by c18h's own pilot
+        # once it records a measured per-call mean.
+        naive=1959,
+        ceiling=3672,
+        estimate_source=ESTIMATE_INHERITED_PENDING,
+    ),
     "c23": TokenEstimate(
         naive=5468, ceiling=4953, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
@@ -176,10 +198,17 @@ _C22_SPLIT_PER_STRATUM = (2, 6, 6)  # (internal_eval, official, held_out)
 #: Per-env per-stratum split overrides (``(internal, official, held_out)``).
 #: c22h keeps base c22's 2:6 internal:official proportion but takes the full
 #: remaining stratum depth as held_out, so its 3 x 20 pool splits to totals
-#: (internal 6, official 18, held_out 36) with no unused instances. Any env
-#: not listed falls back to :data:`_C22_SPLIT_PER_STRATUM`.
+#: (internal 6, official 18, held_out 36) with no unused instances. c18h uses
+#: the identical per-stratum split: its HARD_PRESET is likewise a 3 x 20 pool
+#: (depths D5/D8/D10), so (2, 6, 12) per stratum -> the same disjoint totals
+#: internal 6 / official 18 / held_out 36 with no unused instances. Because a
+#: preset env's :meth:`EnvSpec.default_split_sizes` bypasses the env's own
+#: committed ``default_split_sizes``, this override (not c18's base split
+#: call) is what applies to c18h. Any env not listed falls back to
+#: :data:`_C22_SPLIT_PER_STRATUM`.
 _SPLIT_PER_STRATUM_BY_ENV: dict[str, tuple[int, int, int]] = {
     "c22h": (2, 6, 12),
+    "c18h": (2, 6, 12),
 }
 
 

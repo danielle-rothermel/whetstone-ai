@@ -95,7 +95,9 @@ def _fixtures(env_name: str) -> tuple[str, str, str]:
         return gold, '{"a":1,"b":2}', '{"b":2,"a":1}'
     if env_name == "c19":
         return "2,3", "2,3", "9,9"
-    if env_name == "c18":
+    if env_name in {"c18", "c18h"}:
+        # c18h reuses the c18 oracle (True/False entailment gold); the same
+        # exact-match fixture proves its wiring.
         return "True", "True", "False"
     # c23: a transformed string gold.
     return "abcd", "abcd", "zzzz"

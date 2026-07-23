@@ -19,8 +19,10 @@ from whetstone.envs.registry import (
     env_spec,
 )
 
-#: The per-env (naive, ceiling, source) estimates. The five base envs are
-#: live-measured; c22h inherits c22's means pending its own pilot.
+#: The per-env (naive, ceiling, source) estimates. The base envs are
+#: live-measured; the hard-mode variants (c22h, c18h) inherit their base env's
+#: means pending their own pilot -- c18h scales c18's by x1.5 for the deeper
+#: (D8/D10) chains.
 _EXPECTED: dict[str, TokenEstimate] = {
     "c22": TokenEstimate(
         naive=2526, ceiling=3046, estimate_source=ESTIMATE_LIVE_MEASURED
@@ -39,6 +41,11 @@ _EXPECTED: dict[str, TokenEstimate] = {
     "c18": TokenEstimate(
         naive=1306, ceiling=2448, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
+    "c18h": TokenEstimate(
+        naive=1959,
+        ceiling=3672,
+        estimate_source=ESTIMATE_INHERITED_PENDING,
+    ),
     "c23": TokenEstimate(
         naive=5468, ceiling=4953, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
@@ -53,9 +60,13 @@ def test_every_env_has_committed_token_estimate(env_name: str) -> None:
     assert estimate.ceiling > 0
 
 
-#: The base envs whose estimates are live-measured pilot means. c22h is the
-#: sole variant: it inherits c22's means pending its own pilot measurement.
-_LIVE_MEASURED_ENVS = tuple(n for n in ENV_NAMES if n != "c22h")
+#: The base envs whose estimates are live-measured pilot means. The hard-mode
+#: variants (c22h, c18h) are excluded: each inherits its base env's means
+#: pending its own pilot measurement.
+_INHERITED_VARIANT_ENVS = frozenset({"c22h", "c18h"})
+_LIVE_MEASURED_ENVS = tuple(
+    n for n in ENV_NAMES if n not in _INHERITED_VARIANT_ENVS
+)
 
 
 @pytest.mark.parametrize("env_name", _LIVE_MEASURED_ENVS)
