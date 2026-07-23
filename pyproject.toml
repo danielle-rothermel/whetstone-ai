@@ -24,6 +24,7 @@ dev = [
     "pre-commit>=4.6.0",
     "psycopg>=3.3.4",
     "pytest>=8.4.2",
+    "pytest-xdist>=3.6.0",
     "ruff>=0.15.10",
     "ty>=0.0.54",
 ]
@@ -69,7 +70,15 @@ testpaths = ["tests"]
 # shape) runs as its own CI job via `-m slow`. Deselected-by-default does NOT
 # mean never-run: see the `slow-tests` job in
 # .github/workflows/whetstone_tests.yml and tests/README.md.
-addopts = "-m 'not slow'"
+#
+# `-n auto --dist loadgroup` runs the suite across one worker per core
+# (measured ~52s vs ~195s serial; see test-suite-speedup.md). `loadgroup`
+# keeps every test tagged `@pytest.mark.xdist_group("postgres")` (the three
+# orchestration modules that share the single `dr_platform_test` DB) on ONE
+# worker so they cannot race the shared schema, while everything else
+# parallelizes. A single-file invocation (`pytest tests/foo.py`) still runs
+# fine -- xdist just spins up workers for whatever is collected.
+addopts = "-m 'not slow' -n auto --dist loadgroup"
 markers = [
     "slow: irreducibly >5s (full-N c18h PrOntoQA pool regeneration); deselected by default, run explicitly with -m slow",
 ]

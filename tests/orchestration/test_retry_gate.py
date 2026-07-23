@@ -41,6 +41,13 @@ from .support import (
     response_outcome,
 )
 
+# Pinned to one xdist worker: all three Postgres/DBOS modules share the
+# single `dr_platform_test` DB and reset its schema per test, so parallel
+# workers race (duplicate alembic version). `--dist loadgroup` serializes
+# this group onto one worker while everything else parallelizes. See
+# test-suite-speedup.md.
+pytestmark = pytest.mark.xdist_group("postgres")
+
 
 def _response(text: str = "answer"):
     return response_outcome(text=text)

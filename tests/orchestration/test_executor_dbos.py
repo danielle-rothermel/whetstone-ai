@@ -14,6 +14,7 @@ import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+import pytest
 from dbos import DBOS, DBOSClient, DBOSConfig, Queue
 from dr_platform.staging import PipelineRegistry
 from dr_platform.staging.admission import run_admission_pass
@@ -57,6 +58,13 @@ if TYPE_CHECKING:
 
     from whetstone.graph.rollout import RolloutExecutionKey
     from whetstone.orchestration import RolloutWorkRequest
+
+# Pinned to one xdist worker: all three Postgres/DBOS modules share the
+# single `dr_platform_test` DB and reset its schema per test, so parallel
+# workers race (duplicate alembic version). `--dist loadgroup` serializes
+# this group onto one worker while everything else parallelizes. See
+# test-suite-speedup.md.
+pytestmark = pytest.mark.xdist_group("postgres")
 
 
 def _response(text: str = "durable answer") -> ProviderTransportOutcome:
