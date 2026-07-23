@@ -61,6 +61,7 @@ from whetstone.optimization.schema import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.budget import CreditsSnapshot
 from whetstone.runner.cell import CellConfig, CellOutcome, run_cell
+from whetstone.runner.events import EventStream
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
 
@@ -229,6 +230,7 @@ def run_dry_cell(
     budget_ratio: float | None = 0.5,
     blend_config: BoundedCompressionMetricConfig | None = None,
     input_arm: str = "original",
+    events: EventStream | None = None,
 ) -> CellOutcome:
     """Run one fake-transport cell end-to-end and append its ledger line.
 
@@ -251,19 +253,19 @@ def run_dry_cell(
     if env == D1_ENV_NAME:
         return _run_dry_d1_cell(
             optimizer=optimizer, root=root, attempt=attempt, lane=lane,
-            execution_mode=execution_mode, input_arm=input_arm,
+            execution_mode=execution_mode, input_arm=input_arm, events=events,
         )
     if env == ED1_ENV_NAME:
         return _run_dry_ed1_cell(
             optimizer=optimizer, root=root, attempt=attempt, lane=lane,
             execution_mode=execution_mode, budget_ratio=budget_ratio,
-            blend_config=blend_config,
+            blend_config=blend_config, events=events,
         )
     if env == "ed1m":
         return _run_dry_ed1m_cell(
             optimizer=optimizer, root=root, attempt=attempt, lane=lane,
             execution_mode=execution_mode, budget_ratio=budget_ratio,
-            blend_config=blend_config,
+            blend_config=blend_config, events=events,
         )
     pool_n = _pool_n_per_stratum(env)
     experiment = build_env_experiment(
@@ -314,6 +316,7 @@ def run_dry_cell(
         config,
         ledger=ledger,
         credits_fetcher=_static_credits(),
+        events=events,
     )
 
 
@@ -359,6 +362,7 @@ def _run_dry_ed1_cell(
     execution_mode: ExecutionMode,
     budget_ratio: float | None = 0.5,
     blend_config: BoundedCompressionMetricConfig | None = None,
+    events: EventStream | None = None,
 ) -> CellOutcome:
     """Run one ed1 (enc-dec) fake cell end-to-end (no network, no Docker).
 
@@ -413,7 +417,10 @@ def _run_dry_ed1_cell(
     )
     ledger = Ledger(root=root)
     ledger.load()
-    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )
 
 
 #: The fixed d1 dry-run task slice (small + offline).
@@ -467,6 +474,7 @@ def _run_dry_d1_cell(
     lane: str,
     execution_mode: ExecutionMode,
     input_arm: str = "original",
+    events: EventStream | None = None,
 ) -> CellOutcome:
     """Run one d1 (direct-generation) fake cell end-to-end (no network/Docker).
 
@@ -521,7 +529,10 @@ def _run_dry_d1_cell(
     )
     ledger = Ledger(root=root)
     ledger.load()
-    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )
 
 
 _ED1M_DRY_MUTANT_LIMIT = 3
@@ -536,6 +547,7 @@ def _run_dry_ed1m_cell(
     execution_mode: ExecutionMode,
     budget_ratio: float | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
+    events: EventStream | None = None,
 ) -> CellOutcome:
     """Run one ed1m (behavioral-mutant enc-dec) fake cell (no network/Docker).
 
@@ -613,4 +625,7 @@ def _run_dry_ed1m_cell(
     )
     ledger = Ledger(root=root)
     ledger.load()
-    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )

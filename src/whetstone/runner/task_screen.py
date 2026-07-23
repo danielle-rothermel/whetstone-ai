@@ -48,6 +48,13 @@ from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.provider.driver import TransportCall, run_provider_call
 from whetstone.provider.policy import ProviderExecutionPolicy
+from whetstone.runner.events import (
+    EventStream,
+    EventUnit,
+    is_rate_limit_code,
+    latency_snapshot_event,
+    rate_limit_pressure_event,
+)
 
 SCREEN_SCHEMA = "whetstone.runner.task_screen/v2"
 
@@ -637,6 +644,7 @@ def run_task_screen(
     scorer: Callable[..., CodeScore] | None = None,
     partial_log: PartialLog | None = None,
     sidecar_path: Path | None = None,
+    events: EventStream | None = None,
 ) -> TaskScreenReport:
     """Screen the HumanEval+ pool for one task model -> a per-model report.
 
@@ -781,6 +789,40 @@ def run_task_screen(
             pass_counts=pass_counts, fail_counts=fail_counts,
             repeats=repeats,
         ))
+    # Push run telemetry (task 24) over the rows DRIVEN this pass (restored
+    # rows are not re-driven, so they are not part of this window). A
+    # rate_limit_pressure event fires when the window saw any 429/rate-limit
+    # rows; a latency_snapshot pushes the window's median call latency (null
+    # when no row reported one). Keyed by a screen-level id.
+    if events is not None:
+        newly = [out for key, out in driven.items() if key not in restored]
+        rate_limit_rows = sum(
+            1 for out in newly if is_rate_limit_code(out.failure_code)
+        )
+        guard_timeouts = sum(
+            1 for out in newly if out.failure_code == "runner_timeout"
+        )
+        latencies = [
+            out.latency_s for out in newly if out.latency_s is not None
+        ]
+        unit = EventUnit(
+            screen_id=f"screen:{model}:r{budget_ratio}",
+            lane=None, model=model,
+        )
+        if rate_limit_rows or guard_timeouts:
+            events.emit(
+                rate_limit_pressure_event(
+                    unit=unit, rate_limit_rows=rate_limit_rows,
+                    concurrency_halved=False, guard_timeouts=guard_timeouts,
+                    window_label="screen",
+                )
+            )
+        events.emit(
+            latency_snapshot_event(
+                unit=unit, median_latency_s=_median(latencies),
+                coverage=len(latencies), window_label="screen",
+            )
+        )
     return TaskScreenReport(
         model=model, budget_ratio=budget_ratio, repeats=repeats,
         arms=tuple(arms), rename_token=rename_token,

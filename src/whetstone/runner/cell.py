@@ -48,6 +48,18 @@ from whetstone.runner.eval_run import (
     evaluate_split,
     official_instances,
 )
+from whetstone.runner.events import (
+    EventStream,
+    EventUnit,
+    RunEvent,
+    arm_incomplete_event,
+    attempt_skipped_event,
+    cell_failed_event,
+    cell_finalized_event,
+    is_rate_limit_code,
+    latency_snapshot_event,
+    rate_limit_pressure_event,
+)
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import (
     CellArtifacts,
@@ -729,6 +741,44 @@ def _spend_between(
     return max(0.0, b - a)
 
 
+def _rate_limit_rows_in(evaluation: object) -> int:
+    """Count driven rows in this split evaluation that hit a rate limit.
+
+    Reads the per-row ``failure_code`` on the evaluation's ``outputs`` (the
+    rows actually driven THIS pass; a resumed pass restores rows and drives
+    none, so it reports 0 -- honest for the window). A window's pressure is the
+    rate-limited-row count PLUS the halving/guard flags carried separately.
+    """
+    return sum(
+        1
+        for out in getattr(evaluation, "outputs", ()) or ()
+        if is_rate_limit_code(getattr(out, "failure_code", "") or "")
+    )
+
+
+def _median_latency(partial_log: PartialLog) -> tuple[float | None, int]:
+    """The rolling median task-side call latency + its coverage (task 20).
+
+    Reads every recorded ``latency_s`` from the cell's partial log and returns
+    the median plus the count of rows it was computed over. Returns
+    ``(None, 0)`` when NO row reported a latency -- null-not-zero, never a fake
+    0.0 median. The cell has ONE task model (``config.task_model``), so this is
+    that model's rolling median; the caller stamps the model on the event.
+    """
+    latencies = sorted(
+        rec.latency_s
+        for rec in partial_log.load()
+        if rec.latency_s is not None
+    )
+    n = len(latencies)
+    if n == 0:
+        return None, 0
+    mid = n // 2
+    if n % 2 == 1:
+        return latencies[mid], n
+    return (latencies[mid - 1] + latencies[mid]) / 2.0, n
+
+
 def _cell_telemetry(partial_log: PartialLog) -> CellTelemetry:
     """Sum per-cell task-side usage + latency from the partial log (task 20).
 
@@ -1059,6 +1109,7 @@ def run_cell(
     credits_fetcher: CreditsFetcher | None = None,
     store: ObjectStore | None = None,
     clock: Callable[[], float] = time.monotonic,
+    events: EventStream | None = None,
 ) -> CellOutcome:
     """Run one full validation cell, appending its ledger + spend lines.
 
@@ -1071,6 +1122,23 @@ def run_cell(
     backing = store or ObjectStore(MemoryBackend())
     cell_id = f"{config.optimizer}:{config.env}:a{config.attempt}"
     is_openrouter = config.lane == "openrouter"
+
+    # The structured identity every event about this cell carries (separate
+    # env/optimizer/attempt/lane/model fields, so a reader never parses the
+    # composite id). ``_emit`` is a null-safe push: events are best-effort
+    # telemetry and never affect the cell's result.
+    event_unit = EventUnit.for_cell(
+        cell_id=cell_id,
+        env=config.env,
+        optimizer=config.optimizer,
+        attempt=config.attempt,
+        lane=config.lane,
+        model=config.task_model,
+    )
+
+    def _emit(event: RunEvent) -> None:
+        if events is not None:
+            events.emit(event)
 
     # Per-cell incremental persistence: each provider call is appended to this
     # partial log as it completes, so a crash/interrupt leaves a resumable
@@ -1130,21 +1198,61 @@ def run_cell(
                 row["compression_ratio"] = per_task_comp[task_idx]
             output_rows.append(row)
 
-    def _observe(evaluation: object) -> None:
-        """Fold a split evaluation's fan-out flags into the cell-level halt."""
+    def _observe(evaluation: object, window_label: str = "phase") -> None:
+        """Fold a split evaluation's fan-out flags into the cell-level halt.
+
+        Each split evaluation is a natural heartbeat WINDOW: this is where the
+        push-based telemetry fires. A ``rate_limit_pressure`` event is pushed
+        only when the window observed pressure (rate-limited rows, a halving,
+        or a guard timeout -- never a quiet 0-0-0 beat); a ``latency_snapshot``
+        pushes the model's rolling median latency (``None`` when no row
+        reported one). Both mirror a loud stderr marker.
+        """
         nonlocal halt_reason, concurrency_halved
-        if getattr(evaluation, "concurrency_halved", False):
+        window_halved = bool(getattr(evaluation, "concurrency_halved", False))
+        if window_halved:
             concurrency_halved = True
         if getattr(evaluation, "deadline_reached", False) and not halt_reason:
             halt_reason = (
                 f"whole-cell wall deadline {config.max_wall_seconds:.0f}s "
                 "reached; dispatch stopped, in-flight calls finished"
             )
+        rate_limit_rows = _rate_limit_rows_in(evaluation)
+        guard_timeouts = int(getattr(evaluation, "guard_timeouts", 0) or 0)
+        if rate_limit_rows or window_halved or guard_timeouts:
+            _emit(
+                rate_limit_pressure_event(
+                    unit=event_unit,
+                    rate_limit_rows=rate_limit_rows,
+                    concurrency_halved=window_halved,
+                    guard_timeouts=guard_timeouts,
+                    window_label=window_label,
+                )
+            )
+        median, coverage = _median_latency(partial_log)
+        _emit(
+            latency_snapshot_event(
+                unit=event_unit,
+                median_latency_s=median,
+                coverage=coverage,
+                window_label=window_label,
+            )
+        )
 
     # --- Resumability: skip a completed (optimizer, env, attempt) cell. ---
+    # This skip is CORRECT for wave relaunches, but it was SILENT and the
+    # caller echoed the prior line's (stale) stats -- the c18 collision class.
+    # Push a loud ``attempt_skipped`` event + stderr marker so a watcher never
+    # mistakes the echoed stale stats for fresh work. The skip behavior itself
+    # is unchanged.
     if ledger.is_completed(config.optimizer, config.env, config.attempt):
         prior = ledger.latest_for(config.optimizer, config.env)
         assert prior is not None
+        _emit(
+            attempt_skipped_event(
+                unit=event_unit, prior_status=prior.status
+            )
+        )
         return CellOutcome(
             record=prior, skipped=True, reason="already completed"
         )
@@ -1259,14 +1367,22 @@ def run_cell(
             fanout=_fanout(),
             partial_log=partial_log,
         )
-        _observe(baseline)
+        _observe(baseline, "official_naive")
         _collect_outputs("official_naive", baseline)
         if baseline.aggregate.rows_present == 0:
-            raise CellBaselineFailure(
-                f"cell {cell_id}: baseline official eval produced "
-                f"0/{planned} successful rollouts (every rollout failed). "
-                "This is a plumbing failure; no cell line recorded."
+            detail = (
+                f"baseline official eval produced 0/{planned} successful "
+                "rollouts (every rollout failed); plumbing failure, no cell "
+                "line recorded"
             )
+            _emit(
+                cell_failed_event(
+                    unit=event_unit,
+                    reason_class="CellBaselineFailure",
+                    detail=detail,
+                )
+            )
+            raise CellBaselineFailure(f"cell {cell_id}: {detail}.")
         baseline_eval = baseline
         baseline_score = baseline.score
         naive_per_task = baseline.per_task_scores
@@ -1288,7 +1404,7 @@ def run_cell(
             fanout=_fanout(),
             partial_log=partial_log,
         )
-        _observe(ceiling_eval)
+        _observe(ceiling_eval, "official_ceiling")
         _collect_outputs("official_ceiling", ceiling_eval)
         ceiling_official = (
             ceiling_cached
@@ -1437,7 +1553,7 @@ def run_cell(
         partial_log=partial_log,
         render_guard=True,
     )
-    _observe(best)
+    _observe(best, "official_best")
     _collect_outputs("official_best", best)
     best_score = best.score
     best_per_task = best.per_task_scores
@@ -1532,7 +1648,7 @@ def run_cell(
                 repeats=official_repeats, store=backing,
                 execution_mode=config.execution_mode, fanout=_fanout(),
             )
-            _observe(extra_naive)
+            _observe(extra_naive, "official_naive_escalation")
             _collect_outputs("official_naive_escalation", extra_naive)
             extra_best = evaluate_split(
                 experiment, candidate=opt.best_candidate, instances=official,
@@ -1543,7 +1659,7 @@ def run_cell(
                 execution_mode=config.execution_mode, fanout=_fanout(),
                 render_guard=True,
             )
-            _observe(extra_best)
+            _observe(extra_best, "official_best_escalation")
             _collect_outputs("official_best_escalation", extra_best)
             naive_per_task, naive_counts = _pool_per_task(
                 naive_per_task, naive_counts,
@@ -1739,6 +1855,31 @@ def run_cell(
         telemetry=_cell_telemetry(partial_log),
     )
     ledger.append_cell(record)
+    # --- Push the terminal event: incomplete-arm vs a finalized cell. ---
+    # ``realized_spend_usd`` is the cell's OWN credits-delta (already paired to
+    # its own snapshots in ``spend_usd``), never a heartbeat estimate; ``None``
+    # off the openrouter lane where no credits meter exists.
+    realized_spend = record.spend_usd if is_openrouter else None
+    if status == "incomplete-arm":
+        _emit(
+            arm_incomplete_event(
+                unit=event_unit,
+                detail=incomplete_note or "an official arm is incomplete",
+            )
+        )
+    else:
+        _emit(
+            cell_finalized_event(
+                unit=event_unit,
+                status=status,
+                delta=delta,
+                delta_ci95=(
+                    delta_ci.as_tuple() if delta_ci is not None else None
+                ),
+                realized_spend_usd=realized_spend,
+                duration_s=wall_s,
+            )
+        )
     # A cleanly-completed (non-halted) cell has its authoritative result in the
     # ledger, so the per-call partial log is no longer needed -- drop it. A
     # halted OR incomplete-arm cell KEEPS its partial so a resume can pick up

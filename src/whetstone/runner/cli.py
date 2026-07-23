@@ -62,6 +62,11 @@ from whetstone.runner.cell import (
     CellConfig,
     run_cell,
 )
+from whetstone.runner.events import (
+    EventStream,
+    EventUnit,
+    emit_traceback_on_unhandled,
+)
 from whetstone.runner.execution_mode import (
     ExecutionMode,
     detect_execution_mode,
@@ -905,6 +910,7 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         concurrency=args.concurrency,
         max_wall_seconds=args.max_wall_seconds,
         partial_log=partial_log,
+        events=EventStream(root=args.root),
     )
     path = report.write(args.root)
     # --- Whole-run deadline: a partial run exits non-zero with a summary. ---
@@ -1025,6 +1031,7 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
         budget_ratio=_dry_budget_ratio,
         blend_config=_dry_blend,
         input_arm=getattr(args, "input_arm", "original"),
+        events=EventStream(root=args.root),
     )
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
@@ -1323,8 +1330,26 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         return f"proposer_calls={calls} proposer_tokens={tokens}"
 
     cell_id = f"{args.optimizer}:{args.env}:a{args.attempt}"
+    # The push-based event stream (one shared <root>/logs/events.jsonl for the
+    # run). ``run_cell`` pushes the skip/finalize/failed/arm-incomplete/rate-
+    # limit/latency events; the traceback boundary here surfaces an unhandled
+    # exception as a ``traceback`` event before the process dies (the runner's
+    # OWN typed failures below are handled, not unhandled, so they pass thru).
+    events = EventStream(root=args.root)
+    event_unit = EventUnit.for_cell(
+        cell_id=cell_id,
+        env=args.env,
+        optimizer=args.optimizer,
+        attempt=args.attempt,
+        lane=args.lane,
+        model=config.task_model,
+    )
     try:
-        with _Heartbeat(
+        with emit_traceback_on_unhandled(
+            events,
+            unit=event_unit,
+            reraise=(ReserveError, CellBaselineFailure),
+        ), _Heartbeat(
             label=f"cell {cell_id}",
             spend_estimate=_spend_estimate,
             progress=_proposer_progress,
@@ -1334,6 +1359,7 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
                 ledger=ledger,
                 budget=BudgetGuard(),
                 credits_fetcher=credits_fetcher,
+                events=events,
             )
     except ReserveError as exc:
         sys.stderr.write(f"budget reserve guard: {exc}\n")
@@ -1458,6 +1484,7 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         concurrency=args.concurrency,
         partial_log=partials,
         sidecar_path=sidecar,
+        events=EventStream(root=root),
     )
     path = report.write(root)
     summary = report.arm_summary()
