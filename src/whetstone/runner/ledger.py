@@ -367,6 +367,34 @@ class Ledger:
         return self.optimization_traces_dir / f"{safe}.json"
 
     @property
+    def rollout_outputs_dir(self) -> Path:
+        return self.root / "rollout_outputs"
+
+    def rollout_outputs_path(self, cell_id: str) -> Path:
+        """The per-cell rollout-output sidecar path (``:`` -> ``__``)."""
+        safe = cell_id.replace(":", "__")
+        return self.rollout_outputs_dir / f"{safe}.jsonl"
+
+    def write_rollout_outputs(
+        self, cell_id: str, rows: list[dict[str, object]]
+    ) -> Path:
+        """Write (overwrite) the per-cell rollout-output sidecar (JSONL).
+
+        One line per driven rollout row across EVERY internal candidate eval,
+        EVERY official arm: ``split_role``, ``candidate_id``, ``instance_id``,
+        ``repeat``, the FULL untruncated ``output_text``, the extracted 0/1
+        ``score``, and any ``failure_code``. Kept SEPARATE from the trace (c23
+        streams are long) and one-command-readable (plain JSONL). Additive
+        logging -- no behavior change.
+        """
+        self.rollout_outputs_dir.mkdir(parents=True, exist_ok=True)
+        path = self.rollout_outputs_path(cell_id)
+        with path.open("w") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        return path
+
+    @property
     def power_analysis_dir(self) -> Path:
         return self.root / "power_analysis"
 

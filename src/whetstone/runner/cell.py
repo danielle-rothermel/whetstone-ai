@@ -339,6 +339,7 @@ def _write_optimization_trace(
     status: str,
     opt: OptimizeResult | None,
     failure_detail: str | None = None,
+    outputs_ref: str | None = None,
 ) -> str:
     """Persist the per-cell optimizer-search trace; return its ledger ref.
 
@@ -365,6 +366,10 @@ def _write_optimization_trace(
         # briefs' documented internal repeat_count=1 is NOT what the runner
         # drives, so the trace records the value analysis must use.
         "internal_repeat_count_as_run": config.repeats,
+        # The per-cell rollout-output sidecar (FULL prompt->output text +
+        # scores), referenced so the qualitative outputs are discoverable from
+        # the trace. ``None`` when no rows were driven (fully resumed cell).
+        "rollout_outputs_ref": outputs_ref,
     }
     if opt is not None:
         trace = opt.to_trace(header=header)
@@ -876,6 +881,23 @@ def run_cell(
     halt_reason = ""
     concurrency_halved = False
 
+    # Additive rollout-output logging: every driven row's FULL output text +
+    # score across the official arms AND the internal candidate evals is
+    # accumulated here and written to a per-cell sidecar at finalize.
+    output_rows: list[dict[str, object]] = []
+
+    def _collect_outputs(split_role: str, evaluation: object) -> None:
+        for out in getattr(evaluation, "outputs", ()) or ():
+            output_rows.append({
+                "split_role": split_role,
+                "candidate_id": out.candidate_id,
+                "instance_id": out.instance_id,
+                "repeat": out.repeat,
+                "output_text": out.output_text,
+                "score": out.score,
+                "failure_code": out.failure_code,
+            })
+
     def _observe(evaluation: object) -> None:
         """Fold a split evaluation's fan-out flags into the cell-level halt."""
         nonlocal halt_reason, concurrency_halved
@@ -1014,6 +1036,7 @@ def run_cell(
             partial_log=partial_log,
         )
         _observe(baseline)
+        _collect_outputs("official_naive", baseline)
         if baseline.aggregate.rows_present == 0:
             raise CellBaselineFailure(
                 f"cell {cell_id}: baseline official eval produced "
@@ -1042,6 +1065,7 @@ def run_cell(
             partial_log=partial_log,
         )
         _observe(ceiling_eval)
+        _collect_outputs("official_ceiling", ceiling_eval)
         ceiling_official = (
             ceiling_cached
             if ceiling_cached is not None
@@ -1151,6 +1175,14 @@ def run_cell(
             resumed=resumed, restarted=restarted,
         )
 
+    # Collect the INTERNAL candidate eval outputs (the internal naive base +
+    # every scored proposal candidate) for the rollout-output sidecar.
+    if opt.baseline_evaluation is not None:
+        _collect_outputs("internal_naive", opt.baseline_evaluation)
+    for step in opt.steps:
+        if step.evaluation is not None:
+            _collect_outputs("internal_candidate", step.evaluation)
+
     # --- 3. Best-candidate official eval on the SAME official Eval Config. ---
     # The best candidate may be a PROPOSED template (non-canonical), so its
     # official render is guarded (a residual render KeyError fails its rows as
@@ -1172,6 +1204,7 @@ def run_cell(
         render_guard=True,
     )
     _observe(best)
+    _collect_outputs("official_best", best)
     best_score = best.score
     best_per_task = best.per_task_scores
     best_counts = best.per_task_counts
@@ -1266,6 +1299,7 @@ def run_cell(
                 execution_mode=config.execution_mode, fanout=_fanout(),
             )
             _observe(extra_naive)
+            _collect_outputs("official_naive_escalation", extra_naive)
             extra_best = evaluate_split(
                 experiment, candidate=opt.best_candidate, instances=official,
                 split_role="official", transport=config.rollout_transport,
@@ -1276,6 +1310,7 @@ def run_cell(
                 render_guard=True,
             )
             _observe(extra_best)
+            _collect_outputs("official_best_escalation", extra_best)
             naive_per_task, naive_counts = _pool_per_task(
                 naive_per_task, naive_counts,
                 extra_naive.per_task_scores, extra_naive.per_task_counts,
@@ -1401,11 +1436,23 @@ def run_cell(
         )
     combined_note = "; ".join(notes)
 
+    # Persist the per-cell rollout-output sidecar (FULL output text + score for
+    # every internal candidate eval row AND every official arm row) -- additive
+    # logging for qualitative prompt->output analysis, kept separate from the
+    # trace (long streams). The trace refers to it via ``rollout_outputs_ref``.
+    outputs_ref: str | None = None
+    if output_rows:
+        ledger.write_rollout_outputs(cell_id, output_rows)
+        outputs_ref = str(
+            ledger.rollout_outputs_path(cell_id).relative_to(ledger.root)
+        )
+
     # Persist the full optimizer-search trace (per-round candidate evidence +
     # the accepted-candidate prompt text) and point the cell's
     # optimization_result_ref at it so the search is auditable from disk.
     trace_ref = _write_optimization_trace(
-        ledger, cell_id=cell_id, config=config, status=status, opt=opt
+        ledger, cell_id=cell_id, config=config, status=status, opt=opt,
+        outputs_ref=outputs_ref,
     )
 
     record = CellRecord(

@@ -31,7 +31,7 @@ from whetstone.code_eval.aggregate import (
     RowPolicy,
 )
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.internal_eval import run_internal_eval
+from whetstone.envs.internal_eval import RolloutOutput, run_internal_eval
 from whetstone.execution.fanout import FanoutConfig
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
@@ -86,6 +86,9 @@ class SplitEvaluation:
     deadline_reached: bool = False
     #: Count of runner-level guard timeouts (belt-and-suspenders breaches).
     guard_timeouts: int = 0
+    #: FULL model output text + score per DRIVEN row (additive logging for
+    #: qualitative prompt->output analysis; empty on a resumed/restored pass).
+    outputs: tuple[RolloutOutput, ...] = ()
 
     @property
     def is_complete(self) -> bool:
@@ -204,4 +207,5 @@ def evaluate_split(
         concurrency_halved=result.concurrency_halved,
         deadline_reached=result.deadline_reached,
         guard_timeouts=result.guard_timeouts,
+        outputs=result.outputs,
     )

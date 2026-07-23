@@ -87,6 +87,25 @@ RENDER_FAILURE_CODE = "render_key_error"
 
 
 @dataclass(frozen=True, slots=True)
+class RolloutOutput:
+    """One driven rollout row's FULL model output + extracted score.
+
+    Captured for qualitative prompt->output analysis: the candidate that was
+    evaluated, the task instance + repeat index, the FULL untruncated model
+    output text, and the 0/1 oracle score (``None`` on a failed/missing row,
+    with the failure code). Restored (resumed) rows carry no fresh output text
+    (``output_text=None``) since they were not re-driven.
+    """
+
+    candidate_id: str
+    instance_id: str
+    repeat: int
+    output_text: str | None
+    score: float | None
+    failure_code: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class InternalEvalResult:
     """One candidate's evaluation outcome over a split.
 
@@ -118,6 +137,10 @@ class InternalEvalResult:
     concurrency_halved: bool = False
     deadline_reached: bool = False
     guard_timeouts: int = 0
+    #: FULL model output text + score for every DRIVEN row this pass (in
+    #: instance/repeat order). Additive logging for qualitative analysis;
+    #: restored (resumed) rows are omitted (not re-driven).
+    outputs: tuple[RolloutOutput, ...] = ()
 
 
 def _per_task_score(task: TaskRows) -> float:
@@ -478,8 +501,12 @@ def run_internal_eval(
     deadline_reached = deadline_1 or deadline_2
     guard_timeouts = guard_1 + guard_2
 
-    # Assemble per-task rows in instance/repeat order (restored + driven).
+    # Assemble per-task rows in instance/repeat order (restored + driven), and
+    # collect the FULL model output text of every DRIVEN row (additive logging
+    # for qualitative prompt->output analysis; restored rows carry no fresh
+    # text since they were not re-driven).
     task_rows: list[TaskRows] = []
+    outputs: list[RolloutOutput] = []
     for instance, task in tasks:
         rows: list[RowValue] = []
         for index in range(repeats):
@@ -487,7 +514,18 @@ def run_internal_eval(
             if key in recorded:
                 rows.append(recorded[key])
             else:
-                rows.append(driven[key].row)
+                outcome = driven[key]
+                rows.append(outcome.row)
+                outputs.append(
+                    RolloutOutput(
+                        candidate_id=unit,
+                        instance_id=str(instance.id),
+                        repeat=index,
+                        output_text=_output_text_of(outcome.result),
+                        score=outcome.score,
+                        failure_code=outcome.failure_code,
+                    )
+                )
         task_rows.append(
             TaskRows(
                 task_identity=task.task_identity(),
@@ -524,6 +562,7 @@ def run_internal_eval(
         concurrency_halved=concurrency_halved,
         deadline_reached=deadline_reached,
         guard_timeouts=guard_timeouts,
+        outputs=tuple(outputs),
     )
 
 
@@ -588,6 +627,18 @@ def _row_thunk(
         return outcome
 
     return _run
+
+
+def _output_text_of(result: ProviderCallResult | None) -> str | None:
+    """The FULL (untruncated) model output text of a driven call, else None.
+
+    Returns the accepted Generation's text for a succeeded call; ``None`` for a
+    failed / restored / generation-less call. Never truncated -- the sidecar
+    keeps whole streams (c23 outputs are long).
+    """
+    if result is None or not result.succeeded or result.generation is None:
+        return None
+    return result.generation.text
 
 
 def _usage_of(
@@ -661,5 +712,6 @@ def _restore_recorded(
 __all__ = [
     "RENDER_FAILURE_CODE",
     "InternalEvalResult",
+    "RolloutOutput",
     "run_internal_eval",
 ]

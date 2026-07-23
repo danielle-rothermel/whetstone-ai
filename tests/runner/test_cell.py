@@ -641,3 +641,89 @@ def test_cell_power_stage_on_writes_artifact_and_sets_sizes(
     assert trace_ref is not None and power_ref is not None
     assert (tmp_path / trace_ref).exists()
     assert (tmp_path / power_ref).exists()
+
+
+# --- Rollout-output sidecar (qualitative prompt->output logging) -----------
+
+
+def test_cell_writes_rollout_output_sidecar_with_full_coverage(
+    tmp_path: Path,
+) -> None:
+    # Every internal candidate eval row AND every official arm row is captured
+    # in the per-cell rollout-output sidecar with the FULL output text + score;
+    # the trace references it and the reference resolves.
+    import json
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env, optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=ScriptedProposer((WIN,)),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    sidecar = ledger.rollout_outputs_path(r.cell_id)
+    assert sidecar.exists(), "the rollout-output sidecar must be written"
+    rows = [json.loads(line) for line in sidecar.read_text().splitlines()]
+    assert rows
+    # Every row carries the required fields (full text, never truncated).
+    for row in rows:
+        assert set(row) == {
+            "split_role", "candidate_id", "instance_id", "repeat",
+            "output_text", "score", "failure_code",
+        }
+    roles = {row["split_role"] for row in rows}
+    # Official arms AND internal candidate evals are ALL covered.
+    assert "official_naive" in roles
+    assert "official_ceiling" in roles
+    assert "official_best" in roles
+    assert "internal_naive" in roles
+    assert "internal_candidate" in roles
+    # The winning candidate's official rows carry its FULL gold output text.
+    win_rows = [
+        row for row in rows
+        if row["split_role"] == "official_best" and row["output_text"]
+    ]
+    assert win_rows
+    # The trace references the sidecar and the reference resolves.
+    trace = json.loads(
+        ledger.optimization_trace_path(r.cell_id).read_text()
+    )
+    assert trace["rollout_outputs_ref"] == str(
+        sidecar.relative_to(tmp_path)
+    )
+    assert (tmp_path / trace["rollout_outputs_ref"]).exists()
+
+
+def test_cell_rollout_sidecar_covers_eval_row_official_arms(
+    tmp_path: Path,
+) -> None:
+    # The eval (identity) optimizer drafts nothing, but its OFFICIAL arms
+    # (naive/ceiling) outputs are still captured -- the directive applies to
+    # eval cells' official arms too.
+    import json
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env, optimizer="eval",
+        rollout_transport=FakeTransport(reply=correct_reply(exp)),
+        proposer_transport=ScriptedProposer(()),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    sidecar = ledger.rollout_outputs_path(r.cell_id)
+    assert sidecar.exists()
+    rows = [json.loads(line) for line in sidecar.read_text().splitlines()]
+    roles = {row["split_role"] for row in rows}
+    assert "official_naive" in roles
+    assert "official_ceiling" in roles

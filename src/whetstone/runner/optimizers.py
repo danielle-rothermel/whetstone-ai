@@ -306,6 +306,9 @@ class OptimizeResult:
     baseline_internal_score: float | None
     steps: list[ProposalStep] = field(default_factory=list)
     scaled_hyperparameters: dict[str, Any] = field(default_factory=dict)
+    #: The internal-split NAIVE baseline eval's SplitEvaluation (for its output
+    #: text; the internal baseline is a distinct eval from the official naive).
+    baseline_evaluation: SplitEvaluation | None = None
 
     @property
     def internal_evals_count(self) -> int:
@@ -650,4 +653,5 @@ def run_optimize(
         baseline_internal_score=baseline_eval.score,
         steps=steps,
         scaled_hyperparameters=hyper,
+        baseline_evaluation=baseline_eval,
     )
