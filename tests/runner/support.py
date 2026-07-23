@@ -192,6 +192,26 @@ def no_improvement_reply(experiment: EnvExperiment) -> ReplyFn:
     return reply
 
 
+def ceiling_only_reply(experiment: EnvExperiment) -> ReplyFn:
+    """Only the CEILING probe scores gold; naive (and all else) scores 0.
+
+    Reproduces the base-rate-0 anchor boundary (naive base_rate == 0.0,
+    ceiling == 1.0) that makes the power stage's anchor-arm variance
+    decomposition degenerate -- the shape that drove the c11 powered cells to
+    delta 0 before the brief-floor fix.
+    """
+    env = env_spec(experiment.env_name)
+    ceiling = ceiling_candidate(env)
+    ceiling_prompts: dict[str, str] = {}
+    for inst in _all_instances(experiment):
+        ceiling_prompts[render_prompt(env, ceiling, inst)] = inst.gold
+
+    def reply(prompt: str) -> str:
+        return ceiling_prompts.get(prompt, "definitely-not-a-label")
+
+    return reply
+
+
 class ScriptedProposer:
     """A proposer transport returning fixed templates (records its calls)."""
 

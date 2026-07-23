@@ -45,6 +45,7 @@ from .support import (
     FakeTransport,
     ScriptedProposer,
     _split_fits,
+    ceiling_only_reply,
     correct_reply,
     credits_fetcher,
     improvement_reply,
@@ -879,3 +880,76 @@ def test_power_stage_overrides_miprov2_minibatch(tmp_path: Path) -> None:
         if row["split_role"] in ("internal_candidate", "internal_naive")
     }
     assert len(internal_tasks) == ps.used_n_tasks
+
+
+def test_power_stage_base_rate_zero_anchor_floors_at_brief_sizes(
+    tmp_path: Path,
+) -> None:
+    # Boundary guard (the c11 delta-0 flaw): when the naive anchor sits at the
+    # 0.0 base-rate floor, the anchor-arm variance decomposition is degenerate
+    # and the raw power recommendation collapses (e.g. n_tasks=2) -- far below
+    # the candidate-comparison variance once candidates move off the naive base
+    # rate. The opt-in flag means "at least as powered as before", so the USED
+    # sizes must be FLOORED at the as-run brief (n = brief scope clamped to
+    # pool, r = config.repeats) -- the stage may only ADD power, never subtract
+    # below it. Reproduced on miprov2 (brief internal scope = 8) with a 12-task
+    # pool and a ceiling-only reply (naive base_rate == 0, ceiling == 1).
+    import json
+
+    from whetstone.envs.factory import build_env_experiment
+    from whetstone.runner.optimizers import scaled_hyperparameters
+    from whetstone.runner.power import PowerConfig
+
+    exp = build_env_experiment(
+        "c11", model=TASK_MODEL, pool_n_per_stratum=4, split_sizes=(12, 2, 2),
+    )
+    pool = len(exp.eval_configs.internal.instances)
+    assert pool == 12
+    brief_n = scaled_hyperparameters(
+        "miprov2", internal_pool_size=pool
+    )["internal_task_count_scaled"]
+    assert brief_n == 8  # the minibatch scope, below the pool
+
+    cfg = _big_internal_config(
+        "miprov2", exp,
+        # alpha=0.1 widens the target gap -> the degenerate rec would drop to a
+        # tiny n_tasks (the a4 shape) absent the floor.
+        PowerConfig(alpha=0.1, repeat_cap=5, trials=300, seed=5),
+    )
+    from dataclasses import replace
+
+    cfg = replace(
+        cfg, rollout_transport=FakeTransport(reply=ceiling_only_reply(exp))
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    ps = r.power_sizing
+    assert ps is not None
+    # The degenerate base-rate-0 anchor: the RAW recommendation is recorded and
+    # may be below the brief (that's the boundary condition being guarded).
+    art = json.loads(ledger.power_analysis_path(r.cell_id).read_text())
+    assert art["variance_decomposition"]["base_rate"] == 0.0
+    # The USED sizes are floored at the brief and never subtract below it.
+    assert ps.used_n_tasks >= brief_n
+    assert ps.used_n_tasks <= ps.pool_ceiling
+    assert ps.used_repeats >= cfg.repeats
+    # The recommendation is still visible (auditable) on the line + artifact.
+    assert (
+        ps.recommended_n_tasks
+        == art["recommendation"]["recommended_n_tasks"]
+    )
+    # The internal evals actually RAN at the floored sizes.
+    rows = [
+        json.loads(line)
+        for line in ledger.rollout_outputs_path(r.cell_id)
+        .read_text().splitlines()
+    ]
+    internal = {
+        row["instance_id"] for row in rows
+        if row["split_role"] in ("internal_candidate", "internal_naive")
+    }
+    assert len(internal) == ps.used_n_tasks >= brief_n

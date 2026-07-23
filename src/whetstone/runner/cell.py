@@ -63,6 +63,7 @@ from whetstone.runner.optimizers import (
     OPTIMIZATION_TRACE_SCHEMA,
     OptimizeResult,
     run_optimize,
+    scaled_hyperparameters,
 )
 from whetstone.runner.power import PowerConfig, PowerResult, analyze_power
 from whetstone.runner.statistics import (
@@ -478,6 +479,8 @@ def _run_power_stage(
     naive_per_task: tuple[float, ...],
     ceiling_per_task: tuple[float, ...],
     pool_ceiling: int,
+    brief_n_tasks: int,
+    brief_repeats: int,
 ) -> tuple[str | None, PowerSizing | None, int | None]:
     """Run the opt-in power stage: persist the artifact + return the sizing.
 
@@ -485,9 +488,19 @@ def _run_power_stage(
     internal sample-size recommendation, writes the per-cell ``power_analysis``
     artifact, and returns ``(power_ref, power_sizing, task_override)``.
     When the ceiling arm has no per-task vector (never measured), the stage is
-    skipped (returns all ``None``) -- it needs both anchors. The used sizes are
-    the recommendation CLAMPED to the pool (n); the caller's repeat budget is
-    taken from ``power_sizing.used_repeats``.
+    skipped (returns all ``None``) -- it needs both anchors.
+
+    SAFE SEMANTIC (opt-in flag = "at least as powered as before"): the used
+    sizes are FLOORED at the as-run brief (n = ``brief_n_tasks``, the
+    optimizer's brief internal task scope clamped to the pool; r =
+    ``brief_repeats``) and clamped to the pool ceiling. The power stage can
+    therefore only ADD power vs the briefs, never subtract below them. This
+    guards the degenerate case where a base-rate-0 (or -1) anchor makes the
+    variance decomposition tiny -- unrepresentative of the far larger
+    candidate-comparison Bernoulli variance when candidates move off the naive
+    base rate -- and would otherwise recommend a 2-task internal eval that
+    collapses delta to 0. The raw (unfloored) recommendation is still recorded
+    on ``recommended_*`` so the analysis output stays visible.
     """
     power_cfg = config.power_config
     if (
@@ -516,8 +529,12 @@ def _run_power_stage(
         ledger.power_analysis_path(cell_id).relative_to(ledger.root)
     )
     rec = result.recommendation
-    used_n = min(rec.recommended_n_tasks, pool_ceiling)
-    used_r = rec.recommended_repeats
+    # Floor at the as-run brief, then clamp n to the pool. The stage can only
+    # ADD power vs the brief, never subtract below it. ``brief_n_tasks`` is the
+    # optimizer's brief internal task scope (already clamped to the pool by the
+    # caller); ``brief_repeats`` is the brief internal repeat count.
+    used_n = min(pool_ceiling, max(rec.recommended_n_tasks, brief_n_tasks))
+    used_r = max(rec.recommended_repeats, brief_repeats)
     sizing = PowerSizing(
         recommended_n_tasks=rec.recommended_n_tasks,
         recommended_repeats=rec.recommended_repeats,
@@ -1189,14 +1206,24 @@ def run_cell(
     internal_task_count_override: int | None = None
     internal_repeats = config.repeats
     if config.power_config is not None:
+        _internal_pool = len(experiment.eval_configs.internal.instances)
+        # The optimizer's brief internal task scope (already clamped to the
+        # pool) is the floor for the power stage's ``used_n_tasks`` -- the
+        # stage may only ADD tasks above the brief, never subtract below it.
+        _brief_n = int(
+            scaled_hyperparameters(
+                config.optimizer, internal_pool_size=_internal_pool
+            ).get("internal_task_count_scaled", _internal_pool)
+            or _internal_pool
+        )
         power_ref, power_sizing, internal_task_count_override = (
             _run_power_stage(
                 config=config, cell_id=cell_id, ledger=ledger,
                 naive_per_task=naive_per_task,
                 ceiling_per_task=ceiling_per_task,
-                pool_ceiling=len(
-                    experiment.eval_configs.internal.instances
-                ),
+                pool_ceiling=_internal_pool,
+                brief_n_tasks=_brief_n,
+                brief_repeats=config.repeats,
             )
         )
         if power_sizing is not None:
