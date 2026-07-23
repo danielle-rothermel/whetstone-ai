@@ -187,6 +187,11 @@ class CellConfig:
     #: Optimizer cells (copro/miprov2/gepa/codex) REQUIRE it (the guard rail);
     #: eval anchors set it so anchors pair on the same metric.
     ed1_blend_config: BoundedCompressionMetricConfig | None = None
+    #: d1 (direct-generation) FROZEN input arm (task 23): one of the five
+    #: screen DIRECT arms (original/docstring/signature/name/renamed).
+    #: Identity-bearing -- folds into the d1 graph + split identity. Ignored by
+    #: non-d1 envs.
+    d1_input_arm: str = "original"
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -365,6 +370,23 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
     task-22 guard rail before building an ed1/ed1m optimizer experiment.
     """
     _guard_ed1_blended_reward(config)
+    if config.env == "d1":
+        # d1: direct-generation precursor (task 23). A single-call rollout over
+        # a FROZEN input arm with a mutable wrapper Mutation Surface; PLAIN
+        # pass-rate reward (NOT blended). --official-n slices the pool.
+        from whetstone.envs.d1 import build_d1_experiment
+        return build_d1_experiment(
+            model=config.task_model,
+            input_arm=config.d1_input_arm,
+            scorer=config.ed1_scorer,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+            exclude_task_ids=config.ed1_exclude_task_ids,
+        )
     if config.env == "ed1m":
         # ed1m: the behavioral-mutant enc-dec (task 18). Reuses ed1's pipeline
         # with the mutant per-input oracle (fidelity reward + attractor

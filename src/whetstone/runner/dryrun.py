@@ -40,6 +40,7 @@ from dr_providers import (
 )
 from whetstone_envs.core import Instance
 
+from whetstone.envs.d1 import D1_ENV_NAME
 from whetstone.envs.ed1 import ED1_ENV_NAME
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
@@ -227,6 +228,7 @@ def run_dry_cell(
     overrides: SamplingOverrides | None = None,
     budget_ratio: float | None = 0.5,
     blend_config: BoundedCompressionMetricConfig | None = None,
+    input_arm: str = "original",
 ) -> CellOutcome:
     """Run one fake-transport cell end-to-end and append its ledger line.
 
@@ -246,6 +248,11 @@ def run_dry_cell(
     # code-eval graph + a local (no-Docker) sandbox scorer. The QA path below
     # is
     # unchanged.
+    if env == D1_ENV_NAME:
+        return _run_dry_d1_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, input_arm=input_arm,
+        )
     if env == ED1_ENV_NAME:
         return _run_dry_ed1_cell(
             optimizer=optimizer, root=root, attempt=attempt, lane=lane,
@@ -403,6 +410,114 @@ def _run_dry_ed1_cell(
         budget_ratio=budget_ratio,
         ed1_task_limit=_ED1_DRY_TASK_LIMIT,
         ed1_blend_config=blend_config,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())
+
+
+#: The fixed d1 dry-run task slice (small + offline).
+_D1_DRY_TASK_LIMIT = 4
+
+
+def _d1_dry_reply(tasks, *, input_arm: str, rename_token: str):
+    """A scripted d1 reply: any direct prompt -> the task's canonical solution.
+
+    Matches each task on a UNIQUE per-task marker in the rendered prompt: the
+    docstring's first line (present for original/docstring/renamed), else the
+    per-task entry point (name/signature arms). The 'renamed' arm renamed
+    EVERY canonical-name occurrence to the SAME token, so matching must key off
+    a per-task marker (the docstring), NOT the shared renamed name; the reply
+    then returns the RENAMED canonical solution -> PASS against renamed name.
+    """
+    from whetstone.runner.task_screen import (
+        rename_identifier,
+        split_prompt,
+    )
+
+    def reply(prompt: str) -> str:
+        for t in tasks:
+            ht = t.humaneval_task
+            ep = ht.entry_point
+            parts = split_prompt(ht.prompt, ep)
+            marker = None
+            if parts.docstring:
+                marker = parts.docstring.splitlines()[0].strip()
+            hit = (
+                (marker and marker in prompt)
+                or (input_arm in ("name", "signature") and (
+                    f"def {ep}(" in prompt or f"named {ep}." in prompt
+                ))
+            )
+            if hit:
+                gt = ht.ground_truth_code
+                if input_arm == "renamed":
+                    return rename_identifier(gt, ep, rename_token)
+                return gt
+        return "def _x():\n    return None\n"
+
+    return reply
+
+
+def _run_dry_d1_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    input_arm: str = "original",
+) -> CellOutcome:
+    """Run one d1 (direct-generation) fake cell end-to-end (no network/Docker).
+
+    Builds the single-call direct experiment over a small offline HumanEval+
+    slice at the given FROZEN input arm, a scripted transport (a direct prompt
+    -> the task's canonical solution so the LOCAL sandbox scores PASS), and any
+    optimizer's proposer script (a valid alternate wrapper BODY). Records the
+    plain pass rate on the ledger line (d1 is pass-only, no blend/compression).
+    """
+    from whetstone.envs.d1 import (
+        D1_DEFAULT_RENAME_TOKEN,
+        D1_WRAPPER_BODY_CEILING,
+    )
+    from whetstone.envs.ed1 import load_ed1_tasks
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=_D1_DRY_TASK_LIMIT)
+    reply = _d1_dry_reply(
+        tasks, input_arm=input_arm, rename_token=D1_DEFAULT_RENAME_TOKEN
+    )
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        # A valid alternate wrapper BODY (no placeholders/fence) so a proposing
+        # optimizer drafts + scores a candidate that passes body validation.
+        proposer = FakeProposerTransport(
+            script={}, default=(D1_WRAPPER_BODY_CEILING,)
+        )
+    config = CellConfig(
+        optimizer=optimizer,
+        env=D1_ENV_NAME,
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        ed1_task_limit=_D1_DRY_TASK_LIMIT,
+        d1_input_arm=input_arm,
     )
     ledger = Ledger(root=root)
     ledger.load()

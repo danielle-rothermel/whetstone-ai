@@ -111,6 +111,10 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     "ed1": DEEPSEEK_TASK_MODEL,
     # ed1m (behavioral-mutant enc-dec): same enc/dec model family as ed1.
     "ed1m": DEEPSEEK_TASK_MODEL,
+    # d1 (direct-generation precursor, task 23): the matrix default mirrors
+    # ed1's deepseek so a d1 anchor pairs with the corresponding ed1 anchor on
+    # the same model family; --task-model selects the clean-vs-deepseek axis.
+    "d1": DEEPSEEK_TASK_MODEL,
 }
 
 
@@ -146,6 +150,12 @@ COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
     # the mutant oracle adds a small subprocess tail. 15% covers both;
     # tune per-cell once the first ed1m anchor measures the actual rate.
     "ed1m": ("skip", 0.15),
+    # d1 (direct-generation) inherits the ed1 SKIP tolerance: the same
+    # deepseek task model produces the same stochastic empty-completion tail on
+    # a direct generation (a single call, so a somewhat smaller tail than the
+    # enc-dec 2-call rows). 15% covers it with margin; tune per-cell with
+    # --missing-data / --max-skip-fraction once a d1 anchor measures the rate.
+    "d1": ("skip", 0.15),
 }
 
 

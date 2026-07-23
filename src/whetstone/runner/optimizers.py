@@ -423,19 +423,23 @@ def _intake_valid_keys(
     encoder Mutation Surface is not a QA ``EnvSpec``, so its valid keys are the
     fixed encoder placeholders (``input_code`` / ``max_budget``).
     """
-    if experiment.env_name in _ED1_FAMILY_ENV_NAMES:
-        # The ed1/ed1m NARROWED surface is the strategy BODY only: NO
-        # placeholders (the frame owns them), so no valid keys are exposed to a
-        # body. Body validation runs via ``_intake_rejection`` instead.
+    if experiment.env_name in _BODY_SURFACE_ENV_NAMES:
+        # The ed1/ed1m/d1 NARROWED surface is the strategy/wrapper BODY only:
+        # NO placeholders (the frame owns them), so no valid keys are exposed
+        # to a body. Body validation runs via ``_intake_rejection`` instead.
         return frozenset()
     env = env_spec(experiment.env_name)
     return valid_prompt_input_keys(env, instances[0])
 
 
-#: The ed1-family env names sharing the strategy-body Mutation Surface (ed1 +
-#: the behavioral-mutant variant ed1m). Both validate the encoder BODY, not QA
-#: placeholders.
-_ED1_FAMILY_ENV_NAMES = frozenset({"ed1", "ed1m"})
+#: The env names whose Mutation Surface is a strategy/wrapper BODY (no
+#: placeholders, no code fence): ed1 + the behavioral-mutant variant ed1m
+#: (both enc-dec) AND d1 (the direct-generation precursor, task 23). All
+#: validate the BODY via ``ed1_body_rejection``, not QA placeholders. NB: this
+#: is the body-surface set, distinct from the blended-reward FAMILY (ed1/ed1m
+#: only) -- d1 is pass-only, so it shares the body surface but NOT the blend
+#: guard rail.
+_BODY_SURFACE_ENV_NAMES = frozenset({"ed1", "ed1m", "d1"})
 
 
 def _intake_rejection(
@@ -454,7 +458,7 @@ def _intake_rejection(
         ed1_body_rejection,
     )
 
-    if experiment.env_name in _ED1_FAMILY_ENV_NAMES:
+    if experiment.env_name in _BODY_SURFACE_ENV_NAMES:
         return ED1_INVALID_BODY, ed1_body_rejection(template)
     return (
         INVALID_TEMPLATE_PLACEHOLDERS,

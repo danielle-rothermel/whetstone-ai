@@ -182,8 +182,25 @@ def evaluate_split(
     # encoder->decoder->code
     # eval drive producing DUAL scores. The QA path below is untouched (byte-
     # identical) -- ed1 is a separate, self-contained branch.
+    from whetstone.envs.d1 import D1Experiment
     from whetstone.envs.ed1 import Ed1Experiment
 
+    if isinstance(experiment, D1Experiment):
+        return _evaluate_d1_split(
+            experiment,
+            candidate=candidate,
+            instances=instances,
+            split_role=split_role,
+            transport=transport,
+            execution_policy=execution_policy,
+            repeats=repeats,
+            store=store,
+            execution_mode=execution_mode,
+            policy=policy,
+            fanout=fanout,
+            partial_log=partial_log,
+            apply_reward=apply_reward_resolved,
+        )
     if isinstance(experiment, Ed1Experiment):
         return _evaluate_ed1_split(
             experiment,
@@ -249,6 +266,89 @@ def evaluate_split(
         deadline_reached=result.deadline_reached,
         guard_timeouts=result.guard_timeouts,
         outputs=result.outputs,
+    )
+
+
+#: The Result Store schema for a persisted d1 pass-rate aggregate artifact.
+D1_AGGREGATE_ARTIFACT_SCHEMA = "whetstone.runner.d1_split_aggregate"
+
+
+def _evaluate_d1_split(
+    experiment: Any,
+    *,
+    candidate: Candidate,
+    instances: tuple[Instance, ...],
+    split_role: str,
+    transport: TransportCall,
+    execution_policy: ProviderExecutionPolicy,
+    repeats: int,
+    store: ObjectStore | None,
+    execution_mode: ExecutionMode,
+    policy: RowPolicy | CompletenessPolicy,
+    fanout: FanoutConfig | None,
+    partial_log: PartialLog | None,
+    apply_reward: bool,
+) -> SplitEvaluation:
+    """Evaluate one d1 candidate over a split via the DIRECT single-call drive.
+
+    Runs :func:`whetstone.envs.d1_eval.run_d1_eval` (render frozen input arm ->
+    generate -> code-eval), persists the pass-rate aggregate artifact, and
+    returns a :class:`SplitEvaluation` whose ``score`` is the PLAIN pass rate
+    (NOT a blend). d1 has one objective, so ``compression_score`` /
+    ``pass_score`` / ``attractor_pull`` stay ``None``.
+    """
+    from whetstone.envs.d1_eval import run_d1_eval
+
+    body = str(candidate.payload.get(MUTATION_FIELD, ""))
+    d1 = run_d1_eval(
+        experiment,
+        candidate_body=body,
+        candidate_id=candidate.candidate_id,
+        instances=instances,
+        execution_policy=execution_policy,
+        transport=transport,
+        scorer=experiment.scorer,
+        repeats=repeats,
+        policy=policy,
+        fanout=fanout,
+        apply_reward=apply_reward,
+        store=store,
+        partial_log=partial_log,
+        split_role=split_role,
+    )
+    pass_agg = d1.pass_aggregate
+    pass_rate = pass_agg.aggregation_output.value
+    backing = store or ObjectStore(MemoryBackend())
+    artifact: dict[str, Any] = {
+        "schema": D1_AGGREGATE_ARTIFACT_SCHEMA,
+        "split_role": split_role,
+        "candidate_id": candidate.candidate_id,
+        "graph_hash": pass_agg.graph_hash,
+        "eval_config_hash": pass_agg.eval_config_hash,
+        "input_arm": experiment.input_arm,
+        "score": pass_rate,
+        "task_count": pass_agg.task_count,
+        "repeat_count": pass_agg.repeat_count,
+        "rows_present": pass_agg.rows_present,
+        "rows_missing": pass_agg.rows_missing,
+        "rows_failed": pass_agg.rows_failed,
+        "rows_invalid": pass_agg.rows_invalid,
+        "execution_mode": execution_mode.value,
+    }
+    backing.put(D1_AGGREGATE_ARTIFACT_SCHEMA, artifact)
+    artifact_ref = typed_ref_for_record(D1_AGGREGATE_ARTIFACT_SCHEMA, artifact)
+    return SplitEvaluation(
+        split_role=split_role,
+        candidate_id=candidate.candidate_id,
+        score=pass_rate,
+        aggregate=pass_agg,
+        artifact_ref=artifact_ref,
+        execution_mode=execution_mode,
+        task_count=pass_agg.task_count,
+        repeat_count=pass_agg.repeat_count,
+        per_task_scores=d1.per_task_scores,
+        per_task_counts=d1.per_task_counts,
+        outputs=d1.outputs,
     )
 
 

@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from whetstone.envs.d1 import D1_ENV_NAME, D1_INPUT_ARMS
 from whetstone.envs.ed1 import ED1_DEFAULT_BUDGET_RATIO, ED1_ENV_NAME
 from whetstone.envs.ed1_blended import (
     DEFAULT_COMPRESSION_WEIGHT,
@@ -458,6 +459,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cell.add_argument(
+        "--input-arm",
+        choices=list(D1_INPUT_ARMS),
+        default="original",
+        help=(
+            "d1 (direct-generation, task 23) ONLY: the FROZEN input arm -- "
+            "the screen DIRECT-arm slice of the canonical HumanEval prompt "
+            "the mutable wrapper surrounds. 'renamed' scrubs the canonical "
+            "occurrence (signature + doctests) and scores against the renamed "
+            "entry point (the causal-memorization ablation). Identity-bearing "
+            "(folds into the d1 graph + split hash). Ignored by non-d1 envs."
+        ),
+    )
+    cell.add_argument(
         "--max-wall-seconds",
         type=float,
         default=DEFAULT_CELL_MAX_WALL_SECONDS,
@@ -835,6 +849,19 @@ def _failure_summary_line(report: PilotReport) -> str:
 
 def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     _require_live(args)
+    if args.env == D1_ENV_NAME:
+        # d1 (direct-generation) has no QA-registry EnvSpec, so the QA pilot
+        # cannot build it. The d1 naive/ceiling probe check IS the d1 EVAL
+        # anchor (which reproduces the corresponding screen numbers by
+        # construction), so direct the operator there rather than crash on a
+        # registry miss.
+        sys.stderr.write(
+            "d1 has no standalone pilot: run the d1 EVAL anchor instead, e.g. "
+            "`whetstone-validate --root <root> --live cell --optimizer eval "
+            "--env d1 --input-arm <arm> --official-n <N>`. The d1 naive probe "
+            "reproduces the screen's direct-arm numbers by construction.\n"
+        )
+        return 2
     if args.env == ED1_ENV_NAME:
         return _run_ed1_pilot(args)
     # Resolve the task model the same way a cell does: explicit --task-model
@@ -997,6 +1024,7 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
         ),
         budget_ratio=_dry_budget_ratio,
         blend_config=_dry_blend,
+        input_arm=getattr(args, "input_arm", "original"),
     )
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
@@ -1230,6 +1258,7 @@ def _build_cell_config(
         budget_ratio=ed1_budget_ratio,
         ed1_exclude_task_ids=ed1_exclude,
         ed1_blend_config=ed1_blend_config,
+        d1_input_arm=getattr(args, "input_arm", "original"),
     )
     return config, task_route
 
