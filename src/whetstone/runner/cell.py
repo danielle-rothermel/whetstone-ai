@@ -817,6 +817,10 @@ def run_cell(
         )
 
     # --- 3. Best-candidate official eval on the SAME official Eval Config. ---
+    # The best candidate may be a PROPOSED template (non-canonical), so its
+    # official render is guarded (a residual render KeyError fails its rows as
+    # a typed failure, never a cell crash). Intake validation already rejected
+    # any bad-placeholder candidate, so a valid winner renders normally.
     best = evaluate_split(
         experiment,
         candidate=opt.best_candidate,
@@ -830,6 +834,7 @@ def run_cell(
         execution_mode=config.execution_mode,
         fanout=_fanout(),
         partial_log=partial_log,
+        render_guard=True,
     )
     _observe(best)
     best_score = best.score
@@ -933,6 +938,7 @@ def run_cell(
                 policy=experiment.completeness_policy,
                 repeats=official_repeats, store=backing,
                 execution_mode=config.execution_mode, fanout=_fanout(),
+                render_guard=True,
             )
             _observe(extra_best)
             naive_per_task, naive_counts = _pool_per_task(

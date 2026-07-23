@@ -48,7 +48,10 @@ from whetstone.graph.nodes import (
     llm_call_node_definition,
     llm_call_variable_assignment,
 )
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.mutation import (
+    MUTATION_FIELD,
+    template_placeholder_fields,
+)
 from whetstone.optimization.schema import Candidate
 
 #: The Provider Call Config schema name (referenced by the LLM Call Node's
@@ -225,6 +228,33 @@ def render_prompt(
     return env.surface.render(template, instance)
 
 
+def valid_prompt_input_keys(
+    env: EnvSpec, instance: Instance
+) -> frozenset[str]:
+    """The keyword fields a candidate template may reference for ``env``.
+
+    Derived (never hardcoded per-env) from two authoritative sources already
+    available at the optimizer seam:
+
+    * ``instance.prompt_inputs`` keys -- the exact keyword inputs the render
+      binds (``env.surface.render`` formats against these), and
+    * the placeholder fields of the env's OWN naive/ceiling probe templates --
+      known-good renders. This covers envs whose render translates keys (c19's
+      surface renders ``{fact_line}`` from the public ``fact_type`` input, and
+      c11's ceiling template carries example-JSON braces its literal-replace
+      render tolerates), so a legitimate candidate mimicking the env's own
+      templates is never spuriously rejected.
+
+    A candidate placeholder outside this set (e.g. c22's ``{question}``) cannot
+    be filled by the render and would raise the probe surface's loud
+    ``KeyError`` -- so the intake validator rejects it before any eval spend.
+    """
+    keys: set[str] = set(dict(instance.prompt_inputs).keys())
+    keys.update(template_placeholder_fields(env.surface.naive_template))
+    keys.update(template_placeholder_fields(env.surface.ceiling_template))
+    return frozenset(keys)
+
+
 def env_task_for(env: EnvSpec, instance: Instance) -> EnvTask:
     """Wrap an env instance as an :class:`EnvTask` (Graph External Inputs +
     evaluation inputs)."""
@@ -245,4 +275,5 @@ __all__ = [
     "initial_candidate",
     "llm_eval_graph_definition",
     "render_prompt",
+    "valid_prompt_input_keys",
 ]

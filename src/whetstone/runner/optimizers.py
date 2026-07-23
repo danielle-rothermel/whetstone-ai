@@ -36,8 +36,13 @@ from dr_store import MemoryBackend, ObjectStore
 from whetstone_envs.core import Instance
 
 from whetstone.envs.factory import EnvExperiment
+from whetstone.envs.registry import env_spec
+from whetstone.envs.rollout_definition import valid_prompt_input_keys
 from whetstone.execution.fanout import FanoutConfig
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.mutation import (
+    MUTATION_FIELD,
+    invalid_template_placeholders,
+)
 from whetstone.optimization.proposer import (
     ProposalRequest,
     ProposerConfig,
@@ -50,6 +55,7 @@ from whetstone.runner.eval_run import SplitEvaluation, evaluate_split
 from whetstone.runner.execution_mode import ExecutionMode
 
 __all__ = [
+    "INVALID_TEMPLATE_PLACEHOLDERS",
     "OPTIMIZERS",
     "OptimizeResult",
     "ProposalStep",
@@ -174,15 +180,35 @@ def scaling_help() -> str:
     return "\n".join(lines)
 
 
+#: The typed rejection reason for a candidate whose template references a
+#: placeholder the env's render cannot fill. Recorded on the rejected
+#: :class:`ProposalStep` so the offending fields are visible in step evidence.
+INVALID_TEMPLATE_PLACEHOLDERS = "invalid_template_placeholders"
+
+
 @dataclass(frozen=True, slots=True)
 class ProposalStep:
-    """One proposal round's evaluated candidate + its internal Reward."""
+    """One proposal round's evaluated candidate + its internal Reward.
+
+    A candidate REJECTED at intake (its template references a placeholder the
+    env's render cannot fill) carries ``evaluation is None``,
+    ``internal_score is None``, a typed ``rejected_reason`` and the offending
+    ``rejected_fields`` -- it spent NO eval calls and is never selectable as
+    best, but is recorded here so the rejection is counted, not silently
+    dropped.
+    """
 
     step_index: int
     candidate_id: str
     template: str
     internal_score: float | None
-    evaluation: SplitEvaluation
+    evaluation: SplitEvaluation | None
+    rejected_reason: str | None = None
+    rejected_fields: tuple[str, ...] = ()
+
+    @property
+    def rejected(self) -> bool:
+        return self.rejected_reason is not None
 
 
 @dataclass(slots=True)
@@ -204,12 +230,18 @@ class OptimizeResult:
 
     @property
     def internal_evals_count(self) -> int:
-        # Baseline internal eval + one per proposal step.
-        return 1 + len(self.steps)
+        # Baseline internal eval + one per EVALUATED (non-rejected) step. A
+        # rejected candidate spent no eval calls, so it does not count here.
+        return 1 + sum(1 for step in self.steps if not step.rejected)
 
     @property
     def optimizer_steps(self) -> int:
         return len(self.steps)
+
+    @property
+    def rejected_candidate_count(self) -> int:
+        """How many drafted candidates were rejected at intake (visible)."""
+        return sum(1 for step in self.steps if step.rejected)
 
 
 def _proposal_rounds(hyper: dict[str, Any]) -> tuple[int, int]:
@@ -295,6 +327,16 @@ def run_optimize(
     best_score = baseline_eval.score
     steps: list[ProposalStep] = []
 
+    # The keyword fields a candidate template may safely reference, derived
+    # (never hardcoded) from the env definition + a sample of the split we will
+    # actually render against. PROPOSED templates are untrusted LLM output: a
+    # candidate naming a field the render cannot fill (e.g. c22's {question})
+    # is rejected at intake below, before it spends any eval calls -- the c22
+    # crash was an unhandled render KeyError that killed the whole cell.
+    env = env_spec(experiment.env_name)
+    sample = scoped[0] if scoped else internal_instances[0]
+    valid_keys = valid_prompt_input_keys(env, sample)
+
     breadth, depth = _proposal_rounds(hyper)
     ordinal = 0
     base_template = str(naive.payload[MUTATION_FIELD])
@@ -316,8 +358,31 @@ def run_optimize(
             if not template.strip():
                 continue  # an empty draft cannot fill the surface
             ordinal += 1
+            candidate_id = f"{optimizer}-p{ordinal}"
+
+            # Intake validation: an untrusted proposed template that references
+            # a placeholder the render cannot fill is REJECTED here without any
+            # eval spend. It is recorded as a failed step (internal_score=None,
+            # evaluation=None) with a typed reason + the offending fields, so
+            # the optimizer continues, the candidate is never selected as best,
+            # and the rejection is counted rather than silently dropped.
+            offending = invalid_template_placeholders(template, valid_keys)
+            if offending:
+                steps.append(
+                    ProposalStep(
+                        step_index=ordinal,
+                        candidate_id=candidate_id,
+                        template=template,
+                        internal_score=None,
+                        evaluation=None,
+                        rejected_reason=INVALID_TEMPLATE_PLACEHOLDERS,
+                        rejected_fields=offending,
+                    )
+                )
+                continue
+
             candidate = Candidate(
-                candidate_id=f"{optimizer}-p{ordinal}",
+                candidate_id=candidate_id,
                 base_ref=naive.base_ref,
                 payload={MUTATION_FIELD: template},
             )
@@ -333,6 +398,7 @@ def run_optimize(
                 execution_mode=execution_mode,
                 fanout=fanout,
                 apply_reward=needs_reward,
+                render_guard=True,
             )
             steps.append(
                 ProposalStep(

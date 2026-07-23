@@ -35,7 +35,9 @@ from tests.envs.support import _prompt_of, _response, transport_policy
 from whetstone.envs.internal_eval import run_internal_eval
 from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import CandidateEvaluationFailure
+from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.reward import Reward
+from whetstone.optimization.schema import Candidate
 from whetstone.runner.cell import CellConfig, run_cell
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
@@ -259,6 +261,62 @@ def test_searching_cell_incomplete_internal_arm_not_raw_exit(
     ).exists()
     # The incomplete cell must NOT poison the per-env official cache.
     assert ledger.env_cache_for(env, task_model=TASK_MODEL) is None
+
+
+# --- Belt-and-braces: a residual render KeyError on a NON-canonical template
+#     fails that candidate's rows as a typed failure, never a cell crash. ---
+
+
+def _bad_candidate(exp) -> Candidate:
+    """A candidate whose template names an unfillable placeholder ({nope})."""
+    return Candidate(
+        candidate_id="bad-p1",
+        base_ref=exp.initial_candidate.base_ref,
+        payload={MUTATION_FIELD: "junk {nope} tail"},
+    )
+
+
+def test_render_guard_fails_candidate_row_not_the_cell() -> None:
+    # A candidate template whose placeholder the render cannot fill would raise
+    # a loud KeyError from the env probe surface (the c22 crash). Under the
+    # guarded (candidate) path the render KeyError is caught: every row lands
+    # as a typed RENDER_FAILURE_CODE failure and the aggregate is visibly
+    # incomplete (score None) -- NOT a process crash. No provider call is made.
+    exp = tiny_experiment("c22")  # str.format render -> the true c22 KeyError
+    served: list[int] = [0]
+
+    def _reply(_prompt: str) -> str:  # pragma: no cover - never reached
+        served[0] += 1
+        return "unused"
+
+    result = run_internal_eval(
+        exp, candidate=_bad_candidate(exp),
+        instances=exp.eval_configs.internal.instances,
+        execution_policy=runner_execution_policy(),
+        transport=_FailMatchingInputs(fail_inputs=frozenset(), reply=_reply),
+        repeats=2, apply_reward=False, render_guard=True,
+    )
+    # Every planned row failed at render; the aggregate is incomplete, not a
+    # crash, and no provider call was ever dispatched.
+    assert result.aggregate.rows_failed > 0
+    assert result.aggregate.aggregation_output.value is None
+    assert served[0] == 0
+
+
+def test_render_guard_off_keeps_loud_crash_for_canonical() -> None:
+    # Canonical naive/ceiling renders are NOT guarded (render_guard defaults
+    # False): a template-drift KeyError propagates loudly as designed.
+    exp = tiny_experiment("c22")
+    with pytest.raises(KeyError):
+        run_internal_eval(
+            exp, candidate=_bad_candidate(exp),
+            instances=exp.eval_configs.internal.instances,
+            execution_policy=runner_execution_policy(),
+            transport=_FailMatchingInputs(
+                fail_inputs=frozenset(), reply=correct_reply(exp)
+            ),
+            repeats=1, apply_reward=False,
+        )
 
 
 def test_no_reward_avoids_crash_but_searching_still_would_raise() -> None:

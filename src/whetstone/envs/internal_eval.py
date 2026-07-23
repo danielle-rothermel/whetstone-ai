@@ -77,6 +77,14 @@ from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import TransportCall, run_provider_call
 from whetstone.provider.policy import ProviderExecutionPolicy
 
+#: The typed failure code for a candidate row whose NON-canonical template
+#: raised a render ``KeyError`` (an untrusted placeholder the render could not
+#: fill). Belt-and-braces: intake validation rejects such templates before
+#: eval, but if one still reaches render under the guarded (candidate) path it
+#: fails THAT row as a typed failure instead of killing the cell. Canonical
+#: naive/ceiling probe renders are NOT guarded and keep their loud crash.
+RENDER_FAILURE_CODE = "render_key_error"
+
 
 @dataclass(frozen=True, slots=True)
 class InternalEvalResult:
@@ -187,11 +195,30 @@ def _generation_row(
     transport: TransportCall,
     procedure_config_hash: str,
     logical_call_id: str,
+    render_guard: bool = False,
 ) -> _RowOutcome:
-    """Run one repeat: render, call the transport, score via the env oracle."""
+    """Run one repeat: render, call the transport, score via the env oracle.
+
+    When ``render_guard`` is True (a NON-canonical candidate template), a
+    render ``KeyError`` from the env probe surface fails THIS row as a typed
+    :data:`RENDER_FAILURE_CODE` failure -- never a cell-killing crash -- and no
+    provider call is made. When False (canonical naive/ceiling probe), a
+    render ``KeyError`` propagates loudly as the designed template-drift guard.
+    """
     from whetstone.execution.call_support import failure_code_of
 
-    prompt = render_prompt(env, candidate, instance)
+    if render_guard:
+        try:
+            prompt = render_prompt(env, candidate, instance)
+        except KeyError:
+            return _RowOutcome(
+                row=RowValue(failed=True),
+                result=None,
+                score=None,
+                failure_code=RENDER_FAILURE_CODE,
+            )
+    else:
+        prompt = render_prompt(env, candidate, instance)
     result = run_provider_call(
         request=_request(provider_call_config, prompt),
         policy=execution_policy,
@@ -292,6 +319,7 @@ def run_internal_eval(
     partial_log: PartialLog | None = None,
     partial_phase: str = "cell",
     apply_reward: bool = True,
+    render_guard: bool = False,
 ) -> InternalEvalResult:
     """Evaluate ``candidate`` over ``instances`` (internal or official split).
 
@@ -366,6 +394,7 @@ def run_internal_eval(
                 partial_instance_id=str(instance.id),
                 partial_unit=unit,
                 repeat_id=index,
+                render_guard=render_guard,
             ),
             deadline_seconds=guard_deadline_seconds(execution_policy),
         )
@@ -513,6 +542,7 @@ def _row_thunk(
     partial_instance_id: str,
     partial_unit: str,
     repeat_id: int,
+    render_guard: bool = False,
 ) -> Callable[[], _RowOutcome]:
     """A zero-arg thunk running one repeat (the fan-out unit of work).
 
@@ -532,6 +562,7 @@ def _row_thunk(
             transport=transport,
             procedure_config_hash=procedure_config_hash,
             logical_call_id=logical_call_id,
+            render_guard=render_guard,
         )
         if partial_log is not None:
             prompt_t, completion_t, total_t = _usage_of(outcome.result)
@@ -628,6 +659,7 @@ def _restore_recorded(
 
 
 __all__ = [
+    "RENDER_FAILURE_CODE",
     "InternalEvalResult",
     "run_internal_eval",
 ]

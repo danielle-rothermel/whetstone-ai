@@ -17,16 +17,81 @@ attempt cap or fails the Step per its cardinality rule.
 
 from __future__ import annotations
 
+import string
+from collections.abc import Iterable
+
 from whetstone.optimization.schema import Candidate
 
 __all__ = [
     "MUTATION_FIELD",
+    "POSITIONAL_FIELD_TOKEN",
     "DiffCheckError",
     "diff_check",
+    "invalid_template_placeholders",
+    "template_placeholder_fields",
 ]
 
 # The single allowed mutation field across every optimizing run here.
 MUTATION_FIELD = "user_prompt_template"
+
+#: The reported token for a positional (``{}``) or index (``{0}``) format
+#: field. A render restricted to keyword ``prompt_inputs`` can never fill a
+#: positional field, so any positional field is an invalid placeholder; it is
+#: surfaced under this stable token so a rejection reason names it readably.
+POSITIONAL_FIELD_TOKEN = "<positional>"
+
+
+def template_placeholder_fields(template: str) -> tuple[str, ...]:
+    """The ordered ``str.format`` placeholder fields a template references.
+
+    Parses ``template`` with :func:`string.Formatter().parse` -- the exact
+    engine ``str.format`` uses at render time -- so the fields returned are the
+    ones a render would try to fill. Escaped ``{{``/``}}`` literals carry no
+    field and are skipped. A positional (``{}``) or index (``{0}``) field is
+    reported as :data:`POSITIONAL_FIELD_TOKEN`, since a keyword-only render
+    over ``prompt_inputs`` can never fill it. Only the top-level field NAME is
+    reported (an attribute/index suffix like ``{grid[0]}`` -> ``grid``),
+    because that is the key the render's ``**prompt_inputs`` lookup uses.
+    """
+    fields: list[str] = []
+    for _literal, field_name, _spec, _conv in string.Formatter().parse(
+        template
+    ):
+        if field_name is None:
+            continue  # a literal run (or an escaped brace), no field
+        if field_name == "":
+            fields.append(POSITIONAL_FIELD_TOKEN)
+            continue
+        # Strip an attribute/index suffix: ``grid[0]``/``grid.x`` -> ``grid``.
+        head = field_name.replace("[", ".").split(".", 1)[0]
+        if head.isdigit():
+            fields.append(POSITIONAL_FIELD_TOKEN)  # an index field {0}
+        else:
+            fields.append(head)
+    return tuple(fields)
+
+
+def invalid_template_placeholders(
+    template: str, valid_keys: Iterable[str]
+) -> tuple[str, ...]:
+    """The offending placeholder fields a template references but cannot fill.
+
+    ``valid_keys`` are the render's known keyword inputs (the env's public
+    ``prompt_inputs`` keys, plus the fields the env's own probe templates use).
+    Returns the ordered, de-duplicated field names that are NOT valid: an
+    unknown named field, or a positional/index field (reported as
+    :data:`POSITIONAL_FIELD_TOKEN`). Empty tuple means every placeholder is
+    fillable -- the template renders without a ``KeyError``.
+    """
+    allowed = set(valid_keys)
+    offending: list[str] = []
+    seen: set[str] = set()
+    for field_name in template_placeholder_fields(template):
+        if field_name in allowed or field_name in seen:
+            continue
+        seen.add(field_name)
+        offending.append(field_name)
+    return tuple(offending)
 
 
 class DiffCheckError(ValueError):

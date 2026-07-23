@@ -31,6 +31,11 @@ from .support import (
 
 WIN = "WIN_TEMPLATE {input}"
 
+# The live c22 crash shape, reproduced on c11 (whose fixtures score a winner):
+# an untrusted proposer draft with an unknown placeholder ({question}, not one
+# of the env's prompt_inputs keys) beside a valid winning draft ({input}).
+BAD = "Question: {question}\n\nAnswer:"
+
 
 def _pool_n(env: str) -> int:
     n = 1
@@ -94,6 +99,37 @@ def test_cell_improvement_script(tmp_path: Path) -> None:
     assert r.internal_evals_count >= 1
     assert r.spend_usd == pytest.approx(0.5)
     # The ledger line lands.
+    assert len(ledger.cells()) == 1
+
+
+def test_cell_bad_placeholder_candidate_does_not_kill_cell(
+    tmp_path: Path,
+) -> None:
+    # Regression for the live c22 crash: the proposer (openai/gpt-5.4-nano)
+    # emitted a candidate with the unknown placeholder {question}, which is not
+    # one of c22's prompt_inputs keys. Previously the render raised a KeyError
+    # that killed the whole cell with no ledger line. Now the bad candidate is
+    # REJECTED at intake (no eval spend), the run completes, and the valid
+    # winning candidate is selected as best -- a clean ledger line lands.
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env,
+        optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=ScriptedProposer((BAD, WIN)),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg,
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # The cell finalized (no crash) and the valid winner beat the baseline.
+    assert r.status == "improved"
+    assert r.best_official == pytest.approx(1.0)
+    # A ledger line landed (the crash previously produced none).
     assert len(ledger.cells()) == 1
 
 

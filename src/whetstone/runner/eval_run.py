@@ -117,6 +117,7 @@ def evaluate_split(
     fanout: FanoutConfig | None = None,
     partial_log: PartialLog | None = None,
     apply_reward: bool | None = None,
+    render_guard: bool = False,
 ) -> SplitEvaluation:
     """Evaluate ``candidate`` over ``instances`` and persist the aggregate.
 
@@ -143,6 +144,13 @@ def evaluate_split(
     overrides it. Either way, a timed-out observation that leaves an aggregate
     incomplete is then visible incompleteness in the aggregate/per-task rows,
     never a Reward-policy crash.
+
+    ``render_guard`` is the belt-and-braces render guard for NON-canonical
+    (proposed candidate) templates: when True, a render ``KeyError`` escaping
+    the env probe surface fails THAT candidate's row as a typed failure rather
+    than killing the cell. It defaults False so canonical naive/ceiling probe
+    renders keep their loud template-drift crash. Intake validation already
+    rejects bad candidate templates before eval; this guards any residual.
     """
     is_official = split_role == "official"
     apply_reward_resolved = (
@@ -160,6 +168,7 @@ def evaluate_split(
         partial_log=partial_log,
         partial_phase="cell",
         apply_reward=apply_reward_resolved,
+        render_guard=render_guard,
     )
     aggregate = result.aggregate
     backing = store or ObjectStore(MemoryBackend())

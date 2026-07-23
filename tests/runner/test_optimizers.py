@@ -6,6 +6,7 @@ import pytest
 
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.runner.optimizers import (
+    INVALID_TEMPLATE_PLACEHOLDERS,
     OPTIMIZERS,
     hyperparameters_for,
     run_optimize,
@@ -25,6 +26,14 @@ from .support import (
 )
 
 WIN = "WIN_TEMPLATE {input}"
+
+# The live c22 crash shape, reproduced on c11 (whose fixtures score a winner):
+# an untrusted proposer draft carries a placeholder ({question}) that is NOT
+# one of the env's prompt_inputs keys (c11's only key is {input}), exactly as
+# c22's {question} was not among its {constraints_block} inputs. Rendering it
+# would raise the probe surface's loud KeyError and kill the cell -- so it must
+# be rejected at intake, before any eval spend.
+BAD = "Question: {question}\n\nAnswer:"
 
 
 def test_all_optimizers_have_brief_hyperparameters() -> None:
@@ -139,3 +148,59 @@ def test_proposer_route_identity_distinct_from_graph() -> None:
 def test_unknown_optimizer_rejected() -> None:
     with pytest.raises(ValueError, match="unknown optimizer"):
         hyperparameters_for("nope")
+
+
+def test_run_optimize_rejects_bad_placeholder_without_eval_spend() -> None:
+    # The c22 crash shape: the proposer emits an unknown-placeholder draft
+    # ({question}) AND a valid winning draft. The bad draft is REJECTED at
+    # intake (no eval spend), recorded with the typed reason + offending field,
+    # and the valid candidate is selected as best -- the run completes.
+    exp = tiny_experiment("c11")
+    transport = FakeTransport(reply=improvement_reply(exp, WIN))
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        # breadth is 4; the first two drafts are scripted, the rest padded.
+        proposer_transport=ScriptedProposer((BAD, WIN)),
+        rollout_transport=transport,
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    rejected = [s for s in result.steps if s.rejected]
+    assert rejected, "the bad-placeholder draft must be recorded as rejected"
+    bad = next(s for s in rejected if "question" in s.rejected_fields)
+    assert bad.rejected_reason == INVALID_TEMPLATE_PLACEHOLDERS
+    assert bad.rejected_fields == ("question",)
+    assert bad.evaluation is None and bad.internal_score is None
+    # The rejected candidate is never selected as best.
+    assert result.best_candidate.payload[MUTATION_FIELD] != BAD
+    assert result.best_candidate.payload[MUTATION_FIELD] == WIN
+    assert result.best_internal_score == pytest.approx(1.0)
+    assert result.rejected_candidate_count == len(rejected)
+    # A rejected candidate spent NO eval call: internal_evals_count skips it.
+    evaluated = [s for s in result.steps if not s.rejected]
+    assert result.internal_evals_count == 1 + len(evaluated)
+
+
+def test_run_optimize_all_drafts_bad_keeps_naive_best() -> None:
+    # Every proposed template is unknown-placeholder junk: all are rejected and
+    # the naive Initial Candidate remains best (never crashes, never selects a
+    # rejected candidate).
+    exp = tiny_experiment("c11")
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=ScriptedProposer((BAD, "{another_unknown}")),
+        rollout_transport=FakeTransport(reply=no_improvement_reply(exp)),
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    assert result.rejected_candidate_count >= 1
+    assert (
+        result.best_candidate.candidate_id
+        == exp.initial_candidate.candidate_id
+    )
