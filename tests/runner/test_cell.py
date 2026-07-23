@@ -727,3 +727,127 @@ def test_cell_rollout_sidecar_covers_eval_row_official_arms(
     roles = {row["split_role"] for row in rows}
     assert "official_naive" in roles
     assert "official_ceiling" in roles
+
+
+def _big_internal_config(optimizer: str, exp, power_config):
+    # A c11 cell with a 12-task INTERNAL split so MIPROv2's 8-task minibatch is
+    # below the pool (the analysis shape) and the power stage can recommend a
+    # larger n than the brief. WIN scores gold under improvement_reply.
+    return CellConfig(
+        optimizer=optimizer, env="c11", lane="openrouter", attempt=0,
+        task_model=TASK_MODEL, proposer_model=PROPOSER_MODEL, canonical=True,
+        proposer_config=proposer_config(),
+        proposer_transport=ScriptedProposer((WIN,)),
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        execution_policy=runner_execution_policy(),
+        repeats=3, pool_n_per_stratum=4, split_sizes=(12, 2, 2),
+        execution_mode=ExecutionMode.IN_PROCESS,
+        power_config=power_config,
+    )
+
+
+def test_power_stage_applies_recommended_repeats_to_internal_evals(
+    tmp_path: Path,
+) -> None:
+    # The power recommendation is APPLIED (not just recorded): the internal
+    # candidate evals actually run at used_repeats x used_n_tasks. Verified via
+    # the rollout-output sidecar (task 8), whose internal rows reflect the
+    # actual repeats/tasks driven.
+    import json
+
+    from whetstone.envs.factory import build_env_experiment
+    from whetstone.runner.power import PowerConfig
+
+    exp = build_env_experiment(
+        "c11", model=TASK_MODEL, pool_n_per_stratum=4, split_sizes=(12, 2, 2),
+    )
+    cfg = _big_internal_config(
+        "copro", exp,
+        PowerConfig(alpha=0.25, repeat_cap=5, trials=300, seed=5),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    ps = r.power_sizing
+    assert ps is not None
+    # The internal candidate eval rows actually driven reflect the APPLIED
+    # sizes: max repeat index == used_repeats - 1, distinct tasks == used_n.
+    rows = [
+        json.loads(line)
+        for line in ledger.rollout_outputs_path(r.cell_id)
+        .read_text().splitlines()
+    ]
+    internal = [
+        row for row in rows if row["split_role"] == "internal_candidate"
+    ]
+    assert internal, "the power-sized internal candidate evals must have run"
+    max_repeat = max(row["repeat"] for row in internal)
+    distinct_tasks = {row["instance_id"] for row in internal}
+    assert max_repeat + 1 == ps.used_repeats  # repeats APPLIED
+    assert len(distinct_tasks) == ps.used_n_tasks  # task count APPLIED
+    # The trace records the APPLIED repeat count (not config.repeats) + source.
+    trace = json.loads(
+        ledger.optimization_trace_path(r.cell_id).read_text()
+    )
+    assert trace["internal_task_count_source"] == "power_stage"
+    assert trace["internal_repeat_count_as_run"] == ps.used_repeats
+    assert trace["internal_task_count_scaled"] == ps.used_n_tasks
+
+
+def test_power_stage_overrides_miprov2_minibatch(tmp_path: Path) -> None:
+    # MIPROv2's internal_task_count is PINNED at the 8-task minibatch no matter
+    # the pool (the analysis's weakest link). With the power stage on, the
+    # recommended n_tasks (up to the pool) OVERRIDES that minibatch -- the used
+    # task count comes from the recommendation, not the fixed 8.
+    import json
+
+    from whetstone.envs.factory import build_env_experiment
+    from whetstone.runner.optimizers import scaled_hyperparameters
+    from whetstone.runner.power import PowerConfig
+
+    exp = build_env_experiment(
+        "c11", model=TASK_MODEL, pool_n_per_stratum=4, split_sizes=(12, 2, 2),
+    )
+    pool = len(exp.eval_configs.internal.instances)
+    assert pool == 12
+    # Sanity: WITHOUT the power stage MIPROv2 would clamp to the 8-task
+    # minibatch (below the pool of 12) -- the analysis's weak spot.
+    brief = scaled_hyperparameters("miprov2", internal_pool_size=pool)
+    assert brief["internal_task_count_scaled"] == 8
+
+    cfg = _big_internal_config(
+        "miprov2", exp,
+        PowerConfig(alpha=0.25, repeat_cap=5, trials=300, seed=5),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    ps = r.power_sizing
+    assert ps is not None
+    trace = json.loads(
+        ledger.optimization_trace_path(r.cell_id).read_text()
+    )
+    # The used internal task count is the power recommendation (clamped to
+    # pool), NOT the brief's fixed 8-task minibatch.
+    assert trace["internal_task_count_source"] == "power_stage"
+    assert trace["internal_task_count_scaled"] == ps.used_n_tasks
+    # The brief minibatch (8) is retained for the recommended-vs-used record,
+    # and the APPLIED value came from the power rec, not the fixed 8.
+    assert trace["internal_task_count_brief"] == 8
+    # The applied task count is what the internal evals actually ran on.
+    rows = [
+        json.loads(line)
+        for line in ledger.rollout_outputs_path(r.cell_id)
+        .read_text().splitlines()
+    ]
+    internal_tasks = {
+        row["instance_id"] for row in rows
+        if row["split_role"] in ("internal_candidate", "internal_naive")
+    }
+    assert len(internal_tasks) == ps.used_n_tasks

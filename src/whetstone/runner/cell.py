@@ -340,6 +340,7 @@ def _write_optimization_trace(
     opt: OptimizeResult | None,
     failure_detail: str | None = None,
     outputs_ref: str | None = None,
+    internal_repeats: int | None = None,
 ) -> str:
     """Persist the per-cell optimizer-search trace; return its ledger ref.
 
@@ -362,10 +363,15 @@ def _write_optimization_trace(
         "status": status,
         "task_model": config.task_model,
         "proposer_model": config.proposer_model,
-        # The as-run internal repeat count (CellConfig.repeats default 3); the
-        # briefs' documented internal repeat_count=1 is NOT what the runner
-        # drives, so the trace records the value analysis must use.
-        "internal_repeat_count_as_run": config.repeats,
+        # The as-run internal repeat count actually driven: the power stage's
+        # applied ``used_repeats`` when it ran, else ``config.repeats`` (dflt
+        # 3). The briefs' documented internal repeat_count=1 is NOT what the
+        # runner drives, so the trace records the value analysis must use.
+        "internal_repeat_count_as_run": (
+            internal_repeats
+            if internal_repeats is not None
+            else config.repeats
+        ),
         # The per-cell rollout-output sidecar (FULL prompt->output text +
         # scores), referenced so the qualitative outputs are discoverable from
         # the trace. ``None`` when no rows were driven (fully resumed cell).
@@ -1452,7 +1458,7 @@ def run_cell(
     # optimization_result_ref at it so the search is auditable from disk.
     trace_ref = _write_optimization_trace(
         ledger, cell_id=cell_id, config=config, status=status, opt=opt,
-        outputs_ref=outputs_ref,
+        outputs_ref=outputs_ref, internal_repeats=internal_repeats,
     )
 
     record = CellRecord(

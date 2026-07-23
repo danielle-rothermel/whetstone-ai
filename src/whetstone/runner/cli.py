@@ -67,7 +67,11 @@ from whetstone.runner.pilot import (
     PilotReport,
     run_pilot,
 )
-from whetstone.runner.power import DEFAULT_ALPHA, PowerConfig
+from whetstone.runner.power import (
+    DEFAULT_ALPHA,
+    DEFAULT_REPEAT_CAP,
+    PowerConfig,
+)
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     LANE_NAMES,
@@ -306,6 +310,21 @@ def build_parser() -> argparse.ArgumentParser:
             "recommendation (clamped to pool; recommended-vs-used recorded). "
             "ABSENT (the default), behavior + internal-eval sizes are "
             "byte-identical to a run without it."
+        ),
+    )
+    cell.add_argument(
+        "--power-repeat-cap",
+        type=int,
+        default=DEFAULT_REPEAT_CAP,
+        metavar="R",
+        help=(
+            "the maximum internal repeats the power stage's (n x r) grid "
+            f"searches + may recommend (default {DEFAULT_REPEAT_CAP}). Raise "
+            "it for a repeat-noise-dominated env whose recommendation needs "
+            "more repeats than the default (e.g. c22 rescue ~r=11 fits within "
+            "20; a tighter target may need more). Only takes effect with "
+            "--power-stage; the recommended repeats are APPLIED to the "
+            "optimizer's internal evals, not just recorded."
         ),
     )
     cell.add_argument(
@@ -906,13 +925,16 @@ def _power_config_for(args: argparse.Namespace) -> PowerConfig | None:
     """The opt-in power-stage config, or ``None`` (the strict default = OFF).
 
     ``--power-stage`` with no value uses the default alpha; ``--power-stage
-    0.3`` sets alpha=0.3. Absent, returns ``None`` -- the power stage does not
-    run and the cell is byte-identical to a run without it.
+    0.3`` sets alpha=0.3. ``--power-repeat-cap`` sets the (n x r) grid's repeat
+    ceiling (default unchanged). Absent ``--power-stage``, returns ``None`` --
+    the power stage does not run and the cell is byte-identical to a run
+    without it.
     """
     alpha = getattr(args, "power_stage", None)
     if alpha is None:
         return None
-    return PowerConfig(alpha=float(alpha))
+    repeat_cap = getattr(args, "power_repeat_cap", DEFAULT_REPEAT_CAP)
+    return PowerConfig(alpha=float(alpha), repeat_cap=int(repeat_cap))
 
 
 def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live

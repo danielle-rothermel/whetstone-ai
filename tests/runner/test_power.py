@@ -132,6 +132,29 @@ def test_pool_limited_verdict_is_loud_not_silently_clamped() -> None:
     assert rec.achieved_mdd == pytest.approx(rec.best_achievable_mdd)
 
 
+def test_repeat_cap_changes_the_grid_and_the_c22_verdict() -> None:
+    # The repeat cap bounds the (n x r) grid AND can flip the verdict: c22
+    # (repeat-noise-dominated) is POOL-LIMITED at a low cap but ACHIEVABLE once
+    # the cap admits enough repeats (~r=11) -- the exact coordinator concern.
+    low = analyze_power(
+        naive_per_task=_C22_NAIVE, ceiling_per_task=_C22_CEILING,
+        pool_ceiling=12, anchor_repeats=3, config=PowerConfig(repeat_cap=6),
+    )
+    high = analyze_power(
+        naive_per_task=_C22_NAIVE, ceiling_per_task=_C22_CEILING,
+        pool_ceiling=12, anchor_repeats=3, config=PowerConfig(repeat_cap=20),
+    )
+    # The grid's repeat extent follows the cap.
+    assert max(r["repeats"] for r in low.surface) == 6
+    assert max(r["repeats"] for r in high.surface) == 20
+    # Low cap: pool-limited (best repeats == the cap). High cap: achievable
+    # with repeats the low cap could not reach.
+    assert low.recommendation.pool_limited is True
+    assert low.recommendation.best_repeats == 6
+    assert high.recommendation.achievable is True
+    assert high.recommendation.recommended_repeats > 6
+
+
 def test_surface_covers_full_grid_and_cost_model() -> None:
     res = analyze_power(
         naive_per_task=_C22_NAIVE, ceiling_per_task=_C22_CEILING,
