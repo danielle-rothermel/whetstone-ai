@@ -67,10 +67,12 @@ from whetstone.envs.ed1 import (
     ED1_COMPRESSION_NAME,
     ED1_PASS_RATE_NAME,
     Ed1Experiment,
+    ed1_reward_from_blended,
     ed1_reward_from_pass_rate,
     humaneval_task_from_instance,
     render_encoder_frame,
 )
+from whetstone.envs.ed1_blended import blend_per_task
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.envs.internal_eval import RolloutOutput
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
@@ -131,10 +133,16 @@ class Ed1EvalResult:
     pass_aggregate: RolloutAggregate
     compression_aggregate: RolloutAggregate
     reward: Reward | None
+    #: The CI vector: the PER-TASK BLENDED reward when a blend config is set,
+    #: else the per-task pass mean (task 22). The paired bootstrap uses this.
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     per_task_compression: tuple[float | None, ...]
-    outputs: tuple[RolloutOutput, ...]
+    #: The raw per-task pass mean, ALWAYS reported separately (even when
+    #: per_task_scores carries the blend), so pass rate + compression stay
+    #: visible components in traces/sidecars/cells.
+    per_task_pass: tuple[float, ...] = ()
+    outputs: tuple[RolloutOutput, ...] = ()
     row_diags: tuple[Ed1RowDiag, ...] = ()
 
 
@@ -230,7 +238,9 @@ def _sum_telemetry(a: CallTelemetry, b: CallTelemetry) -> CallTelemetry:
     )
 
 
-def _render_encoder(body: str, *, input_code: str, max_budget: int) -> str:
+def _render_encoder(
+    body: str, *, input_code: str, max_budget: int | None
+) -> str:
     """Render the encoder prompt: the immutable frame around a strategy body.
 
     ``body`` is the Mutation-Surface payload (the strategy sentence ONLY); the
@@ -259,7 +269,10 @@ def _drive_row(
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
     assert rd is not None
-    max_budget = _max_budget(input_code, rd.budget_rule)
+    # NO-BUDGET frame (task 22.4): budget_rule None -> no MAX_BUDGET, no budget
+    # sentence rendered (render_encoder_frame drops the clause on None).
+    rule = rd.budget_rule
+    max_budget = None if rule is None else _max_budget(input_code, rule)
     try:
         encoder_prompt = _render_encoder(
             candidate_template, input_code=input_code, max_budget=max_budget
@@ -752,21 +765,51 @@ def run_ed1_eval(
         eval_config_hash=eval_config_hash, per_task_rows=comp_rows,
         repeats=repeats, policy=completeness,
     )
-    reward = (
-        ed1_reward_from_pass_rate(
-            experiment.reward_policy,
-            pass_rate=pass_aggregate.aggregation_output.value,
+
+    # Task 22: the weighted-blend reward. When a blend config is set, the
+    # CERTIFICATION metric + the per-task CI vector are the PER-TASK blended
+    # reward (pass rate + compression ALWAYS also reported separately). The
+    # blend is composed PER TASK, so the paired bootstrap operates on blended
+    # rewards exactly as env_exact_match does for QA. Pass-only (blend None)
+    # keeps the historical per_task_scores = per-task pass mean.
+    blend_config = experiment.blend_config
+    pass_scores = tuple(per_task_scores)
+    if blend_config is not None:
+        reward_scores = blend_per_task(
+            pass_scores, tuple(per_task_compression), blend_config
         )
-        if apply_reward
-        else None
-    )
+    else:
+        reward_scores = pass_scores
+
+    if apply_reward:
+        if blend_config is not None:
+            # The aggregate blended reward = MEAN over tasks of the per-task
+            # blended rewards (unweighted mean over the tasks with a present
+            # pass mean; a fully-failed task (pass mean 0) still counts,
+            # matching the pass-aggregate's completeness handling).
+            mean_blended = (
+                sum(reward_scores) / len(reward_scores)
+                if reward_scores else None
+            )
+            reward = ed1_reward_from_blended(
+                blend_config, blended=mean_blended
+            )
+        else:
+            reward = ed1_reward_from_pass_rate(
+                experiment.reward_policy,
+                pass_rate=pass_aggregate.aggregation_output.value,
+            )
+    else:
+        reward = None
     return Ed1EvalResult(
         pass_aggregate=pass_aggregate,
         compression_aggregate=compression_aggregate,
         reward=reward,
-        per_task_scores=tuple(per_task_scores),
+        # The CI vector: blended reward per task when blending, else pass mean.
+        per_task_scores=reward_scores,
         per_task_counts=tuple(per_task_counts),
         per_task_compression=tuple(per_task_compression),
+        per_task_pass=pass_scores,
         outputs=tuple(outputs),
         row_diags=tuple(row_diags),
     )

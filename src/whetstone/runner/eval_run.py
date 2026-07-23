@@ -100,6 +100,10 @@ class SplitEvaluation:
     #: /
     #: dual-score reporting; empty for QA envs.
     per_task_compression: tuple[float | None, ...] = ()
+    #: The ed1 blended-reward certification value (task 22): when set, score
+    #: IS this blend and ``pass_score`` carries the pass rate SEPARATELY. When
+    #: ``None`` (pass-only or QA), ``score`` is the pass rate itself.
+    pass_score: float | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -296,6 +300,20 @@ def _evaluate_ed1_split(
     )
     pass_agg = ed.pass_aggregate
     comp_agg = ed.compression_aggregate
+    pass_rate = pass_agg.aggregation_output.value
+    # Task 22: when a blend config is set, the CERTIFICATION ``score`` is the
+    # blended-reward aggregate (mean of the per-task blended rewards) and the
+    # pass rate is reported SEPARATELY as ``pass_score``. Pass-only keeps
+    # score == pass rate.
+    blend_active = getattr(experiment, "blend_config", None) is not None
+    if blend_active and ed.per_task_scores:
+        cert_score: float | None = (
+            sum(ed.per_task_scores) / len(ed.per_task_scores)
+        )
+        pass_score: float | None = pass_rate
+    else:
+        cert_score = pass_rate
+        pass_score = None
     backing = store or ObjectStore(MemoryBackend())
     artifact: dict[str, Any] = {
         "schema": ED1_AGGREGATE_ARTIFACT_SCHEMA,
@@ -303,8 +321,12 @@ def _evaluate_ed1_split(
         "candidate_id": candidate.candidate_id,
         "graph_hash": pass_agg.graph_hash,
         "eval_config_hash": pass_agg.eval_config_hash,
-        "pass_rate": pass_agg.aggregation_output.value,
+        "pass_rate": pass_rate,
         "mean_compression_ratio": comp_agg.aggregation_output.value,
+        # The blended certification score (== pass_rate when not blending) +
+        # the blend flag, so the artifact records both components separately.
+        "blended_reward": cert_score,
+        "blend_active": blend_active,
         "task_count": pass_agg.task_count,
         "repeat_count": pass_agg.repeat_count,
         "rows_present": pass_agg.rows_present,
@@ -319,7 +341,10 @@ def _evaluate_ed1_split(
     return SplitEvaluation(
         split_role=split_role,
         candidate_id=candidate.candidate_id,
-        score=pass_agg.aggregation_output.value,
+        # The certification score: the blended reward when blending, else the
+        # pass rate. per_task_scores already carries the blended vector
+        # (so the paired CI operates on blended rewards).
+        score=cert_score,
         aggregate=pass_agg,
         artifact_ref=artifact_ref,
         execution_mode=execution_mode,
@@ -330,4 +355,5 @@ def _evaluate_ed1_split(
         outputs=ed.outputs,
         compression_score=comp_agg.aggregation_output.value,
         per_task_compression=ed.per_task_compression,
+        pass_score=pass_score,
     )

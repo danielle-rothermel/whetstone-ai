@@ -63,7 +63,8 @@ def test_budget_ratio_and_model_fold_into_graph_hash() -> None:
     # A distinct ratio is a distinct Rollout Variant; so is a distinct model.
     assert base.graph_hash != other_ratio.graph_hash
     assert base.graph_hash != other_model.graph_hash
-    assert base.budget_rule.ratio == 0.5
+    rule = base.budget_rule
+    assert rule is not None and rule.ratio == 0.5
 
 
 def test_encoder_and_decoder_share_the_same_route() -> None:
@@ -856,3 +857,126 @@ def test_ed1_per_task_count_matches_qa_planned_repeats_semantics() -> None:
     )
     # The weight is the PLANNED 2 repeats, not the 1 present row.
     assert ed.per_task_counts == (2,)
+
+
+# --- Task 22: blended reward + no-budget frame + guard rail ----------------
+
+
+def test_no_budget_frame_render_drops_budget_line() -> None:
+    # (Task 22.4) budget_ratio=None -> no "Use at most N characters." line, no
+    # MAX_BUDGET; distinct graph_hash from any ratio.
+    from whetstone.envs.ed1 import ENCODER_BODY_A, render_encoder_frame
+
+    rendered = render_encoder_frame(
+        ENCODER_BODY_A, input_code="def f(): pass", max_budget=None
+    )
+    assert "Use at most" not in rendered
+    assert "characters." not in rendered
+    assert "```python\ndef f(): pass\n```" in rendered
+    assert rendered.startswith(ENCODER_BODY_A)
+
+
+def test_no_budget_experiment_distinct_graph_hash() -> None:
+    # (Task 22.4) The no-budget rollout is a DISTINCT graph variant.
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    e_budget = build_ed1_experiment(
+        tasks=tasks, internal_n=2, official_n=1, budget_ratio=0.25,
+    )
+    e_none = build_ed1_experiment(
+        tasks=tasks, internal_n=2, official_n=1, budget_ratio=None,
+    )
+    rd_budget = e_budget.encdec_rollout
+    rd_none = e_none.encdec_rollout
+    assert rd_budget is not None and rd_none is not None
+    assert rd_budget.graph_hash != rd_none.graph_hash
+    assert rd_none.budget_rule is None
+
+
+def test_ed1_optimizer_cell_refuses_pass_only_reward(tmp_path: Path) -> None:
+    # (Task 22.3 guard rail) A searching ed1 cell with NO blend config
+    # is REFUSED before any build/spend.
+    from tests.envs.support import execution_policy
+    from tests.runner.support import proposer_config
+    from whetstone.optimization.proposer import FakeProposerTransport
+    from whetstone.runner.cell import CellConfig, _build_experiment
+    from whetstone.runner.execution_mode import ExecutionMode
+
+    cfg = CellConfig(
+        optimizer="copro", env=ED1_ENV_NAME, lane="openrouter", attempt=0,
+        task_model=ED1_CANONICAL_MODEL, proposer_model="none", canonical=True,
+        proposer_config=proposer_config(),
+        proposer_transport=FakeProposerTransport(script={}, default=()),
+        rollout_transport=_fake_encdec_transport(
+            load_ed1_tasks(prefer_snapshot=True, limit=2)
+        ),
+        execution_policy=execution_policy(max_attempts=1),
+        repeats=1, official_repeats=1,
+        execution_mode=ExecutionMode.IN_PROCESS,
+        budget_ratio=None, ed1_task_limit=2,
+        ed1_blend_config=None,  # the refused condition
+    )
+    with pytest.raises(ValueError, match="REFUSES pass-only reward"):
+        _build_experiment(cfg)
+
+
+def test_ed1_eval_anchor_allows_pass_only() -> None:
+    # (Task 22.3) The eval/identity anchor is EXEMPT from the guard (it derives
+    # no search Reward) -- building it with no blend config is fine.
+    from tests.envs.support import execution_policy
+    from tests.runner.support import proposer_config
+    from whetstone.optimization.proposer import FakeProposerTransport
+    from whetstone.runner.cell import CellConfig, _build_experiment
+    from whetstone.runner.execution_mode import ExecutionMode
+
+    cfg = CellConfig(
+        optimizer="eval", env=ED1_ENV_NAME, lane="openrouter", attempt=0,
+        task_model=ED1_CANONICAL_MODEL, proposer_model="none", canonical=True,
+        proposer_config=proposer_config(),
+        proposer_transport=FakeProposerTransport(script={}, default=()),
+        rollout_transport=_fake_encdec_transport(
+            load_ed1_tasks(prefer_snapshot=True, limit=2)
+        ),
+        execution_policy=execution_policy(max_attempts=1),
+        repeats=1, official_repeats=1,
+        execution_mode=ExecutionMode.IN_PROCESS,
+        budget_ratio=0.5, ed1_task_limit=2, ed1_blend_config=None,
+    )
+    from whetstone.envs.ed1 import Ed1Experiment
+
+    exp = _build_experiment(cfg)  # no raise
+    assert isinstance(exp, Ed1Experiment)
+    assert exp.blend_config is None
+
+
+def test_ed1_blended_reward_drives_per_task_ci_vector() -> None:
+    # (Task 22.1) With a blend config, per_task_scores carries the BLENDED
+    # per-task reward and per_task_pass carries the raw pass rate SEPARATELY;
+    # the reward is the blended aggregate.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1 import ed1_initial_candidate
+    from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+    from whetstone.envs.ed1_eval import run_ed1_eval
+    from whetstone.optimization.mutation import MUTATION_FIELD
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    transport = _fake_encdec_transport(tasks)
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=2, official_n=2, budget_ratio=0.5,
+        blend_config=BoundedCompressionMetricConfig(weight=0.5),
+    )
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template, candidate_id="ed1-naive",
+        instances=exp.eval_configs.official.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=transport, repeats=1, apply_reward=True,
+    )
+    # The pass vector is retained separately from the (blended) CI vector.
+    assert len(ed.per_task_pass) == len(ed.per_task_scores)
+    # All tasks pass (canonical) -> pass vector all 1.0.
+    assert all(p == pytest.approx(1.0) for p in ed.per_task_pass)
+    # The blended per-task scores are <= 1.0 and (with real compression) < 1.0
+    # for a passing task whose compression is not maximally tight.
+    assert all(0.0 <= s <= 1.0 for s in ed.per_task_scores)
+    # A blended reward object was derived.
+    assert ed.reward is not None

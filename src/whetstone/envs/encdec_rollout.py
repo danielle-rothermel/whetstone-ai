@@ -85,7 +85,10 @@ class EncDecRolloutDefinition:
     definition: GraphDefinition
     provider_call_config: ProviderCallConfig
     procedure_config_hash: str
-    budget_ratio: float
+    #: The Character Budget ratio, OR ``None`` for the NO-BUDGET frame variant
+    #: (task 22.4): no budget clause, no MAX_BUDGET. A ``None`` budget yields a
+    #: DISTINCT ``graph_hash`` from any ratio (identity-folded).
+    budget_ratio: float | None
     graph_config: GraphConfig
 
     @property
@@ -94,8 +97,10 @@ class EncDecRolloutDefinition:
         return graph_hash(self.graph_config)
 
     @property
-    def budget_rule(self) -> CharacterBudgetRule:
-        """The Character Budget derivation rule for this graph."""
+    def budget_rule(self) -> CharacterBudgetRule | None:
+        """The Character Budget derivation rule, or ``None`` (no-budget)."""
+        if self.budget_ratio is None:
+            return None
         return CharacterBudgetRule(ratio=self.budget_ratio)
 
 
@@ -135,11 +140,17 @@ def encdec_graph_definition() -> GraphDefinition:
     )
 
 
+#: The encoder Character Budget identity token for the NO-BUDGET frame variant
+#: (task 22.4): a distinct sentinel so a no-budget graph never collides with
+#: ratio's graph_hash.
+_NO_BUDGET_IDENTITY = "no_budget"
+
+
 def build_encdec_graph_config(
     *,
     provider_call_config_hash: str,
     evaluation_procedure_config_hash: str,
-    budget_ratio: float,
+    budget_ratio: float | None,
 ) -> GraphConfig:
     """Materialize the enc-dec Graph Config binding both routes + the budget.
 
@@ -147,15 +158,19 @@ def build_encdec_graph_config(
     ==
     decoder route); the ENCODER additionally carries the Character Budget
     ``ratio`` Variable, so a distinct ``budget_ratio`` yields a distinct
-    ``graph_hash``. The Eval Node carries the code-eval Procedure reference.
+    ``graph_hash``. ``budget_ratio=None`` binds the NO-BUDGET sentinel (a
+    distinct graph). The Eval Node carries the code-eval Procedure reference.
     """
     definition = encdec_graph_definition()
-    budget_rule = CharacterBudgetRule(ratio=budget_ratio)
+    budget_identity = (
+        _NO_BUDGET_IDENTITY if budget_ratio is None
+        else CharacterBudgetRule(ratio=budget_ratio).identity_value()
+    )
     assignments = {
         ENCODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
             provider_call_config_hash=provider_call_config_hash,
-            character_budget_rule=budget_rule.identity_value(),
+            character_budget_rule=budget_identity,
         ),
         DECODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
@@ -178,7 +193,7 @@ def build_encdec_rollout_definition(
     *,
     model: str,
     procedure_config_hash: str,
-    budget_ratio: float,
+    budget_ratio: float | None,
 ) -> EncDecRolloutDefinition:
     """Build the enc-dec Rollout Definition graph for one (model, ratio).
 

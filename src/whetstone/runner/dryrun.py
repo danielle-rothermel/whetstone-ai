@@ -41,6 +41,7 @@ from dr_providers import (
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import ED1_ENV_NAME
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
@@ -224,7 +225,8 @@ def run_dry_cell(
     lane: str = "openrouter",
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
     overrides: SamplingOverrides | None = None,
-    budget_ratio: float = 0.5,
+    budget_ratio: float | None = 0.5,
+    blend_config: BoundedCompressionMetricConfig | None = None,
 ) -> CellOutcome:
     """Run one fake-transport cell end-to-end and append its ledger line.
 
@@ -248,6 +250,7 @@ def run_dry_cell(
         return _run_dry_ed1_cell(
             optimizer=optimizer, root=root, attempt=attempt, lane=lane,
             execution_mode=execution_mode, budget_ratio=budget_ratio,
+            blend_config=blend_config,
         )
     pool_n = _pool_n_per_stratum(env)
     experiment = build_env_experiment(
@@ -341,7 +344,8 @@ def _run_dry_ed1_cell(
     attempt: int,
     lane: str,
     execution_mode: ExecutionMode,
-    budget_ratio: float = 0.5,
+    budget_ratio: float | None = 0.5,
+    blend_config: BoundedCompressionMetricConfig | None = None,
 ) -> CellOutcome:
     """Run one ed1 (enc-dec) fake cell end-to-end (no network, no Docker).
 
@@ -392,6 +396,7 @@ def _run_dry_ed1_cell(
         window_notes="dry-run-fake (no live paid call)",
         budget_ratio=budget_ratio,
         ed1_task_limit=_ED1_DRY_TASK_LIMIT,
+        ed1_blend_config=blend_config,
     )
     ledger = Ledger(root=root)
     ledger.load()

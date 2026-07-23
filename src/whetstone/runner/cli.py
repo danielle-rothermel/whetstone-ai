@@ -32,6 +32,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from whetstone.envs.ed1 import ED1_DEFAULT_BUDGET_RATIO, ED1_ENV_NAME
+from whetstone.envs.ed1_blended import (
+    DEFAULT_COMPRESSION_WEIGHT,
+    BoundedCompressionMetricConfig,
+)
 from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
@@ -373,14 +377,39 @@ def build_parser() -> argparse.ArgumentParser:
     cell.add_argument(
         "--budget-ratio",
         type=float,
-        default=ED1_DEFAULT_BUDGET_RATIO,
+        default=None,
         metavar="R",
         help=(
             "ed1 (enc-dec) ONLY: the per-task Character Budget ratio "
-            f"(MAX_BUDGET = round(R * chars(input_code)), default "
+            f"(MAX_BUDGET = round(R * chars(input_code)); anchor default "
             f"{ED1_DEFAULT_BUDGET_RATIO}). Folds into the enc-dec graph_hash "
-            "via the Character Budget rule (a distinct ratio is a distinct "
-            "Rollout Variant). Ignored by the QA envs."
+            "(a distinct ratio is a distinct Rollout Variant). Ignored by QA "
+            "envs. ed1 OPTIMIZER cells default to NO-BUDGET; pass an explicit "
+            "ratio here to override. See --no-budget."
+        ),
+    )
+    cell.add_argument(
+        "--no-budget",
+        action="store_true",
+        help=(
+            "ed1 (enc-dec) ONLY: use the NO-BUDGET frame (no 'Use at most N "
+            "characters.' line, no MAX_BUDGET; 22.4). The DEFAULT for ed1 "
+            "OPTIMIZER cells -- the blended reward's compression term carries "
+            "the pressure. Distinct graph_hash from any --budget-ratio."
+        ),
+    )
+    cell.add_argument(
+        "--compression-weight",
+        type=float,
+        default=None,
+        metavar="W",
+        help=(
+            "ed1 (enc-dec) ONLY: the weighted-blend reward's compression "
+            "weight in [0,1] (task 22). MANDATORY for ed1 optimizer cells "
+            "(copro/miprov2/gepa/codex) -- they REFUSE pass-only reward; the "
+            f"default when omitted for those is {DEFAULT_COMPRESSION_WEIGHT}. "
+            "Folds into the reward config identity (a distinct weight is a "
+            "distinct comparable config). Set 0 to degenerate to pure pass."
         ),
     )
     cell.add_argument(
@@ -918,6 +947,10 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
         if args.execution_mode
         else detect_execution_mode()
     )
+    # Task 22: the dry-run of an ed1 optimizer cell must ALSO carry the blend +
+    # no-budget resolution so the guard rail is exercised (and dry-runs match
+    # the live cell wiring).
+    _dry_blend, _dry_budget_ratio = _resolve_ed1_reward_and_budget(args)
     outcome = run_dry_cell(
         env=args.env,
         optimizer=args.optimizer,
@@ -929,7 +962,8 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
             official_n=getattr(args, "official_n", None),
             official_repeats=getattr(args, "official_repeats", None),
         ),
-        budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
+        budget_ratio=_dry_budget_ratio,
+        blend_config=_dry_blend,
     )
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
@@ -1014,6 +1048,54 @@ def _proposer_transport_for(
     return _HttpProposerTransport(proposer_route)
 
 
+_ED1_FAMILY = frozenset({ED1_ENV_NAME, "ed1m"})
+_ED1_SEARCHING = frozenset({"copro", "miprov2", "gepa", "codex"})
+
+
+def _resolve_ed1_reward_and_budget(
+    args: argparse.Namespace,
+) -> tuple[BoundedCompressionMetricConfig | None, float | None]:
+    """Resolve ed1 (blend config, budget_ratio) from the cell args (task 22).
+
+    * A NON-ed1 env: no blend, keep the given budget_ratio (QA ignores it).
+    * An ed1/ed1m OPTIMIZER cell (copro/miprov2/gepa/codex): the blend is
+      MANDATORY -- weight from ``--compression-weight`` (default 0.10); the
+      budget frame defaults to NO-BUDGET (the user's end goal) unless the
+      operator sets ``--budget-ratio`` away from the default or passes an
+      explicit ratio. ``--no-budget`` forces the no-budget frame.
+    * An ed1 EVAL anchor: record the blend too (so anchors pair with optimizer
+      cells on the same metric) -- weight from --compression-weight (default
+      0.10); the anchor KEEPS its ``--budget-ratio`` (screens/probes/anchors
+      keep their ratio knob, per the directive).
+    """
+    env = args.env
+    explicit_ratio = getattr(args, "budget_ratio", None)
+    if env not in _ED1_FAMILY:
+        # QA envs ignore the ratio; keep the anchor default when unset.
+        return None, (
+            explicit_ratio if explicit_ratio is not None
+            else ED1_DEFAULT_BUDGET_RATIO
+        )
+    weight = getattr(args, "compression_weight", None)
+    if weight is None:
+        weight = DEFAULT_COMPRESSION_WEIGHT
+    blend = BoundedCompressionMetricConfig(weight=weight)
+    no_budget = getattr(args, "no_budget", False)
+    is_optimizer = args.optimizer in _ED1_SEARCHING
+    if no_budget:
+        budget: float | None = None
+    elif explicit_ratio is not None:
+        # An explicit --budget-ratio overrides (anchors + optimizers both).
+        budget = explicit_ratio
+    elif is_optimizer:
+        # ed1 optimizer cells DEFAULT to the no-budget frame (the end goal).
+        budget = None
+    else:
+        # ed1 eval anchor with no explicit ratio -> the anchor budget default.
+        budget = ED1_DEFAULT_BUDGET_RATIO
+    return blend, budget
+
+
 def _build_cell_config(
     args: argparse.Namespace,
 ) -> tuple[CellConfig, ProviderRoute]:
@@ -1079,6 +1161,9 @@ def _build_cell_config(
     if task_filter:
         from whetstone.runner.task_screen import load_exclusion_ids
         ed1_exclude = load_exclusion_ids(Path(task_filter))
+
+    # Task 22: resolve the ed1 blended reward + budget frame.
+    ed1_blend_config, ed1_budget_ratio = _resolve_ed1_reward_and_budget(args)
     config = CellConfig(
         optimizer=args.optimizer,
         env=args.env,
@@ -1109,8 +1194,9 @@ def _build_cell_config(
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
         power_config=_power_config_for(args),
-        budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
+        budget_ratio=ed1_budget_ratio,
         ed1_exclude_task_ids=ed1_exclude,
+        ed1_blend_config=ed1_blend_config,
     )
     return config, task_route
 

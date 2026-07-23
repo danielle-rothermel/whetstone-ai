@@ -59,6 +59,7 @@ from dr_code.synthetic.humaneval_loader import HF_REVISION, load_humaneval_plus
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import aggregation_definition
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.encdec_rollout import (
     EncDecRolloutDefinition,
@@ -106,6 +107,10 @@ ED1_DATASET_ID = "evalplus/humanevalplus"
 #: The reward-term / internal aggregate name: the Binary Test Pass rate. The
 #: optimizer Reward is pass-rate ONLY; compression is reported, not rewarded.
 ED1_PASS_RATE_NAME = "binary_test_pass"
+
+#: The blended-reward term name (task 22): pass rate blended with the bounded
+#: compression score. The optimizer's reward-bearing metric when blending.
+ED1_BLENDED_REWARD_NAME = "blended_reward"
 #: The compression aggregate name reported alongside (never the Reward).
 ED1_COMPRESSION_NAME = "compression_ratio"
 
@@ -125,13 +130,25 @@ _DEFINITION_VERSION = "1"
 # applies to the BODY (see runner.optimizers): a body carrying a
 # ``{placeholder}`` or a code fence is a TYPED rejection (the frame owns them).
 
-#: The immutable encoder frame. ``{body}`` is the ONLY mutable region (the
-#: strategy sentence); the budget clause + fenced code block are fixed. The
-#: ``{max_budget}`` / ``{input_code}`` placeholders live in the frame, so a
-#: body never needs (or is allowed) placeholders of its own.
+#: The immutable encoder frame WITH a budget clause. ``{body}`` is the ONLY
+#: mutable region (the strategy sentence); the budget + fenced code block
+#: are fixed. The ``{max_budget}`` / ``{input_code}`` placeholders live in the
+#: frame, so a body never needs (or is allowed) placeholders of its own.
 ENCODER_FRAME = (
     "{body}\n"
     "Use at most {max_budget} characters.\n"
+    "```python\n"
+    "{input_code}\n"
+    "```"
+)
+
+#: The NO-BUDGET frame variant (task 22.4): NO "Use at most N characters." line
+#: and NO MAX_BUDGET. Used when ``budget_ratio is None`` -- the user's end goal
+#: is to optimize compression without listing a budget at all; the blended
+#: reward's compression term carries the pressure. Identity-folded (a no-budget
+#: rollout is a distinct graph variant).
+ENCODER_FRAME_NO_BUDGET = (
+    "{body}\n"
     "```python\n"
     "{input_code}\n"
     "```"
@@ -149,15 +166,21 @@ ENCODER_BODY_B = (
 
 
 def render_encoder_frame(
-    body: str, *, input_code: str, max_budget: int
+    body: str, *, input_code: str, max_budget: int | None
 ) -> str:
     """Compose the immutable encoder frame around a mutable strategy body.
 
-    The body is the ONLY mutable region; the budget clause + fenced code block
-    are fixed by the frame, so EVERY candidate keeps them by construction. The
-    body must NOT carry ``{placeholder}`` tokens (the frame owns them) -- the
-    intake validator rejects such bodies before this is ever called.
+    The body is the ONLY mutable region; the fenced code block is fixed by the
+    frame, so EVERY candidate keeps it by construction. When ``max_budget`` is
+    ``None`` the NO-BUDGET frame is used (no "Use at most N characters." line);
+    otherwise the budget clause is included. The body must NOT carry
+    ``{placeholder}`` tokens (the frame owns them) -- the intake validator
+    rejects such bodies before this is ever called.
     """
+    if max_budget is None:
+        return ENCODER_FRAME_NO_BUDGET.format(
+            body=body, input_code=input_code
+        )
     return ENCODER_FRAME.format(
         body=body, input_code=input_code, max_budget=max_budget
     )
@@ -515,6 +538,58 @@ def ed1_reward_from_pass_rate(
         ) from exc
 
 
+def build_ed1_blended_reward_policy(
+    blend_config: BoundedCompressionMetricConfig,
+) -> RewardPolicy:
+    """The ed1 BLENDED Reward Policy (task 22): one blended-reward term.
+
+    A single unit-weight, maximize term over the pre-computed per-task-blended
+    aggregate (:data:`ED1_BLENDED_REWARD_NAME`). The blend config's id key
+    folds into the policy name, so a different weight/bounds is a DISTINCT,
+    visibly-comparable Reward Policy identity (task 22.2). ``missing_data =
+    FAIL`` matches the pass-only policy.
+    """
+    return RewardPolicy(
+        policy_name=(
+            f"whetstone.env.{ED1_ENV_NAME}.blended_reward"
+            f"|{blend_config.identity_key()}"
+        ),
+        reward_name="reward",
+        terms=(
+            RewardTerm(
+                name=ED1_BLENDED_REWARD_NAME, weight=1.0, maximize=True
+            ),
+        ),
+        missing_data=MissingDataPolicy.FAIL,
+    )
+
+
+def ed1_reward_from_blended(
+    blend_config: BoundedCompressionMetricConfig, *, blended: float | None
+) -> Reward:
+    """Apply the blended Reward Policy to the mean per-task blended reward.
+
+    ``blended`` is the count-weighted mean of the per-task blended rewards (the
+    aggregate certification value). A missing value under FAIL surfaces as a
+    typed :class:`CandidateEvaluationFailure` (candidate marked failed).
+    """
+    from whetstone.envs.reward import CandidateEvaluationFailure
+
+    policy = build_ed1_blended_reward_policy(blend_config)
+    try:
+        return apply_reward_policy(
+            policy,
+            aggregates={ED1_BLENDED_REWARD_NAME: blended},
+            evidence_role=EvaluationRole.INTERNAL,
+        )
+    except ValueError as exc:
+        raise CandidateEvaluationFailure(
+            "ed1 internal candidate has no computable blended Reward: the "
+            f"{ED1_BLENDED_REWARD_NAME!r} aggregate is missing under FAIL "
+            f"(blended={blended!r})"
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Ed1Experiment(EnvExperiment):
     """An ``EnvExperiment`` carrying the ed1-specific enc-dec rollout + tasks.
@@ -528,18 +603,29 @@ class Ed1Experiment(EnvExperiment):
     """
 
     encdec_rollout: EncDecRolloutDefinition | None = None
-    budget_ratio: float = ED1_DEFAULT_BUDGET_RATIO
+    #: The per-task Character Budget ratio, OR ``None`` for the NO-BUDGET frame
+    #: (no "Use at most N characters." line, no MAX_BUDGET; task 22.4).
+    #: ``None`` is the default for ed1 OPTIMIZER cells -- the end goal is
+    #: to optimize compression without listing a budget at all; the reward's
+    #: compression term carries the pressure instead.
+    budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO
     dataset_revision: str = ED1_DATASET_REVISION
     #: The injectable code scorer (raw_submission, task) -> CodeScore. ``None``
     #: uses the production dr-code container sandbox; tests / dry-runs inject a
     #: local no-container runner so no Docker/network is needed.
     scorer: Callable[..., CodeScore] | None = None
+    #: The weighted-blend reward config (task 22), OR ``None`` for pass-only.
+    #: When set, the official certification metric + internal selection use the
+    #: PER-TASK blended reward; pass rate + compression are ALWAYS reported
+    #: separately. Optimizer cells REQUIRE this (the guard rail); eval anchors
+    #: set it so anchors pair with optimizer cells on the same metric.
+    blend_config: BoundedCompressionMetricConfig | None = None
 
 
 def build_ed1_experiment(
     *,
     model: str = ED1_CANONICAL_MODEL,
-    budget_ratio: float = ED1_DEFAULT_BUDGET_RATIO,
+    budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO,
     scorer: Callable[..., CodeScore] | None = None,
     prefer_snapshot: bool = True,
     limit: int | None = None,
@@ -550,6 +636,7 @@ def build_ed1_experiment(
     repeats: int = 3,
     tasks: tuple[Ed1Instance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
+    blend_config: BoundedCompressionMetricConfig | None = None,
 ) -> Ed1Experiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
 
@@ -628,6 +715,7 @@ def build_ed1_experiment(
         budget_ratio=budget_ratio,
         dataset_revision=ED1_DATASET_REVISION,
         scorer=scorer,
+        blend_config=blend_config,
     )
 
 

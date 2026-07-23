@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from dr_store import MemoryBackend, ObjectStore
 
 from whetstone.envs.ed1 import ED1_ENV_NAME, build_ed1_experiment
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.reward import CandidateEvaluationFailure
@@ -167,10 +168,11 @@ class CellConfig:
     #: artifact, and SETS the optimizer's internal-eval sizes from the
     #: recommendation (clamped to pool), recording recommended-vs-used.
     power_config: PowerConfig | None = None
-    #: ed1 (enc-dec) budget ratio (``--budget-ratio``, default 0.5). Folds into
-    #: the enc-dec ``graph_hash`` via the Character Budget rule. QA envs
-    #: ignore.
-    budget_ratio: float = 0.5
+    #: ed1 (enc-dec) budget ratio, OR ``None`` for the NO-BUDGET frame (task
+    #: 22.4: no "Use at most N characters." line). Folds into the enc-dec
+    #: ``graph_hash``. Default for ed1 OPTIMIZER cells = None (no-budget). QA
+    #: envs ignore.
+    budget_ratio: float | None = 0.5
     #: ed1 injectable code scorer (tests/dry-runs may inject a fast scorer;
     #: ``None`` uses the default dr-code local subprocess scorer).
     ed1_scorer: Callable[..., CodeScore] | None = None
@@ -181,6 +183,10 @@ class CellConfig:
     #: exclusion list). Folds into each split's Task Set identity by removing
     #: those tasks from the ordered pool before the split.
     ed1_exclude_task_ids: frozenset[str] | None = None
+    #: ed1 weighted-blend reward config (task 22), OR ``None`` for pass-only.
+    #: Optimizer cells (copro/miprov2/gepa/codex) REQUIRE it (the guard rail);
+    #: eval anchors set it so anchors pair on the same metric.
+    ed1_blend_config: BoundedCompressionMetricConfig | None = None
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -320,13 +326,45 @@ def _arm_incomplete_detail(
     )
 
 
+#: The ed1-family env ids the blended-reward guard rail governs (task 22.3).
+#: ed1m (task 18's behavioral-mutant variant) inherits the same standing rule.
+_ED1_FAMILY_ENVS = frozenset({ED1_ENV_NAME, "ed1m"})
+
+#: The searching optimizers whose ed1/ed1m cells MUST use the blended reward.
+_SEARCHING_OPTIMIZERS = frozenset({"copro", "miprov2", "gepa", "codex"})
+
+
+def _guard_ed1_blended_reward(config: CellConfig) -> None:
+    """Standing rule (task 22.3): ed1/ed1m OPTIMIZER cells REFUSE pass-only.
+
+    A searching-optimizer cell (copro/miprov2/gepa/codex) on an ed1-family env
+    MUST carry a blend config (the weighted blend is mandatory). The eval
+    /identity anchor is exempt (it derives no search Reward, but still records
+    the blend for both probes so anchors pair with optimizer cells). Refusing
+    here -- before any build/spend -- makes the rule true by construction.
+    """
+    if (
+        config.env in _ED1_FAMILY_ENVS
+        and config.optimizer in _SEARCHING_OPTIMIZERS
+        and config.ed1_blend_config is None
+    ):
+        raise ValueError(
+            f"ed1/ed1m optimizer cell ({config.optimizer}:{config.env}) "
+            "REFUSES pass-only reward: the weighted-blend reward is mandatory "
+            "(user standing rule, task 22). Pass a --compression-weight "
+            "(default 0.10) so the cell carries a blend config."
+        )
+
+
 def _build_experiment(config: CellConfig) -> EnvExperiment:
     """Build the cell's experiment: the ed1 enc-dec binding or a QA env.
 
     ``ed1`` builds the encoder->decoder->code-eval experiment (dual-score,
     ``budget_ratio`` folded into ``graph_hash``); every other env is the QA
-    ``build_env_experiment`` path, UNCHANGED (byte-identical).
+    ``build_env_experiment`` path, UNCHANGED (byte-identical). Enforces the
+    task-22 guard rail before building an ed1/ed1m optimizer experiment.
     """
+    _guard_ed1_blended_reward(config)
     if config.env == ED1_ENV_NAME:
         # Fold the OFFICIAL-split sampling override into the ed1 pool slice so
         # a reduced-anchor cell (``--official-n``) drives only N official tasks
@@ -345,6 +383,7 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
             max_skip_fraction=config.max_skip_fraction,
             repeats=config.repeats,
             exclude_task_ids=config.ed1_exclude_task_ids,
+            blend_config=config.ed1_blend_config,
         )
     return build_env_experiment(
         config.env,
