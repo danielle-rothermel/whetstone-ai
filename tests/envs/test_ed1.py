@@ -397,3 +397,109 @@ def test_ed1_eval_streams_partials_and_resume_skips_redrive(
         resumed.compression_aggregate.aggregation_output.value
         == first.compression_aggregate.aggregation_output.value
     )
+
+
+# --- Task 14: pilot row-level diagnostics (arm-None explainability) ----------
+
+
+def test_ed1_row_diags_carry_budget_and_failure_context() -> None:
+    # (Task 14a) Every row exposes a diagnostic: the typed failure_code, the
+    # per-task MAX_BUDGET, the actual encoder-output length, and the derived
+    # over_budget flag -- so an arm-level None is explainable from disk.
+    from tests.envs.support import FakeTransport, execution_policy
+    from whetstone.envs.ed1_eval import run_ed1_eval
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=1, official_n=1, budget_ratio=0.5,
+    )
+    ht = tasks[0].humaneval_task
+    input_chars = len(tasks[0].input_code)
+    long_desc = "y" * (input_chars * 4)  # deliberately over budget
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            return long_desc
+        return ht.ground_truth_code
+
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template, candidate_id="ed1-naive",
+        instances=exp.eval_configs.internal.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=FakeTransport(reply=reply), repeats=1, apply_reward=False,
+    )
+    assert len(ed.row_diags) == 1
+    d = ed.row_diags[0]
+    # MAX_BUDGET is the per-task rounded ratio of input chars (0.5).
+    assert d.max_budget == round(0.5 * input_chars)
+    assert d.encoder_len == len(long_desc)
+    # Over-budget is FLAGGED (encoder_len > max_budget) but NOT failed -- the
+    # budget only steers; the row still scored (canonical -> pass).
+    assert d.over_budget is True
+    assert d.failed is False
+    assert d.failure_code == ""
+    assert d.passed == pytest.approx(1.0)
+    # The dict form (what lands in pilots/ed1.json) carries all the fields.
+    row = d.as_dict()
+    assert set(row) >= {
+        "instance_id", "repeat", "passed", "compression", "failed",
+        "failure_code", "max_budget", "encoder_len", "over_budget",
+    }
+
+
+def test_ed1_pilot_zero_row_arm_is_loud_not_bare_none() -> None:
+    # (Task 14b) An arm whose rows all fail must be LOUD: present_rows==0 with
+    # a none_reason naming the dominant failure code + count, not a bare None.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1_scoring import CodeScore
+    from whetstone.runner.ed1_pilot import run_ed1_pilot
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    transport = _fake_encdec_transport(tasks)
+
+    # A scorer that always reports infrastructure-unknown -> every row FAILS
+    # (never scored 0), so the pass aggregate is incomplete (arm-level None).
+    def _infra_unknown(**_kwargs) -> CodeScore:
+        return CodeScore(
+            passed=False, infrastructure_unknown=True,
+            outcome="HARNESS_FAILURE",
+        )
+
+    report = run_ed1_pilot(
+        transport=transport, execution_policy=execution_policy(max_attempts=1),
+        tasks=3, repeats=1, concurrency=2, scorer=_infra_unknown,
+    )
+    arm = report.naive
+    # The aggregate pass rate is None (all rows failed) -- but the arm is LOUD.
+    assert arm.pass_rate is None
+    assert arm.present_rows == 0
+    assert arm.failed_rows == 3
+    assert arm.none_reason is not None
+    assert "code_eval_infrastructure_unknown" in arm.none_reason
+    assert "0 present rows" in arm.none_reason
+    # The per-row records are on the report (persisted to pilots/ed1.json).
+    d = arm.as_dict()
+    assert d["present_rows"] == 0
+    assert d["none_reason"] == arm.none_reason
+    rows = list(arm.row_diags)  # already dict records on the summary
+    assert len(rows) == 3
+    codes = [r["failure_code"] for r in rows]
+    assert codes == ["code_eval_infrastructure_unknown"] * 3
+
+
+def test_ed1_pilot_healthy_arm_has_no_none_reason() -> None:
+    # The LOUD reason is present ONLY for a 0-row arm: a healthy arm records
+    # the per-row diagnostics but none_reason stays None.
+    from tests.envs.support import execution_policy
+    from whetstone.runner.ed1_pilot import run_ed1_pilot
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    transport = _fake_encdec_transport(tasks)
+    report = run_ed1_pilot(
+        transport=transport, execution_policy=execution_policy(max_attempts=1),
+        tasks=3, repeats=1, concurrency=2,
+    )
+    assert report.naive.present_rows == 3
+    assert report.naive.none_reason is None
+    assert len(report.naive.row_diags) == 3

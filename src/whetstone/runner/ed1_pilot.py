@@ -20,6 +20,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from whetstone.envs.ed1 import (
     ED1_CANONICAL_MODEL,
@@ -37,16 +38,31 @@ from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
+if TYPE_CHECKING:
+    from whetstone.envs.ed1_eval import Ed1RowDiag
+
 
 @dataclass(frozen=True, slots=True)
 class Ed1ProbeSummary:
-    """One encoder probe's dual measurement over the pilot slice."""
+    """One encoder probe's dual measurement over the pilot slice.
+
+    Carries the aggregate pass rate + Mean Compression Ratio AND the per-row
+    diagnostic records (:class:`Ed1RowDiag`) so an arm-level ``None`` is
+    explainable from disk (which rows failed, with what typed code, and the
+    budget vs encoder-length context). When ZERO rows are present, the arm is
+    LOUD: ``present_rows == 0`` with a ``none_reason`` naming the dominant
+    failure code -- never a bare ``None``.
+    """
 
     probe: str
     pass_rate: float | None
     mean_compression: float | None
     task_count: int
     repeat_count: int
+    present_rows: int
+    failed_rows: int
+    none_reason: str | None
+    row_diags: tuple[dict[str, object], ...]
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -55,6 +71,10 @@ class Ed1ProbeSummary:
             "mean_compression": self.mean_compression,
             "task_count": self.task_count,
             "repeat_count": self.repeat_count,
+            "present_rows": self.present_rows,
+            "failed_rows": self.failed_rows,
+            "none_reason": self.none_reason,
+            "rows": list(self.row_diags),
         }
 
 
@@ -111,6 +131,27 @@ class Ed1PilotReport:
         return path
 
 
+def _none_reason(
+    present: int, diags: tuple[Ed1RowDiag, ...]
+) -> str | None:
+    """A LOUD reason string when an arm produced ZERO present rows, else None.
+
+    Names the dominant (most frequent) typed failure code across the arm's
+    rows and how many rows carried it, so a bare aggregate ``None`` becomes a
+    diagnosable "0 present rows: <code> x N of M".
+    """
+    if present > 0 or not diags:
+        return None
+    counts: dict[str, int] = {}
+    for d in diags:
+        code = d.failure_code or "unknown_failure"
+        counts[code] = counts.get(code, 0) + 1
+    dominant = max(counts.items(), key=lambda kv: kv[1])
+    return (
+        f"0 present rows: {dominant[0]} x{dominant[1]} of {len(diags)} rows"
+    )
+
+
 def run_ed1_pilot(
     *,
     transport: TransportCall,
@@ -160,12 +201,19 @@ def run_ed1_pilot(
             fanout=fanout,
             apply_reward=False,
         )
+        diags = ed.row_diags
+        present = sum(1 for d in diags if not d.failed)
+        failed = sum(1 for d in diags if d.failed)
         return Ed1ProbeSummary(
             probe=candidate.candidate_id,
             pass_rate=ed.pass_aggregate.aggregation_output.value,
             mean_compression=ed.compression_aggregate.aggregation_output.value,
             task_count=len(instances),
             repeat_count=repeats,
+            present_rows=present,
+            failed_rows=failed,
+            none_reason=_none_reason(present, diags),
+            row_diags=tuple(d.as_dict() for d in diags),
         )
 
     naive = _probe(ed1_initial_candidate())

@@ -782,14 +782,23 @@ def _run_ed1_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         concurrency=args.concurrency,
     )
     path = report.write(args.root)
+
+    def _arm_line(name: str, arm) -> str:
+        loud = (
+            f" [{arm.none_reason}]" if arm.none_reason is not None else ""
+        )
+        return (
+            f"  {name}: pass={arm.pass_rate} "
+            f"compression={arm.mean_compression} "
+            f"present={arm.present_rows} failed={arm.failed_rows}{loud}\n"
+        )
+
     sys.stdout.write(
         f"ed1 pilot env={args.env} model={report.model} "
         f"budget_ratio={report.budget_ratio} tasks={report.tasks}\n"
-        f"  naive: pass={report.naive.pass_rate} "
-        f"compression={report.naive.mean_compression}\n"
-        f"  ceiling: pass={report.ceiling.pass_rate} "
-        f"compression={report.ceiling.mean_compression}\n"
-        f"  pass_direction_ok={report.pass_direction_ok} "
+        + _arm_line("naive", report.naive)
+        + _arm_line("ceiling", report.ceiling)
+        + f"  pass_direction_ok={report.pass_direction_ok} "
         f"compression_direction_ok={report.compression_direction_ok} "
         f"dataset={report.dataset_revision} -> {path}\n"
     )

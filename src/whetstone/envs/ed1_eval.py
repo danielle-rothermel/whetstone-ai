@@ -81,6 +81,41 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 
 @dataclass(frozen=True, slots=True)
+class Ed1RowDiag:
+    """One (task, repeat) row's diagnostic record for the pilot artifact.
+
+    Explains an arm-level ``None`` from disk: the typed ``failure_code`` (empty
+    when the row succeeded), the pass/compression scalars, the per-task
+    ``max_budget`` the encoder was told to respect, the actual encoder-output
+    length, and the derived ``over_budget`` flag (an over-budget row is NEVER
+    clipped or failed -- the budget only steers, so this is diagnostic only).
+    """
+
+    instance_id: str
+    repeat: int
+    passed: float | None
+    compression: float | None
+    failed: bool
+    failure_code: str
+    max_budget: int | None
+    encoder_len: int | None
+    over_budget: bool | None
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "instance_id": self.instance_id,
+            "repeat": self.repeat,
+            "passed": self.passed,
+            "compression": self.compression,
+            "failed": self.failed,
+            "failure_code": self.failure_code,
+            "max_budget": self.max_budget,
+            "encoder_len": self.encoder_len,
+            "over_budget": self.over_budget,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Ed1EvalResult:
     """One candidate's ed1 evaluation over a split (dual aggregates).
 
@@ -88,7 +123,7 @@ class Ed1EvalResult:
     metric); ``compression_aggregate`` is the Mean Compression Ratio (reported,
     never the Reward). ``reward`` is derived from the pass aggregate only (when
     ``apply_reward``). Per-task vectors + outputs feed the CI / ledger /
-    sidecar.
+    sidecar; ``row_diags`` explains arm-level Nones (the pilot artifact).
     """
 
     pass_aggregate: RolloutAggregate
@@ -98,6 +133,7 @@ class Ed1EvalResult:
     per_task_counts: tuple[int, ...]
     per_task_compression: tuple[float | None, ...]
     outputs: tuple[RolloutOutput, ...]
+    row_diags: tuple[Ed1RowDiag, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +151,24 @@ class _Ed1RowOutcome:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    #: Budget diagnostics: the per-task MAX_BUDGET (chars) the encoder was told
+    #: to respect and the actual encoder-output length. ``over_budget`` is a
+    #: derived flag (encoder_len > max_budget) -- an over-budget row is NOT
+    #: clipped or failed (the budget only steers), so this is diagnostic only.
+    max_budget: int | None = None
+    encoder_len: int | None = None
+
+    @property
+    def over_budget(self) -> bool | None:
+        """True when the encoder output exceeded MAX_BUDGET (diagnostic only).
+
+        ``None`` when either the budget or the encoder length is unknown (a
+        pre-encoder failure, e.g. a render error), so a reader distinguishes
+        "measured, within budget" from "never measured".
+        """
+        if self.max_budget is None or self.encoder_len is None:
+            return None
+        return self.encoder_len > self.max_budget
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -195,6 +249,7 @@ def _drive_row(
             pass_value=None, compression_value=None,
             encoder_text=None, decoder_text=None,
             failed=True, failure_code="encoder_render_error",
+            max_budget=max_budget, encoder_len=None,
         )
     enc = run_provider_call(
         request=_request(provider_call_config, encoder_prompt),
@@ -207,8 +262,10 @@ def _drive_row(
             pass_value=None, compression_value=None,
             encoder_text=None, decoder_text=None,
             failed=True, failure_code=failure_code_of(enc),
+            max_budget=max_budget, encoder_len=None,
         )
     encoder_text = enc.generation.text
+    encoder_len = len(encoder_text)
     decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
     dec = run_provider_call(
         request=_request(provider_call_config, decoder_prompt),
@@ -221,6 +278,7 @@ def _drive_row(
             pass_value=None, compression_value=None,
             encoder_text=encoder_text, decoder_text=None,
             failed=True, failure_code=failure_code_of(dec),
+            max_budget=max_budget, encoder_len=encoder_len,
         )
     decoder_text = dec.generation.text
     prompt_t, completion_t, total_t = _sum_usage(
@@ -239,6 +297,7 @@ def _drive_row(
             failed=True, failure_code="code_eval_infrastructure_unknown",
             prompt_tokens=prompt_t, completion_tokens=completion_t,
             total_tokens=total_t,
+            max_budget=max_budget, encoder_len=encoder_len,
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
@@ -248,6 +307,7 @@ def _drive_row(
         failed=False,
         prompt_tokens=prompt_t, completion_tokens=completion_t,
         total_tokens=total_t,
+        max_budget=max_budget, encoder_len=encoder_len,
     )
 
 
@@ -556,6 +616,7 @@ def run_ed1_eval(
     pass_rows: list[tuple[str, list[RowValue]]] = []
     comp_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
+    row_diags: list[Ed1RowDiag] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
     per_task_compression: list[float | None] = []
@@ -566,6 +627,19 @@ def run_ed1_eval(
         comp_vals: list[float] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
+            row_diags.append(
+                Ed1RowDiag(
+                    instance_id=task_id,
+                    repeat=index,
+                    passed=outcome.pass_value,
+                    compression=outcome.compression_value,
+                    failed=outcome.failed,
+                    failure_code=outcome.failure_code,
+                    max_budget=outcome.max_budget,
+                    encoder_len=outcome.encoder_len,
+                    over_budget=outcome.over_budget,
+                )
+            )
             if outcome.failed or outcome.pass_value is None:
                 p_rows.append(RowValue(failed=True))
             else:
@@ -629,6 +703,7 @@ def run_ed1_eval(
         per_task_counts=tuple(per_task_counts),
         per_task_compression=tuple(per_task_compression),
         outputs=tuple(outputs),
+        row_diags=tuple(row_diags),
     )
 
 
@@ -650,5 +725,6 @@ def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
 
 __all__ = [
     "Ed1EvalResult",
+    "Ed1RowDiag",
     "run_ed1_eval",
 ]
