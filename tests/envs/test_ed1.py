@@ -234,14 +234,110 @@ def test_over_budget_encoder_output_is_scored_not_clipped(
 # --- Templates: naive vs ceiling are distinct Mutation-Surface templates ----
 
 
-def test_naive_and_ceiling_encoder_templates_are_distinct() -> None:
+def test_naive_and_ceiling_encoder_bodies_are_distinct_strategy_sentences(
+) -> None:
+    # (Task 17 Part 1) The narrowed Mutation Surface payload is the STRATEGY
+    # BODY only -- distinct sentences that carry NO placeholders and NO code
+    # fence (the immutable frame owns {max_budget}/{input_code} + the code
+    # block). The frame composes them into the full encoder prompt at render.
+    from whetstone.envs.ed1 import (
+        ENCODER_FRAME,
+        ed1_body_rejection,
+        render_encoder_frame,
+    )
+
     naive = ed1_initial_candidate().payload[MUTATION_FIELD]
     ceiling = ed1_ceiling_candidate().payload[MUTATION_FIELD]
     assert naive != ceiling
-    # Both carry the two encoder placeholders the render fills.
-    for tmpl in (naive, ceiling):
-        assert "{input_code}" in tmpl
-        assert "{max_budget}" in tmpl
+    for body in (naive, ceiling):
+        assert "{" not in body and "}" not in body  # no placeholders
+        assert "```" not in body                     # no code fence
+        assert ed1_body_rejection(body) == ()        # accepted by intake
+    # The frame carries the placeholders + code block for every candidate.
+    assert "{max_budget}" in ENCODER_FRAME
+    assert "{input_code}" in ENCODER_FRAME
+    assert "```python" in ENCODER_FRAME
+    # Rendering composes frame(body): the budget line + code block are present
+    # by construction regardless of the body.
+    rendered = render_encoder_frame(
+        naive, input_code="def f(): pass", max_budget=52
+    )
+    assert "Use at most 52 characters." in rendered
+    assert "```python\ndef f(): pass\n```" in rendered
+    assert rendered.startswith(naive)
+
+
+def test_ed1_frame_keeps_budget_line_for_any_body() -> None:
+    # (Task 17 Part 1) The immutable frame guarantees the budget clause + code
+    # block for ANY body -- a proposer CANNOT drop the budget line at all.
+    from whetstone.envs.ed1 import render_encoder_frame
+
+    for body in ("Summarize.", "Describe intent tersely.", "x" * 200):
+        rendered = render_encoder_frame(
+            body, input_code="SRC", max_budget=17
+        )
+        assert "Use at most 17 characters." in rendered
+        assert "```python\nSRC\n```" in rendered
+
+
+def test_ed1_body_validation_rejects_placeholders_and_fences() -> None:
+    # (Task 17 Part 1) A body carrying a {placeholder} (the frame owns them) or
+    # a code fence (the frame owns the code block) is a TYPED rejection; a
+    # strategy sentence is accepted.
+    from whetstone.envs.ed1 import ed1_body_rejection
+
+    # Clean strategy sentences accepted.
+    assert ed1_body_rejection("Describe the code.") == ()
+    assert ed1_body_rejection("Compress it well.\nBe precise.") == ()
+    # Placeholder tokens rejected (the frame owns max_budget/input_code; any
+    # other placeholder has nothing to fill it).
+    assert "{max_budget}" in ed1_body_rejection("Use {max_budget} chars.")
+    assert "{input_code}" in ed1_body_rejection(
+        "Given {input_code}, describe."
+    )
+    assert "{question}" in ed1_body_rejection("Answer {question}.")
+    # A code fence is rejected (the frame owns the fenced code block).
+    assert "```" in ed1_body_rejection("Here:\n```python\nx\n```")
+
+
+def test_ed1_intake_rejects_body_with_placeholder_typed() -> None:
+    # (Task 17 Part 1) The runner intake path rejects an ed1 proposer body that
+    # carries a placeholder with the ED1_INVALID_BODY typed reason (no eval
+    # spend), and accepts a clean strategy-sentence body.
+    from tests.envs.support import execution_policy
+    from tests.runner.support import proposer_config
+    from whetstone.envs.ed1 import ED1_INVALID_BODY
+    from whetstone.optimization.proposer import FakeProposerTransport
+    from whetstone.runner.optimizers import run_optimize
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    transport = _fake_encdec_transport(tasks)
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=3, official_n=3, budget_ratio=0.5,
+    )
+    # COPRO drafts: one INVALID body (placeholder) + one VALID strategy body.
+    proposer = FakeProposerTransport(
+        script={},
+        default=("Use {max_budget} chars now.", "Describe tersely."),
+    )
+    result = run_optimize(
+        exp, optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=transport,
+        execution_policy=execution_policy(max_attempts=1),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=1,
+    )
+    rejected = [
+        s for s in result.steps
+        if s.rejected_reason == ED1_INVALID_BODY
+    ]
+    assert rejected, "the placeholder body must be a typed intake rejection"
+    assert any("{max_budget}" in s.rejected_fields for s in rejected)
+    # The rejected step spent no eval (internal_score/evaluation None).
+    for s in rejected:
+        assert s.internal_score is None and s.evaluation is None
 
 
 # --- The ed1 pilot: both probes, dual scores --------------------------------

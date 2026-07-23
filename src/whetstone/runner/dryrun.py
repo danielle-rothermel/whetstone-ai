@@ -353,7 +353,7 @@ def _run_dry_ed1_cell(
     proposing optimizers). Records BOTH scores (pass rate + Mean Compression
     Ratio) on the ledger line.
     """
-    from whetstone.envs.ed1 import ENCODER_TEMPLATE_B, load_ed1_tasks
+    from whetstone.envs.ed1 import ENCODER_BODY_B, load_ed1_tasks
 
     tasks = load_ed1_tasks(prefer_snapshot=True, limit=_ED1_DRY_TASK_LIMIT)
     reply = _ed1_dry_reply(tasks)
@@ -362,10 +362,11 @@ def _run_dry_ed1_cell(
     if optimizer == "eval":
         proposer = FakeProposerTransport(script={}, default=())
     else:
-        # A valid alternate encoder template (still a real Mutation-Surface
-        # template) so a proposing optimizer drafts + scores a candidate.
+        # A valid alternate strategy BODY (the narrowed Mutation Surface is the
+        # strategy sentence only -- no frame/placeholders) so a proposing
+        # optimizer drafts + scores a candidate that passes body validation.
         proposer = FakeProposerTransport(
-            script={}, default=(ENCODER_TEMPLATE_B,)
+            script={}, default=(ENCODER_BODY_B,)
         )
     config = CellConfig(
         optimizer=optimizer,

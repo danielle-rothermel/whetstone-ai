@@ -71,7 +71,10 @@ from whetstone.envs.sampling import (
     EnvSplitSampling,
 )
 from whetstone.graph.rollout import EvaluationRole
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.mutation import (
+    MUTATION_FIELD,
+    template_placeholder_fields,
+)
 from whetstone.optimization.reward import (
     MissingDataPolicy,
     Reward,
@@ -111,26 +114,90 @@ _ED1_STRATUM = "humaneval_plus"
 
 _DEFINITION_VERSION = "1"
 
-# --- Encoder / decoder prompt templates (verbatim, design/eval-run.html) ----
+# --- Encoder prompt: an IMMUTABLE FRAME + a mutable strategy body ------------
+#
+# The encoder Mutation Surface is NARROWED (user directive, task 17): the
+# proposer/probe vary ONLY the leading STRATEGY-SENTENCE body; the budget
+# clause and the fenced code block are a FIXED frame every candidate keeps by
+# construction. The Mutation Surface payload is the BODY string; rendering
+# composes ``ENCODER_FRAME.format(body=, max_budget=, input_code=)`` so the
+# budget line + code block can never be dropped or mutated. Intake validation
+# applies to the BODY (see runner.optimizers): a body carrying a
+# ``{placeholder}`` or a code fence is a TYPED rejection (the frame owns them).
 
-#: Encoder Template A -- "concise description" (the naive floor).
-ENCODER_TEMPLATE_A = (
-    "Provide a concise description of the following code.\n"
+#: The immutable encoder frame. ``{body}`` is the ONLY mutable region (the
+#: strategy sentence); the budget clause + fenced code block are fixed. The
+#: ``{max_budget}`` / ``{input_code}`` placeholders live in the frame, so a
+#: body never needs (or is allowed) placeholders of its own.
+ENCODER_FRAME = (
+    "{body}\n"
     "Use at most {max_budget} characters.\n"
     "```python\n"
     "{input_code}\n"
     "```"
 )
 
-#: Encoder Template B -- "compress for reconstruction by another agent" (the
-#: ceiling-ish informative template).
-ENCODER_TEMPLATE_B = (
+#: Encoder body A -- "concise description" (the naive floor strategy sentence).
+ENCODER_BODY_A = "Provide a concise description of the following code."
+
+#: Encoder body B -- "compress for reconstruction by another agent" (the
+#: ceiling-ish informative strategy sentence).
+ENCODER_BODY_B = (
     "Compress the following code into a description another agent can use\n"
-    "to reconstruct a function with the same behavior.\n"
-    "Use at most {max_budget} characters.\n"
-    "```python\n"
-    "{input_code}\n"
-    "```"
+    "to reconstruct a function with the same behavior."
+)
+
+
+def render_encoder_frame(
+    body: str, *, input_code: str, max_budget: int
+) -> str:
+    """Compose the immutable encoder frame around a mutable strategy body.
+
+    The body is the ONLY mutable region; the budget clause + fenced code block
+    are fixed by the frame, so EVERY candidate keeps them by construction. The
+    body must NOT carry ``{placeholder}`` tokens (the frame owns them) -- the
+    intake validator rejects such bodies before this is ever called.
+    """
+    return ENCODER_FRAME.format(
+        body=body, input_code=input_code, max_budget=max_budget
+    )
+
+
+#: The typed reason recorded when an ed1 encoder BODY violates the mutation
+#: surface (carries a ``{placeholder}`` the frame owns, or a code fence).
+ED1_INVALID_BODY = "ed1_invalid_encoder_body"
+
+
+def ed1_body_rejection(body: str) -> tuple[str, ...]:
+    """The offending tokens that make an ed1 encoder body invalid, else empty.
+
+    The narrowed ed1 Mutation Surface is the STRATEGY SENTENCE only: the body
+    must carry NO ``{placeholder}`` tokens (the frame owns ``{max_budget}`` /
+    ``{input_code}``) and NO code fence (the frame owns the fenced code block).
+    Returns the ordered, de-duplicated offending tokens (a ``{field}`` name or
+    a triple-backtick code fence); an empty tuple means the body is a clean
+    strategy sentence the frame can wrap.
+    """
+    offending: list[str] = []
+    seen: set[str] = set()
+    for field_name in template_placeholder_fields(body):
+        token = "{" + field_name + "}"
+        if token not in seen:
+            seen.add(token)
+            offending.append(token)
+    if "```" in body and "```" not in seen:
+        offending.append("```")
+    return tuple(offending)
+
+
+#: Back-compat: the fully-rendered naive/ceiling templates (frame + body), for
+#: any reader that still wants the whole encoder prompt shape. The Mutation
+#: Surface itself now carries only the body.
+ENCODER_TEMPLATE_A = ENCODER_FRAME.format(
+    body=ENCODER_BODY_A, max_budget="{max_budget}", input_code="{input_code}"
+)
+ENCODER_TEMPLATE_B = ENCODER_FRAME.format(
+    body=ENCODER_BODY_B, max_budget="{max_budget}", input_code="{input_code}"
 )
 
 #: The decoder user template (fixed; not the Mutation Surface).
@@ -376,25 +443,27 @@ def _ed1_split(
     )
 
 
-def _ed1_candidate(*, candidate_id: str, template: str) -> Candidate:
+def _ed1_candidate(*, candidate_id: str, body: str) -> Candidate:
+    # The Mutation Surface payload is the STRATEGY-SENTENCE BODY only; the
+    # budget clause + code block are the immutable frame composed at render.
     return Candidate(
         candidate_id=candidate_id,
         base_ref=f"whetstone.env.{ED1_ENV_NAME}.base",
-        payload={MUTATION_FIELD: template},
+        payload={MUTATION_FIELD: body},
     )
 
 
 def ed1_initial_candidate() -> Candidate:
-    """The naive Initial Candidate: encoder Template A ("concise")."""
+    """The naive Initial Candidate: strategy body A ("concise description")."""
     return _ed1_candidate(
-        candidate_id=f"{ED1_ENV_NAME}-naive", template=ENCODER_TEMPLATE_A
+        candidate_id=f"{ED1_ENV_NAME}-naive", body=ENCODER_BODY_A
     )
 
 
 def ed1_ceiling_candidate() -> Candidate:
-    """The ceiling reference: encoder Template B (reconstruction-compress)."""
+    """The ceiling reference: strategy body B (reconstruction-compress)."""
     return _ed1_candidate(
-        candidate_id=f"{ED1_ENV_NAME}-ceiling", template=ENCODER_TEMPLATE_B
+        candidate_id=f"{ED1_ENV_NAME}-ceiling", body=ENCODER_BODY_B
     )
 
 
@@ -560,7 +629,11 @@ __all__ = [
     "ED1_DATASET_REVISION",
     "ED1_DEFAULT_BUDGET_RATIO",
     "ED1_ENV_NAME",
+    "ED1_INVALID_BODY",
     "ED1_PASS_RATE_NAME",
+    "ENCODER_BODY_A",
+    "ENCODER_BODY_B",
+    "ENCODER_FRAME",
     "ENCODER_TEMPLATE_A",
     "ENCODER_TEMPLATE_B",
     "Ed1Experiment",
@@ -568,8 +641,10 @@ __all__ = [
     "build_ed1_experiment",
     "build_ed1_procedure_config",
     "build_ed1_reward_policy",
+    "ed1_body_rejection",
     "ed1_ceiling_candidate",
     "ed1_initial_candidate",
     "humaneval_task_from_instance",
     "load_ed1_tasks",
+    "render_encoder_frame",
 ]

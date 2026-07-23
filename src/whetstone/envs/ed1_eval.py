@@ -69,6 +69,7 @@ from whetstone.envs.ed1 import (
     Ed1Experiment,
     ed1_reward_from_pass_rate,
     humaneval_task_from_instance,
+    render_encoder_frame,
 )
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.envs.internal_eval import RolloutOutput
@@ -221,14 +222,18 @@ def _sum_usage(
     return (_add(a[0], b[0]), _add(a[1], b[1]), _add(a[2], b[2]))
 
 
-def _render_encoder(template: str, *, input_code: str, max_budget: int) -> str:
-    """Render the encoder Mutation-Surface template.
+def _render_encoder(body: str, *, input_code: str, max_budget: int) -> str:
+    """Render the encoder prompt: the immutable frame around a strategy body.
 
-    Fills ``{input_code}`` and ``{max_budget}``. Unknown placeholders are the
-    intake validator's concern (upstream); here a KeyError is a per-row
-    failure.
+    ``body`` is the Mutation-Surface payload (the strategy sentence ONLY); the
+    budget clause + fenced code block come from ``ENCODER_FRAME``, so every
+    candidate keeps them by construction. A body carrying a ``{placeholder}``
+    would raise here (KeyError/IndexError/ValueError) -> a per-row failure, but
+    intake validation rejects such bodies first.
     """
-    return template.format(input_code=input_code, max_budget=max_budget)
+    return render_encoder_frame(
+        body, input_code=input_code, max_budget=max_budget
+    )
 
 
 def _drive_row(

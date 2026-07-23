@@ -426,9 +426,37 @@ def _intake_valid_keys(
     from whetstone.envs.ed1 import ED1_ENV_NAME
 
     if experiment.env_name == ED1_ENV_NAME:
-        return frozenset({"input_code", "max_budget"})
+        # ed1's NARROWED surface is the strategy BODY only: it carries NO
+        # placeholders (the frame owns them), so no valid keys are exposed to a
+        # body. Body validation runs via ``_intake_rejection`` instead.
+        return frozenset()
     env = env_spec(experiment.env_name)
     return valid_prompt_input_keys(env, instances[0])
+
+
+def _intake_rejection(
+    experiment: EnvExperiment, template: str, valid_keys: frozenset[str]
+) -> tuple[str, tuple[str, ...]]:
+    """The (typed reason, offending tokens) for a proposed template if invalid.
+
+    Dispatches on the env's Mutation Surface: ed1 validates the strategy-
+    sentence BODY (no placeholders, no code fence -> ``ED1_INVALID_BODY``); QA
+    validates that every ``{placeholder}`` is fillable (->
+    ``INVALID_TEMPLATE_PLACEHOLDERS``). An empty offending tuple means the
+    template is accepted.
+    """
+    from whetstone.envs.ed1 import (
+        ED1_ENV_NAME,
+        ED1_INVALID_BODY,
+        ed1_body_rejection,
+    )
+
+    if experiment.env_name == ED1_ENV_NAME:
+        return ED1_INVALID_BODY, ed1_body_rejection(template)
+    return (
+        INVALID_TEMPLATE_PLACEHOLDERS,
+        invalid_template_placeholders(template, valid_keys),
+    )
 
 
 def _proposal_rounds(hyper: dict[str, Any]) -> tuple[int, int]:
@@ -586,13 +614,18 @@ def run_optimize(
 
             template = draft.template
 
-            # Intake validation: an untrusted proposed template that references
-            # a placeholder the render cannot fill is REJECTED here without any
-            # eval spend. It is recorded as a failed step (internal_score=None,
-            # evaluation=None) with a typed reason + the offending fields, so
-            # the optimizer continues, the candidate is never selected as best,
-            # and the rejection is counted rather than silently dropped.
-            offending = invalid_template_placeholders(template, valid_keys)
+            # Intake validation: an untrusted proposed template is REJECTED
+            # here (no eval spend) when it violates the env Mutation Surface.
+            # QA: a placeholder the render cannot fill (e.g. c22's {question}).
+            # ed1: the NARROWED surface is the strategy BODY only, so a body
+            # carrying ANY {placeholder} (the frame owns them) or a code fence
+            # (the frame owns the code block) is rejected. Recorded as a failed
+            # step (internal_score/evaluation None) with a typed reason + the
+            # offending tokens, so the optimizer continues, the candidate is
+            # never selected as best, and the rejection is counted.
+            reason, offending = _intake_rejection(
+                experiment, template, valid_keys
+            )
             if offending:
                 steps.append(
                     ProposalStep(
@@ -601,7 +634,7 @@ def run_optimize(
                         template=template,
                         internal_score=None,
                         evaluation=None,
-                        rejected_reason=INVALID_TEMPLATE_PLACEHOLDERS,
+                        rejected_reason=reason,
                         rejected_fields=offending,
                     )
                 )
