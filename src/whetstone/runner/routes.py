@@ -379,6 +379,7 @@ def route_for(
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
     task_model: str | None = None,
+    proposer_model: str | None = None,
 ) -> ProviderRoute:
     """Select the route for a lane + role.
 
@@ -387,10 +388,14 @@ def route_for(
     ``task_model`` (openrouter task role only) selects a per-env task model
     (e.g. the deepseek model for c18/c22), folding into the route's Config
     identity (graph_hash) so a deepseek route differs from a nano route.
+    ``proposer_model`` (openrouter proposer role only) overrides the canonical
+    ``gpt-5.4-nano`` proposer model, folding into the proposer route's Config
+    identity so a non-default proposer route differs from the canonical one.
     """
     if lane == "openrouter":
         if role == "proposer":
             return canonical_proposer_route(
+                model=proposer_model or CANONICAL_PROPOSER_MODEL,
                 temperature=1.0 if temperature is None else temperature,
                 timeout_seconds=timeout_seconds,
                 idle_timeout_seconds=idle_timeout_seconds,

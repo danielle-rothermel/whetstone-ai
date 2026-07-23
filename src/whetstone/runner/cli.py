@@ -38,6 +38,7 @@ from whetstone.optimization.proposer import (
     ProposalDraft,
     ProposalRequest,
     ProposerConfig,
+    ProposerTransport,
 )
 from whetstone.provider.driver import TransportCall
 from whetstone.runner.budget import (
@@ -111,12 +112,14 @@ class _Heartbeat:
         *,
         label: str,
         spend_estimate: Callable[[], float | None],
+        progress: Callable[[], str] | None = None,
         interval: float = HEARTBEAT_SECONDS,
         sink: Callable[[str], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._label = label
         self._spend_estimate = spend_estimate
+        self._progress = progress
         self._interval = interval
         self._sink = sink or (lambda m: sys.stdout.write(m))
         self._clock = clock
@@ -129,9 +132,10 @@ class _Heartbeat:
             elapsed = self._clock() - self._start
             spend = self._spend_estimate()
             spend_str = "n/a" if spend is None else f"${spend:.4f}"
+            extra = f" {self._progress()}" if self._progress else ""
             self._sink(
                 f"[heartbeat] {self._label} elapsed={elapsed:.0f}s "
-                f"spend~={spend_str}\n"
+                f"spend~={spend_str}{extra}\n"
             )
 
     def __enter__(self) -> _Heartbeat:
@@ -233,6 +237,17 @@ def build_parser() -> argparse.ArgumentParser:
             "'openai/gpt-5-nano'. The chosen model folds into the Provider "
             "Call Config (graph_hash) and is recorded in cells.jsonl "
             "models.task. Openrouter lane only."
+        ),
+    )
+    cell.add_argument(
+        "--proposer-model",
+        default=None,
+        help=(
+            "override the canonical proposer model (the routes registry "
+            "default 'openai/gpt-5.4-nano') for a proposal-using optimizer "
+            "(copro/miprov2/gepa). Folds into the proposer route's Config "
+            "identity (never a graph identity) and is recorded in cells.jsonl "
+            "models.proposer. Openrouter lane only; ignored by eval/codex."
         ),
     )
     cell.add_argument(
@@ -395,6 +410,12 @@ class _HttpProposerTransport:
             transport = HttpProvider(policy=route.transport_policy).invoke
         self._transport: TransportCall = transport
         self._served = 0
+        #: Cumulative proposer-call accounting the cell heartbeat reads so a
+        #: long-running live cell streams its proposer token spend, not just
+        #: the credits-delta. Total tokens is best-effort (0 when the wire
+        #: usage is absent); the call count is exact.
+        self.proposer_calls = 0
+        self.proposer_tokens = 0
 
     def draft(
         self,
@@ -432,9 +453,12 @@ class _HttpProposerTransport:
                     f"{request.request_ordinal}:{index}"
                 ),
             )
+            self.proposer_calls += 1
             if result.succeeded and result.generation is not None:
                 template = result.generation.text.strip()
                 usage = result.generation.response.usage
+                if usage is not None and usage.total_tokens is not None:
+                    self.proposer_tokens += usage.total_tokens
                 drafts.append(
                     ProposalDraft(
                         template=template or request.base_template,
@@ -475,11 +499,15 @@ class _HttpProposerTransport:
         return tuple(drafts)
 
 
-def _proposer_config(lane: str, optimizer: str) -> ProposerConfig:
+def _proposer_config(
+    lane: str, optimizer: str, *, proposer_model: str | None = None
+) -> ProposerConfig:
     """The proposer route Config identity for a cell.
 
     Canonical proposer is the OpenRouter ``gpt-5.4-nano`` route; Codex uses the
     local ``codex exec`` bridge (its inner rollout calls follow ``--lane``).
+    ``proposer_model`` overrides the canonical proposer model, folding into the
+    proposer route Config identity (never a graph identity).
     """
     if optimizer == "codex":
         return ProposerConfig(
@@ -487,11 +515,12 @@ def _proposer_config(lane: str, optimizer: str) -> ProposerConfig:
             provider_call_config_hash="c" * 64,
             temperature=1.0,
         )
-    proposer_route = route_for("openrouter", role="proposer", temperature=1.0)
+    model = proposer_model or CANONICAL_PROPOSER_MODEL
+    proposer_route = route_for(
+        "openrouter", role="proposer", temperature=1.0, proposer_model=model
+    )
     return ProposerConfig(
-        provider_call_config_ref=(
-            f"pcc://{CANONICAL_PROPOSER_MODEL}"
-        ),
+        provider_call_config_ref=f"pcc://{model}",
         provider_call_config_hash=proposer_route.call_config.identity_hash,
         temperature=1.0,
     )
@@ -632,10 +661,42 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
-    if getattr(args, "dry_run_fake", False):
-        return _run_dry_cell(args)
-    _require_live(args)
+def _proposer_transport_for(
+    args: argparse.Namespace, *, proposer_model: str | None
+) -> ProposerTransport:
+    """Build the proposer transport for a live cell (the fixture-only seam).
+
+    An eval-row cell never drafts (its "best" is the naive candidate) and codex
+    drafts through its own MCP bridge (not built here), so neither needs a live
+    OpenRouter proposer. A real proposal-using optimizer (COPRO / MIPROv2 /
+    GEPA's reflection LM) on the openrouter lane drafts through the live
+    ``_HttpProposerTransport``. The raising :class:`_LiveProposerUnavailable`
+    placeholder is reachable ONLY where a live proposer genuinely cannot be
+    built -- never from a proposal-using optimizer on the openrouter lane.
+    """
+    if args.optimizer in ("eval", "codex") or args.lane != "openrouter":
+        return _LiveProposerUnavailable()
+    proposer_route = route_for(
+        args.lane, role="proposer", temperature=1.0,
+        proposer_model=proposer_model,
+    )
+    return _HttpProposerTransport(proposer_route)
+
+
+def _build_cell_config(
+    args: argparse.Namespace,
+) -> tuple[CellConfig, ProviderRoute]:
+    """Build the FULL live cell Config (routes, policies, transports).
+
+    Pure construction with NO network: it resolves the task/proposer routes and
+    execution policies from the routes registry and wires the live task
+    (``rollout_transport``) and proposer (``proposer_transport``) transports a
+    real cell runs. Factored out of :func:`_run_cell` so the live cell path is
+    constructible and assertable without a paid call -- the wiring test drives
+    it for every optimizer kind to prove the fixture-only proposer seam is
+    unreachable from the live entrypoint. Returns the Config plus the task
+    route (the caller needs its ``key_env`` for the credits fetcher).
+    """
     # Resolve the task model: explicit --task-model override, else the per-env
     # matrix default (c18/c22 -> deepseek, others -> nano). It folds into the
     # task route's Config identity (graph_hash) and is recorded as models.task.
@@ -651,8 +712,6 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         if args.execution_mode
         else detect_execution_mode()
     )
-    ledger = Ledger(root=args.root)
-    ledger.load()
     # Resolve the completeness tolerance: explicit flags override the per-env
     # matrix default. c18 defaults to SKIP-with-2%-tolerance; others PROPAGATE.
     default_missing, default_skip = completeness_for_env(args.env)
@@ -663,18 +722,16 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         else default_skip
     )
     completeness = Completeness(missing_data)
-    # The proposer transport: an eval-row cell never drafts (its "best" is the
-    # naive candidate), so it needs no live proposer. A real optimizer (COPRO /
-    # MIPROv2) on the openrouter lane drafts through the live OpenRouter
-    # proposer route; codex uses its own bridge (not built here). The raising
-    # placeholder stays only where a live proposer genuinely cannot be built.
-    if args.optimizer in ("eval", "codex") or args.lane != "openrouter":
-        proposer_transport: object = _LiveProposerUnavailable()
-    else:
-        proposer_route = route_for(
-            args.lane, role="proposer", temperature=1.0
-        )
-        proposer_transport = _HttpProposerTransport(proposer_route)
+    # Resolve the proposer model: explicit --proposer-model override, else the
+    # routes-registry canonical (gpt-5.4-nano). Codex uses its own bridge.
+    proposer_model_override = getattr(args, "proposer_model", None)
+    proposer_transport = _proposer_transport_for(
+        args, proposer_model=proposer_model_override
+    )
+    recorded_proposer_model = (
+        "codex_cli/gpt-5.6" if args.optimizer == "codex"
+        else (proposer_model_override or CANONICAL_PROPOSER_MODEL)
+    )
     config = CellConfig(
         optimizer=args.optimizer,
         env=args.env,
@@ -684,13 +741,13 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
             resolved_task_model if args.lane == "openrouter"
             else task_route.model
         ),
-        proposer_model=(
-            "codex_cli/gpt-5.6" if args.optimizer == "codex"
-            else CANONICAL_PROPOSER_MODEL
-        ),
+        proposer_model=recorded_proposer_model,
         canonical=not args.non_canonical,
-        proposer_config=_proposer_config(args.lane, args.optimizer),
-        proposer_transport=proposer_transport,  # type: ignore[arg-type]
+        proposer_config=_proposer_config(
+            args.lane, args.optimizer,
+            proposer_model=proposer_model_override,
+        ),
+        proposer_transport=proposer_transport,
         rollout_transport=_live_transport(task_route),
         execution_policy=task_route.execution_policy,
         execution_mode=decision.mode,
@@ -704,6 +761,16 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
     )
+    return config, task_route
+
+
+def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
+    if getattr(args, "dry_run_fake", False):
+        return _run_dry_cell(args)
+    _require_live(args)
+    ledger = Ledger(root=args.root)
+    ledger.load()
+    config, task_route = _build_cell_config(args)
     credits_fetcher = (
         openrouter_credits_fetcher(task_route.key_env)
         if args.lane == "openrouter"
@@ -727,10 +794,25 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
             return 0.0
         return max(0.0, baseline_remaining[0] - snap.remaining_usd)
 
+    # Proposer-call token accounting for the heartbeat: a live proposer
+    # transport tallies its calls + wire tokens as it drafts, so a long cell
+    # streams its proposer usage (not just the credits-delta spend). The eval/
+    # codex placeholder has no counters, so the progress line is task-only.
+    proposer_transport = config.proposer_transport
+
+    def _proposer_progress() -> str:
+        calls = getattr(proposer_transport, "proposer_calls", None)
+        if calls is None:
+            return ""
+        tokens = getattr(proposer_transport, "proposer_tokens", 0)
+        return f"proposer_calls={calls} proposer_tokens={tokens}"
+
     cell_id = f"{args.optimizer}:{args.env}:a{args.attempt}"
     try:
         with _Heartbeat(
-            label=f"cell {cell_id}", spend_estimate=_spend_estimate
+            label=f"cell {cell_id}",
+            spend_estimate=_spend_estimate,
+            progress=_proposer_progress,
         ):
             outcome = run_cell(
                 config,
