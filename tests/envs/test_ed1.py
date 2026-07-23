@@ -448,6 +448,37 @@ def test_ed1_row_diags_carry_budget_and_failure_context() -> None:
     }
 
 
+def test_ed1_row_diag_within_budget_flag_is_false() -> None:
+    # (Task 14a/b) The over_budget flag is FALSE for a within-budget encoder
+    # output -- the diagnosis rests on distinguishing within- vs over-budget
+    # rows, so the flag must track encoder_len vs max_budget both directions.
+    from tests.envs.support import FakeTransport, execution_policy
+    from whetstone.envs.ed1_eval import run_ed1_eval
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=1, official_n=1, budget_ratio=0.5,
+    )
+    ht = tasks[0].humaneval_task
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            return "ok"  # 2 chars, well within any budget
+        return ht.ground_truth_code
+
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template, candidate_id="ed1-naive",
+        instances=exp.eval_configs.internal.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=FakeTransport(reply=reply), repeats=1, apply_reward=False,
+    )
+    d = ed.row_diags[0]
+    assert d.encoder_len == 2
+    assert d.max_budget is not None and d.max_budget >= 2
+    assert d.over_budget is False
+
+
 def test_ed1_pilot_zero_row_arm_is_loud_not_bare_none() -> None:
     # (Task 14b) An arm whose rows all fail must be LOUD: present_rows==0 with
     # a none_reason naming the dominant failure code + count, not a bare None.
