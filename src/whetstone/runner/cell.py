@@ -176,6 +176,10 @@ class CellConfig:
     #: ed1 pool controls: prefer the offline snapshot + a first-N task slice.
     ed1_prefer_snapshot: bool = True
     ed1_task_limit: int | None = None
+    #: ed1 pool filter: always-pass task ids to EXCLUDE (the per-model screen's
+    #: exclusion list). Folds into each split's Task Set identity by removing
+    #: those tasks from the ordered pool before the split.
+    ed1_exclude_task_ids: frozenset[str] | None = None
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -339,6 +343,7 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
             completeness=config.completeness,
             max_skip_fraction=config.max_skip_fraction,
             repeats=config.repeats,
+            exclude_task_ids=config.ed1_exclude_task_ids,
         )
     return build_env_experiment(
         config.env,

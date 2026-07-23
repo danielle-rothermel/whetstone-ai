@@ -354,6 +354,19 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cell.add_argument(
+        "--task-filter",
+        default=None,
+        metavar="SCREEN_JSON",
+        help=(
+            "ed1 (enc-dec) ONLY: a task_screen/ed1_<model>.json path whose "
+            "always-pass task ids are EXCLUDED from the pool (train/eval/"
+            "test). "
+            "The filtered Task Set folds into each split's eval hash, so "
+            "a filtered cell is a distinct variant. Use the screen file for "
+            "SAME model the cell runs (the exclusion list is per-model)."
+        ),
+    )
+    cell.add_argument(
         "--max-wall-seconds",
         type=float,
         default=DEFAULT_CELL_MAX_WALL_SECONDS,
@@ -443,6 +456,64 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refinalize.add_argument("--env", required=True)
     refinalize.add_argument("--attempt", type=int, default=0)
+
+    screen = sub.add_parser(
+        "screen",
+        help=(
+            "run the ed1 task-informativeness screen for one task model over "
+            "the HumanEval+ pool (5 direct + 2 encdec arms x repeats)"
+            "; writes task_screen/ed1_<model>.json with per-task counts + "
+            "the always-pass pool-exclusion list"
+        ),
+    )
+    screen.add_argument("--env", default=ED1_ENV_NAME)
+    screen.add_argument(
+        "--task-model", required=True,
+        help=(
+            "the task model to screen (e.g. qwen/qwen3-coder-flash or "
+            "deepseek/deepseek-v4-flash). Adding a new model = this one flag."
+        ),
+    )
+    screen.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
+    screen.add_argument(
+        "--budget-ratio", type=float, default=0.25, metavar="R",
+        help="the encdec-arm Character Budget ratio (default 0.25)",
+    )
+    screen.add_argument(
+        "--repeats", type=int, default=5,
+        help="repeats per arm per task (default 5)",
+    )
+    screen.add_argument(
+        "--variants", default=None, metavar="A,B,...",
+        help=(
+            "comma-separated subset of screen arms to run (default: all 7 -- "
+            "direct_original,direct_docstring,direct_signature,direct_name,"
+            "direct_renamed,encdec_naive,encdec_renamed)"
+        ),
+    )
+    screen.add_argument(
+        "--rename-token", default=None, metavar="NAME",
+        help=(
+            "the neutral name the *_renamed arms rename the canonical "
+            "entry point to (default: target_fxn). Recorded in the artifact."
+        ),
+    )
+    screen.add_argument(
+        "--limit", type=int, default=None,
+        help="cap the number of tasks screened (default: all 164)",
+    )
+    screen.add_argument(
+        "--dry-run-fake", action="store_true",
+        help=(
+            "wiring smoke test: NO live calls -- a scripted fake transport "
+            "returns the canonical solution so every arm passes"
+        ),
+    )
+    screen.add_argument(
+        "--max-wall-seconds", type=float,
+        default=DEFAULT_PILOT_MAX_WALL_SECONDS,
+        help="whole-run wall deadline for the screen",
+    )
     return parser
 
 
@@ -967,6 +1038,13 @@ def _build_cell_config(
         recorded_proposer_model = (
             proposer_model_override or CANONICAL_PROPOSER_MODEL
         )
+    # ed1 pool filter: --task-filter names a screen artifact whose always-pass
+    # task ids are excluded from the pool (folds into each split's identity).
+    ed1_exclude = None
+    task_filter = getattr(args, "task_filter", None)
+    if task_filter:
+        from whetstone.runner.task_screen import load_exclusion_ids
+        ed1_exclude = load_exclusion_ids(Path(task_filter))
     config = CellConfig(
         optimizer=args.optimizer,
         env=args.env,
@@ -998,6 +1076,7 @@ def _build_cell_config(
         max_skip_fraction=max_skip_fraction,
         power_config=_power_config_for(args),
         budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
+        ed1_exclude_task_ids=ed1_exclude,
     )
     return config, task_route
 
@@ -1141,6 +1220,135 @@ def _run_refinalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
+    """Run the ed1 task-informativeness screen for one task model.
+
+    Drives the selected arms (5 direct + 2 encdec by default) x repeats over
+    HumanEval+ pool on the live route, with incremental partials + an output
+    sidecar (resumable), and writes ``task_screen/ed1_<model>.json`` (per-task
+    pass counts + verdicts + the pool-exclusion list + rename deltas). The code
+    eval is the LOCAL subprocess sandbox (no container). ``--dry-run-fake``
+    swaps a scripted fake transport (no live calls) for wiring validation.
+    """
+    from whetstone.execution.partials import PartialLog
+    from whetstone.runner.task_screen import (
+        DEFAULT_RENAME_TOKEN,
+        model_tag,
+        run_task_screen,
+    )
+
+    route = route_for(
+        args.lane, role="task", temperature=0.0, task_model=args.task_model,
+    )
+    tag = model_tag(args.task_model)
+    root = Path(args.root)
+    partials = PartialLog(
+        path=root / "partials" / f"screen_{tag}.partial.jsonl"
+    )
+    sidecar = root / "task_screen" / f"ed1_{tag}.outputs.jsonl"
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    variants = (
+        tuple(v.strip() for v in args.variants.split(",") if v.strip())
+        if getattr(args, "variants", None) else None
+    )
+    rename_token = getattr(args, "rename_token", None) or DEFAULT_RENAME_TOKEN
+    transport = (
+        _screen_fake_transport()
+        if getattr(args, "dry_run_fake", False)
+        else _live_transport(route)
+    )
+    report = run_task_screen(
+        model=route.model,
+        transport=transport,
+        execution_policy=route.execution_policy,
+        budget_ratio=args.budget_ratio,
+        repeats=args.repeats,
+        variants=variants,
+        rename_token=rename_token,
+        limit=args.limit,
+        concurrency=args.concurrency,
+        partial_log=partials,
+        sidecar_path=sidecar,
+    )
+    path = report.write(root)
+    summary = report.arm_summary()
+    deltas = report.rename_deltas()
+    mode = " (dry-run-fake, no live calls)" if getattr(
+        args, "dry_run_fake", False) else ""
+    sys.stdout.write(
+        f"ed1 screen model={report.model} tasks={len(report.rows)} "
+        f"repeats={report.repeats} budget_ratio={report.budget_ratio}"
+        f"{mode}\n"
+        f"  excluded (always-pass, all screened arms): "
+        f"{len(report.excluded_task_ids)} tasks\n"
+    )
+    for arm in report.arms:
+        s = summary[arm]
+        sys.stdout.write(
+            f"  {arm}: mean_pass={s['mean_pass_rate']:.3f} "
+            f"tasks_full_pass={int(s['tasks_full_pass'])}\n"
+        )
+    for pair, d in deltas.items():
+        sys.stdout.write(
+            f"  DELTA {pair}: canonical={d['canonical_mean_pass']:.3f} - "
+            f"renamed={d['renamed_mean_pass']:.3f} = {d['delta']:.3f}\n"
+        )
+    sys.stdout.write(f"  -> {path}\n")
+    return 0
+
+
+def _screen_fake_transport():  # pragma: no cover - dry-run wiring only
+    """A scripted fake transport for ``screen --dry-run-fake`` (no live call).
+
+    Returns the canonical solution (renamed as each arm needs) so every arm
+    passes -- it validates the screen wiring end-to-end without paid calls.
+    """
+    from whetstone.envs.ed1 import load_ed1_tasks
+    from whetstone.runner.dryrun import ScriptedRolloutTransport
+    from whetstone.runner.task_screen import rename_identifier, split_prompt
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=None)
+    fp: dict[str, tuple[str, str]] = {}
+    for t in tasks:
+        ht = t.humaneval_task
+        parts = split_prompt(ht.prompt, ht.entry_point)
+        fp[parts.docstring[:40]] = (ht.entry_point, ht.ground_truth_code)
+        for code in (
+            t.input_code,
+            rename_identifier(t.input_code, ht.entry_point, "target_fxn"),
+        ):
+            body = code.split("):", 1)[-1].strip()[:40]
+            if body:
+                fp[body] = (ht.entry_point, ht.ground_truth_code)
+
+    def _reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for key, (ep, _gt) in fp.items():
+                if key and key in prompt:
+                    renamed = "1" if "def target_fxn(" in prompt else "0"
+                    return f"REBUILD:{ep}:{renamed}"
+            return "REBUILD::x"
+        for t in tasks:
+            ht = t.humaneval_task
+            if f"REBUILD:{ht.entry_point}:1" in prompt:
+                return rename_identifier(
+                    ht.ground_truth_code, ht.entry_point, "target_fxn"
+                )
+            if f"REBUILD:{ht.entry_point}:0" in prompt:
+                return ht.ground_truth_code
+        for key, (ep, gt) in fp.items():
+            if key and key in prompt:
+                if "target_fxn" in prompt and ep not in prompt:
+                    return rename_identifier(gt, ep, "target_fxn")
+                return gt
+        for t in tasks:
+            if t.humaneval_task.entry_point in prompt:
+                return t.humaneval_task.ground_truth_code
+        return tasks[0].humaneval_task.ground_truth_code
+
+    return ScriptedRolloutTransport(reply=_reply)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     _force_unbuffered_stdout()
     parser = build_parser()
@@ -1151,6 +1359,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_cell(args)
     if args.command == "refinalize":
         return _run_refinalize(args)
+    if args.command == "screen":
+        return _run_screen(args)
     parser.error("unknown command")  # pragma: no cover
     return 1
 

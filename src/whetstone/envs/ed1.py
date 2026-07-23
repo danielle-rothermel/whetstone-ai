@@ -549,6 +549,7 @@ def build_ed1_experiment(
     max_skip_fraction: float = 0.0,
     repeats: int = 3,
     tasks: tuple[Ed1Instance, ...] | None = None,
+    exclude_task_ids: frozenset[str] | None = None,
 ) -> Ed1Experiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
 
@@ -557,10 +558,25 @@ def build_ed1_experiment(
     enc-dec rollout at ``budget_ratio`` (folded into ``graph_hash``), the naive
     (A) + ceiling (B) encoder candidates, the two Eval Configs (sharing the
     code-eval Procedure identity), and the pass-rate-only Reward Policy.
+
+    ``exclude_task_ids`` DROPS those task ids from the pool BEFORE the split
+    (the task-screen pool filter, task 17 Part 2): a task that is 100% correct
+    in every screen arm carries no signal and is removed from the train /
+    eval / test (internal / official / held-out) pools. The exclusion applies
+    to the
+    ordered pool, so the filtered Task Set is deterministic; because each
+    split's Task Set identity folds its task ids, a filtered pool yields a
+    DISTINCT ``eval_config_hash`` per split -- the exclusion folds into the id
+    by construction. The list is per-model (built from that model's screen), so
+    the caller passes the exclusion list for the model the cell actually runs.
     """
     pool = tasks if tasks is not None else load_ed1_tasks(
         prefer_snapshot=prefer_snapshot, limit=limit
     )
+    if exclude_task_ids:
+        pool = tuple(
+            t for t in pool if str(t.instance.id) not in exclude_task_ids
+        )
     if not pool:
         raise ValueError("ed1 task pool is empty")
     procedure = build_ed1_procedure_config()
