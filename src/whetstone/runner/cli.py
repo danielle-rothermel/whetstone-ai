@@ -31,6 +31,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from whetstone.envs.ed1 import ED1_DEFAULT_BUDGET_RATIO, ED1_ENV_NAME
 from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
@@ -325,6 +326,19 @@ def build_parser() -> argparse.ArgumentParser:
             "20; a tighter target may need more). Only takes effect with "
             "--power-stage; the recommended repeats are APPLIED to the "
             "optimizer's internal evals, not just recorded."
+        ),
+    )
+    cell.add_argument(
+        "--budget-ratio",
+        type=float,
+        default=ED1_DEFAULT_BUDGET_RATIO,
+        metavar="R",
+        help=(
+            "ed1 (enc-dec) ONLY: the per-task Character Budget ratio "
+            f"(MAX_BUDGET = round(R * chars(input_code)), default "
+            f"{ED1_DEFAULT_BUDGET_RATIO}). Folds into the enc-dec graph_hash "
+            "via the Character Budget rule (a distinct ratio is a distinct "
+            "Rollout Variant). Ignored by the QA envs."
         ),
     )
     cell.add_argument(
@@ -645,6 +659,8 @@ def _failure_summary_line(report: PilotReport) -> str:
 
 def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     _require_live(args)
+    if args.env == ED1_ENV_NAME:
+        return _run_ed1_pilot(args)
     # Resolve the task model the same way a cell does: explicit --task-model
     # override, else the per-env matrix default (c18/c22/c22h -> deepseek,
     # others -> nano). Applied to the openrouter task route only; plan lanes
@@ -726,6 +742,48 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     return 0
 
 
+def _run_ed1_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
+    """Run the ed1 enc-dec pilot: both encoder probes on a small task slice.
+
+    Drives the 3-node encoder->decoder->code-eval rollout for the naive (A) +
+    ceiling (B) encoder templates over a small HumanEval+ slice and reports
+    each
+    probe's pass rate + Mean Compression Ratio (dual scores). The task-side
+    rollouts run on the live openrouter route; the code eval is the LOCAL
+    subprocess sandbox (no container).
+    """
+    from whetstone.runner.ed1_pilot import run_ed1_pilot
+
+    resolved_task_model = task_model_for_env(
+        args.env, override=getattr(args, "task_model", None)
+    )
+    route = route_for(
+        args.lane, role="task", temperature=0.0,
+        task_model=resolved_task_model,
+    )
+    report = run_ed1_pilot(
+        transport=_live_transport(route),
+        execution_policy=route.execution_policy,
+        model=route.model,
+        budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
+        tasks=args.instances,
+        concurrency=args.concurrency,
+    )
+    path = report.write(args.root)
+    sys.stdout.write(
+        f"ed1 pilot env={args.env} model={report.model} "
+        f"budget_ratio={report.budget_ratio} tasks={report.tasks}\n"
+        f"  naive: pass={report.naive.pass_rate} "
+        f"compression={report.naive.mean_compression}\n"
+        f"  ceiling: pass={report.ceiling.pass_rate} "
+        f"compression={report.ceiling.mean_compression}\n"
+        f"  pass_direction_ok={report.pass_direction_ok} "
+        f"compression_direction_ok={report.compression_direction_ok} "
+        f"dataset={report.dataset_revision} -> {path}\n"
+    )
+    return 0
+
+
 def _run_dry_cell(args: argparse.Namespace) -> int:
     """Run one cell against scripted fake transports (no live paid call)."""
     from whetstone.runner.dryrun import run_dry_cell
@@ -746,6 +804,7 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
             official_n=getattr(args, "official_n", None),
             official_repeats=getattr(args, "official_repeats", None),
         ),
+        budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
     )
     r = outcome.record
     note = "skipped" if outcome.skipped else r.status
@@ -917,6 +976,7 @@ def _build_cell_config(
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
         power_config=_power_config_for(args),
+        budget_ratio=getattr(args, "budget_ratio", ED1_DEFAULT_BUDGET_RATIO),
     )
     return config, task_route
 

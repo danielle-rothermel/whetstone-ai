@@ -152,6 +152,28 @@ class PowerSizing(BaseModel):
     achieved_mdd: float
 
 
+class CellDualScores(BaseModel):
+    """The ed1 SECOND objective (Mean Compression Ratio) per official arm.
+
+    Present ONLY for the ed1 enc-dec env (``None`` for QA envs, which have one
+    objective). The primary ``baseline_official`` / ``best_official`` /
+    ``ceiling_official`` fields carry the pass-rate (the reward-bearing
+    metric);
+    these carry the compression scalars REPORTED alongside. Full dual-objective
+    /
+    Pareto selection is a flagged follow-up -- this is reporting, not
+    selection.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    naive_compression: float | None = None
+    ceiling_compression: float | None = None
+    best_compression: float | None = None
+    budget_ratio: float | None = None
+    dataset_revision: StrictStr | None = None
+
+
 class CellRecord(BaseModel):
     """One ``cells.jsonl`` line -- the validation-plan schema + stats upgrade.
 
@@ -213,6 +235,9 @@ class CellRecord(BaseModel):
     #: The opt-in power stage's recommended-vs-used internal sizing; ``None``
     #: when the power stage did not run (a run without it is byte-identical).
     power_sizing: PowerSizing | None = None
+    #: The ed1 enc-dec SECOND objective (Mean Compression Ratio per arm) +
+    #: budget/dataset provenance; ``None`` for QA envs (single objective).
+    dual_scores: CellDualScores | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> CellRecord:

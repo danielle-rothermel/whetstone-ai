@@ -13,13 +13,15 @@ lives in :mod:`whetstone.envs.internal_eval`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
+
+from dr_providers import ProviderCallConfig
 
 from whetstone.code_eval.aggregate import CompletenessPolicy
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import DEFAULT_REPEATS, env_spec
 from whetstone.envs.reward import build_reward_policy
 from whetstone.envs.rollout_definition import (
-    EnvRolloutDefinition,
     build_rollout_definition,
     ceiling_candidate,
     initial_candidate,
@@ -34,6 +36,25 @@ from whetstone.optimization.reward import RewardPolicy
 from whetstone.optimization.schema import Candidate
 
 
+class RolloutDefinitionLike(Protocol):
+    """The structural Rollout Definition contract the runner reads.
+
+    Both the QA ``EnvRolloutDefinition`` (2-node) and the ed1
+    ``EncDecRolloutDefinition`` (3-node) satisfy it, so the runner reads
+    ``graph_hash`` / ``provider_call_config`` / ``procedure_config_hash``
+    uniformly across env kinds without a concrete-type coupling.
+    """
+
+    @property
+    def graph_hash(self) -> str: ...
+
+    @property
+    def provider_call_config(self) -> ProviderCallConfig: ...
+
+    @property
+    def procedure_config_hash(self) -> str: ...
+
+
 @dataclass(frozen=True, slots=True)
 class EnvExperiment:
     """The five bound deliverables for one env, returned by the factory.
@@ -45,7 +66,7 @@ class EnvExperiment:
     """
 
     env_name: str
-    rollout_definition: EnvRolloutDefinition
+    rollout_definition: RolloutDefinitionLike
     initial_candidate: Candidate
     ceiling_candidate: Candidate
     eval_configs: EnvEvalConfigs

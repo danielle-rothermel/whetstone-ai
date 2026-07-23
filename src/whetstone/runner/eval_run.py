@@ -35,6 +35,7 @@ from whetstone.envs.internal_eval import RolloutOutput, run_internal_eval
 from whetstone.execution.fanout import FanoutConfig
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
+from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.schema import Candidate
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
@@ -89,6 +90,16 @@ class SplitEvaluation:
     #: FULL model output text + score per DRIVEN row (additive logging for
     #: qualitative prompt->output analysis; empty on a resumed/restored pass).
     outputs: tuple[RolloutOutput, ...] = ()
+    #: The ed1 SECOND objective reported alongside the primary ``score``: the
+    #: Mean Compression Ratio (``None`` for QA envs, which have one objective).
+    #: The Reward is derived from ``score`` (pass rate) ONLY; this is REPORTED,
+    #: never rewarded (dual-objective / Pareto selection is a flagged
+    #: follow-up).
+    compression_score: float | None = None
+    #: The aligned per-task Mean Compression Ratio (ed1 only), for the sidecar
+    #: /
+    #: dual-score reporting; empty for QA envs.
+    per_task_compression: tuple[float | None, ...] = ()
 
     @property
     def is_complete(self) -> bool:
@@ -159,6 +170,27 @@ def evaluate_split(
     apply_reward_resolved = (
         (not is_official) if apply_reward is None else apply_reward
     )
+    # ed1 (enc-dec HumanEval) dispatch: a distinct 3-node
+    # encoder->decoder->code
+    # eval drive producing DUAL scores. The QA path below is untouched (byte-
+    # identical) -- ed1 is a separate, self-contained branch.
+    from whetstone.envs.ed1 import Ed1Experiment
+
+    if isinstance(experiment, Ed1Experiment):
+        return _evaluate_ed1_split(
+            experiment,
+            candidate=candidate,
+            instances=instances,
+            split_role=split_role,
+            transport=transport,
+            execution_policy=execution_policy,
+            repeats=repeats,
+            store=store,
+            execution_mode=execution_mode,
+            policy=policy,
+            fanout=fanout,
+            apply_reward=apply_reward_resolved,
+        )
     result = run_internal_eval(
         experiment,
         candidate=candidate,
@@ -208,4 +240,90 @@ def evaluate_split(
         deadline_reached=result.deadline_reached,
         guard_timeouts=result.guard_timeouts,
         outputs=result.outputs,
+    )
+
+
+#: The Result Store schema for a persisted ed1 dual-aggregate artifact.
+ED1_AGGREGATE_ARTIFACT_SCHEMA = "whetstone.runner.ed1_split_aggregate"
+
+
+def _evaluate_ed1_split(
+    experiment: Any,
+    *,
+    candidate: Candidate,
+    instances: tuple[Instance, ...],
+    split_role: str,
+    transport: TransportCall,
+    execution_policy: ProviderExecutionPolicy,
+    repeats: int,
+    store: ObjectStore | None,
+    execution_mode: ExecutionMode,
+    policy: RowPolicy | CompletenessPolicy,
+    fanout: FanoutConfig | None,
+    apply_reward: bool,
+) -> SplitEvaluation:
+    """Evaluate one ed1 candidate over a split via the enc-dec DUAL drive.
+
+    Runs :func:`whetstone.envs.ed1_eval.run_ed1_eval` (encoder -> decoder ->
+    code-eval), persists a DUAL aggregate artifact (pass rate + Mean
+    Compression
+    Ratio), and returns a :class:`SplitEvaluation` whose ``score`` is the pass
+    rate (the reward-bearing metric) and whose ``compression_score`` /
+    ``per_task_compression`` carry the reported compression, plus per-row
+    outputs
+    (encoder + decoder text) for the dual-score sidecar.
+    """
+    from whetstone.envs.ed1_eval import run_ed1_eval
+
+    template = str(candidate.payload.get(MUTATION_FIELD, ""))
+    ed = run_ed1_eval(
+        experiment,
+        candidate_template=template,
+        candidate_id=candidate.candidate_id,
+        instances=instances,
+        execution_policy=execution_policy,
+        transport=transport,
+        scorer=experiment.scorer,
+        repeats=repeats,
+        policy=policy,
+        fanout=fanout,
+        apply_reward=apply_reward,
+        store=store,
+    )
+    pass_agg = ed.pass_aggregate
+    comp_agg = ed.compression_aggregate
+    backing = store or ObjectStore(MemoryBackend())
+    artifact: dict[str, Any] = {
+        "schema": ED1_AGGREGATE_ARTIFACT_SCHEMA,
+        "split_role": split_role,
+        "candidate_id": candidate.candidate_id,
+        "graph_hash": pass_agg.graph_hash,
+        "eval_config_hash": pass_agg.eval_config_hash,
+        "pass_rate": pass_agg.aggregation_output.value,
+        "mean_compression_ratio": comp_agg.aggregation_output.value,
+        "task_count": pass_agg.task_count,
+        "repeat_count": pass_agg.repeat_count,
+        "rows_present": pass_agg.rows_present,
+        "rows_failed": pass_agg.rows_failed,
+        "rows_invalid": pass_agg.rows_invalid,
+        "execution_mode": execution_mode.value,
+    }
+    backing.put(ED1_AGGREGATE_ARTIFACT_SCHEMA, artifact)
+    artifact_ref = typed_ref_for_record(
+        ED1_AGGREGATE_ARTIFACT_SCHEMA, artifact
+    )
+    return SplitEvaluation(
+        split_role=split_role,
+        candidate_id=candidate.candidate_id,
+        score=pass_agg.aggregation_output.value,
+        aggregate=pass_agg,
+        artifact_ref=artifact_ref,
+        execution_mode=execution_mode,
+        task_count=pass_agg.task_count,
+        repeat_count=pass_agg.repeat_count,
+        per_task_scores=ed.per_task_scores,
+        per_task_counts=ed.per_task_counts,
+        outputs=ed.outputs,
+        compression_score=comp_agg.aggregation_output.value,
+        per_task_compression=ed.per_task_compression,
     )

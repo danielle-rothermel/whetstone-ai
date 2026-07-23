@@ -414,6 +414,23 @@ class OptimizeResult:
         }
 
 
+def _intake_valid_keys(
+    experiment: EnvExperiment, instances: tuple[Instance, ...]
+) -> frozenset[str]:
+    """The keyword fields a candidate template may reference at intake.
+
+    QA envs derive them from the env definition + a sample instance. ed1's
+    encoder Mutation Surface is not a QA ``EnvSpec``, so its valid keys are the
+    fixed encoder placeholders (``input_code`` / ``max_budget``).
+    """
+    from whetstone.envs.ed1 import ED1_ENV_NAME
+
+    if experiment.env_name == ED1_ENV_NAME:
+        return frozenset({"input_code", "max_budget"})
+    env = env_spec(experiment.env_name)
+    return valid_prompt_input_keys(env, instances[0])
+
+
 def _proposal_rounds(hyper: dict[str, Any]) -> tuple[int, int]:
     """(breadth, depth) proposal shape from the scaled hyperparameters.
 
@@ -511,17 +528,20 @@ def run_optimize(
     best_score = baseline_eval.score
     steps: list[ProposalStep] = []
 
+    breadth, depth = _proposal_rounds(hyper)
+
     # The keyword fields a candidate template may safely reference, derived
     # (never hardcoded) from the env definition + a sample of the split we will
     # actually render against. PROPOSED templates are untrusted LLM output: a
     # candidate naming a field the render cannot fill (e.g. c22's {question})
     # is rejected at intake below, before it spends any eval calls -- the c22
     # crash was an unhandled render KeyError that killed the whole cell.
-    env = env_spec(experiment.env_name)
-    sample = scoped[0] if scoped else internal_instances[0]
-    valid_keys = valid_prompt_input_keys(env, sample)
+    # Derived ONLY when the optimizer actually drafts (identity draws nothing,
+    # and ed1's encoder surface is not a QA EnvSpec so its keys come from ed1).
+    valid_keys = _intake_valid_keys(
+        experiment, scoped or internal_instances
+    ) if (breadth and depth) else frozenset()
 
-    breadth, depth = _proposal_rounds(hyper)
     ordinal = 0
     base_template = str(naive.payload[MUTATION_FIELD])
     for round_index in range(depth):

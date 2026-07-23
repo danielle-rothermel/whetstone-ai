@@ -66,6 +66,8 @@ def test_cell_record_exact_schema_fields() -> None:
         "sampling_overrides",
         # Opt-in power stage (None unless --power-stage ran).
         "power_sizing",
+        # ed1 enc-dec dual scores (None unless the env is ed1).
+        "dual_scores",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
@@ -78,6 +80,8 @@ def test_cell_record_exact_schema_fields() -> None:
     # The power stage did NOT run -> both power fields null (inert default).
     assert dumped["power_sizing"] is None
     assert dumped["artifacts"]["power_analysis_ref"] is None
+    # A QA cell records no ed1 dual scores (single objective).
+    assert dumped["dual_scores"] is None
 
 
 def test_invalid_status_rejected() -> None:

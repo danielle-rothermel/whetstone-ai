@@ -98,6 +98,10 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     # c18h inherits base c18's deepseek default (same entailment task family);
     # overridable via --task-model (the c18h headroom pilot/anchor runs nano).
     "c18h": DEEPSEEK_TASK_MODEL,
+    # ed1 (enc-dec HumanEval compression): canonical enc/dec model is
+    # deepseek/deepseek-v4-flash (design + user directive), overridable via
+    # --task-model. The same route plays both encoder and decoder.
+    "ed1": DEEPSEEK_TASK_MODEL,
 }
 
 

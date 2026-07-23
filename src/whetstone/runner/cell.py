@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 
 from dr_store import MemoryBackend, ObjectStore
 
+from whetstone.envs.ed1 import ED1_ENV_NAME, build_ed1_experiment
+from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness, SamplingOverrides
@@ -48,6 +50,7 @@ from whetstone.runner.eval_run import (
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import (
     CellArtifacts,
+    CellDualScores,
     CellModels,
     CellRecord,
     CellSamplingOverrides,
@@ -162,6 +165,16 @@ class CellConfig:
     #: artifact, and SETS the optimizer's internal-eval sizes from the
     #: recommendation (clamped to pool), recording recommended-vs-used.
     power_config: PowerConfig | None = None
+    #: ed1 (enc-dec) budget ratio (``--budget-ratio``, default 0.5). Folds into
+    #: the enc-dec ``graph_hash`` via the Character Budget rule. QA envs
+    #: ignore.
+    budget_ratio: float = 0.5
+    #: ed1 injectable code scorer (tests/dry-runs may inject a fast scorer;
+    #: ``None`` uses the default dr-code local subprocess scorer).
+    ed1_scorer: Callable[..., CodeScore] | None = None
+    #: ed1 pool controls: prefer the offline snapshot + a first-N task slice.
+    ed1_prefer_snapshot: bool = True
+    ed1_task_limit: int | None = None
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -298,6 +311,60 @@ def _arm_incomplete_detail(
         f"{label}(rows_present={agg.rows_present} "
         f"rows_failed={agg.rows_failed} rows_missing={agg.rows_missing} "
         f"rows_invalid={agg.rows_invalid})"
+    )
+
+
+def _build_experiment(config: CellConfig) -> EnvExperiment:
+    """Build the cell's experiment: the ed1 enc-dec binding or a QA env.
+
+    ``ed1`` builds the encoder->decoder->code-eval experiment (dual-score,
+    ``budget_ratio`` folded into ``graph_hash``); every other env is the QA
+    ``build_env_experiment`` path, UNCHANGED (byte-identical).
+    """
+    if config.env == ED1_ENV_NAME:
+        return build_ed1_experiment(
+            model=config.task_model,
+            budget_ratio=config.budget_ratio,
+            scorer=config.ed1_scorer,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+        )
+    return build_env_experiment(
+        config.env,
+        model=config.task_model,
+        pool_n_per_stratum=config.pool_n_per_stratum,
+        completeness=config.completeness,
+        max_skip_fraction=config.max_skip_fraction,
+        split_sizes=config.split_sizes,
+        overrides=config.sampling_overrides,
+    )
+
+
+def _ed1_dual_scores(
+    config: CellConfig,
+    experiment: EnvExperiment,
+    dual_compression: dict[str, float | None],
+) -> CellDualScores | None:
+    """The ed1 SECOND-objective sub-record (compression per arm), or ``None``.
+
+    ``None`` for QA envs. For ed1, carries the Mean Compression Ratio the naive
+    /
+    ceiling / best official arms measured (reported alongside the pass rate),
+    the
+    ``budget_ratio``, and the pinned dataset revision.
+    """
+    if config.env != ED1_ENV_NAME:
+        return None
+    revision = getattr(experiment, "dataset_revision", None)
+    return CellDualScores(
+        naive_compression=dual_compression.get("official_naive"),
+        ceiling_compression=dual_compression.get("official_ceiling"),
+        best_compression=dual_compression.get("official_best"),
+        budget_ratio=config.budget_ratio,
+        dataset_revision=revision,
     )
 
 
@@ -891,10 +958,18 @@ def run_cell(
     # score across the official arms AND the internal candidate evals is
     # accumulated here and written to a per-cell sidecar at finalize.
     output_rows: list[dict[str, object]] = []
+    # ed1 dual scores: the Mean Compression Ratio per official arm (reported
+    # alongside the primary pass-rate score; None for QA envs). Captured as the
+    # arms are observed so the cell line records both objectives.
+    dual_compression: dict[str, float | None] = {}
 
     def _collect_outputs(split_role: str, evaluation: object) -> None:
-        for out in getattr(evaluation, "outputs", ()) or ():
-            output_rows.append({
+        comp = getattr(evaluation, "compression_score", None)
+        if comp is not None or getattr(evaluation, "per_task_compression", ()):
+            dual_compression[split_role] = comp
+        per_task_comp = getattr(evaluation, "per_task_compression", ()) or ()
+        for i, out in enumerate(getattr(evaluation, "outputs", ()) or ()):
+            row: dict[str, object] = {
                 "split_role": split_role,
                 "candidate_id": out.candidate_id,
                 "instance_id": out.instance_id,
@@ -902,7 +977,13 @@ def run_cell(
                 "output_text": out.output_text,
                 "score": out.score,
                 "failure_code": out.failure_code,
-            })
+            }
+            # ed1: attach the per-task compression alongside the per-row
+            # output.
+            task_idx = i // max(1, config.repeats)
+            if task_idx < len(per_task_comp):
+                row["compression_ratio"] = per_task_comp[task_idx]
+            output_rows.append(row)
 
     def _observe(evaluation: object) -> None:
         """Fold a split evaluation's fan-out flags into the cell-level halt."""
@@ -959,15 +1040,7 @@ def run_cell(
     )
 
     start = clock()
-    experiment: EnvExperiment = build_env_experiment(
-        config.env,
-        model=config.task_model,
-        pool_n_per_stratum=config.pool_n_per_stratum,
-        completeness=config.completeness,
-        max_skip_fraction=config.max_skip_fraction,
-        split_sizes=config.split_sizes,
-        overrides=config.sampling_overrides,
-    )
+    experiment: EnvExperiment = _build_experiment(config)
     naive = experiment.initial_candidate
     official = official_instances(experiment)
 
@@ -1461,6 +1534,10 @@ def run_cell(
         outputs_ref=outputs_ref, internal_repeats=internal_repeats,
     )
 
+    # ed1: record the SECOND objective (Mean Compression Ratio per arm) +
+    # budget/dataset provenance alongside the primary pass-rate scores.
+    dual_scores = _ed1_dual_scores(config, experiment, dual_compression)
+
     record = CellRecord(
         cell_id=cell_id,
         optimizer=config.optimizer,
@@ -1503,6 +1580,7 @@ def run_cell(
         ),
         sampling_overrides=config.record_overrides(),
         power_sizing=power_sizing,
+        dual_scores=dual_scores,
     )
     ledger.append_cell(record)
     # A cleanly-completed (non-halted) cell has its authoritative result in the

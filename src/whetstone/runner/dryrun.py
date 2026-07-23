@@ -40,6 +40,7 @@ from dr_providers import (
 )
 from whetstone_envs.core import Instance
 
+from whetstone.envs.ed1 import ED1_ENV_NAME
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
@@ -74,6 +75,8 @@ __all__ = [
 #: cell, but every transport is a scripted fake (no live paid call).
 DRYRUN_TASK_MODEL = "openai/gpt-5-nano"
 DRYRUN_PROPOSER_MODEL = "openai/gpt-5.4-nano"
+#: The ed1 dry-run enc/dec task model (recorded on the dry cell line).
+ED1_DRY_TASK_MODEL = "deepseek/deepseek-v4-flash"
 
 #: A brace-free suffix appended to the env's own naive template to build the
 #: winning template. Appending plain text keeps every ``str.format``
@@ -221,6 +224,7 @@ def run_dry_cell(
     lane: str = "openrouter",
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
     overrides: SamplingOverrides | None = None,
+    budget_ratio: float = 0.5,
 ) -> CellOutcome:
     """Run one fake-transport cell end-to-end and append its ledger line.
 
@@ -235,6 +239,16 @@ def run_dry_cell(
     keys the env cache by the reduced hash.
     """
     overrides = overrides or SamplingOverrides()
+    # ed1 (enc-dec) has a distinct fake-cell path: the 3-node
+    # encoder->decoder->
+    # code-eval graph + a local (no-Docker) sandbox scorer. The QA path below
+    # is
+    # unchanged.
+    if env == ED1_ENV_NAME:
+        return _run_dry_ed1_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, budget_ratio=budget_ratio,
+        )
     pool_n = _pool_n_per_stratum(env)
     experiment = build_env_experiment(
         env, model=DRYRUN_TASK_MODEL, pool_n_per_stratum=pool_n,
@@ -292,3 +306,92 @@ def _static_credits() -> Callable[[], CreditsSnapshot]:
         return CreditsSnapshot(total_credits=710.0, total_usage=616.0)
 
     return fetch
+
+
+#: The fixed ed1 dry-run task slice (small + offline).
+_ED1_DRY_TASK_LIMIT = 4
+
+
+def _ed1_dry_reply(tasks) -> Callable[[str], str]:
+    """A scripted enc/dec reply: encoder emits a per-task marker; the decoder
+    returns that task's canonical solution (so the sandbox scores PASS)."""
+    by_entry = {
+        t.humaneval_task.entry_point: t.humaneval_task.ground_truth_code
+        for t in tasks
+    }
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for ep in by_entry:
+                if f"def {ep}(" in prompt:
+                    return f"REBUILD:{ep}"
+            return "REBUILD:unknown"
+        for ep, gt in by_entry.items():
+            if f"REBUILD:{ep}" in prompt:
+                return gt
+        return "def _x():\n    return None\n"
+
+    return reply
+
+
+def _run_dry_ed1_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    budget_ratio: float = 0.5,
+) -> CellOutcome:
+    """Run one ed1 (enc-dec) fake cell end-to-end (no network, no Docker).
+
+    Builds the 3-node encoder->decoder->code-eval experiment over a small
+    offline HumanEval+ slice, a scripted enc/dec transport (encoder marker ->
+    decoder canonical), a LOCAL subprocess sandbox scorer (no container), and
+    any
+    optimizer's proposer script (a valid improved encoder template for the
+    proposing optimizers). Records BOTH scores (pass rate + Mean Compression
+    Ratio) on the ledger line.
+    """
+    from whetstone.envs.ed1 import ENCODER_TEMPLATE_B, load_ed1_tasks
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=_ED1_DRY_TASK_LIMIT)
+    reply = _ed1_dry_reply(tasks)
+    # The default ed1 scorer runs the test suite in a LOCAL subprocess (no
+    # container) -- no Docker needed for the dry-run wiring validation.
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        # A valid alternate encoder template (still a real Mutation-Surface
+        # template) so a proposing optimizer drafts + scores a candidate.
+        proposer = FakeProposerTransport(
+            script={}, default=(ENCODER_TEMPLATE_B,)
+        )
+    config = CellConfig(
+        optimizer=optimizer,
+        env=ED1_ENV_NAME,
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        budget_ratio=budget_ratio,
+        ed1_task_limit=_ED1_DRY_TASK_LIMIT,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())

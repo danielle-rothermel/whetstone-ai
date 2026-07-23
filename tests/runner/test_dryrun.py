@@ -259,3 +259,34 @@ def test_cli_dry_run_fake_resumes_completed_cell(tmp_path: Path) -> None:
     assert outcome.skipped is True
     # Still exactly one ledger line (the completed cell was not duplicated).
     assert len(Ledger(root=tmp_path).load()) == 1
+
+
+def test_dry_cell_ed1_encdec_end_to_end(tmp_path: Path) -> None:
+    # ed1 --dry-run-fake drives the 3-node enc-dec graph offline (no network,
+    # no
+    # Docker): both scores land + the pinned dataset revision is recorded.
+    from whetstone.envs.ed1 import ED1_DATASET_REVISION, ED1_ENV_NAME
+
+    outcome = run_dry_cell(
+        env=ED1_ENV_NAME, optimizer="eval", root=tmp_path,
+        execution_mode=ExecutionMode.IN_PROCESS, budget_ratio=0.5,
+    )
+    r = outcome.record
+    assert r.env == ED1_ENV_NAME
+    assert r.best_official is not None  # pass rate
+    assert r.dual_scores is not None
+    assert r.dual_scores.best_compression is not None
+    assert r.dual_scores.budget_ratio == 0.5
+    assert r.dual_scores.dataset_revision == ED1_DATASET_REVISION
+    assert len(Ledger(root=tmp_path).load()) == 1
+
+
+def test_dry_cell_ed1_budget_ratio_flows(tmp_path: Path) -> None:
+    from whetstone.envs.ed1 import ED1_ENV_NAME
+
+    outcome = run_dry_cell(
+        env=ED1_ENV_NAME, optimizer="eval", root=tmp_path,
+        execution_mode=ExecutionMode.IN_PROCESS, budget_ratio=0.75,
+    )
+    assert outcome.record.dual_scores is not None
+    assert outcome.record.dual_scores.budget_ratio == 0.75
