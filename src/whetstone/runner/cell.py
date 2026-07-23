@@ -323,12 +323,19 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
     ``build_env_experiment`` path, UNCHANGED (byte-identical).
     """
     if config.env == ED1_ENV_NAME:
+        # Fold the OFFICIAL-split sampling override into the ed1 pool slice so
+        # a reduced-anchor cell (``--official-n``) drives only N official tasks
+        # -- not the full 164-task HumanEval pool. ``official_repeats`` is
+        # applied downstream via ``official_repeats_effective()`` (the shared
+        # eval-driver repeat budget), so only the task-count override folds in
+        # here. ``None`` keeps the full official split (spec default).
         return build_ed1_experiment(
             model=config.task_model,
             budget_ratio=config.budget_ratio,
             scorer=config.ed1_scorer,
             prefer_snapshot=config.ed1_prefer_snapshot,
             limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
             completeness=config.completeness,
             max_skip_fraction=config.max_skip_fraction,
             repeats=config.repeats,

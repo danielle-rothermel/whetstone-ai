@@ -269,3 +269,131 @@ def test_ed1_pilot_reports_both_probes_dual_scores(tmp_path: Path) -> None:
     # The report writes to <root>/pilots/ed1.json.
     path = report.write(tmp_path)
     assert path.exists() and path.name == "ed1.json"
+
+
+def test_ed1_pilot_honors_budget_ratio_override() -> None:
+    # (Task 13d) The pilot's --budget-ratio flows into the enc-dec graph: a
+    # distinct ratio changes MAX_BUDGET and is recorded on the report.
+    from tests.envs.support import execution_policy
+    from whetstone.runner.ed1_pilot import run_ed1_pilot
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    transport = _fake_encdec_transport(tasks)
+    report = run_ed1_pilot(
+        transport=transport, execution_policy=execution_policy(max_attempts=1),
+        tasks=3, repeats=1, concurrency=2, budget_ratio=0.25,
+    )
+    assert report.budget_ratio == 0.25
+
+
+def test_ed1_pilot_subcommand_exposes_budget_ratio() -> None:
+    # (Task 13d) The flag is on the PILOT subparser (was cell-only), defaulting
+    # to the canonical ratio and overridable for a cheap ratio scan.
+    from whetstone.envs.ed1 import ED1_DEFAULT_BUDGET_RATIO
+    from whetstone.runner.cli import build_parser
+
+    parser = build_parser()
+    default_args = parser.parse_args(["pilot", "--env", "ed1"])
+    assert default_args.budget_ratio == ED1_DEFAULT_BUDGET_RATIO
+    scan_args = parser.parse_args(
+        ["pilot", "--env", "ed1", "--budget-ratio", "0.25"]
+    )
+    assert scan_args.budget_ratio == 0.25
+
+
+def test_ed1_cell_official_n_slices_pool_not_full_split(
+    tmp_path: Path,
+) -> None:
+    # (Task 13a) --official-n (SamplingOverrides.official_n) must fold into the
+    # ed1 pool slice so a reduced-anchor eval cell drives only N official tasks
+    # -- NOT the full HumanEval pool (the killed cell drove ~82 tasks because
+    # the override was dropped on the ed1 build path).
+    from tests.envs.support import execution_policy
+    from tests.runner.support import proposer_config
+    from whetstone.envs.sampling import SamplingOverrides
+    from whetstone.optimization.proposer import FakeProposerTransport
+    from whetstone.runner.cell import CellConfig, _build_experiment
+    from whetstone.runner.eval_run import official_instances
+    from whetstone.runner.execution_mode import ExecutionMode
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=12)
+    transport = _fake_encdec_transport(tasks)
+    cfg = CellConfig(
+        optimizer="eval", env=ED1_ENV_NAME, lane="openrouter", attempt=0,
+        task_model=ED1_CANONICAL_MODEL, proposer_model="none", canonical=True,
+        proposer_config=proposer_config(),
+        proposer_transport=FakeProposerTransport(script={}, default=()),
+        rollout_transport=transport,
+        execution_policy=execution_policy(max_attempts=1),
+        repeats=1, official_repeats=1,
+        execution_mode=ExecutionMode.IN_PROCESS,
+        budget_ratio=0.5, ed1_task_limit=12,
+        sampling_overrides=SamplingOverrides(official_n=3),
+    )
+    exp = _build_experiment(cfg)
+    # The official split is exactly the 3 requested tasks, not the full pool.
+    assert len(official_instances(exp)) == 3
+
+
+def test_ed1_eval_streams_partials_and_resume_skips_redrive(
+    tmp_path: Path,
+) -> None:
+    # (Task 13b) The ed1 eval must stream partials incrementally (each row is
+    # on disk the instant it completes) AND a resumed drive must skip re-drive
+    # already-recorded rows -- so a crash/interrupt never loses finished rows.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1 import ed1_initial_candidate
+    from whetstone.envs.ed1_eval import run_ed1_eval
+    from whetstone.execution.partials import PartialLog
+    from whetstone.optimization.mutation import MUTATION_FIELD
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=4)
+    transport = _fake_encdec_transport(tasks)
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=4, official_n=4, repeats=1,
+    )
+    instances = exp.eval_configs.official.instances
+    cand = ed1_initial_candidate()
+    template = str(cand.payload[MUTATION_FIELD])
+    log = PartialLog(path=tmp_path / "ed1.partial.jsonl")
+
+    first = run_ed1_eval(
+        exp, candidate_template=template, candidate_id=cand.candidate_id,
+        instances=instances, execution_policy=execution_policy(max_attempts=1),
+        transport=transport, repeats=1, apply_reward=False,
+        partial_log=log, split_role="official",
+    )
+    # Every driven row was appended to the partial log incrementally.
+    recorded = [
+        rec for rec in log.load()
+        if rec.phase == "official" and rec.unit == cand.candidate_id
+    ]
+    assert len(recorded) == len(instances)
+    # A record carries the dual payload (compression) for a lossless resume.
+    import json as _json
+
+    payloads = [_json.loads(rec.raw_response) for rec in recorded]
+    assert all("compression_value" in p for p in payloads)
+
+    # A resumed drive over a transport that RAISES if called proves the rows
+    # were restored from disk (no re-drive, no re-pay).
+    from tests.envs.support import FakeTransport
+
+    def _boom(_prompt: str) -> str:
+        raise AssertionError("resume must not re-drive recorded rows")
+
+    resumed = run_ed1_eval(
+        exp, candidate_template=template, candidate_id=cand.candidate_id,
+        instances=instances, execution_policy=execution_policy(max_attempts=1),
+        transport=FakeTransport(reply=_boom), repeats=1, apply_reward=False,
+        partial_log=log, split_role="official",
+    )
+    # The resumed aggregate matches the first drive (restored losslessly).
+    assert (
+        resumed.pass_aggregate.aggregation_output.value
+        == first.pass_aggregate.aggregation_output.value
+    )
+    assert (
+        resumed.compression_aggregate.aggregation_output.value
+        == first.compression_aggregate.aggregation_output.value
+    )

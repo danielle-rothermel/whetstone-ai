@@ -189,6 +189,7 @@ def evaluate_split(
             execution_mode=execution_mode,
             policy=policy,
             fanout=fanout,
+            partial_log=partial_log,
             apply_reward=apply_reward_resolved,
         )
     result = run_internal_eval(
@@ -260,6 +261,7 @@ def _evaluate_ed1_split(
     execution_mode: ExecutionMode,
     policy: RowPolicy | CompletenessPolicy,
     fanout: FanoutConfig | None,
+    partial_log: PartialLog | None,
     apply_reward: bool,
 ) -> SplitEvaluation:
     """Evaluate one ed1 candidate over a split via the enc-dec DUAL drive.
@@ -289,6 +291,8 @@ def _evaluate_ed1_split(
         fanout=fanout,
         apply_reward=apply_reward,
         store=store,
+        partial_log=partial_log,
+        split_role=split_role,
     )
     pass_agg = ed.pass_aggregate
     comp_agg = ed.compression_aggregate

@@ -26,6 +26,7 @@ transport and the code-eval scorer are injected.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -72,6 +73,7 @@ from whetstone.envs.ed1 import (
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.envs.internal_eval import RolloutOutput
 from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
+from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.graph.character_budget import CharacterBudgetRule
 from whetstone.optimization.reward import Reward
 from whetstone.provider.driver import TransportCall, run_provider_call
@@ -108,6 +110,11 @@ class _Ed1RowOutcome:
     decoder_text: str | None
     failed: bool
     failure_code: str = ""
+    #: Summed encoder+decoder token usage (for spend reconciliation on the
+    #: partial log); ``None`` when a call carried no usage block.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -122,6 +129,35 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
 def _max_budget(input_code: str, rule: CharacterBudgetRule) -> int:
     """``MAX_BUDGET = round(ratio * chars(input_code))`` (design rule)."""
     return round(rule.ratio * len(input_code))
+
+
+def _call_usage(result: object) -> tuple[int | None, int | None, int | None]:
+    """(prompt, completion, total) tokens of one succeeded call, else Nones."""
+    gen = getattr(result, "generation", None)
+    if gen is None or not getattr(result, "succeeded", False):
+        return (None, None, None)
+    usage = getattr(getattr(gen, "response", None), "usage", None)
+    if usage is None:
+        return (None, None, None)
+    return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+
+
+def _sum_usage(
+    a: tuple[int | None, int | None, int | None],
+    b: tuple[int | None, int | None, int | None],
+) -> tuple[int | None, int | None, int | None]:
+    """Sum two (prompt, completion, total) usage triples, None-preserving.
+
+    A field is ``None`` only if BOTH calls lacked it; otherwise the present
+    values sum (a missing side counts as 0) so the encoder+decoder token spend
+    is the row's total.
+    """
+    def _add(x: int | None, y: int | None) -> int | None:
+        if x is None and y is None:
+            return None
+        return (x or 0) + (y or 0)
+
+    return (_add(a[0], b[0]), _add(a[1], b[1]), _add(a[2], b[2]))
 
 
 def _render_encoder(template: str, *, input_code: str, max_budget: int) -> str:
@@ -187,6 +223,9 @@ def _drive_row(
             failed=True, failure_code=failure_code_of(dec),
         )
     decoder_text = dec.generation.text
+    prompt_t, completion_t, total_t = _sum_usage(
+        _call_usage(enc), _call_usage(dec)
+    )
 
     # Correctness (decoder output) -- may be an infrastructure-unknown, which
     # fails the row (never scored 0). Compression (encoder output) is always
@@ -198,6 +237,8 @@ def _drive_row(
             pass_value=None, compression_value=None,
             encoder_text=encoder_text, decoder_text=decoder_text,
             failed=True, failure_code="code_eval_infrastructure_unknown",
+            prompt_tokens=prompt_t, completion_tokens=completion_t,
+            total_tokens=total_t,
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
@@ -205,7 +246,119 @@ def _drive_row(
         compression_value=compression,
         encoder_text=encoder_text, decoder_text=decoder_text,
         failed=False,
+        prompt_tokens=prompt_t, completion_tokens=completion_t,
+        total_tokens=total_t,
     )
+
+
+def _drive_and_persist(
+    *,
+    experiment: Ed1Experiment,
+    candidate_template: str,
+    candidate_id: str,
+    instance: Instance,
+    index: int,
+    provider_call_config: ProviderCallConfig,
+    execution_policy: ProviderExecutionPolicy,
+    transport: TransportCall,
+    scorer: Callable[..., CodeScore],
+    partial_log: PartialLog | None,
+    split_role: str,
+) -> _Ed1RowOutcome:
+    """Drive one ed1 row and append its partial record the instant it finishes.
+
+    The dual result (compression + encoder/decoder text) that the reducer
+    needs but ``PartialCallRecord`` has no native field for is carried in the
+    record's ``raw_response`` as a compact JSON blob, so a resumed drive can
+    fully reconstruct the row without re-paying. Mirrors the QA row thunk's
+    persist-on-completion contract.
+    """
+    outcome = _drive_row(
+        experiment=experiment,
+        candidate_template=candidate_template,
+        instance=instance,
+        provider_call_config=provider_call_config,
+        execution_policy=execution_policy,
+        transport=transport,
+        scorer=scorer,
+        logical_call_id=f"{candidate_id}:{instance.id}#{index}",
+    )
+    if partial_log is not None:
+        partial_log.append(
+            PartialCallRecord(
+                phase=split_role,
+                instance_id=str(instance.id),
+                unit=candidate_id,
+                repeat_id=index,
+                score=outcome.pass_value,
+                failed=outcome.failed,
+                failure_code=outcome.failure_code,
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                total_tokens=outcome.total_tokens,
+                # ed1 dual payload (compression + texts) the reducer needs on
+                # resume; QA leaves raw_response empty on the cell path.
+                raw_response=_encode_ed1_payload(outcome),
+            )
+        )
+    return outcome
+
+
+def _encode_ed1_payload(outcome: _Ed1RowOutcome) -> str:
+    """Compact JSON of the ed1 dual extras for a partial record's resume."""
+    return json.dumps({
+        "compression_value": outcome.compression_value,
+        "encoder_text": outcome.encoder_text,
+        "decoder_text": outcome.decoder_text,
+    })
+
+
+def _restore_ed1_recorded(
+    partial_log: PartialLog | None,
+    split_role: str,
+    candidate_id: str,
+) -> dict[tuple[str, int], _Ed1RowOutcome]:
+    """Rebuild ed1 row outcomes already durably recorded (resume skip).
+
+    Restores only records for THIS phase (``split_role``) + unit
+    (``candidate_id``), keyed ``(instance_id, repeat)`` to match the driven
+    keys. The dual extras are decoded from ``raw_response``; a record missing
+    that blob (e.g. a QA-shaped record) restores a pass-only failed/value row.
+    """
+    if partial_log is None:
+        return {}
+    restored: dict[tuple[str, int], _Ed1RowOutcome] = {}
+    for record in partial_log.load():
+        if record.phase != split_role or record.unit != candidate_id:
+            continue
+        extras: dict[str, object] = {}
+        if record.raw_response:
+            try:
+                loaded = json.loads(record.raw_response)
+                if isinstance(loaded, dict):
+                    extras = loaded
+            except json.JSONDecodeError:
+                extras = {}
+        comp = extras.get("compression_value")
+        comp_value = (
+            float(comp) if isinstance(comp, int | float) else None
+        )
+        restored[(record.instance_id, record.repeat_id)] = _Ed1RowOutcome(
+            pass_value=record.score,
+            compression_value=comp_value,
+            encoder_text=_opt_str(extras.get("encoder_text")),
+            decoder_text=_opt_str(extras.get("decoder_text")),
+            failed=record.failed,
+            failure_code=record.failure_code,
+            prompt_tokens=record.prompt_tokens,
+            completion_tokens=record.completion_tokens,
+            total_tokens=record.total_tokens,
+        )
+    return restored
+
+
+def _opt_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _compression_ratio(encoder_text: str, input_code: str) -> float | None:
@@ -322,6 +475,8 @@ def run_ed1_eval(
     fanout: FanoutConfig | None = None,
     apply_reward: bool = True,
     store: ObjectStore | None = None,
+    partial_log: PartialLog | None = None,
+    split_role: str = "cell",
 ) -> Ed1EvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
@@ -330,6 +485,13 @@ def run_ed1_eval(
     transport + code scorer, reduces to the pass-rate + compression aggregates,
     derives the pass-rate Reward (when ``apply_reward``), and collects per-row
     outputs (encoder + decoder text) for the dual-score sidecar.
+
+    Incremental persistence: when a ``partial_log`` is given, each (task,
+    repeat) row appends its OWN dual-result record the instant it completes
+    (thread-safe), so a crash/interrupt mid-drive keeps every finished row on
+    disk. A resumed drive restores already-recorded rows (keyed by the
+    candidate ``unit`` = ``candidate_id`` and ``split_role`` phase) instead of
+    re-driving+re-paying for them.
     """
     _ = store or ObjectStore(MemoryBackend())
     fanout = fanout or FanoutConfig()
@@ -343,36 +505,42 @@ def run_ed1_eval(
     eval_config_hash = (
         experiment.eval_configs.internal.eval_config.config_identity_hash
     )
+    restored = _restore_ed1_recorded(partial_log, split_role, candidate_id)
 
     def _spec(
         instance: Instance, index: int
     ) -> CallSpec[tuple[str, int], _Ed1RowOutcome]:
         return CallSpec(
             key=(str(instance.id), index),
-            run=lambda inst=instance, i=index: _drive_row(
+            run=lambda inst=instance, i=index: _drive_and_persist(
                 experiment=experiment,
                 candidate_template=candidate_template,
+                candidate_id=candidate_id,
                 instance=inst,
+                index=i,
                 provider_call_config=rd.provider_call_config,
                 execution_policy=execution_policy,
                 transport=transport,
                 scorer=scorer,
-                logical_call_id=f"{candidate_id}:{inst.id}#{i}",
+                partial_log=partial_log,
+                split_role=split_role,
             ),
             deadline_seconds=_deadline(execution_policy),
         )
 
+    # Only drive rows NOT already durably recorded (resume skip).
     specs = [
         _spec(instance, index)
         for instance in instances
         for index in range(repeats)
+        if (str(instance.id), index) not in restored
     ]
     pool = run_call_pool(
         specs, concurrency=fanout.concurrency,
         is_rate_limited=lambda _o: False,
         max_wall_seconds=fanout.max_wall_seconds,
     )
-    driven: dict[tuple[str, int], _Ed1RowOutcome] = {}
+    driven: dict[tuple[str, int], _Ed1RowOutcome] = dict(restored)
     for res in pool.results:
         if res.value is not None:
             driven[res.key] = res.value

@@ -242,6 +242,18 @@ def build_parser() -> argparse.ArgumentParser:
             "in-flight, persist partials, exit non-zero with a status note"
         ),
     )
+    pilot.add_argument(
+        "--budget-ratio",
+        type=float,
+        default=ED1_DEFAULT_BUDGET_RATIO,
+        metavar="R",
+        help=(
+            "ed1 (enc-dec) pilot ONLY: the per-task Character Budget ratio "
+            f"(MAX_BUDGET = round(R * chars(input_code)), default "
+            f"{ED1_DEFAULT_BUDGET_RATIO}). Lets a cheap ratio scan probe a "
+            "distinct budget without the cell machinery. Ignored by QA envs."
+        ),
+    )
 
     cell = sub.add_parser(
         "cell", help="run one full validation cell (optimizer x env)"
