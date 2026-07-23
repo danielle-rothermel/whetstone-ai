@@ -48,6 +48,7 @@ from whetstone.envs.rollout_definition import (
     render_prompt,
 )
 from whetstone.envs.sampling import SamplingOverrides
+from whetstone.optimization.codex_proposer import codex_proposer_ref
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
     FakeProposerTransport,
@@ -254,7 +255,9 @@ def run_dry_cell(
         attempt=attempt,
         task_model=DRYRUN_TASK_MODEL,
         proposer_model=(
-            "codex_cli/gpt-5.6" if optimizer == "codex"
+            # Match the live path's recorded codex proposer id (task 5): the
+            # codex optimizer drafts through the local codex CLI.
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
             else DRYRUN_PROPOSER_MODEL
         ),
         canonical=False,
