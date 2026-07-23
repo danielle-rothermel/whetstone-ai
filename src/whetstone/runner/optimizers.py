@@ -268,6 +268,15 @@ def run_optimize(
         else internal_instances
     )
 
+    # The identity (eval) optimizer performs NO search: its single internal
+    # measurement is never compared against a proposal, so its Reward is
+    # vestigial. Deriving one under the env's FAIL missing-data policy would
+    # crash the whole cell the moment any internal rollout fails (the ling/c11
+    # 429 defect). So the identity optimizer measures the internal split with
+    # NO Reward (aggregate + score only); every searching optimizer keeps the
+    # Reward it actually greedily selects on.
+    needs_reward = hyper.get("kind") != "identity"
+
     # Baseline: internal-eval of the naive Initial Candidate.
     baseline_eval = evaluate_split(
         experiment,
@@ -280,6 +289,7 @@ def run_optimize(
         store=backing,
         execution_mode=execution_mode,
         fanout=fanout,
+        apply_reward=needs_reward,
     )
     best_candidate = naive
     best_score = baseline_eval.score
@@ -322,6 +332,7 @@ def run_optimize(
                 store=backing,
                 execution_mode=execution_mode,
                 fanout=fanout,
+                apply_reward=needs_reward,
             )
             steps.append(
                 ProposalStep(

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from dr_store import MemoryBackend, ObjectStore
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
 from whetstone.execution.partials import PartialLog
@@ -441,6 +442,99 @@ def _halted_before_optimize(
     )
 
 
+def _incomplete_internal_arm(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    failure_detail: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+) -> CellOutcome:
+    """Finalize a cell whose INTERNAL (optimize) arm never resolved.
+
+    A ``CandidateEvaluationFailure`` escaping the optimize phase means some
+    internal-split rollouts failed and the env's FAIL missing-data policy left
+    the candidate with no computable internal Reward. During a cell's optimize
+    (anchor) phase this must NOT surface as a raw process exit 1: it finalizes
+    as ``incomplete-arm`` carrying ``arm=internal`` and the reward-failure
+    reason, records the real spend attributed to the attempt (openrouter: the
+    summed credits deltas across the cell's before/after snapshots), and KEEPS
+    the partial log so a resume can re-drive only the failed internal rows. The
+    baseline/ceiling arms that DID measure are preserved on the line; the
+    best/delta phases never ran so they stay ``None`` and NO headroom /
+    statistical determination is emitted (the same guarantee as an incomplete
+    OFFICIAL arm). The per-env official cache is NOT written (an incomplete
+    cell must never poison downstream optimizer cells).
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            SpendRecord(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                total_credits=(
+                    spend_after.total_credits if spend_after else None
+                ),
+                total_usage=(
+                    spend_after.total_usage if spend_after else None
+                ),
+                remaining_usd=(
+                    spend_after.remaining_usd if spend_after else None
+                ),
+                at=spend_after.at if spend_after else "",
+            )
+        )
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
+    notes = [
+        "incomplete internal arm -- the optimize phase could not score the "
+        "candidate into a Reward (some internal-split rollouts failed under "
+        "the FAIL missing-data policy); no best/delta/headroom determination "
+        "emitted (certified output requires a resolved internal arm): "
+        f"internal({failure_detail})"
+    ]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=0, optimizer_steps=0,
+        spend_usd=spend_usd, wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes,
+        status="incomplete-arm",
+        artifacts=CellArtifacts(official_record_before=baseline_before_ref),
+        sampling_overrides=config.record_overrides(),
+    )
+    ledger.append_cell(record)
+    # KEEP the partial log (an incomplete-arm cell is resumable): the caller
+    # must not delete it. The per-env official cache is NOT written here.
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"incomplete internal arm: {failure_detail}",
+    )
+
+
 def run_cell(
     config: CellConfig,
     *,
@@ -689,19 +783,38 @@ def run_cell(
         )
 
     # --- 2. Optimize on the internal split (Reward only). ---
-    opt = run_optimize(
-        experiment,
-        optimizer=config.optimizer,
-        proposer_config=config.proposer_config,
-        proposer_transport=config.proposer_transport,
-        rollout_transport=config.rollout_transport,
-        execution_policy=config.execution_policy,
-        internal_instances=experiment.eval_configs.internal.instances,
-        repeats=config.repeats,
-        store=backing,
-        execution_mode=config.execution_mode,
-        fanout=_fanout(),
-    )
+    # Residual hardening: a searching optimizer's internal measurement can
+    # still raise a typed CandidateEvaluationFailure when internal rollouts
+    # fail under the env's FAIL missing-data policy (the identity optimizer no
+    # longer derives a Reward at all -- FIX 1 -- but COPRO/MIPROv2/GEPA/Codex
+    # do). During a CELL's anchor phase that failure must NEVER escape as a raw
+    # process exit 1: it finalizes the cell typed as ``incomplete-arm``
+    # (arm=internal) with real spend and retained partials, exactly as an
+    # incomplete OFFICIAL arm does.
+    try:
+        opt = run_optimize(
+            experiment,
+            optimizer=config.optimizer,
+            proposer_config=config.proposer_config,
+            proposer_transport=config.proposer_transport,
+            rollout_transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            internal_instances=experiment.eval_configs.internal.instances,
+            repeats=config.repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+            fanout=_fanout(),
+        )
+    except CandidateEvaluationFailure as exc:
+        return _incomplete_internal_arm(
+            config=config, cell_id=cell_id, ledger=ledger,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref, failure_detail=str(exc),
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+        )
 
     # --- 3. Best-candidate official eval on the SAME official Eval Config. ---
     best = evaluate_split(
