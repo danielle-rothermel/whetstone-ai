@@ -29,6 +29,10 @@ import pytest
 from dr_providers import ProviderTransportPolicy
 from dr_providers.transport import HttpProvider
 
+from whetstone.optimization.codex_proposer import (
+    CODEX_CLI_LANE,
+    CodexProposerTransport,
+)
 from whetstone.optimization.proposer import ProposalRequest
 from whetstone.runner.cli import (
     _build_cell_config,
@@ -52,6 +56,7 @@ def _cell_args(optimizer: str, **overrides: object) -> argparse.Namespace:
         attempt=0,
         task_model=None,
         proposer_model=None,
+        proposer_cli=None,
         non_canonical=False,
         execution_mode="in-process",
         concurrency=4,
@@ -176,6 +181,65 @@ def test_live_proposer_drafts_over_http_boundary_stub(
     # Proposer token accounting is tallied for the cell heartbeat.
     assert live.proposer_calls == 2
     assert live.proposer_tokens == 36  # 18 tokens x 2 drafts
+
+
+@pytest.mark.parametrize("optimizer", _PROPOSAL_USING)
+def test_codex_cli_proposer_constructs_for_every_proposal_optimizer(
+    optimizer: str,
+) -> None:
+    # --proposer-cli codex wires the LOCAL CodexProposerTransport for every
+    # proposal-using optimizer, with no network and no fixture-only seam. The
+    # 7d70d3f lesson: the live seam must be constructible under test.
+    config, task_route = _build_cell_config(
+        _cell_args(optimizer, proposer_cli="codex")
+    )
+    assert isinstance(config.proposer_transport, CodexProposerTransport)
+    assert not isinstance(config.proposer_transport, _LiveProposerUnavailable)
+    # The task route still runs on openrouter (the proposer is independent).
+    assert task_route.lane == "openrouter"
+    # The codex-CLI proposer model + lane fold into the recorded proposer id
+    # and the proposer Config identity (never a graph identity).
+    assert config.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.4-mini"
+    assert CODEX_CLI_LANE in config.proposer_config.provider_call_config_ref
+    assert len(config.proposer_config.provider_call_config_hash) == 64
+
+
+def test_codex_cli_proposer_model_override_folds_into_identity() -> None:
+    # --proposer-model with --proposer-cli codex selects the codex model and
+    # produces a DISTINCT proposer Config identity from the default model.
+    default_cfg, _ = _build_cell_config(
+        _cell_args("copro", proposer_cli="codex")
+    )
+    override_cfg, _ = _build_cell_config(
+        _cell_args(
+            "copro", proposer_cli="codex", proposer_model="gpt-5.3-codex-spark"
+        )
+    )
+    assert override_cfg.proposer_model == (
+        f"{CODEX_CLI_LANE}/gpt-5.3-codex-spark"
+    )
+    assert (
+        default_cfg.proposer_config.identity_hash()
+        != override_cfg.proposer_config.identity_hash()
+    )
+
+
+def test_codex_cli_flag_ignored_by_eval_and_codex_optimizers() -> None:
+    # eval never drafts; the codex OPTIMIZER uses its MCP bridge -- the
+    # --proposer-cli flag does not turn either into a CLI-proposer cell (both
+    # keep the placeholder).
+    for optimizer in _NO_PROPOSER:
+        config, _ = _build_cell_config(
+            _cell_args(optimizer, proposer_cli="codex")
+        )
+        assert isinstance(config.proposer_transport, _LiveProposerUnavailable)
+
+
+def test_default_proposer_unchanged_without_codex_cli_flag() -> None:
+    # Default (no --proposer-cli) is the canonical OpenRouter proposer.
+    config, _ = _build_cell_config(_cell_args("copro"))
+    assert isinstance(config.proposer_transport, _HttpProposerTransport)
+    assert config.proposer_model == "openai/gpt-5.4-nano"
 
 
 def test_placeholder_draft_raises_fixture_only_runtime_error() -> None:
