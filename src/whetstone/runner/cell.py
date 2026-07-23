@@ -654,6 +654,109 @@ def _incomplete_internal_arm(
     )
 
 
+def _proposer_failure_arm(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    opt: OptimizeResult,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+) -> CellOutcome:
+    """Finalize a cell where EVERY proposer draft failed (proposer outage).
+
+    ``opt.all_drafts_failed`` -- the optimizer drafted proposal slots but NOT
+    ONE yielded a real candidate (every slot was a typed proposer-draft
+    failure: timeout / nonzero exit / empty / model-rejected). This is NOT an
+    honest no-improvement (where real candidates WERE scored but none beat the
+    baseline): no candidate was ever explored, so no best/delta/headroom
+    determination is emitted. The cell finalizes with the loud typed
+    ``proposer-failure`` status carrying the per-draft failure reasons, records
+    real spend, and writes the FULL trace (its steps are the failed-draft
+    slots). Not a completed terminal status -- a re-run supersedes it. The per-
+    env official cache is NOT written.
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            SpendRecord(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                total_credits=(
+                    spend_after.total_credits if spend_after else None
+                ),
+                total_usage=(
+                    spend_after.total_usage if spend_after else None
+                ),
+                remaining_usd=(
+                    spend_after.remaining_usd if spend_after else None
+                ),
+                at=spend_after.at if spend_after else "",
+            )
+        )
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
+    details = [
+        f"{step.candidate_id}({step.rejected_detail})"
+        for step in opt.steps
+    ]
+    notes = [
+        "proposer failure -- EVERY proposal draft failed to produce a "
+        f"template ({opt.failed_draft_count} failed draft slot(s), 0 real "
+        "candidates); no best/delta/headroom determination emitted (this is a "
+        "proposer outage, NOT an honest no-improvement): "
+        f"{'; '.join(details)}"
+    ]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="proposer-failure",
+        opt=opt,
+    )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=opt.internal_evals_count,
+        optimizer_steps=opt.optimizer_steps,
+        spend_usd=spend_usd, wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes,
+        status="proposer-failure",
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            best_candidate_id=opt.best_candidate.candidate_id,
+            official_record_before=baseline_before_ref,
+        ),
+        sampling_overrides=config.record_overrides(),
+    )
+    ledger.append_cell(record)
+    # KEEP the partial log (a proposer-failure cell is resumable): the caller
+    # must not delete it. The per-env official cache is NOT written here.
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"proposer failure: {opt.failed_draft_count} failed drafts",
+    )
+
+
 def run_cell(
     config: CellConfig,
     *,
@@ -929,6 +1032,23 @@ def run_cell(
             config=config, cell_id=cell_id, ledger=ledger,
             baseline_score=baseline_score, ceiling_official=ceiling_official,
             baseline_before_ref=baseline_before_ref, failure_detail=str(exc),
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+        )
+
+    # --- Proposer-failure guard (before ANY best-candidate determination). ---
+    # If the optimizer DRAFTED proposal slots but EVERY one was a typed
+    # proposer-draft failure (timeout/nonzero/empty/model-rejected), no real
+    # candidate was ever explored. Finalize LOUD as ``proposer-failure`` --
+    # never fall through to a naive-as-best "no-improvement" that would hide a
+    # proposer outage behind an honest-looking terminal result.
+    if opt.all_drafts_failed:
+        return _proposer_failure_arm(
+            config=config, cell_id=cell_id, ledger=ledger, opt=opt,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref,
             concurrency_halved=concurrency_halved,
             spend_before=spend_before, credits_fetcher=credits_fetcher,
             is_openrouter=is_openrouter, wall_s=clock() - start,

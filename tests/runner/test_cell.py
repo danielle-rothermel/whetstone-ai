@@ -26,7 +26,12 @@ from whetstone.optimization.codex_proposer import (
     CodexInvocation,
     CodexProposerTransport,
 )
-from whetstone.optimization.proposer import FakeProposerTransport
+from whetstone.optimization.proposer import (
+    FakeProposerTransport,
+    ProposalDraft,
+    ProposalRequest,
+    ProposerConfig,
+)
 from whetstone.runner.budget import BudgetGuard, ReserveError
 from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
 from whetstone.runner.execution_mode import ExecutionMode
@@ -319,6 +324,75 @@ def test_cell_codex_optimizer_completes_with_isolation_and_trace(
         and s["rejected_reason"] == "unscorable_candidate_internal_eval"
     ]
     assert poisoned, "the poison codex candidate must be a rejected trace step"
+
+
+class _AllFailedDraftProposer:
+    """A proposer transport whose EVERY draft is a typed failure (no template).
+
+    Models a proposer outage (e.g. a model the CLI rejects with HTTP 400):
+    every slot is a typed failure, never a base-template echo.
+    """
+
+    def draft(
+        self, config: ProposerConfig, request: ProposalRequest, count: int
+    ) -> tuple[ProposalDraft, ...]:
+        return tuple(
+            ProposalDraft.failure(
+                detail=f"scripted total proposer outage (slot {i})",
+                request_evidence={"draft_index": i},
+            )
+            for i in range(count)
+        )
+
+
+def test_cell_all_drafts_failed_finalizes_loud_proposer_failure(
+    tmp_path: Path,
+) -> None:
+    # A proposer OUTAGE (every draft a typed failure) must NOT be hidden behind
+    # a naive-as-best "no-improvement": the cell finalizes with the loud typed
+    # ``proposer-failure`` status naming the per-draft reasons, emits NO
+    # best/delta/headroom, and is impossible to confuse with an honest
+    # no-improvement in the ledger, trace, and log line.
+    import json
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env,
+        optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=_AllFailedDraftProposer(),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg,
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # LOUD typed status, distinct from no-improvement.
+    assert r.status == "proposer-failure"
+    assert r.status != "no-improvement"
+    # No best/delta/headroom off a run that explored zero real candidates.
+    assert r.best_official is None
+    assert r.delta is None
+    assert r.headroom_delta is None
+    # The note names the proposer outage + per-draft reasons.
+    assert "proposer failure" in r.escalation_note.lower()
+    assert "0 real candidates" in r.escalation_note
+    # NOT a completed terminal status: a re-run supersedes it (resumable).
+    assert not r.is_completed()
+    # The trace records the failed-draft slots (no phantom candidates).
+    trace_path = ledger.optimization_trace_path(r.cell_id)
+    trace = json.loads(trace_path.read_text())
+    assert trace["all_drafts_failed"] is True
+    assert trace["scored_candidate_count"] == 0
+    assert trace["failed_draft_count"] > 0
+    for s in trace["steps"]:
+        assert s["rejected_reason"] == "proposer_draft_failed"
+        assert s["template"] == ""  # no fabricated candidate
+    # The per-env official cache is NOT poisoned by a proposer-failure cell.
+    assert ledger.env_cache_for(env, task_model=TASK_MODEL) is None
 
 
 def test_cell_no_improvement_script(tmp_path: Path) -> None:

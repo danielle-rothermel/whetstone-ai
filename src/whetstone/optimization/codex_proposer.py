@@ -168,11 +168,14 @@ class CodexProposerTransport:
     ``draft`` issues ``count`` independent ``codex exec`` invocations (one per
     requested draft) through the injected :class:`CodexCliInvoker`. A clean
     invocation yields a :class:`ProposalDraft` carrying the returned template
-    text and ``cost=0.0`` (plan-billed). A timeout / nonzero exit / empty
-    output yields a FAILED draft (base template returned, ``failed=True``
-    evidence), so the optimizer's diff check rejects it without a fabricated
-    candidate -- never a retry storm. Best-effort proposer token counts are
-    tallied for the cell heartbeat (0 when the CLI exposes none on this path).
+    text and ``cost=0.0`` (plan-billed). A timeout / nonzero exit / empty /
+    model-rejected output yields a TYPED FAILED draft
+    (:meth:`ProposalDraft.failure`, empty template + a ``failure_detail``) --
+    the base template is NEVER echoed back, so a failed draft can never be
+    confused with a real candidate. The optimizer records it as a failed slot,
+    never scores it, never lets it be selected as best. Best-effort proposer
+    token counts are tallied for the cell heartbeat (0 when the CLI exposes
+    none on this path).
     """
 
     def __init__(
@@ -214,14 +217,10 @@ class CodexProposerTransport:
                 template = self._draft_one(prompt)
             except CodexProposerError as exc:
                 drafts.append(
-                    ProposalDraft(
-                        template=request.base_template,
+                    ProposalDraft.failure(
+                        detail=str(exc),
                         request_evidence={**evidence, "failed": True},
-                        response_evidence={
-                            "finish": "failed", "error": str(exc)
-                        },
                         usage={"proposer_calls": 1, "total_tokens": 0},
-                        cost=0.0,
                     )
                 )
                 continue
@@ -254,7 +253,10 @@ class CodexProposerTransport:
         if not text:
             raise CodexProposerError(
                 "codex exec produced empty output drafting a proposal "
-                f"(model={self._model!r})"
+                f"(model={self._model!r}) -- no --output-last-message file "
+                "was written; this is what a model rejected by the ChatGPT "
+                "account (HTTP 400) looks like, since codex exec exits 0 but "
+                "writes nothing"
             )
         return text
 

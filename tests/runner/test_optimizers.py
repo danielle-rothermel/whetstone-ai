@@ -21,10 +21,16 @@ from tests.envs.support import (
     transport_policy,
 )
 from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.proposer import FakeProposerTransport
+from whetstone.optimization.proposer import (
+    FakeProposerTransport,
+    ProposalDraft,
+    ProposalRequest,
+    ProposerConfig,
+)
 from whetstone.runner.optimizers import (
     INVALID_TEMPLATE_PLACEHOLDERS,
     OPTIMIZERS,
+    PROPOSER_DRAFT_FAILED,
     UNSCORABLE_CANDIDATE,
     hyperparameters_for,
     run_optimize,
@@ -322,3 +328,117 @@ def test_unscorable_round2_candidate_isolated_not_whole_run() -> None:
         s.template == WIN_R1 for s in scored
     ), "round-1 winner step must survive the round-2 failure"
     assert result.rejected_candidate_count == len(poisoned)
+
+
+class _FailingDraftProposer:
+    """A proposer transport that emits N failed draft slots then real ones.
+
+    ``fail_count`` failed slots (typed failures, NO template) come first, then
+    the remaining slots draft ``winning_template``. Models the codex-CLI /
+    HTTP proposer failure path: a draft the route could not produce is a TYPED
+    FAILURE, never a base-template echo.
+    """
+
+    def __init__(self, *, fail_count: int, winning_template: str) -> None:
+        self._fail_count = fail_count
+        self._winning = winning_template
+        self.calls = 0
+
+    def draft(
+        self, config: ProposerConfig, request: ProposalRequest, count: int
+    ) -> tuple[ProposalDraft, ...]:
+        drafts: list[ProposalDraft] = []
+        for index in range(count):
+            self.calls += 1
+            if index < self._fail_count:
+                drafts.append(
+                    ProposalDraft.failure(
+                        detail=f"scripted draft failure #{index}",
+                        request_evidence={"draft_index": index},
+                    )
+                )
+            else:
+                drafts.append(ProposalDraft(template=self._winning))
+        return tuple(drafts)
+
+
+def test_failed_drafts_recorded_as_typed_slots_no_phantom_candidate() -> None:
+    # A rejected-model / failed proposer draft is recorded as a TYPED failed
+    # slot (no template, never scored, never best) -- never a phantom candidate
+    # echoing the base template.
+    exp = tiny_experiment("c11")
+    # copro breadth=4 depth=2; fail the first 2 per round, win with the rest.
+    proposer = _FailingDraftProposer(fail_count=2, winning_template=WIN)
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    failed = [
+        s for s in result.steps if s.rejected_reason == PROPOSER_DRAFT_FAILED
+    ]
+    assert failed, "failed drafts must be recorded as typed slots"
+    for s in failed:
+        assert s.template == ""  # NO fabricated candidate
+        assert s.evaluation is None
+        assert s.internal_score is None
+        assert s.rejected_detail and "failure" in s.rejected_detail
+    assert result.failed_draft_count == len(failed)
+    # Real drafts still scored + selected: the winner beats the baseline.
+    assert result.scored_candidate_count > 0
+    assert result.best_candidate.payload[MUTATION_FIELD] == WIN
+    assert result.best_internal_score == pytest.approx(1.0)
+    # A failed slot is NEVER the base template -> never confusable with a real
+    # candidate (the c11 naive template would be the fallback echo pre-fix).
+    naive_template = exp.initial_candidate.payload[MUTATION_FIELD]
+    assert all(s.template != naive_template for s in failed)
+    assert result.all_drafts_failed is False
+
+
+def test_all_drafts_failed_flagged_distinct_from_no_improvement() -> None:
+    # EVERY draft fails -> all_drafts_failed True, zero scored candidates, and
+    # best stays the naive Initial Candidate. This is a proposer OUTAGE, NOT an
+    # honest no-improvement (where real candidates WERE scored).
+    exp = tiny_experiment("c11")
+    proposer = _FailingDraftProposer(fail_count=999, winning_template=WIN)
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=FakeTransport(reply=no_improvement_reply(exp)),
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    assert result.all_drafts_failed is True
+    assert result.scored_candidate_count == 0
+    assert result.failed_draft_count == result.optimizer_steps
+    assert (
+        result.best_candidate.candidate_id
+        == exp.initial_candidate.candidate_id
+    )
+
+
+def test_honest_no_improvement_is_not_all_drafts_failed() -> None:
+    # Contrast: real candidates ARE drafted + scored but none beats the naive
+    # baseline -> all_drafts_failed False (an honest no-improvement, distinct
+    # from a proposer outage).
+    exp = tiny_experiment("c11")
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=ScriptedProposer(("also-loses {input}",)),
+        rollout_transport=FakeTransport(reply=no_improvement_reply(exp)),
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    assert result.scored_candidate_count > 0
+    assert result.all_drafts_failed is False

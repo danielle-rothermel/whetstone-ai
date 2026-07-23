@@ -125,20 +125,63 @@ class ProposalRequest(BaseModel):
 
 
 class ProposalDraft(BaseModel):
-    """One drafted template plus the proposer route's provenance evidence.
+    """One drafted template OR an explicitly-failed draft slot.
 
     ``template`` is the mutated ``user_prompt_template`` text. The evidence
     fields carry the Proposal LM request/response/usage/cost provenance the
     Step Result records — never a score and never a Reward.
+
+    A draft the proposer route could NOT produce (a timeout, a nonzero exit, an
+    empty/model-rejected response) is a TYPED FAILURE: ``failed=True`` with an
+    empty ``template`` and a human-readable ``failure_detail``. It is NEVER a
+    fabricated candidate (the base template is NEVER echoed back), so a failed
+    draft is impossible to confuse with a real proposal in the trace/ledger.
+    The optimizer records it as a failed slot, never scores it, and never lets
+    it be selected as best.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    template: StrictStr
+    template: StrictStr = ""
+    failed: bool = False
+    failure_detail: StrictStr | None = None
     request_evidence: dict[str, Any] = Field(default_factory=dict)
     response_evidence: dict[str, Any] = Field(default_factory=dict)
     usage: dict[str, Any] = Field(default_factory=dict)
     cost: float | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> ProposalDraft:
+        if self.failed:
+            if self.template:
+                raise ValueError(
+                    "a failed ProposalDraft carries no template (a failed "
+                    "draft must NOT echo a fabricated candidate)"
+                )
+        elif not self.template:
+            raise ValueError(
+                "a non-failed ProposalDraft must carry a non-empty template"
+            )
+        return self
+
+    @classmethod
+    def failure(
+        cls,
+        *,
+        detail: str,
+        request_evidence: dict[str, Any] | None = None,
+        usage: dict[str, Any] | None = None,
+    ) -> ProposalDraft:
+        """A typed failed-draft slot (no template, never a candidate)."""
+        return cls(
+            template="",
+            failed=True,
+            failure_detail=detail,
+            request_evidence=request_evidence or {},
+            response_evidence={"finish": "failed"},
+            usage=usage or {},
+            cost=0.0,
+        )
 
 
 class ProposerTransport(Protocol):
@@ -183,6 +226,11 @@ class FakeProposerTransport:
         templates = self._script.get(
             (request.proposal_mode, request.request_ordinal), self._default
         )
+        evidence_base = {
+            "proposal_mode": request.proposal_mode,
+            "request_ordinal": request.request_ordinal,
+            "temperature": config.temperature,
+        }
         drafts: list[ProposalDraft] = []
         for index in range(count):
             if index < len(templates):
@@ -193,14 +241,25 @@ class FakeProposerTransport:
                     f"{request.base_template}::pad::"
                     f"{request.request_ordinal}:{index}"
                 )
+            if not text:
+                # An empty scripted template models a draft the proposer route
+                # could not produce -> a TYPED FAILED slot (never a fabricated
+                # candidate), matching the real transports.
+                drafts.append(
+                    ProposalDraft.failure(
+                        detail="scripted empty draft (proposer produced none)",
+                        request_evidence={
+                            **evidence_base, "draft_index": index,
+                            "failed": True,
+                        },
+                        usage={"proposer_calls": 1},
+                    )
+                )
+                continue
             drafts.append(
                 ProposalDraft(
                     template=text,
-                    request_evidence={
-                        "proposal_mode": request.proposal_mode,
-                        "request_ordinal": request.request_ordinal,
-                        "temperature": config.temperature,
-                    },
+                    request_evidence={**evidence_base},
                     response_evidence={"draft_index": index},
                     usage={"proposer_calls": 1},
                     cost=0.0,

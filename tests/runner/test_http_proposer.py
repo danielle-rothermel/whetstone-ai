@@ -3,9 +3,10 @@
 ``_HttpProposerTransport`` drafts template variants by driving the proposer
 route through the bounded dr-providers attempt loop. Here the transport is
 injected as a scripted fake so the drafting logic is exercised with no network:
-a successful draft returns the completion text as the template; a failed draft
-returns the base template unchanged (which the optimizer diff-check rejects, so
-a failed call never becomes a fabricated candidate).
+a successful draft returns the completion text as the template; a failed OR
+empty-completion draft is a TYPED FAILURE (``failed=True``, empty template) --
+the base template is NEVER echoed back, so a failed call can never become a
+fabricated candidate.
 """
 
 from __future__ import annotations
@@ -92,25 +93,31 @@ class _FailingTransport:
         )
 
 
-def test_failed_draft_returns_base_template_unchanged() -> None:
+def test_failed_draft_is_typed_failure_not_base_template() -> None:
     proposer = _HttpProposerTransport(
         _proposer_route(), transport=_FailingTransport()
     )
     drafts = proposer.draft(_config(), _REQUEST, count=1)
     assert len(drafts) == 1
-    # A failed draft returns the base unchanged (the diff check then rejects
-    # it) -- never a fabricated non-base candidate from a failed call.
-    assert drafts[0].template == _REQUEST.base_template
+    # A failed draft is a TYPED FAILURE with NO template -- the base is NEVER
+    # echoed back (no fabricated candidate from a failed call).
+    assert drafts[0].failed is True
+    assert drafts[0].template == ""
+    assert drafts[0].template != _REQUEST.base_template
+    assert drafts[0].failure_detail and "failed" in drafts[0].failure_detail
     assert drafts[0].request_evidence["failed"] is True
 
 
-def test_blank_completion_falls_back_to_base_template() -> None:
-    # A whitespace-only completion is not a usable template: fall back to the
-    # base (rejected by the diff check) rather than emit an empty template.
+def test_blank_completion_is_typed_failure_not_base_template() -> None:
+    # A whitespace-only completion is not a usable template: it is a TYPED
+    # FAILURE (empty template), never an echo of the base.
     transport = FakeTransport(reply=lambda _p: "   ")
     proposer = _HttpProposerTransport(_proposer_route(), transport=transport)
     drafts = proposer.draft(_config(), _REQUEST, count=1)
-    assert drafts[0].template == _REQUEST.base_template
+    assert drafts[0].failed is True
+    assert drafts[0].template == ""
+    assert drafts[0].template != _REQUEST.base_template
+    assert drafts[0].failure_detail  # a typed reason is recorded
 
 
 def test_response_helper_is_used_for_success_shape() -> None:

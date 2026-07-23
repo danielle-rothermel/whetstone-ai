@@ -59,6 +59,7 @@ __all__ = [
     "INVALID_TEMPLATE_PLACEHOLDERS",
     "OPTIMIZATION_TRACE_SCHEMA",
     "OPTIMIZERS",
+    "PROPOSER_DRAFT_FAILED",
     "UNSCORABLE_CANDIDATE",
     "OptimizeResult",
     "ProposalStep",
@@ -191,6 +192,16 @@ OPTIMIZATION_TRACE_SCHEMA = "whetstone.runner.optimization_trace/v1"
 #: :class:`ProposalStep` so the offending fields are visible in step evidence.
 INVALID_TEMPLATE_PLACEHOLDERS = "invalid_template_placeholders"
 
+#: The typed rejection reason for a DRAFT the proposer route could not produce
+#: (timeout / nonzero exit / empty / model-rejected). It is recorded as a
+#: failed slot with NO template (never a fabricated candidate echoing the
+#: base), never scored, never eligible for best -- so a proposer outage is
+#: impossible to confuse with a real candidate in the trace/ledger. When EVERY
+#: draft in a run fails this way (no real candidate was ever evaluated), the
+#: cell finalizes with the loud typed ``proposer-failure`` status, distinct
+#: from an honest no-improvement.
+PROPOSER_DRAFT_FAILED = "proposer_draft_failed"
+
 #: The typed rejection reason for a PROPOSAL candidate whose internal eval
 #: could not be scored into a Reward (its ``env_exact_match`` aggregate came
 #: back missing/incomplete under the FAIL Reward policy -- e.g. a transient
@@ -311,6 +322,45 @@ class OptimizeResult:
         """How many drafted candidates were rejected at intake (visible)."""
         return sum(1 for step in self.steps if step.rejected)
 
+    @property
+    def scored_candidate_count(self) -> int:
+        """How many drafted candidates actually scored (real proposals)."""
+        return sum(1 for step in self.steps if not step.rejected)
+
+    @property
+    def failed_draft_count(self) -> int:
+        """How many draft SLOTS the proposer route could not produce."""
+        return sum(
+            1 for step in self.steps
+            if step.rejected_reason == PROPOSER_DRAFT_FAILED
+        )
+
+    @property
+    def all_drafts_failed(self) -> bool:
+        """Whether the proposer produced drafts but EVERY one failed to draft.
+
+        True iff the optimizer attempted at least one proposal slot and NOT ONE
+        yielded a real (scorable) candidate -- every slot was a typed
+        proposer-draft failure. This is the loud ``proposer-failure`` cell
+        condition, distinct from an honest no-improvement (where real
+        candidates WERE scored but none beat the baseline). It is False for the
+        identity optimizer (which drafts nothing) and whenever any real
+        candidate scored or was rejected for a NON-proposer reason (a bad
+        placeholder / unscorable candidate is a real draft the proposer DID
+        produce).
+        """
+        if not self.steps:
+            return False
+        if self.scored_candidate_count > 0:
+            return False
+        # Every step is a rejection; it is a proposer failure only if EVERY one
+        # is a proposer-draft failure (not a placeholder/unscorable rejection
+        # of a template the proposer actually produced).
+        return all(
+            step.rejected_reason == PROPOSER_DRAFT_FAILED
+            for step in self.steps
+        )
+
     def to_trace(self, *, header: dict[str, Any]) -> dict[str, Any]:
         """The full on-disk optimizer-search trace for this result.
 
@@ -333,6 +383,9 @@ class OptimizeResult:
             "optimizer_steps": self.optimizer_steps,
             "internal_evals_count": self.internal_evals_count,
             "rejected_candidate_count": self.rejected_candidate_count,
+            "scored_candidate_count": self.scored_candidate_count,
+            "failed_draft_count": self.failed_draft_count,
+            "all_drafts_failed": self.all_drafts_failed,
             "internal_task_count_scaled": int(
                 self.scaled_hyperparameters.get(
                     "internal_task_count_scaled", 0
@@ -453,11 +506,33 @@ def run_optimize(
             proposer_config, request, breadth
         )
         for draft in drafts:
-            template = draft.template
-            if not template.strip():
-                continue  # an empty draft cannot fill the surface
             ordinal += 1
             candidate_id = f"{optimizer}-p{ordinal}"
+
+            # A TYPED FAILED draft (the proposer route could not produce a
+            # template -- timeout / nonzero exit / empty / model-rejected) is
+            # recorded as a failed slot with NO template and NO eval. The base
+            # template is never echoed, so a proposer outage can never be
+            # confused with a real candidate. An empty template on a non-failed
+            # draft is treated the same way (it cannot fill the surface).
+            if draft.failed or not draft.template.strip():
+                steps.append(
+                    ProposalStep(
+                        step_index=ordinal,
+                        candidate_id=candidate_id,
+                        template="",
+                        internal_score=None,
+                        evaluation=None,
+                        rejected_reason=PROPOSER_DRAFT_FAILED,
+                        rejected_detail=(
+                            draft.failure_detail
+                            or "proposer returned an empty draft"
+                        ),
+                    )
+                )
+                continue
+
+            template = draft.template
 
             # Intake validation: an untrusted proposed template that references
             # a placeholder the render cannot fill is REJECTED here without any

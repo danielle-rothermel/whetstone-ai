@@ -52,6 +52,11 @@ FULL_CONFIG_EVAL_HASH = "__full_config__"
 #: determination or a terminal statistical status. The cell finalizes as
 #: ``incomplete-arm`` carrying which arm/rows failed, and is NOT a certified
 #: result (it is not a completed terminal status: a re-run supersedes it).
+#: ``proposer-failure`` was added by the failed-draft fix: EVERY draft in the
+#: run was a typed proposer-draft failure (timeout/nonzero/empty/rejected) so
+#: no real candidate was ever explored. This is NOT an honest no-improvement
+#: (where real candidates WERE scored) -- it is a proposer outage, and (like
+#: ``incomplete-arm``) not a completed status (a re-run supersedes it).
 CELL_STATUSES: frozenset[str] = frozenset(
     {
         "improved",
@@ -60,6 +65,7 @@ CELL_STATUSES: frozenset[str] = frozenset(
         "plumbing-retry",
         "halted",
         "incomplete-arm",
+        "proposer-failure",
     }
 )
 

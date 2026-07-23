@@ -35,6 +35,7 @@ from whetstone.optimization.codex_proposer import (
 )
 from whetstone.optimization.proposer import ProposalRequest
 from whetstone.runner.cli import (
+    CODEX_OPTIMIZER_AGENT_MODEL,
     _build_cell_config,
     _HttpProposerTransport,
     _LiveProposerUnavailable,
@@ -164,8 +165,12 @@ def test_codex_optimizer_wires_codex_cli_proposer_not_placeholder() -> None:
     config, task_route = _build_cell_config(_cell_args("codex"))
     assert isinstance(config.proposer_transport, CodexProposerTransport)
     assert not isinstance(config.proposer_transport, _LiveProposerUnavailable)
-    # Recorded distinctly as codex-cli/<agent model> (briefs §5 gpt-5.6).
-    assert config.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.6"
+    # Recorded distinctly as codex-cli/<agent model>. The brief pins gpt-5.6
+    # but that is rejected by ChatGPT-account Codex, so the default deviates to
+    # CODEX_OPTIMIZER_AGENT_MODEL (gpt-5.6-sol).
+    assert config.proposer_model == (
+        f"{CODEX_CLI_LANE}/{CODEX_OPTIMIZER_AGENT_MODEL}"
+    )
     assert CODEX_CLI_LANE in config.proposer_config.provider_call_config_ref
     assert len(config.proposer_config.provider_call_config_hash) == 64
     # The task route is still the openrouter lane (proposer is independent).

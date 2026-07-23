@@ -91,17 +91,19 @@ def test_success_prompt_carries_base_template() -> None:
 # --- Nonzero exit ----------------------------------------------------------
 
 
-def test_nonzero_exit_yields_failed_draft_base_template() -> None:
+def test_nonzero_exit_yields_typed_failed_draft_not_base_template() -> None:
     invoker = _FakeInvoker([CodexInvocation(text="", returncode=3)])
     transport = CodexProposerTransport(model=MODEL, invoker=invoker)
     drafts = transport.draft(_config(), _request(), count=1)
     assert len(drafts) == 1
     draft = drafts[0]
-    # A failed draft returns the base unchanged (the diff check rejects it),
-    # never a fabricated candidate.
-    assert draft.template == "Answer: {input}"
+    # A failed draft is a TYPED FAILURE with NO template -- the base template
+    # is NEVER echoed back (no fabricated candidate).
+    assert draft.failed is True
+    assert draft.template == ""
+    assert draft.template != "Answer: {input}"  # base NOT echoed
+    assert draft.failure_detail and "non-zero" in draft.failure_detail
     assert draft.request_evidence["failed"] is True
-    assert draft.response_evidence["finish"] == "failed"
     assert draft.cost == 0.0
     # No retry storm: exactly one invocation for the one requested draft.
     assert len(invoker.calls) == 1
@@ -110,27 +112,29 @@ def test_nonzero_exit_yields_failed_draft_base_template() -> None:
 # --- Timeout ---------------------------------------------------------------
 
 
-def test_timeout_yields_failed_draft() -> None:
+def test_timeout_yields_typed_failed_draft() -> None:
     invoker = _FakeInvoker(
         [CodexInvocation(text="", returncode=-1, timed_out=True)]
     )
     transport = CodexProposerTransport(model=MODEL, invoker=invoker)
     drafts = transport.draft(_config(), _request(), count=1)
-    assert drafts[0].template == "Answer: {input}"
-    assert drafts[0].request_evidence["failed"] is True
-    assert "timed out" in drafts[0].response_evidence["error"]
+    assert drafts[0].failed is True
+    assert drafts[0].template == ""
+    assert "timed out" in (drafts[0].failure_detail or "")
 
 
 # --- Empty output ----------------------------------------------------------
 
 
-def test_empty_output_yields_failed_draft() -> None:
+def test_empty_output_yields_typed_failed_draft() -> None:
+    # This is the c11/gpt-5.6 shape: codex exec exits 0 but writes NO
+    # output-last-message file (a ChatGPT-account model rejection, HTTP 400).
     invoker = _FakeInvoker([CodexInvocation(text="   \n  ", returncode=0)])
     transport = CodexProposerTransport(model=MODEL, invoker=invoker)
     drafts = transport.draft(_config(), _request(), count=1)
-    assert drafts[0].template == "Answer: {input}"
-    assert drafts[0].request_evidence["failed"] is True
-    assert "empty" in drafts[0].response_evidence["error"]
+    assert drafts[0].failed is True
+    assert drafts[0].template == ""
+    assert "empty" in (drafts[0].failure_detail or "")
 
 
 def test_mixed_success_and_failure_across_drafts() -> None:
@@ -142,10 +146,14 @@ def test_mixed_success_and_failure_across_drafts() -> None:
     )
     transport = CodexProposerTransport(model=MODEL, invoker=invoker)
     drafts = transport.draft(_config(), _request(), count=2)
+    # Real draft: a genuine template, not failed.
     assert drafts[0].template == "Good {input}"
+    assert drafts[0].failed is False
     assert "failed" not in drafts[0].request_evidence
-    assert drafts[1].template == "Answer: {input}"
-    assert drafts[1].request_evidence["failed"] is True
+    # Failed draft: typed failure, NO base-template echo.
+    assert drafts[1].failed is True
+    assert drafts[1].template == ""
+    assert drafts[1].template != "Answer: {input}"
 
 
 def test_token_accounting_tallied() -> None:

@@ -85,11 +85,14 @@ _LANE_CHOICES = ("openrouter", *LANE_NAMES)
 CODEX_PROPOSER_DEFAULT_MODEL = "gpt-5.4-mini"
 
 #: The default agent model for the codex OPTIMIZER (``--optimizer codex``),
-#: whose proposer IS the local ``codex exec`` CLI
-#: (``reports/optimizer-briefs.md`` §5: ``agent_model = gpt-5.6``). Overridable
-#: by ``--proposer-model``. Recorded as ``codex-cli/<model>`` on the cell
-#: line's ``models.proposer``.
-CODEX_OPTIMIZER_AGENT_MODEL = "gpt-5.6"
+#: whose proposer IS the local ``codex exec`` CLI. The brief
+#: (``reports/optimizer-briefs.md`` §5) pins ``agent_model = gpt-5.6``, but
+#: that model returns HTTP 400 ("not supported when using Codex with a ChatGPT
+#: account") on this machine's plan -- so the default DEVIATES to
+#: ``gpt-5.6-sol`` (a working sol-tier model on this account). Overridable by
+#: ``--proposer-model``; recorded as ``codex-cli/<model>`` on
+#: ``models.proposer``.
+CODEX_OPTIMIZER_AGENT_MODEL = "gpt-5.6-sol"
 
 #: Progress heartbeat interval (seconds): how often the CLI prints a progress
 #: line during a long cell/pilot run so nohup logs stream something regularly.
@@ -263,7 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
             "with --proposer-cli codex it selects the codex-CLI model "
             "(default "
             "gpt-5.4-mini); for --optimizer codex it selects the codex agent "
-            "model (default gpt-5.6). Folds into the proposer route Config "
+            "model (default gpt-5.6-sol -- the brief's gpt-5.6 is rejected by "
+            "ChatGPT-account Codex). Folds into the proposer route Config "
             "identity (never a graph identity) and is recorded in cells.jsonl "
             "models.proposer. Ignored by eval (the identity optimizer)."
         ),
@@ -487,48 +491,52 @@ class _HttpProposerTransport:
                 ),
             )
             self.proposer_calls += 1
-            if result.succeeded and result.generation is not None:
-                template = result.generation.text.strip()
-                usage = result.generation.response.usage
-                if usage is not None and usage.total_tokens is not None:
-                    self.proposer_tokens += usage.total_tokens
+            base_evidence = {
+                "proposal_mode": request.proposal_mode,
+                "request_ordinal": request.request_ordinal,
+                "draft_index": index,
+            }
+            # A failed OR empty-completion draft is a TYPED FAILURE -- the base
+            # template is NEVER echoed back (no fabricated candidate).
+            if not (result.succeeded and result.generation is not None):
                 drafts.append(
-                    ProposalDraft(
-                        template=template or request.base_template,
-                        request_evidence={
-                            "proposal_mode": request.proposal_mode,
-                            "request_ordinal": request.request_ordinal,
-                            "draft_index": index,
-                        },
-                        response_evidence={"finish": "stop"},
-                        usage={
-                            "proposer_calls": 1,
-                            "total_tokens": (
-                                usage.total_tokens if usage is not None else 0
-                            ),
-                        },
-                        # Per-call USD cost is not on the wire usage; cell
-                        # spend is attributed via credits-delta in the ledger.
-                        cost=None,
-                    )
-                )
-            else:
-                # A failed draft returns the base unchanged; the diff check
-                # rejects it (no fabricated candidate from a failed call).
-                drafts.append(
-                    ProposalDraft(
-                        template=request.base_template,
-                        request_evidence={
-                            "proposal_mode": request.proposal_mode,
-                            "request_ordinal": request.request_ordinal,
-                            "draft_index": index,
-                            "failed": True,
-                        },
-                        response_evidence={"finish": "failed"},
+                    ProposalDraft.failure(
+                        detail="proposer call failed",
+                        request_evidence={**base_evidence, "failed": True},
                         usage={"proposer_calls": 1},
-                        cost=None,
                     )
                 )
+                continue
+            generation = result.generation
+            template = generation.text.strip()
+            if not template:
+                drafts.append(
+                    ProposalDraft.failure(
+                        detail="proposer returned an empty completion",
+                        request_evidence={**base_evidence, "failed": True},
+                        usage={"proposer_calls": 1},
+                    )
+                )
+                continue
+            usage = generation.response.usage
+            if usage is not None and usage.total_tokens is not None:
+                self.proposer_tokens += usage.total_tokens
+            drafts.append(
+                ProposalDraft(
+                    template=template,
+                    request_evidence=base_evidence,
+                    response_evidence={"finish": "stop"},
+                    usage={
+                        "proposer_calls": 1,
+                        "total_tokens": (
+                            usage.total_tokens if usage is not None else 0
+                        ),
+                    },
+                    # Per-call USD cost is not on the wire usage; cell spend is
+                    # attributed via credits-delta in the ledger.
+                    cost=None,
+                )
+            )
         return tuple(drafts)
 
 
@@ -736,8 +744,9 @@ def _uses_codex_cli_proposer(args: argparse.Namespace) -> bool:
 def _codex_proposer_model(args: argparse.Namespace) -> str:
     """The codex-CLI proposer model.
 
-    ``--proposer-model`` overrides; else the codex OPTIMIZER uses its brief
-    agent model (``gpt-5.6``) and a ``--proposer-cli codex`` cell uses the
+    ``--proposer-model`` overrides; else the codex OPTIMIZER uses its default
+    agent model (``gpt-5.6-sol`` -- the brief pins ``gpt-5.6`` but ChatGPT-
+    account Codex rejects it) and a ``--proposer-cli codex`` cell uses the
     codex proposer default (``gpt-5.4-mini``).
     """
     override = getattr(args, "proposer_model", None)
