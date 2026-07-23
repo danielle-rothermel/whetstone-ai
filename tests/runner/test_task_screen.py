@@ -245,22 +245,27 @@ def test_cross_model_summary_table(tmp_path: Path) -> None:
         assert isinstance(r, dict)
         models.add(str(r.get("model")))
     assert models == expected_models
-    # Table rows carry the task-20 telemetry columns + the ratio key.
+    # Table rows carry the task-20 telemetry columns + the config keys.
     for r in rows:
         assert isinstance(r, dict)
         assert "budget_ratio" in r
+        assert "reasoning_effort" in r
+        assert "config_key" in r
         assert "mean_latency_s" in r
         assert "latency_coverage" in r
         assert "total_reasoning_tokens" in r
-    per_model = table["per_model_ratio_excluded"]
-    assert isinstance(per_model, dict)
-    # Keyed per (model, ratio); both reports are r=0.25 -> model@r025.
+    per_config = table["per_config_excluded"]
+    assert isinstance(per_config, dict)
+    # Keyed per (model, ratio, effort); both are default-effort r=0.25 ->
+    # model@r025 (no effort suffix on the default).
     expected_keys = {f"{m}@r025" for m in expected_models}
-    assert set(per_model) == expected_keys
-    # The cross-model rename deltas (paper figure) present per (model,ratio).
-    deltas = table["rename_deltas_by_model_ratio"]
+    assert set(per_config) == expected_keys
+    # The cross-model rename deltas (paper figure) present per config.
+    deltas = table["rename_deltas_by_config"]
     assert isinstance(deltas, dict)
     assert set(deltas) == expected_keys
+    # Default-effort reports have no reasoning-honored entries (no labels).
+    assert table["reasoning_honored"] == {}
 
 
 # --- pool filter: exclusion folds into split identity ------------------------
@@ -681,3 +686,89 @@ def test_screen_telemetry_mixed_coverage_counts_not_conflated() -> None:
     assert s["mean_reasoning_tokens"] == 5.0
     assert s["latency_coverage"] == 2
     assert s["median_latency_s"] == pytest.approx(0.15)
+
+
+# --- Task 21.1: reasoning-effort keyed artifacts + honor-vs-ignore -----------
+
+
+def test_screen_stem_folds_reasoning_effort() -> None:
+    from whetstone.runner.task_screen import effort_suffix, screen_stem
+
+    # Default effort keeps the original name (byte-compat w/ running runs).
+    assert screen_stem("qwen/q3", 0.25, None) == "ed1_qwen_q3_r025"
+    assert effort_suffix(None) == ""
+    # A labeled effort adds _e<effort>, never colliding with default.
+    assert screen_stem("qwen/q3", 0.25, "low") == "ed1_qwen_q3_r025_elow"
+    assert screen_stem("qwen/q3", 0.25, "none") == "ed1_qwen_q3_r025_enone"
+
+
+def test_screen_artifact_and_phase_keyed_by_effort(tmp_path: Path) -> None:
+    # (Task 21.1) A low-effort round writes a DISTINCT artifact + phase
+    # from the default round -- never overwrites or cross-resumes.
+    from whetstone.execution.partials import PartialLog
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    log = PartialLog(path=tmp_path / "s.partial.jsonl")
+    default = run_task_screen(
+        model="gpt-5.4-nano", transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, variants=("direct_original",),
+        partial_log=log,
+    )
+    low = run_task_screen(
+        model="gpt-5.4-nano", transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, variants=("direct_original",),
+        reasoning_effort="low", partial_log=log,
+    )
+    p_default = default.write(tmp_path)
+    p_low = low.write(tmp_path)
+    assert p_default.name == "ed1_gpt_5_4_nano_r025.json"
+    assert p_low.name == "ed1_gpt_5_4_nano_r025_elow.json"
+    assert p_default != p_low and p_default.exists() and p_low.exists()
+    assert json.loads(p_low.read_text())["reasoning_effort"] == "low"
+    # The two configs recorded DISTINCT partials phases (no cross-resume).
+    phases = {rec.phase for rec in log.load()}
+    assert any(":r025:" in p for p in phases)       # default
+    assert any(":r025_elow:" in p for p in phases)  # low
+
+
+def test_reasoning_honored_flags_detect_ignore() -> None:
+    # (Task 21.3) A model that IGNORES the effort has ~equal reasoning tokens
+    # across default and low -> honored=False, flagged as duplicate.
+    from whetstone.runner.task_screen import (
+        TaskScreenReport,
+        TaskScreenRow,
+        reasoning_honored_flags,
+    )
+
+    def _report(effort, reason_per_row):
+        rows = (
+            TaskScreenRow(
+                task_id="t1", entry_point="f", repeats=1,
+                pass_counts={"direct_original": 1},
+                fail_counts={"direct_original": 0},
+                arm_latencies={"direct_original": [0.1]},
+                arm_reasoning={"direct_original": [reason_per_row]},
+            ),
+        )
+        return TaskScreenReport(
+            model="m", budget_ratio=0.25, repeats=1,
+            arms=("direct_original",), rename_token="target_fxn",
+            dataset_revision="rev", name_only_wrapper="w", rows=rows,
+            reasoning_effort=effort,
+        )
+
+    # IGNORE case: default=100, low=100 -> not honored.
+    flags = reasoning_honored_flags([
+        _report(None, 100), _report("low", 100),
+    ])
+    key = "m@r025/low"
+    assert flags[key]["honored"] is False
+    assert "IGNORED" in str(flags[key]["note"])
+    # HONOR case: default=100, low=10 -> honored (moved >5%).
+    flags2 = reasoning_honored_flags([
+        _report(None, 100), _report("low", 10),
+    ])
+    assert flags2[key]["honored"] is True
+    assert flags2[key]["note"] is None

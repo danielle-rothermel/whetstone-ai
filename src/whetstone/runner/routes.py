@@ -36,6 +36,7 @@ from dr_providers import (
     GenerationControls,
     ProviderCallConfig,
     ProviderTransportPolicy,
+    ReasoningEffort,
     anthropic_messages_config,
     openai_chat_config,
     openrouter_chat_config,
@@ -53,15 +54,20 @@ __all__ = [
     "CANONICAL_TASK_MODEL",
     "DEEPSEEK_TASK_MODEL",
     "LANE_NAMES",
+    "OPENAI_BASE_URL",
+    "OPENAI_KEY_ENV",
     "OPENROUTER_BASE_URL",
     "OPENROUTER_KEY_ENV",
     "PLAN_LANES",
+    "REASONING_EFFORT_CHOICES",
     "TASK_MODEL_BY_ENV",
     "PlanLane",
     "ProviderRoute",
     "canonical_proposer_route",
     "canonical_task_route",
     "lane_route",
+    "openai_direct_route",
+    "reasoning_effort_for",
     "route_for",
     "task_model_for_env",
 ]
@@ -276,16 +282,29 @@ def _execution_policy(
     )
 
 
-def _controls(temperature: float | None) -> GenerationControls | None:
-    if temperature is None:
+def _controls(
+    temperature: float | None,
+    reasoning: ReasoningEffort | None = None,
+) -> GenerationControls | None:
+    """The GenerationControls for a route, or ``None`` when nothing is set.
+
+    ``reasoning`` (the ``--reasoning-effort`` dial) is OUTPUT-AFFECTING: it
+    serializes on the wire per the config's reasoning shape (openrouter ->
+    ``reasoning`` object; openai -> ``reasoning_effort`` field) AND folds into
+    the Provider Call Config identity_hash (the c23-era rule), so a distinct
+    effort is a distinct route/graph variant. ``None`` leaves the control
+    UNSET -> the provider default -> byte-identical to a run without the flag.
+    """
+    if temperature is None and reasoning is None:
         return None
-    return GenerationControls(temperature=temperature)
+    return GenerationControls(temperature=temperature, reasoning=reasoning)
 
 
 def canonical_task_route(
     *,
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
+    reasoning: ReasoningEffort | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -296,10 +315,11 @@ def canonical_task_route(
     ``OPENROUTER_API_KEY``. Temperature defaults to 0 (the pilots use temp-0
     for agreement checks); pass ``None`` to leave the control unset. The
     absolute cap is 600s to accommodate reasoning-model generations; the
-    ~90s idle timeout is the real stall detector.
+    ~90s idle timeout is the real stall detector. ``reasoning`` sets the
+    OUTPUT-AFFECTING reasoning effort (folds into the Config identity).
     """
     call_config = openrouter_chat_config(
-        model=model, controls=_controls(temperature)
+        model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
         api_key_env=OPENROUTER_KEY_ENV,
@@ -325,6 +345,7 @@ def openai_direct_route(
     role: str = "task",
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
+    reasoning: ReasoningEffort | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -335,10 +356,11 @@ def openai_direct_route(
     off ``OPENAI_API_KEY`` at ``OPENAI_BASE_URL`` via ``ProviderKind.OPENAI``
     -- so the config identity (hence graph route identity) is DISTINCT from the
     openrouter route for the same model. Chosen when temperature must hold
-    (OpenAI respects it for gpt-5.4-nano; OpenRouter ignores it).
+    (OpenAI respects it for gpt-5.4-nano; OpenRouter ignores it). ``reasoning``
+    serializes as ``reasoning_effort`` and folds into the Config identity.
     """
     call_config = openai_chat_config(
-        model=model, controls=_controls(temperature)
+        model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
         api_key_env=OPENAI_KEY_ENV,
@@ -363,6 +385,7 @@ def canonical_proposer_route(
     *,
     model: str = CANONICAL_PROPOSER_MODEL,
     temperature: float | None = 1.0,
+    reasoning: ReasoningEffort | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -375,7 +398,7 @@ def canonical_proposer_route(
     an encoder/decoder route hash.
     """
     call_config = openrouter_chat_config(
-        model=model, controls=_controls(temperature)
+        model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
         api_key_env=OPENROUTER_KEY_ENV,
@@ -401,6 +424,7 @@ def lane_route(
     *,
     role: str = "task",
     temperature: float | None = 0.0,
+    reasoning: ReasoningEffort | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -417,7 +441,7 @@ def lane_route(
         )
     spec = PLAN_LANES[lane]
     call_config = anthropic_messages_config(
-        model=spec.model, controls=_controls(temperature)
+        model=spec.model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
         api_key_env=spec.key_env,
@@ -438,11 +462,41 @@ def lane_route(
     )
 
 
+#: The CLI ``--reasoning-effort`` choices -> the typed cross-provider effort.
+#: ``none`` maps to ``ReasoningEffort.NONE`` (openrouter serializes it as
+#: ``{reasoning: {enabled: false}}``; openai as the minimal/none effort the API
+#: allows). Absent flag -> ``None`` -> provider default (byte-identical).
+REASONING_EFFORT_CHOICES: tuple[str, ...] = ("none", "low", "medium", "high")
+_REASONING_BY_NAME: dict[str, ReasoningEffort] = {
+    "none": ReasoningEffort.NONE,
+    "low": ReasoningEffort.LOW,
+    "medium": ReasoningEffort.MEDIUM,
+    "high": ReasoningEffort.HIGH,
+}
+
+
+def reasoning_effort_for(name: str | None) -> ReasoningEffort | None:
+    """Map a ``--reasoning-effort`` choice to the typed effort, or ``None``.
+
+    ``None`` / absent leaves the control UNSET (the provider default), so a run
+    without the flag is byte-identical to the historical behavior.
+    """
+    if name is None:
+        return None
+    if name not in _REASONING_BY_NAME:
+        raise ValueError(
+            f"unknown reasoning effort {name!r}; expected one of "
+            f"{REASONING_EFFORT_CHOICES}"
+        )
+    return _REASONING_BY_NAME[name]
+
+
 def route_for(
     lane: str,
     *,
     role: str = "task",
     temperature: float | None = 0.0,
+    reasoning: ReasoningEffort | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -459,12 +513,16 @@ def route_for(
     ``proposer_model`` (openrouter proposer role only) overrides the canonical
     ``gpt-5.4-nano`` proposer model, folding into the proposer route's Config
     identity so a non-default proposer route differs from the canonical one.
+    ``reasoning`` (the ``--reasoning-effort`` dial) is OUTPUT-AFFECTING and
+    folds into the Config identity; ``None`` leaves it at the provider default
+    (byte-identical to a run without the flag).
     """
     if lane == "openrouter":
         if role == "proposer":
             return canonical_proposer_route(
                 model=proposer_model or CANONICAL_PROPOSER_MODEL,
                 temperature=1.0 if temperature is None else temperature,
+                reasoning=reasoning,
                 timeout_seconds=timeout_seconds,
                 idle_timeout_seconds=idle_timeout_seconds,
                 max_attempts=max_attempts,
@@ -472,6 +530,7 @@ def route_for(
         return canonical_task_route(
             model=task_model or CANONICAL_TASK_MODEL,
             temperature=temperature,
+            reasoning=reasoning,
             timeout_seconds=timeout_seconds,
             idle_timeout_seconds=idle_timeout_seconds,
             max_attempts=max_attempts,
@@ -485,6 +544,7 @@ def route_for(
                 role="proposer",
                 model=proposer_model or CANONICAL_PROPOSER_MODEL,
                 temperature=1.0 if temperature is None else temperature,
+                reasoning=reasoning,
                 timeout_seconds=timeout_seconds,
                 idle_timeout_seconds=idle_timeout_seconds,
                 max_attempts=max_attempts,
@@ -493,6 +553,7 @@ def route_for(
             role=role,
             model=task_model or CANONICAL_TASK_MODEL,
             temperature=temperature,
+            reasoning=reasoning,
             timeout_seconds=timeout_seconds,
             idle_timeout_seconds=idle_timeout_seconds,
             max_attempts=max_attempts,
@@ -501,6 +562,7 @@ def route_for(
         lane,
         role=role,
         temperature=temperature,
+        reasoning=reasoning,
         timeout_seconds=timeout_seconds,
         idle_timeout_seconds=idle_timeout_seconds,
         max_attempts=max_attempts,

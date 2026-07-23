@@ -76,8 +76,10 @@ from whetstone.runner.power import (
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     LANE_NAMES,
+    REASONING_EFFORT_CHOICES,
     ProviderRoute,
     completeness_for_env,
+    reasoning_effort_for,
     route_for,
     task_model_for_env,
 )
@@ -85,6 +87,32 @@ from whetstone.runner.routes import (
 __all__ = ["build_parser", "main"]
 
 _LANE_CHOICES = ("openrouter", "openai", *LANE_NAMES)
+
+
+def _reasoning_arg(args: argparse.Namespace):
+    """The typed reasoning effort from ``--reasoning-effort`` (or ``None``)."""
+    return reasoning_effort_for(getattr(args, "reasoning_effort", None))
+
+
+def _add_reasoning_effort_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--reasoning-effort`` flag to a subparser.
+
+    OUTPUT-AFFECTING: folds into the Provider Call Config identity (recorded on
+    the artifact/cell) and the realized reasoning tokens are in the telemetry
+    (so honor-vs-ignore is visible per model). Absent -> the provider default
+    -> byte-identical to a run without the flag.
+    """
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=REASONING_EFFORT_CHOICES,
+        default=None,
+        help=(
+            "task-model reasoning effort (OUTPUT-AFFECTING, folds into config "
+            "identity). openrouter -> the reasoning param ({effort} / "
+            "{enabled:false} for none); openai -> reasoning_effort. Absent = "
+            "the provider default (byte-identical to no flag)."
+        ),
+    )
 
 #: The default model for the local codex-CLI proposer (--proposer-cli codex).
 #: Stronger than the canonical gpt-5.4-nano, and ChatGPT-plan billed ($0).
@@ -242,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
             "in-flight, persist partials, exit non-zero with a status note"
         ),
     )
+    _add_reasoning_effort_arg(pilot)
     pilot.add_argument(
         "--budget-ratio",
         type=float,
@@ -264,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
     cell.add_argument("--env", required=True)
     cell.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     cell.add_argument("--attempt", type=int, default=0)
+    _add_reasoning_effort_arg(cell)
     cell.add_argument(
         "--task-model",
         default=None,
@@ -475,6 +505,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     screen.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
+    _add_reasoning_effort_arg(screen)
     screen.add_argument(
         "--budget-ratio", type=float, default=0.25, metavar="R",
         help="the encdec-arm Character Budget ratio (default 0.25)",
@@ -760,6 +791,7 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         role="task",
         temperature=0.0,
         task_model=resolved_task_model,
+        reasoning=_reasoning_arg(args),
     )
     transport = _live_transport(route)
     # A per-env resumable partial log (round-2 crashes lost every call). A
@@ -843,6 +875,7 @@ def _run_ed1_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     route = route_for(
         args.lane, role="task", temperature=0.0,
         task_model=resolved_task_model,
+        reasoning=_reasoning_arg(args),
     )
     report = run_ed1_pilot(
         transport=_live_transport(route),
@@ -1004,6 +1037,7 @@ def _build_cell_config(
     task_route = route_for(
         args.lane, role="task", temperature=0.0,
         task_model=resolved_task_model,
+        reasoning=_reasoning_arg(args),
     )
     decision = (
         detect_execution_mode(force=ExecutionMode(args.execution_mode))
@@ -1237,15 +1271,20 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         run_task_screen,
     )
 
+    effort = getattr(args, "reasoning_effort", None)
     route = route_for(
         args.lane, role="task", temperature=0.0, task_model=args.task_model,
+        reasoning=reasoning_effort_for(effort),
     )
     tag = model_tag(args.task_model)
+    # Fold the effort into the partials/sidecar names so a low/none round never
+    # cross-resumes or overwrites the default round.
+    suffix = "" if effort is None else f"_e{effort}"
     root = Path(args.root)
     partials = PartialLog(
-        path=root / "partials" / f"screen_{tag}.partial.jsonl"
+        path=root / "partials" / f"screen_{tag}{suffix}.partial.jsonl"
     )
-    sidecar = root / "task_screen" / f"ed1_{tag}.outputs.jsonl"
+    sidecar = root / "task_screen" / f"ed1_{tag}{suffix}.outputs.jsonl"
     sidecar.parent.mkdir(parents=True, exist_ok=True)
     variants = (
         tuple(v.strip() for v in args.variants.split(",") if v.strip())
@@ -1262,6 +1301,7 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         transport=transport,
         execution_policy=route.execution_policy,
         budget_ratio=args.budget_ratio,
+        reasoning_effort=effort,
         repeats=args.repeats,
         variants=variants,
         rename_token=rename_token,
@@ -1275,10 +1315,11 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
     deltas = report.rename_deltas()
     mode = " (dry-run-fake, no live calls)" if getattr(
         args, "dry_run_fake", False) else ""
+    eff = report.reasoning_effort or "default"
     sys.stdout.write(
         f"ed1 screen model={report.model} tasks={len(report.rows)} "
-        f"repeats={report.repeats} budget_ratio={report.budget_ratio}"
-        f"{mode}\n"
+        f"repeats={report.repeats} budget_ratio={report.budget_ratio} "
+        f"reasoning_effort={eff}{mode}\n"
         f"  excluded (always-pass, all screened arms): "
         f"{len(report.excluded_task_ids)} tasks\n"
     )

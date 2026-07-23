@@ -13,10 +13,12 @@ from whetstone.runner.routes import (
     OPENROUTER_BASE_URL,
     OPENROUTER_KEY_ENV,
     PLAN_LANES,
+    REASONING_EFFORT_CHOICES,
     canonical_proposer_route,
     canonical_task_route,
     lane_route,
     openai_direct_route,
+    reasoning_effort_for,
     route_for,
 )
 
@@ -192,3 +194,90 @@ def test_unlisted_env_completeness_default_is_strict_propagate() -> None:
     # Every env not in the matrix keeps the strict, untolerant default.
     for env in ("c11", "c19", "c22", "c23"):
         assert completeness_for_env(env) == ("propagate", 0.0)
+
+
+# --- Task 21.1: --reasoning-effort dial (identity fold + lane mappings) --
+
+
+def test_reasoning_effort_for_maps_choices() -> None:
+    from dr_providers import ReasoningEffort
+
+    assert reasoning_effort_for(None) is None  # absent -> provider default
+    assert reasoning_effort_for("none") is ReasoningEffort.NONE
+    assert reasoning_effort_for("low") is ReasoningEffort.LOW
+    assert reasoning_effort_for("medium") is ReasoningEffort.MEDIUM
+    assert reasoning_effort_for("high") is ReasoningEffort.HIGH
+    assert set(REASONING_EFFORT_CHOICES) == {"none", "low", "medium", "high"}
+
+
+def test_reasoning_absent_is_byte_identical() -> None:
+    # (Task 21.1) Absent flag -> control UNSET -> byte-identical config to the
+    # historical no-flag route (openrouter + openai).
+    orr = route_for("openrouter", role="task", task_model="gpt-5-nano")
+    orr_none = route_for(
+        "openrouter", role="task", task_model="gpt-5-nano",
+        reasoning=reasoning_effort_for(None),
+    )
+    assert orr.call_config.identity_hash == orr_none.call_config.identity_hash
+    oa = openai_direct_route(model="gpt-5.4-nano")
+    oa_none = openai_direct_route(
+        model="gpt-5.4-nano", reasoning=reasoning_effort_for(None)
+    )
+    assert oa.call_config.identity_hash == oa_none.call_config.identity_hash
+
+
+def test_reasoning_effort_folds_into_config_identity_openrouter() -> None:
+    # (Task 21.1, c23-era rule) OUTPUT-AFFECTING: each effort is a DISTINCT
+    # config identity on the openrouter lane (reasoning object shape).
+    base = route_for("openrouter", role="task", task_model="gpt-5-nano")
+    low = route_for(
+        "openrouter", role="task", task_model="gpt-5-nano",
+        reasoning=reasoning_effort_for("low"),
+    )
+    none = route_for(
+        "openrouter", role="task", task_model="gpt-5-nano",
+        reasoning=reasoning_effort_for("none"),
+    )
+    high = route_for(
+        "openrouter", role="task", task_model="gpt-5-nano",
+        reasoning=reasoning_effort_for("high"),
+    )
+    hashes = {
+        base.call_config.identity_hash, low.call_config.identity_hash,
+        none.call_config.identity_hash, high.call_config.identity_hash,
+    }
+    assert len(hashes) == 4  # all distinct
+
+
+def test_reasoning_effort_folds_into_config_identity_openai() -> None:
+    # (Task 21.1) OUTPUT-AFFECTING on the openai lane (reasoning_effort field).
+    base = openai_direct_route(model="gpt-5.4-nano")
+    low = openai_direct_route(
+        model="gpt-5.4-nano", reasoning=reasoning_effort_for("low")
+    )
+    none = openai_direct_route(
+        model="gpt-5.4-nano", reasoning=reasoning_effort_for("none")
+    )
+    hashes = {
+        base.call_config.identity_hash, low.call_config.identity_hash,
+        none.call_config.identity_hash,
+    }
+    assert len(hashes) == 3
+
+
+def test_reasoning_effort_serializes_per_lane_shape() -> None:
+    # (Task 21.1) openrouter -> reasoning object; openai -> reasoning_effort
+    # (dr-providers picks the shape from the config's reasoning_shape).
+    from whetstone.runner.routes import openai_direct_route
+
+    orr = route_for(
+        "openrouter", role="task", task_model="gpt-5-nano",
+        reasoning=reasoning_effort_for("low"),
+    ).call_config
+    oa = openai_direct_route(
+        model="gpt-5.4-nano", reasoning=reasoning_effort_for("low")
+    ).call_config
+    assert (
+        orr.definition.constraints.reasoning_shape.value == "reasoning_object"
+    )
+    assert oa.definition.constraints.reasoning_shape.value == "effort_field"

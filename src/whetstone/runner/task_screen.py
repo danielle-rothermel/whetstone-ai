@@ -107,9 +107,30 @@ def ratio_tag(budget_ratio: float) -> str:
     return "r" + f"{budget_ratio:.2f}".replace(".", "")
 
 
-def screen_stem(model: str, budget_ratio: float) -> str:
-    """The per-(model, ratio) artifact stem: ``ed1_<model>_<ratio>``."""
-    return f"ed1_{model_tag(model)}_{ratio_tag(budget_ratio)}"
+def effort_suffix(reasoning_effort: str | None) -> str:
+    """The artifact/phase suffix for a reasoning effort.
+
+    The DEFAULT (provider-default, ``None``) effort keeps NO suffix -- so the
+    existing default screens' names/phases are unchanged (byte-compatible with
+    the in-flight default runs). A LABELED effort adds ``_e<effort>`` (e.g.
+    ``_elow`` / ``_enone``), OUTPUT-AFFECTING and never colliding with default.
+    """
+    return "" if reasoning_effort is None else f"_e{reasoning_effort}"
+
+
+def screen_stem(
+    model: str, budget_ratio: float, reasoning_effort: str | None = None
+) -> str:
+    """The per-(model, ratio, effort) artifact stem.
+
+    ``ed1_<model>_<ratio>[_e<effort>]`` -- the reasoning effort folds into the
+    name (and the partials phase) so the default / low / none rounds are
+    DISTINCT files. Default effort keeps the original ``_r<ratio>`` name.
+    """
+    return (
+        f"ed1_{model_tag(model)}_{ratio_tag(budget_ratio)}"
+        f"{effort_suffix(reasoning_effort)}"
+    )
 
 
 def _mean(values: list[float]) -> float | None:
@@ -485,6 +506,11 @@ class TaskScreenReport:
     dataset_revision: str
     name_only_wrapper: str
     rows: tuple[TaskScreenRow, ...]
+    #: The task-model reasoning effort this screen ran at (``None`` = the
+    #: provider default). OUTPUT-AFFECTING: folds into the artifact stem +
+    #: partials phase, and the realized reasoning tokens (arm_summary) show
+    #: whether the model HONORED it.
+    reasoning_effort: str | None = None
 
     @property
     def excluded_task_ids(self) -> tuple[str, ...]:
@@ -559,6 +585,7 @@ class TaskScreenReport:
             "dataset_revision": self.dataset_revision,
             "name_only_wrapper": self.name_only_wrapper,
             "rename_token": self.rename_token,
+            "reasoning_effort": self.reasoning_effort,
             "science_intent": (
                 "The direct_name arm is the memorization DISCRIMINATOR (solve "
                 "from the function NAME alone = recall). The direct_renamed / "
@@ -578,11 +605,14 @@ class TaskScreenReport:
         }
 
     def write(self, root: Path) -> Path:
-        # Per-(model, ratio) filename so the r=0.25 compression screen and the
-        # r=1.0 fair-channel encdec re-run never overwrite each other.
+        # Per-(model, ratio, effort) filename so the compression / fair-channel
+        # / low / none rounds never overwrite each other.
         out_dir = root / "task_screen"
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{screen_stem(self.model, self.budget_ratio)}.json"
+        stem = screen_stem(
+            self.model, self.budget_ratio, self.reasoning_effort
+        )
+        path = out_dir / f"{stem}.json"
         path.write_text(json.dumps(self.as_dict(), indent=2, sort_keys=True))
         return path
 
@@ -596,6 +626,7 @@ def run_task_screen(
     transport: TransportCall,
     execution_policy: ProviderExecutionPolicy,
     budget_ratio: float = 0.25,
+    reasoning_effort: str | None = None,
     repeats: int = 5,
     variants: Sequence[str] | None = None,
     rename_token: str = DEFAULT_RENAME_TOKEN,
@@ -645,7 +676,9 @@ def run_task_screen(
     assert rd is not None
     pcc = rd.provider_call_config
 
-    restored = _restore_screen(partial_log, model, budget_ratio)
+    restored = _restore_screen(
+        partial_log, model, budget_ratio, reasoning_effort
+    )
     encdec_arms = frozenset(ENCDEC_ARMS)
 
     def _spec(
@@ -676,7 +709,8 @@ def run_task_screen(
                 )
             _persist_row(
                 partial_log, sidecar_path, model=model,
-                budget_ratio=budget_ratio, task_id=task_id,
+                budget_ratio=budget_ratio,
+                reasoning_effort=reasoning_effort, task_id=task_id,
                 arm=arm, index=index, outcome=out,
             )
             return out
@@ -752,17 +786,25 @@ def run_task_screen(
         arms=tuple(arms), rename_token=rename_token,
         dataset_revision=ED1_DATASET_REVISION,
         name_only_wrapper=NAME_ONLY_WRAPPER, rows=tuple(rows),
+        reasoning_effort=reasoning_effort,
     )
 
 
-def _screen_phase(model: str, budget_ratio: float, arm: str) -> str:
-    """The partials phase key for a screen row: per (model, ratio, arm).
+def _screen_phase(
+    model: str, budget_ratio: float, arm: str,
+    reasoning_effort: str | None = None,
+) -> str:
+    """The partials phase key: per (model, ratio, effort, arm).
 
-    The RATIO is in the key so a fair-channel r=1.0 encdec re-run does NOT
-    restore-skip against the r=0.25 encdec rows -- a different ratio is a
-    different rollout that must be re-driven, not resumed.
+    The RATIO and the reasoning EFFORT are in the key so a fair-channel r=1.0
+    run (or a low/none-effort round) does NOT restore-skip against a different
+    config's rows -- a different ratio OR effort is a different rollout that
+    must be re-driven, not resumed. Default effort keeps the original key.
     """
-    return f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}:{arm}"
+    return (
+        f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}"
+        f"{effort_suffix(reasoning_effort)}:{arm}"
+    )
 
 
 def _persist_row(
@@ -771,6 +813,7 @@ def _persist_row(
     *,
     model: str,
     budget_ratio: float,
+    reasoning_effort: str | None,
     task_id: str,
     arm: str,
     index: int,
@@ -779,7 +822,7 @@ def _persist_row(
     """Append one completed screen row to the partial log + output sidecar."""
     if partial_log is not None:
         partial_log.append(PartialCallRecord(
-            phase=_screen_phase(model, budget_ratio, arm),
+            phase=_screen_phase(model, budget_ratio, arm, reasoning_effort),
             instance_id=task_id, unit=arm, repeat_id=index,
             score=(None if outcome.passed is None else float(outcome.passed)),
             failed=outcome.failed, failure_code=outcome.failure_code,
@@ -793,6 +836,7 @@ def _persist_row(
         with sidecar_path.open("a") as handle:
             handle.write(json.dumps({
                 "model": model, "budget_ratio": budget_ratio,
+                "reasoning_effort": reasoning_effort,
                 "task_id": task_id, "arm": arm,
                 "repeat": index, "passed": outcome.passed,
                 "failure_code": outcome.failure_code,
@@ -806,18 +850,22 @@ def _persist_row(
 
 
 def _restore_screen(
-    partial_log: PartialLog | None, model: str, budget_ratio: float
+    partial_log: PartialLog | None, model: str, budget_ratio: float,
+    reasoning_effort: str | None = None,
 ) -> dict[tuple[str, str, int], _ScreenRowOutcome]:
     """Rebuild screen rows already recorded (resume skip) by (task,arm,r).
 
-    Matches ONLY this (model, ratio) phase, so a fair-channel r=1.0 run never
-    restores the r=0.25 rows. Restored rows re-hydrate their token counts (for
-    the cost sums); a pre-telemetry recorded row simply carries ``None`` tokens
-    (coverage-honest -- never conflated with 0).
+    Matches ONLY this (model, ratio, effort) phase, so a fair-channel r=1.0 run
+    (or a low/none-effort round) never restores another config's rows. Restored
+    rows re-hydrate their token counts (for the cost sums); a pre-telemetry
+    recorded row simply carries ``None`` tokens (coverage-honest, not 0).
     """
     if partial_log is None:
         return {}
-    prefix = f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}:"
+    prefix = (
+        f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}"
+        f"{effort_suffix(reasoning_effort)}:"
+    )
     restored: dict[tuple[str, str, int], _ScreenRowOutcome] = {}
     for rec in partial_log.load():
         if not rec.phase.startswith(prefix):
@@ -850,19 +898,81 @@ def load_exclusion_ids(screen_path: Path) -> frozenset[str]:
     return frozenset(str(x) for x in ids)
 
 
+def _config_key(report: TaskScreenReport) -> str:
+    """The cross-model config key: ``<model>@<ratio>[/<effort>]``."""
+    base = f"{report.model}@{ratio_tag(report.budget_ratio)}"
+    if report.reasoning_effort is not None:
+        base += f"/{report.reasoning_effort}"
+    return base
+
+
+def _mean_reasoning(report: TaskScreenReport) -> float | None:
+    """The report's mean realized reasoning tokens over rows-with-field."""
+    summary = report.arm_summary()
+    vals: list[float] = []
+    weights = 0
+    for arm in report.arms:
+        m = summary[arm]["mean_reasoning_tokens"]
+        cov = summary[arm]["reasoning_coverage"] or 0
+        if m is not None and cov:
+            vals.append(m * cov)
+            weights += int(cov)
+    return (sum(vals) / weights) if weights else None
+
+
+def reasoning_honored_flags(
+    reports: Sequence[TaskScreenReport],
+) -> dict[str, dict[str, object]]:
+    """Per (model, ratio, effort) whether the model HONORED the effort setting.
+
+    Compares a labeled-effort report's mean realized reasoning tokens against
+    the SAME (model, ratio) DEFAULT report's. If a ``low``/``none`` round's
+    reasoning tokens ~match the default's (within 5%), the model IGNORED the
+    setting -- its labeled rows are DUPLICATES of default and must be flagged
+    (not presented as a distinct condition). ``honored=None`` when there is no
+    default to compare against, or neither reported reasoning tokens.
+    """
+    # Index the DEFAULT-effort report's mean reasoning per (model, ratio).
+    default_reason: dict[tuple[str, float], float | None] = {}
+    for r in reports:
+        if r.reasoning_effort is None:
+            default_reason[(r.model, r.budget_ratio)] = _mean_reasoning(r)
+    out: dict[str, dict[str, object]] = {}
+    for r in reports:
+        if r.reasoning_effort is None:
+            continue
+        mine = _mean_reasoning(r)
+        base = default_reason.get((r.model, r.budget_ratio))
+        honored: bool | None = None
+        if mine is not None and base is not None:
+            # Honored iff the realized reasoning moved from default by >5%.
+            denom = base if base else 1.0
+            honored = abs(mine - base) / denom > 0.05
+        out[_config_key(r)] = {
+            "reasoning_effort": r.reasoning_effort,
+            "mean_reasoning_tokens": mine,
+            "default_mean_reasoning_tokens": base,
+            "honored": honored,
+            "note": (
+                "IGNORED: labeled rows duplicate the default condition"
+                if honored is False else None
+            ),
+        }
+    return out
+
+
 def cross_model_summary(
     reports: Sequence[TaskScreenReport],
 ) -> dict[str, object]:
-    """A compact cross-model table, keyed per (model, arm, budget_ratio).
+    """A cross-model table, keyed per (model, arm, ratio, reasoning-effort).
 
-    Headed for the paper's contamination + cost/latency section. Each row is
-    ONE (model, arm, ratio) cell -- so the two-ratio encdec structure is
-    CLEANLY: the same model/arm appears once per ratio it was screened at (the
-    compression point r=0.25 and the fair-channel point r=1.0 are distinct
-    rows, never merged). Direct arms are ratio-independent (they appear at
-    whatever ratio their screen ran). Columns: pass rate, tasks-full-pass, AND
-    the task-20 telemetry (mean/median latency + reasoning tokens) + coverage
-    counts (rows over which the telemetry was actually reported).
+    Headed for the paper's contamination + cost/latency + reasoning section.
+    Each row is ONE (model, arm, ratio, effort) cell -- so the two-ratio encdec
+    structure AND the reasoning-effort rounds (default / low / none) are all
+    distinct rows, never merged. Columns: pass rate, tasks-full-pass, AND the
+    task-20 telemetry (mean/median latency + reasoning tokens) + coverage
+    counts. ``reasoning_honored`` flags labeled-effort configs whose realized
+    reasoning tokens ~match the default (the model IGNORED the setting).
     """
     table: list[dict[str, object]] = []
     for report in reports:
@@ -873,6 +983,8 @@ def cross_model_summary(
                 "model": report.model,
                 "arm": arm,
                 "budget_ratio": report.budget_ratio,
+                "reasoning_effort": report.reasoning_effort,
+                "config_key": _config_key(report),
                 "mean_pass_rate": s["mean_pass_rate"],
                 "tasks_full_pass": s["tasks_full_pass"],
                 "mean_latency_s": s["mean_latency_s"],
@@ -886,15 +998,15 @@ def cross_model_summary(
         "arms": list(SCREEN_ARMS),
         "table": table,
         # The paper's causal-memorization figure: canonical-minus-renamed pass
-        # delta per (model, ratio) per arm-pair (larger delta = more contam).
-        "rename_deltas_by_model_ratio": {
-            f"{r.model}@{ratio_tag(r.budget_ratio)}": r.rename_deltas()
-            for r in reports
+        # delta per config (model, ratio, effort) per arm-pair.
+        "rename_deltas_by_config": {
+            _config_key(r): r.rename_deltas() for r in reports
         },
-        "per_model_ratio_excluded": {
-            f"{r.model}@{ratio_tag(r.budget_ratio)}": len(r.excluded_task_ids)
-            for r in reports
+        "per_config_excluded": {
+            _config_key(r): len(r.excluded_task_ids) for r in reports
         },
+        # Reasoning-effort honor-vs-ignore per labeled config (task 21.3).
+        "reasoning_honored": reasoning_honored_flags(reports),
     }
 
 
@@ -911,9 +1023,11 @@ __all__ = [
     "TaskScreenReport",
     "TaskScreenRow",
     "cross_model_summary",
+    "effort_suffix",
     "load_exclusion_ids",
     "model_tag",
     "ratio_tag",
+    "reasoning_honored_flags",
     "rename_identifier",
     "renamed_task",
     "run_task_screen",
