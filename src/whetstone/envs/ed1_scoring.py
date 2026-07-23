@@ -63,11 +63,27 @@ class CodeScore:
     definitive verdict (harness failure / evaluation incomplete / timeout) --
     the
     rollout must fail, never score 0. ``outcome`` retains the dr-code label.
+
+    ed1m (behavioral-mutant) extension: ``fidelity`` is the FRACTIONAL
+    reward-bearing per-row score (fraction of inputs matching the mutant), used
+    IN PLACE of the binary ``passed`` when present; ``attractor_pull`` is the
+    REPORTED contamination measurement (fraction of discriminating inputs that
+    snapped to canonical), never a reward. Both ``None`` for the QA/ed1 binary
+    scorer, where ``passed`` is the sole score.
     """
 
     passed: bool
     infrastructure_unknown: bool
     outcome: str
+    fidelity: float | None = None
+    attractor_pull: float | None = None
+
+    @property
+    def row_value(self) -> float:
+        """The per-row reward-bearing score: fractional fidelity, else 0/1."""
+        return self.fidelity if self.fidelity is not None else float(
+            self.passed
+        )
 
 
 def score_ed1_submission(

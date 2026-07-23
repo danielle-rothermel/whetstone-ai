@@ -365,6 +365,24 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
     task-22 guard rail before building an ed1/ed1m optimizer experiment.
     """
     _guard_ed1_blended_reward(config)
+    if config.env == "ed1m":
+        # ed1m: the behavioral-mutant enc-dec (task 18). Reuses ed1's pipeline
+        # with the mutant per-input oracle (fidelity reward + attractor
+        # pull). --official-n slices the mutant pool; no-budget frame default.
+        from whetstone.envs.ed1m import build_ed1m_experiment
+        return build_ed1m_experiment(
+            model=config.task_model,
+            budget_ratio=config.budget_ratio,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+            exclude_mutant_ids=config.ed1_exclude_task_ids,
+            blend_config=config.ed1_blend_config,
+            scorer=config.ed1_scorer,
+        )
     if config.env == ED1_ENV_NAME:
         # Fold the OFFICIAL-split sampling override into the ed1 pool slice so
         # a reduced-anchor cell (``--official-n``) drives only N official tasks
@@ -409,7 +427,7 @@ def _ed1_dual_scores(
     the
     ``budget_ratio``, and the pinned dataset revision.
     """
-    if config.env != ED1_ENV_NAME:
+    if config.env not in _ED1_FAMILY_ENVS:
         return None
     revision = getattr(experiment, "dataset_revision", None)
     return CellDualScores(

@@ -252,6 +252,12 @@ def run_dry_cell(
             execution_mode=execution_mode, budget_ratio=budget_ratio,
             blend_config=blend_config,
         )
+    if env == "ed1m":
+        return _run_dry_ed1m_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, budget_ratio=budget_ratio,
+            blend_config=blend_config,
+        )
     pool_n = _pool_n_per_stratum(env)
     experiment = build_env_experiment(
         env, model=DRYRUN_TASK_MODEL, pool_n_per_stratum=pool_n,
@@ -397,6 +403,98 @@ def _run_dry_ed1_cell(
         budget_ratio=budget_ratio,
         ed1_task_limit=_ED1_DRY_TASK_LIMIT,
         ed1_blend_config=blend_config,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(config, ledger=ledger, credits_fetcher=_static_credits())
+
+
+_ED1M_DRY_MUTANT_LIMIT = 3
+
+
+def _run_dry_ed1m_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    budget_ratio: float | None = None,
+    blend_config: BoundedCompressionMetricConfig | None = None,
+) -> CellOutcome:
+    """Run one ed1m (behavioral-mutant enc-dec) fake cell (no network/Docker).
+
+    Loads a tiny mutant slice, a scripted enc/dec transport (encoder marker ->
+    decoder emits a per-mutant reconstruction), and an INJECTED fake dual
+    scorer (deterministic fidelity + attractor, no subprocess) so the wiring --
+    the mutant oracle path, the blended fidelity reward, the reported attractor
+    -- is validated without the live oracle. ``ed1_scorer`` carries the fake.
+    """
+    from whetstone.envs.ed1 import ENCODER_BODY_B
+    from whetstone.envs.ed1_scoring import CodeScore
+    from whetstone.envs.ed1m_dataset import load_ed1m_mutants
+
+    mutants = load_ed1m_mutants(limit=_ED1M_DRY_MUTANT_LIMIT)
+    by_prefix = {m.mutated_full_source[:60]: m for m in mutants}
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for prefix, m in by_prefix.items():
+                if prefix in prompt:
+                    return f"REBUILD:{m.mutant_id}"
+            return "REBUILD:x"
+        for m in mutants:
+            if f"REBUILD:{m.mutant_id}" in prompt:
+                return m.mutated_full_source
+        return "def _x():\n    return None\n"
+
+    def _fake_scorer(*, reconstruction: str, mutant) -> CodeScore:
+        # A faithful reconstruction (== mutant source) -> fidelity 1.0,
+        # attractor 0.0; anything else -> a partial deterministic score.
+        if reconstruction.strip() == mutant.mutated_full_source.strip():
+            return CodeScore(
+                passed=True, infrastructure_unknown=False,
+                outcome="ed1m_dry", fidelity=1.0, attractor_pull=0.0,
+            )
+        return CodeScore(
+            passed=False, infrastructure_unknown=False,
+            outcome="ed1m_dry", fidelity=0.5, attractor_pull=0.5,
+        )
+
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        proposer = FakeProposerTransport(script={}, default=(ENCODER_BODY_B,))
+    weight = blend_config.weight if blend_config is not None else 0.10
+    from whetstone.envs.ed1_blended import (
+        BoundedCompressionMetricConfig as _BC,
+    )
+    config = CellConfig(
+        optimizer=optimizer,
+        env="ed1m",
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        budget_ratio=budget_ratio,
+        ed1_task_limit=_ED1M_DRY_MUTANT_LIMIT,
+        ed1_blend_config=blend_config or _BC(weight=weight),
+        ed1_scorer=_fake_scorer,
     )
     ledger = Ledger(root=root)
     ledger.load()

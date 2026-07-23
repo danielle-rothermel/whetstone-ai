@@ -423,15 +423,19 @@ def _intake_valid_keys(
     encoder Mutation Surface is not a QA ``EnvSpec``, so its valid keys are the
     fixed encoder placeholders (``input_code`` / ``max_budget``).
     """
-    from whetstone.envs.ed1 import ED1_ENV_NAME
-
-    if experiment.env_name == ED1_ENV_NAME:
-        # ed1's NARROWED surface is the strategy BODY only: it carries NO
+    if experiment.env_name in _ED1_FAMILY_ENV_NAMES:
+        # The ed1/ed1m NARROWED surface is the strategy BODY only: NO
         # placeholders (the frame owns them), so no valid keys are exposed to a
         # body. Body validation runs via ``_intake_rejection`` instead.
         return frozenset()
     env = env_spec(experiment.env_name)
     return valid_prompt_input_keys(env, instances[0])
+
+
+#: The ed1-family env names sharing the strategy-body Mutation Surface (ed1 +
+#: the behavioral-mutant variant ed1m). Both validate the encoder BODY, not QA
+#: placeholders.
+_ED1_FAMILY_ENV_NAMES = frozenset({"ed1", "ed1m"})
 
 
 def _intake_rejection(
@@ -446,12 +450,11 @@ def _intake_rejection(
     template is accepted.
     """
     from whetstone.envs.ed1 import (
-        ED1_ENV_NAME,
         ED1_INVALID_BODY,
         ed1_body_rejection,
     )
 
-    if experiment.env_name == ED1_ENV_NAME:
+    if experiment.env_name in _ED1_FAMILY_ENV_NAMES:
         return ED1_INVALID_BODY, ed1_body_rejection(template)
     return (
         INVALID_TEMPLATE_PLACEHOLDERS,

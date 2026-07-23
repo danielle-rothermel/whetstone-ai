@@ -142,13 +142,22 @@ class Ed1EvalResult:
     #: per_task_scores carries the blend), so pass rate + compression stay
     #: visible components in traces/sidecars/cells.
     per_task_pass: tuple[float, ...] = ()
+    #: ed1m only: the per-task REPORTED attractor pull (fraction of
+    #: discriminating inputs that snapped to canonical); ``None`` per task with
+    #: no attractor sample; empty for ed1/QA.
+    per_task_attractor: tuple[float | None, ...] = ()
     outputs: tuple[RolloutOutput, ...] = ()
     row_diags: tuple[Ed1RowDiag, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class _Ed1RowOutcome:
-    """One (task, repeat) rollout's dual result + provenance."""
+    """One (task, repeat) rollout's dual result + provenance.
+
+    ``pass_value`` is the reward-bearing per-row score (ed1: binary test pass;
+    ed1m: fractional fidelity-to-mutant). ``attractor_pull`` is the ed1m
+    REPORTED contamination measurement (``None`` for ed1/QA).
+    """
 
     pass_value: float | None
     compression_value: float | None
@@ -156,6 +165,8 @@ class _Ed1RowOutcome:
     decoder_text: str | None
     failed: bool
     failure_code: str = ""
+    #: ed1m only: the reported attractor-pull for this row (``None`` for ed1).
+    attractor_pull: float | None = None
     #: Summed encoder+decoder token usage (for spend reconciliation on the
     #: partial log); ``None`` when a call carried no usage block.
     prompt_tokens: int | None = None
@@ -325,10 +336,10 @@ def _drive_row(
     tel = _sum_telemetry(call_telemetry(enc), call_telemetry(dec))
 
     # Correctness (decoder output) -- may be an infrastructure-unknown, which
-    # fails the row (never scored 0). Compression (encoder output) is always
-    # computed (it does not depend on the sandbox).
-    task = humaneval_task_from_instance(instance)
-    code_score = scorer(raw_submission=decoder_text, task=task)
+    # fails the row (never scored 0). ed1 scores the HumanEval test suite; ed1m
+    # scores the mutant's per-input oracle (fidelity + attractor). Compression
+    # (encoder output) is always computed (it does not depend on the sandbox).
+    code_score = _score_row(experiment, instance, decoder_text, scorer)
     if code_score.infrastructure_unknown:
         return _Ed1RowOutcome(
             pass_value=None, compression_value=None,
@@ -342,16 +353,38 @@ def _drive_row(
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
-        pass_value=float(code_score.passed),
+        pass_value=code_score.row_value,
         compression_value=compression,
         encoder_text=encoder_text, decoder_text=decoder_text,
         failed=False,
+        attractor_pull=code_score.attractor_pull,
         prompt_tokens=tel.prompt_tokens,
         completion_tokens=tel.completion_tokens,
         total_tokens=tel.total_tokens,
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         max_budget=max_budget, encoder_len=encoder_len,
     )
+
+
+def _score_row(
+    experiment: Ed1Experiment,
+    instance: Instance,
+    decoder_text: str,
+    scorer: Callable[..., CodeScore],
+) -> CodeScore:
+    """Score one reconstruction: ed1 HumanEval suite OR ed1m mutant oracle.
+
+    ed1m (an ``Ed1mExperiment``) scores the decoder output against the
+    instance's mutant per-input oracle (fractional fidelity + reported
+    attractor pull). Every other ed1 experiment scores the HumanEval test suite
+    via the injected binary ``scorer``.
+    """
+    from whetstone.envs.ed1m import Ed1mExperiment, score_ed1m_row
+
+    if isinstance(experiment, Ed1mExperiment):
+        return score_ed1m_row(experiment, instance, decoder_text)
+    task = humaneval_task_from_instance(instance)
+    return scorer(raw_submission=decoder_text, task=task)
 
 
 def _drive_and_persist(
@@ -692,13 +725,17 @@ def run_ed1_eval(
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
     per_task_compression: list[float | None] = []
+    per_task_attractor: list[float | None] = []
     for instance in instances:
         task_id = str(instance.id)
         p_rows: list[RowValue] = []
         c_rows: list[RowValue] = []
         comp_vals: list[float] = []
+        attr_vals: list[float] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
+            if outcome.attractor_pull is not None:
+                attr_vals.append(outcome.attractor_pull)
             row_diags.append(
                 Ed1RowDiag(
                     instance_id=task_id,
@@ -753,6 +790,9 @@ def run_ed1_eval(
         per_task_counts.append(len(p_rows))
         per_task_compression.append(
             sum(comp_vals) / len(comp_vals) if comp_vals else None
+        )
+        per_task_attractor.append(
+            sum(attr_vals) / len(attr_vals) if attr_vals else None
         )
 
     pass_aggregate = _aggregate_metric(
@@ -810,6 +850,7 @@ def run_ed1_eval(
         per_task_counts=tuple(per_task_counts),
         per_task_compression=tuple(per_task_compression),
         per_task_pass=pass_scores,
+        per_task_attractor=tuple(per_task_attractor),
         outputs=tuple(outputs),
         row_diags=tuple(row_diags),
     )

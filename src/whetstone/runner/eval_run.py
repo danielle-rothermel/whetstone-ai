@@ -104,6 +104,10 @@ class SplitEvaluation:
     #: IS this blend and ``pass_score`` carries the pass rate SEPARATELY. When
     #: ``None`` (pass-only or QA), ``score`` is the pass rate itself.
     pass_score: float | None = None
+    #: ed1m REPORTED mean attractor pull (contamination measurement, NEVER a
+    #: reward); ``None`` for ed1/QA. Per-task vector in ``per_task_attractor``.
+    attractor_pull: float | None = None
+    per_task_attractor: tuple[float | None, ...] = ()
 
     @property
     def is_complete(self) -> bool:
@@ -314,6 +318,14 @@ def _evaluate_ed1_split(
     else:
         cert_score = pass_rate
         pass_score = None
+    # ed1m: the REPORTED mean attractor pull (fraction of discriminating inputs
+    # that snapped to canonical), over the tasks that had an attractor sample.
+    attractor_vals = [
+        a for a in ed.per_task_attractor if a is not None
+    ]
+    mean_attractor: float | None = (
+        sum(attractor_vals) / len(attractor_vals) if attractor_vals else None
+    )
     backing = store or ObjectStore(MemoryBackend())
     artifact: dict[str, Any] = {
         "schema": ED1_AGGREGATE_ARTIFACT_SCHEMA,
@@ -327,6 +339,8 @@ def _evaluate_ed1_split(
         # the blend flag, so the artifact records both components separately.
         "blended_reward": cert_score,
         "blend_active": blend_active,
+        # ed1m: the REPORTED attractor pull (None for ed1/QA).
+        "mean_attractor_pull": mean_attractor,
         "task_count": pass_agg.task_count,
         "repeat_count": pass_agg.repeat_count,
         "rows_present": pass_agg.rows_present,
@@ -356,4 +370,6 @@ def _evaluate_ed1_split(
         compression_score=comp_agg.aggregation_output.value,
         per_task_compression=ed.per_task_compression,
         pass_score=pass_score,
+        attractor_pull=mean_attractor,
+        per_task_attractor=ed.per_task_attractor,
     )

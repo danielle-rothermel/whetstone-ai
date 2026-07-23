@@ -109,6 +109,8 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     # deepseek/deepseek-v4-flash (design + user directive), overridable via
     # --task-model. The same route plays both encoder and decoder.
     "ed1": DEEPSEEK_TASK_MODEL,
+    # ed1m (behavioral-mutant enc-dec): same enc/dec model family as ed1.
+    "ed1m": DEEPSEEK_TASK_MODEL,
 }
 
 
@@ -139,6 +141,11 @@ COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
     # explicit counts on the aggregate + cell line (never silently dropped);
     # override per-cell with --missing-data / --max-skip-fraction.
     "ed1": ("skip", 0.15),
+    # ed1m (behavioral-mutant enc-dec) inherits ed1's SKIP tolerance: the same
+    # deepseek enc/dec produces the same stochastic empty-completion tail, and
+    # the mutant oracle adds a small subprocess tail. 15% covers both;
+    # tune per-cell once the first ed1m anchor measures the actual rate.
+    "ed1m": ("skip", 0.15),
 }
 
 
