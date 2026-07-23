@@ -157,6 +157,13 @@ class _Ed1RowOutcome:
     #: clipped or failed (the budget only steers), so this is diagnostic only.
     max_budget: int | None = None
     encoder_len: int | None = None
+    #: True when this row failed on a TRANSIENT transport fault (timeout /
+    #: stalled response / transport error / rate limit) whose driver-level
+    #: semantic retries were exhausted -- eligible for ONE bounded re-drive.
+    #: A deterministic failure (render error, provider rejection, infra-unknown
+    #: scoring) is NOT redrivable (re-driving the same input will not change a
+    #: deterministic "no").
+    redrivable: bool = False
 
     @property
     def over_budget(self) -> bool | None:
@@ -257,12 +264,16 @@ def _drive_row(
         logical_call_id=f"{logical_call_id}:enc",
     )
     if not enc.succeeded or enc.generation is None:
-        from whetstone.execution.call_support import failure_code_of
+        from whetstone.execution.call_support import (
+            failure_code_of,
+            is_transient_transport_failure,
+        )
         return _Ed1RowOutcome(
             pass_value=None, compression_value=None,
             encoder_text=None, decoder_text=None,
             failed=True, failure_code=failure_code_of(enc),
             max_budget=max_budget, encoder_len=None,
+            redrivable=is_transient_transport_failure(enc),
         )
     encoder_text = enc.generation.text
     encoder_len = len(encoder_text)
@@ -273,12 +284,16 @@ def _drive_row(
         logical_call_id=f"{logical_call_id}:dec",
     )
     if not dec.succeeded or dec.generation is None:
-        from whetstone.execution.call_support import failure_code_of
+        from whetstone.execution.call_support import (
+            failure_code_of,
+            is_transient_transport_failure,
+        )
         return _Ed1RowOutcome(
             pass_value=None, compression_value=None,
             encoder_text=encoder_text, decoder_text=None,
             failed=True, failure_code=failure_code_of(dec),
             max_budget=max_budget, encoder_len=encoder_len,
+            redrivable=is_transient_transport_failure(dec),
         )
     decoder_text = dec.generation.text
     prompt_t, completion_t, total_t = _sum_usage(
@@ -588,6 +603,33 @@ def run_ed1_eval(
             deadline_seconds=_deadline(execution_policy),
         )
 
+    by_instance = {str(inst.id): inst for inst in instances}
+
+    def _drive(
+        pending: list[CallSpec[tuple[str, int], _Ed1RowOutcome]],
+    ) -> dict[tuple[str, int], _Ed1RowOutcome]:
+        pool = run_call_pool(
+            pending, concurrency=fanout.concurrency,
+            is_rate_limited=lambda _o: False,
+            max_wall_seconds=fanout.max_wall_seconds,
+        )
+        out: dict[tuple[str, int], _Ed1RowOutcome] = {}
+        for res in pool.results:
+            if res.value is not None:
+                out[res.key] = res.value
+            else:
+                # A runner-guard timeout: the row hung past its (2-call) guard.
+                # Marked redrivable so ONE bounded re-drive gets a fresh try
+                # before it lands as a failed row (a single hung row must not
+                # kill an anchor arm under the FAIL policy).
+                out[res.key] = _Ed1RowOutcome(
+                    pass_value=None, compression_value=None,
+                    encoder_text=None, decoder_text=None,
+                    failed=True, failure_code="runner_timeout",
+                    redrivable=True,
+                )
+        return out
+
     # Only drive rows NOT already durably recorded (resume skip).
     specs = [
         _spec(instance, index)
@@ -595,21 +637,23 @@ def run_ed1_eval(
         for index in range(repeats)
         if (str(instance.id), index) not in restored
     ]
-    pool = run_call_pool(
-        specs, concurrency=fanout.concurrency,
-        is_rate_limited=lambda _o: False,
-        max_wall_seconds=fanout.max_wall_seconds,
-    )
     driven: dict[tuple[str, int], _Ed1RowOutcome] = dict(restored)
-    for res in pool.results:
-        if res.value is not None:
-            driven[res.key] = res.value
-        else:
-            driven[res.key] = _Ed1RowOutcome(
-                pass_value=None, compression_value=None,
-                encoder_text=None, decoder_text=None,
-                failed=True, failure_code="runner_timeout",
-            )
+    driven.update(_drive(specs))
+
+    # --- ONE bounded re-drive of timed-out / transient-transport rows. ---
+    # A runner-guard timeout or a TERMINAL transient transport failure (enc or
+    # dec) is re-driven exactly once before it lands as a failed row, so a
+    # single flaky observation never fails the whole ed1 arm under FAIL policy
+    # (the eval:ed1:a1 kill). A deterministic failure (render error, provider
+    # rejection, infra-unknown scoring) is NOT re-driven. Mirrors the QA arm's
+    # bounded re-drive; the re-drive persists its own partial record.
+    redrive_specs = [
+        _spec(by_instance[key[0]], key[1])
+        for key, out in driven.items()
+        if out.redrivable
+    ]
+    if redrive_specs:
+        driven.update(_drive(redrive_specs))
 
     # Assemble per-task rows (pass + compression) + outputs, instance/repeat
     # order.
@@ -717,10 +761,19 @@ def _row_output_text(outcome: _Ed1RowOutcome) -> str | None:
     )
 
 
+#: An ed1 row makes TWO sequential wire calls (encoder THEN decoder), so its
+#: runner guard must budget both calls' transport caps -- otherwise the guard
+#: (sized for one call) trips mid-decoder the instant the encoder used any
+#: time, masquerading as a transport-bound regression (the eval:ed1:a1 hang).
+_ED1_WIRE_CALLS_PER_ROW = 2
+
+
 def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
     from whetstone.execution.call_support import guard_deadline_seconds
 
-    return guard_deadline_seconds(execution_policy)
+    return guard_deadline_seconds(
+        execution_policy, wire_calls_per_unit=_ED1_WIRE_CALLS_PER_ROW
+    )
 
 
 __all__ = [

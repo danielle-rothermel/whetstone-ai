@@ -83,14 +83,16 @@ def is_rate_limit_failure(result: ProviderCallResult) -> bool:
     return False
 
 
-def guard_deadline_seconds(policy: ProviderExecutionPolicy) -> float:
+def guard_deadline_seconds(
+    policy: ProviderExecutionPolicy, *, wire_calls_per_unit: int = 1
+) -> float:
     """The runner-level call-guard deadline: transport CAP + 15s margin.
 
     The transport enforces its OWN absolute wall-clock cap
     (``timeout_seconds``) per single wire call, with the idle timeout as the
     primary stall detector; this runner deadline is the belt-and-suspenders
-    backstop the fan-out pool applies per call, sitting just ABOVE the
-    transport's single-call bound so the transport's own bound fires first.
+    backstop the fan-out pool applies per fan-out UNIT, sitting just ABOVE that
+    unit's total transport-bound time so the transport's own bound fires first.
 
     Aligned with the new transport semantics (guard = cap + 15s). The old
     ``cap x max_attempts + 10`` model summed the cap over every logical retry,
@@ -98,5 +100,14 @@ def guard_deadline_seconds(policy: ProviderExecutionPolicy) -> float:
     and trip it BEFORE the transport's per-call bound could -- the c23
     regression. The guard now tracks the transport's single-call cap, not the
     retry-stacked total.
+
+    ``wire_calls_per_unit`` is the number of SEQUENTIAL wire calls one fan-out
+    unit makes (1 for a QA row = one call; 2 for an ed1 row = encoder THEN
+    decoder). The guard scales with it so each call in the unit gets its full
+    transport cap before the row-level backstop fires -- otherwise a 2-call ed1
+    row under a 1-call (cap + 15s) guard trips the guard mid-second-call the
+    instant the first call consumed any time, masquerading as a transport-bound
+    regression (the eval:ed1:a1 hang).
     """
-    return policy.transport_policy.timeout_seconds + GUARD_MARGIN_SECONDS
+    cap = policy.transport_policy.timeout_seconds
+    return cap * max(1, wire_calls_per_unit) + GUARD_MARGIN_SECONDS

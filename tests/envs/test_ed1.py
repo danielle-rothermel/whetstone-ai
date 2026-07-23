@@ -519,6 +519,135 @@ def test_ed1_pilot_zero_row_arm_is_loud_not_bare_none() -> None:
     assert codes == ["code_eval_infrastructure_unknown"] * 3
 
 
+# --- Task 15: transport-bound guard sizing + timed-out-row re-drive ---------
+
+
+def test_ed1_row_guard_budgets_both_wire_calls() -> None:
+    # (Task 15a) An ed1 row makes TWO sequential wire calls (encoder THEN
+    # decoder), so its runner guard must budget BOTH calls' transport caps --
+    # otherwise the guard (sized for one call) trips mid-decoder the moment the
+    # encoder used any time, which made eval:ed1:a1 hang to the guard at
+    # cap+15s and look like a transport-bound regression.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1_eval import _ED1_WIRE_CALLS_PER_ROW, _deadline
+    from whetstone.execution.call_support import (
+        GUARD_MARGIN_SECONDS,
+        guard_deadline_seconds,
+    )
+
+    policy = execution_policy(max_attempts=1)
+    cap = policy.transport_policy.timeout_seconds
+    # The ed1 row guard budgets both calls; the QA (1-call) guard budgets one.
+    assert _ED1_WIRE_CALLS_PER_ROW == 2
+    assert _deadline(policy) == cap * 2 + GUARD_MARGIN_SECONDS
+    assert _deadline(policy) > guard_deadline_seconds(policy)
+    # The default (QA) guard is unchanged -- byte-identical to before.
+    assert guard_deadline_seconds(policy) == cap + GUARD_MARGIN_SECONDS
+
+
+def test_ed1_transient_encoder_failure_is_redriven_to_success() -> None:
+    # (Task 15b) A transient transport failure on an ed1 row must trigger ONE
+    # bounded re-drive before it lands as a failed row -- a single flaky
+    # observation must NOT fail the whole ed1 arm under the FAIL policy (the
+    # eval:ed1:a1 kill). Here each encoder prompt fails transiently once, then
+    # the re-drive succeeds, so the arm aggregate computes cleanly (no fails).
+    from dataclasses import dataclass, field
+
+    from dr_providers import (
+        FailureClass,
+        ProviderCallRequest,
+        ProviderInvocationEvidence,
+        ProviderTransportFailure,
+        ProviderTransportPolicy,
+        RawHttpRequest,
+    )
+
+    from tests.envs.support import (
+        _prompt_of,
+        _response,
+        execution_policy,
+        transport_policy,
+    )
+    from whetstone.envs.ed1_eval import run_ed1_eval
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=3)
+    by_entry = {
+        t.humaneval_task.entry_point: t.humaneval_task.ground_truth_code
+        for t in tasks
+    }
+
+    def _reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for ep in by_entry:
+                if f"def {ep}(" in prompt:
+                    return f"REBUILD:{ep}"
+            return "REBUILD:x"
+        for ep, gt in by_entry.items():
+            if f"REBUILD:{ep}" in prompt:
+                return gt
+        return "def _x():\n    return None\n"
+
+    @dataclass
+    class _TransientOnce:
+        policy: ProviderTransportPolicy = field(
+            default_factory=transport_policy
+        )
+        seen: set[str] = field(default_factory=set)
+        fail_count: int = 0
+
+        def __call__(
+            self, request: ProviderCallRequest
+        ) -> ProviderInvocationEvidence:
+            prompt = _prompt_of(request)
+            raw = RawHttpRequest.build(
+                url="https://example.test/v1/chat/completions",
+                headers={"content-type": "json"},
+                body={"model": "test-model"},
+            )
+            # Fail ONLY the first ENCODER call of each task transiently (a
+            # decoder prompt is derived from the encoder output, so failing it
+            # too would exhaust the single re-drive on a 2-call row). The
+            # re-drive then sees the encoder succeed and the decoder succeed ->
+            # the row recovers, proving the row-level bounded re-drive works.
+            is_encoder = prompt.startswith(("Provide", "Compress"))
+            if is_encoder and prompt not in self.seen:
+                self.seen.add(prompt)
+                self.fail_count += 1
+                failure = ProviderTransportFailure(
+                    failure_class=FailureClass.TRANSIENT,
+                    code="transport_error",
+                    message="connection reset", retryable=True,
+                )
+                return ProviderInvocationEvidence.build(
+                    request=request, policy=self.policy,
+                    raw_request=raw, outcome=failure,
+                )
+            return ProviderInvocationEvidence.build(
+                request=request, policy=self.policy, raw_request=raw,
+                outcome=_response(_reply(prompt)),
+            )
+
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=3, official_n=3, budget_ratio=0.25,
+    )
+    transport = _TransientOnce()
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template,
+        candidate_id="ed1-naive",
+        instances=exp.eval_configs.internal.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=transport, repeats=1, apply_reward=False,
+    )
+    # Every distinct encoder prompt failed transiently on its first drive...
+    assert transport.fail_count > 0
+    # ...but the single bounded re-drive recovered them: NO failed rows, and
+    # the arm aggregate is present (not None) -- the arm survived the flakes.
+    assert all(not d.failed for d in ed.row_diags)
+    assert ed.pass_aggregate.aggregation_output.value is not None
+    assert ed.pass_aggregate.aggregation_output.value == pytest.approx(1.0)
+
+
 def test_ed1_pilot_healthy_arm_has_no_none_reason() -> None:
     # The LOUD reason is present ONLY for a 0-row arm: a healthy arm records
     # the per-row diagnostics but none_reason stays None.
