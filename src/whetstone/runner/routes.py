@@ -91,6 +91,13 @@ CANONICAL_PROPOSER_MODEL = "openai/gpt-5.4-nano"
 #: An alternate task model for the constraint-heavy envs (per user directive).
 DEEPSEEK_TASK_MODEL = "deepseek/deepseek-v4-flash"
 
+#: Default task model for the enc-dec family (user directive 2026-07-23):
+#: deepseek is by far the slowest model in the funnel latency preview
+#: (~6.4s vs ~1.1s median/call), so it must be an EXPLICIT choice (the
+#: contamination axis via --task-model), never a default. gemini is the
+#: standing evidence favorite; the funnel phase-3 pick may revise this.
+ENCDEC_DEFAULT_TASK_MODEL = "google/gemini-3.1-flash-lite"
+
 #: Per-env DEFAULT task model (the matrix config). c18 + c22 default to the
 #: deepseek model per user directive; every other env keeps the canonical nano
 #: task model. The chosen model folds into the Provider Call Config (hence the
@@ -105,16 +112,16 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     # c18h inherits base c18's deepseek default (same entailment task family);
     # overridable via --task-model (the c18h headroom pilot/anchor runs nano).
     "c18h": DEEPSEEK_TASK_MODEL,
-    # ed1 (enc-dec HumanEval compression): canonical enc/dec model is
-    # deepseek/deepseek-v4-flash (design + user directive), overridable via
-    # --task-model. The same route plays both encoder and decoder.
-    "ed1": DEEPSEEK_TASK_MODEL,
+    # ed1 (enc-dec HumanEval compression): default enc/dec model, overridable
+    # via --task-model. The same route plays both encoder and decoder.
+    # Deepseek (the contamination axis) is explicit-only, never the default.
+    "ed1": ENCDEC_DEFAULT_TASK_MODEL,
     # ed1m (behavioral-mutant enc-dec): same enc/dec model family as ed1.
-    "ed1m": DEEPSEEK_TASK_MODEL,
+    "ed1m": ENCDEC_DEFAULT_TASK_MODEL,
     # d1 (direct-generation precursor, task 23): the matrix default mirrors
-    # ed1's deepseek so a d1 anchor pairs with the corresponding ed1 anchor on
-    # the same model family; --task-model selects the clean-vs-deepseek axis.
-    "d1": DEEPSEEK_TASK_MODEL,
+    # ed1's so a d1 anchor pairs with the corresponding ed1 anchor on the
+    # same model family; --task-model selects the clean-vs-deepseek axis.
+    "d1": ENCDEC_DEFAULT_TASK_MODEL,
 }
 
 
