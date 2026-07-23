@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from whetstone.envs.ed1 import (
@@ -95,6 +95,37 @@ def rename_identifier(text: str, old: str, new: str) -> str:
 def model_tag(model: str) -> str:
     """A filesystem-safe tag for a model slug (``a/b:c`` -> ``a_b_c``)."""
     return re.sub(r"[^0-9a-zA-Z]+", "_", model).strip("_")
+
+
+def ratio_tag(budget_ratio: float) -> str:
+    """A filesystem-safe tag for a budget ratio (``0.25`` -> ``r025``).
+
+    Folds the ratio into the artifact/partials names so the compression point
+    (r=0.25, full 7 arms) and the fair-channel point (r=1.0, encdec-only) are
+    DISTINCT files -- a per-(model, ratio) config never overwrites another.
+    """
+    return "r" + f"{budget_ratio:.2f}".replace(".", "")
+
+
+def screen_stem(model: str, budget_ratio: float) -> str:
+    """The per-(model, ratio) artifact stem: ``ed1_<model>_<ratio>``."""
+    return f"ed1_{model_tag(model)}_{ratio_tag(budget_ratio)}"
+
+
+def _mean(values: list[float]) -> float | None:
+    """Mean over the sampled values, or ``None`` when none were sampled."""
+    return sum(values) / len(values) if values else None
+
+
+def _median(values: list[float]) -> float | None:
+    """Median over the sampled values, or ``None`` when none were sampled."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
 
 
 # --- Canonical-prompt splitting (the four direct arms) -----------------------
@@ -158,6 +189,18 @@ class _ScreenRowOutcome:
     failed: bool
     failure_code: str
     output_text: str | None
+    #: Summed generation token counts for the row (direct = 1 call; encdec =
+    #: enc+dec). Persisted so cost is reconstructable per model -- the honest
+    #: spend record for the OpenAI-direct lane (whose billing is NOT the
+    #: OpenRouter credits API) and a sanity check for every lane.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    #: Task-20 telemetry: summed reasoning tokens + summed wall-clock latency
+    #: for the row (enc+dec for encdec). ``None`` when the provider exposed no
+    #: reasoning detail -- never 0-conflated.
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
 
 
 def _direct_body(arm: str, parts: PromptParts, *, rename_token: str) -> str:
@@ -263,16 +306,26 @@ def _run_direct_row(
             failure_code=failure_code_of(result), output_text=None,
         )
     code = result.generation.text
+    from whetstone.execution.call_support import call_telemetry
+    tel = call_telemetry(result)
     score = _score(scorer, code=code, ht=score_task)
     if score.infrastructure_unknown:
         return _ScreenRowOutcome(
             passed=None, failed=True,
             failure_code="code_eval_infrastructure_unknown",
             output_text=code,
+            prompt_tokens=tel.prompt_tokens,
+            completion_tokens=tel.completion_tokens,
+            total_tokens=tel.total_tokens,
+            reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         )
     return _ScreenRowOutcome(
         passed=score.passed, failed=False, failure_code="",
         output_text=code,
+        prompt_tokens=tel.prompt_tokens,
+        completion_tokens=tel.completion_tokens,
+        total_tokens=tel.total_tokens,
+        reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
     )
 
 
@@ -357,6 +410,11 @@ def _run_encdec_row(
         failed=outcome.failed,
         failure_code=outcome.failure_code,
         output_text=text,
+        prompt_tokens=outcome.prompt_tokens,
+        completion_tokens=outcome.completion_tokens,
+        total_tokens=outcome.total_tokens,
+        reasoning_tokens=outcome.reasoning_tokens,
+        latency_s=outcome.latency_s,
     )
 
 
@@ -372,6 +430,11 @@ class TaskScreenRow:
     pass_counts: dict[str, int]
     fail_counts: dict[str, int]
     repeats: int
+    #: Task-20 per-arm telemetry samples for THIS task's rows (one entry per
+    #: repeat that reported the field). Kept as lists so the report can compute
+    #: mean/median + coverage counts over rows-with-field (never 0-conflated).
+    arm_latencies: dict[str, list[float]] = field(default_factory=dict)
+    arm_reasoning: dict[str, list[int]] = field(default_factory=dict)
 
     @property
     def always_pass(self) -> bool:
@@ -392,6 +455,15 @@ class TaskScreenRow:
             "pass_counts": dict(self.pass_counts),
             "fail_counts": dict(self.fail_counts),
             "always_pass": self.always_pass,
+            # Per-arm telemetry samples (task 20): total reasoning tokens +
+            # latency sample count for this task (coverage-honest).
+            "reasoning_tokens_by_arm": {
+                arm: (sum(v) if v else None)
+                for arm, v in self.arm_reasoning.items()
+            },
+            "latency_sample_count_by_arm": {
+                arm: len(v) for arm, v in self.arm_latencies.items()
+            },
         }
 
 
@@ -419,21 +491,41 @@ class TaskScreenReport:
         """The always-pass task ids (the model's pool-exclusion list)."""
         return tuple(r.task_id for r in self.rows if r.always_pass)
 
-    def arm_summary(self) -> dict[str, dict[str, float]]:
-        """Per-arm mean pass rate + n tasks at full pass (the paper table)."""
-        out: dict[str, dict[str, float]] = {}
+    def arm_summary(self) -> dict[str, dict[str, float | None]]:
+        """Per-arm pass rate + telemetry (task 20), coverage-honest.
+
+        Adds per-arm mean/median wall-clock latency + total & mean reasoning
+        tokens, each computed ONLY over rows that REPORTED the field, with a
+        ``*_coverage`` count (rows-with-field) so a reader never mistakes a
+        partial-coverage aggregate (mixed pre/post-telemetry rows) for a full
+        one. A field absent everywhere yields ``None`` (never a fake 0).
+        """
+        out: dict[str, dict[str, float | None]] = {}
         n_tasks = len(self.rows) or 1
+        total_rows_denom = self.repeats * len(self.rows) or 1
         for arm in self.arms:
             total_pass = sum(r.pass_counts.get(arm, 0) for r in self.rows)
-            total_rows = self.repeats * len(self.rows) or 1
             full = sum(
                 1 for r in self.rows
                 if r.pass_counts.get(arm, 0) == self.repeats
             )
+            lat: list[float] = []
+            reason: list[int] = []
+            for r in self.rows:
+                lat.extend(r.arm_latencies.get(arm, []))
+                reason.extend(r.arm_reasoning.get(arm, []))
             out[arm] = {
-                "mean_pass_rate": total_pass / total_rows,
+                "mean_pass_rate": total_pass / total_rows_denom,
                 "tasks_full_pass": full,
                 "tasks_full_pass_fraction": full / n_tasks,
+                "mean_latency_s": _mean(lat),
+                "median_latency_s": _median(lat),
+                "latency_coverage": len(lat),
+                "total_reasoning_tokens": (sum(reason) if reason else None),
+                "mean_reasoning_tokens": _mean(
+                    [float(x) for x in reason]
+                ),
+                "reasoning_coverage": len(reason),
             }
         return out
 
@@ -448,8 +540,8 @@ class TaskScreenReport:
         out: dict[str, dict[str, float]] = {}
         for canon, renamed in RENAME_DELTA_PAIRS:
             if canon in summary and renamed in summary:
-                c = summary[canon]["mean_pass_rate"]
-                r = summary[renamed]["mean_pass_rate"]
+                c = summary[canon]["mean_pass_rate"] or 0.0
+                r = summary[renamed]["mean_pass_rate"] or 0.0
                 out[f"{canon}_minus_{renamed}"] = {
                     "canonical_mean_pass": c,
                     "renamed_mean_pass": r,
@@ -486,9 +578,11 @@ class TaskScreenReport:
         }
 
     def write(self, root: Path) -> Path:
+        # Per-(model, ratio) filename so the r=0.25 compression screen and the
+        # r=1.0 fair-channel encdec re-run never overwrite each other.
         out_dir = root / "task_screen"
         out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"ed1_{model_tag(self.model)}.json"
+        path = out_dir / f"{screen_stem(self.model, self.budget_ratio)}.json"
         path.write_text(json.dumps(self.as_dict(), indent=2, sort_keys=True))
         return path
 
@@ -551,7 +645,7 @@ def run_task_screen(
     assert rd is not None
     pcc = rd.provider_call_config
 
-    restored = _restore_screen(partial_log, model)
+    restored = _restore_screen(partial_log, model, budget_ratio)
     encdec_arms = frozenset(ENCDEC_ARMS)
 
     def _spec(
@@ -581,7 +675,8 @@ def run_task_screen(
                     rename_token=rename_token,
                 )
             _persist_row(
-                partial_log, sidecar_path, model=model, task_id=task_id,
+                partial_log, sidecar_path, model=model,
+                budget_ratio=budget_ratio, task_id=task_id,
                 arm=arm, index=index, outcome=out,
             )
             return out
@@ -623,18 +718,31 @@ def run_task_screen(
         inst = by_task[task_id]
         pass_counts: dict[str, int] = {}
         fail_counts: dict[str, int] = {}
+        arm_lat: dict[str, list[float]] = {}
+        arm_reason: dict[str, list[int]] = {}
         for arm in arms:
             p = f = 0
+            lat: list[float] = []
+            reason: list[int] = []
             for index in range(repeats):
                 out = driven[(task_id, arm, index)]
                 if out.passed:
                     p += 1
                 elif out.failed or out.passed is None:
                     f += 1
+                # Coverage-honest: sample only rows that reported the field.
+                if out.latency_s is not None:
+                    lat.append(out.latency_s)
+                if out.reasoning_tokens is not None:
+                    reason.append(out.reasoning_tokens)
             pass_counts[arm] = p
             fail_counts[arm] = f
+            arm_lat[arm] = lat
+            arm_reason[arm] = reason
         rows.append(TaskScreenRow(
             task_id=task_id,
+            arm_latencies=arm_lat,
+            arm_reasoning=arm_reason,
             entry_point=inst.humaneval_task.entry_point,
             pass_counts=pass_counts, fail_counts=fail_counts,
             repeats=repeats,
@@ -647,11 +755,22 @@ def run_task_screen(
     )
 
 
+def _screen_phase(model: str, budget_ratio: float, arm: str) -> str:
+    """The partials phase key for a screen row: per (model, ratio, arm).
+
+    The RATIO is in the key so a fair-channel r=1.0 encdec re-run does NOT
+    restore-skip against the r=0.25 encdec rows -- a different ratio is a
+    different rollout that must be re-driven, not resumed.
+    """
+    return f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}:{arm}"
+
+
 def _persist_row(
     partial_log: PartialLog | None,
     sidecar_path: Path | None,
     *,
     model: str,
+    budget_ratio: float,
     task_id: str,
     arm: str,
     index: int,
@@ -660,37 +779,59 @@ def _persist_row(
     """Append one completed screen row to the partial log + output sidecar."""
     if partial_log is not None:
         partial_log.append(PartialCallRecord(
-            phase=f"screen:{model_tag(model)}:{arm}",
+            phase=_screen_phase(model, budget_ratio, arm),
             instance_id=task_id, unit=arm, repeat_id=index,
             score=(None if outcome.passed is None else float(outcome.passed)),
             failed=outcome.failed, failure_code=outcome.failure_code,
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+            total_tokens=outcome.total_tokens,
+            reasoning_tokens=outcome.reasoning_tokens,
+            latency_s=outcome.latency_s,
         ))
     if sidecar_path is not None:
         with sidecar_path.open("a") as handle:
             handle.write(json.dumps({
-                "model": model, "task_id": task_id, "arm": arm,
+                "model": model, "budget_ratio": budget_ratio,
+                "task_id": task_id, "arm": arm,
                 "repeat": index, "passed": outcome.passed,
                 "failure_code": outcome.failure_code,
+                "prompt_tokens": outcome.prompt_tokens,
+                "completion_tokens": outcome.completion_tokens,
+                "total_tokens": outcome.total_tokens,
+                "reasoning_tokens": outcome.reasoning_tokens,
+                "latency_s": outcome.latency_s,
                 "output_text": outcome.output_text,
             }) + "\n")
 
 
 def _restore_screen(
-    partial_log: PartialLog | None, model: str
+    partial_log: PartialLog | None, model: str, budget_ratio: float
 ) -> dict[tuple[str, str, int], _ScreenRowOutcome]:
-    """Rebuild screen rows already recorded (resume skip) by (task,arm,r)."""
+    """Rebuild screen rows already recorded (resume skip) by (task,arm,r).
+
+    Matches ONLY this (model, ratio) phase, so a fair-channel r=1.0 run never
+    restores the r=0.25 rows. Restored rows re-hydrate their token counts (for
+    the cost sums); a pre-telemetry recorded row simply carries ``None`` tokens
+    (coverage-honest -- never conflated with 0).
+    """
     if partial_log is None:
         return {}
-    tag = model_tag(model)
+    prefix = f"screen:{model_tag(model)}:{ratio_tag(budget_ratio)}:"
     restored: dict[tuple[str, str, int], _ScreenRowOutcome] = {}
     for rec in partial_log.load():
-        if not rec.phase.startswith(f"screen:{tag}:"):
+        if not rec.phase.startswith(prefix):
             continue
         restored[(rec.instance_id, rec.unit, rec.repeat_id)] = (
             _ScreenRowOutcome(
                 passed=(None if rec.score is None else bool(rec.score)),
                 failed=rec.failed, failure_code=rec.failure_code,
                 output_text=None,
+                prompt_tokens=rec.prompt_tokens,
+                completion_tokens=rec.completion_tokens,
+                total_tokens=rec.total_tokens,
+                reasoning_tokens=rec.reasoning_tokens,
+                latency_s=rec.latency_s,
             )
         )
     return restored
@@ -712,32 +853,47 @@ def load_exclusion_ids(screen_path: Path) -> frozenset[str]:
 def cross_model_summary(
     reports: Sequence[TaskScreenReport],
 ) -> dict[str, object]:
-    """A compact cross-model table (per variant: mean pass, n at full pass).
+    """A compact cross-model table, keyed per (model, arm, budget_ratio).
 
-    Headed for the paper's contamination section: one row per (model, arm) with
-    the mean pass rate and the count of tasks the model solved at FULL pass.
+    Headed for the paper's contamination + cost/latency section. Each row is
+    ONE (model, arm, ratio) cell -- so the two-ratio encdec structure is
+    CLEANLY: the same model/arm appears once per ratio it was screened at (the
+    compression point r=0.25 and the fair-channel point r=1.0 are distinct
+    rows, never merged). Direct arms are ratio-independent (they appear at
+    whatever ratio their screen ran). Columns: pass rate, tasks-full-pass, AND
+    the task-20 telemetry (mean/median latency + reasoning tokens) + coverage
+    counts (rows over which the telemetry was actually reported).
     """
     table: list[dict[str, object]] = []
     for report in reports:
         summary = report.arm_summary()
         for arm in report.arms:
+            s = summary[arm]
             table.append({
                 "model": report.model,
                 "arm": arm,
-                "mean_pass_rate": summary[arm]["mean_pass_rate"],
-                "tasks_full_pass": summary[arm]["tasks_full_pass"],
+                "budget_ratio": report.budget_ratio,
+                "mean_pass_rate": s["mean_pass_rate"],
+                "tasks_full_pass": s["tasks_full_pass"],
+                "mean_latency_s": s["mean_latency_s"],
+                "median_latency_s": s["median_latency_s"],
+                "latency_coverage": s["latency_coverage"],
+                "total_reasoning_tokens": s["total_reasoning_tokens"],
+                "reasoning_coverage": s["reasoning_coverage"],
             })
     return {
         "schema": f"{SCREEN_SCHEMA}.cross_model",
         "arms": list(SCREEN_ARMS),
         "table": table,
         # The paper's causal-memorization figure: canonical-minus-renamed pass
-        # delta per model per arm-pair (a larger delta = more contamination).
-        "rename_deltas_by_model": {
-            r.model: r.rename_deltas() for r in reports
+        # delta per (model, ratio) per arm-pair (larger delta = more contam).
+        "rename_deltas_by_model_ratio": {
+            f"{r.model}@{ratio_tag(r.budget_ratio)}": r.rename_deltas()
+            for r in reports
         },
-        "per_model_excluded": {
-            r.model: len(r.excluded_task_ids) for r in reports
+        "per_model_ratio_excluded": {
+            f"{r.model}@{ratio_tag(r.budget_ratio)}": len(r.excluded_task_ids)
+            for r in reports
         },
     }
 
@@ -757,8 +913,10 @@ __all__ = [
     "cross_model_summary",
     "load_exclusion_ids",
     "model_tag",
+    "ratio_tag",
     "rename_identifier",
     "renamed_task",
     "run_task_screen",
+    "screen_stem",
     "split_prompt",
 ]

@@ -54,6 +54,7 @@ from whetstone.runner.ledger import (
     CellModels,
     CellRecord,
     CellSamplingOverrides,
+    CellTelemetry,
     EnvOfficialCache,
     Ledger,
     PowerSizing,
@@ -647,6 +648,42 @@ def _spend_between(
     if b is None or a is None:
         return 0.0
     return max(0.0, b - a)
+
+
+def _cell_telemetry(partial_log: PartialLog) -> CellTelemetry:
+    """Sum per-cell task-side usage + latency from the partial log (task 20).
+
+    Coverage-honest: each total sums ONLY the rows that reported the field, and
+    the ``*_coverage`` counts those rows -- a total is ``None`` when NO row
+    carried it (never a fake 0), so a partial-coverage cell (mixed pre/post-
+    telemetry rows) is visible as such.
+    """
+    prompt = comp = total = reason = 0
+    latency = 0.0
+    tok_cov = reason_cov = lat_cov = 0
+    for rec in partial_log.load():
+        if rec.total_tokens is not None or rec.prompt_tokens is not None:
+            prompt += rec.prompt_tokens or 0
+            comp += rec.completion_tokens or 0
+            total += rec.total_tokens or 0
+            tok_cov += 1
+        if rec.reasoning_tokens is not None:
+            reason += rec.reasoning_tokens
+            reason_cov += 1
+        if rec.latency_s is not None:
+            latency += rec.latency_s
+            lat_cov += 1
+    return CellTelemetry(
+        total_prompt_tokens=prompt if tok_cov else None,
+        total_completion_tokens=comp if tok_cov else None,
+        total_tokens=total if tok_cov else None,
+        total_reasoning_tokens=reason if reason_cov else None,
+        total_latency_s=latency if lat_cov else None,
+        mean_latency_s=(latency / lat_cov) if lat_cov else None,
+        token_coverage=tok_cov,
+        reasoning_coverage=reason_cov,
+        latency_coverage=lat_cov,
+    )
 
 
 def _halted_before_optimize(
@@ -1620,6 +1657,7 @@ def run_cell(
         sampling_overrides=config.record_overrides(),
         power_sizing=power_sizing,
         dual_scores=dual_scores,
+        telemetry=_cell_telemetry(partial_log),
     )
     ledger.append_cell(record)
     # A cleanly-completed (non-halted) cell has its authoritative result in the

@@ -37,6 +37,7 @@ __all__ = [
     "CellModels",
     "CellRecord",
     "CellSamplingOverrides",
+    "CellTelemetry",
     "EnvOfficialCache",
     "Ledger",
     "SpendRecord",
@@ -103,6 +104,28 @@ class CellSamplingOverrides(BaseModel):
 
     official_n: int | None = None
     official_repeats: int | None = None
+
+
+class CellTelemetry(BaseModel):
+    """Per-cell usage + latency totals (task 20), summed over the partial log.
+
+    Task-side rollout calls only. Every field is coverage-honest: a total is
+    ``None`` when NO row reported it (never a fake 0); ``*_coverage`` counts
+    the rows over which the total was actually summed, so a partial-coverage
+    cell (mixed pre/post-telemetry rows) is never mistaken for a full one.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    total_prompt_tokens: int | None = None
+    total_completion_tokens: int | None = None
+    total_tokens: int | None = None
+    total_reasoning_tokens: int | None = None
+    total_latency_s: float | None = None
+    mean_latency_s: float | None = None
+    token_coverage: int = 0
+    reasoning_coverage: int = 0
+    latency_coverage: int = 0
 
 
 class CellArtifacts(BaseModel):
@@ -232,6 +255,9 @@ class CellRecord(BaseModel):
     sampling_overrides: CellSamplingOverrides = Field(
         default_factory=CellSamplingOverrides
     )
+    #: Per-cell task-side usage + latency totals (task 20); coverage-honest.
+    #: Absent on pre-telemetry lines -> the empty default (all totals None).
+    telemetry: CellTelemetry = Field(default_factory=CellTelemetry)
     #: The opt-in power stage's recommended-vs-used internal sizing; ``None``
     #: when the power stage did not run (a run without it is byte-identical).
     power_sizing: PowerSizing | None = None

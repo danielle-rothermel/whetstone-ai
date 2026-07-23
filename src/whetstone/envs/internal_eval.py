@@ -604,7 +604,8 @@ def _row_thunk(
             render_guard=render_guard,
         )
         if partial_log is not None:
-            prompt_t, completion_t, total_t = _usage_of(outcome.result)
+            from whetstone.execution.call_support import call_telemetry
+            tel = call_telemetry(outcome.result)
             partial_log.append(
                 PartialCallRecord(
                     phase=partial_phase,
@@ -616,12 +617,16 @@ def _row_thunk(
                     failure_code=outcome.failure_code,
                     # FIX 6: retain the measured token counts on the cell path
                     # (they were null before) so spend reconciliation can sum
-                    # them. The raw_response is intentionally NOT persisted on
-                    # the cell path (Rollout Results hold that evidence) so a
+                    # them. Task 20: also the reasoning tokens + per-call
+                    # latency. The raw_response is intentionally NOT persisted
+                    # on the cell path (Rollout Results hold that evidence)
+                    # so a
                     # cell's partial stays small.
-                    prompt_tokens=prompt_t,
-                    completion_tokens=completion_t,
-                    total_tokens=total_t,
+                    prompt_tokens=tel.prompt_tokens,
+                    completion_tokens=tel.completion_tokens,
+                    total_tokens=tel.total_tokens,
+                    reasoning_tokens=tel.reasoning_tokens,
+                    latency_s=tel.latency_s,
                 )
             )
         return outcome
@@ -639,23 +644,6 @@ def _output_text_of(result: ProviderCallResult | None) -> str | None:
     if result is None or not result.succeeded or result.generation is None:
         return None
     return result.generation.text
-
-
-def _usage_of(
-    result: ProviderCallResult | None,
-) -> tuple[int | None, int | None, int | None]:
-    """Extract (prompt, completion, total) token counts from a call Result.
-
-    Reads the accepted Generation's response usage (the same source the pilot
-    path records). Returns ``(None, None, None)`` for a failed/restored call or
-    a response that carried no usage block.
-    """
-    if result is None or not result.succeeded or result.generation is None:
-        return (None, None, None)
-    usage = result.generation.response.usage
-    if usage is None:
-        return (None, None, None)
-    return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
 
 
 def _row_is_rate_limited(outcome: _RowOutcome) -> bool:

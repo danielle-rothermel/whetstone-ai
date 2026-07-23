@@ -8,12 +8,15 @@ from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     CANONICAL_TASK_MODEL,
     LANE_NAMES,
+    OPENAI_BASE_URL,
+    OPENAI_KEY_ENV,
     OPENROUTER_BASE_URL,
     OPENROUTER_KEY_ENV,
     PLAN_LANES,
     canonical_proposer_route,
     canonical_task_route,
     lane_route,
+    openai_direct_route,
     route_for,
 )
 
@@ -27,6 +30,48 @@ def test_canonical_task_route_openrouter_gpt5_nano() -> None:
     # Absolute cap 600s (accommodate reasoning-model streams), idle ~90s.
     assert route.transport_policy.timeout_seconds == 600.0
     assert route.transport_policy.idle_timeout_seconds == 90.0
+
+
+# --- Task 19: the openai-direct lane -----------------------------------------
+
+
+def test_openai_direct_route_construction() -> None:
+    # (Task 19.1) The openai lane: OpenAI's own API, OPENAI_API_KEY, chat-
+    # completions, DISTINCT config identity from the openrouter route.
+    route = openai_direct_route(model="gpt-5.4-nano", temperature=0.0)
+    assert route.lane == "openai"
+    assert route.model == "gpt-5.4-nano"
+    assert route.key_env == OPENAI_KEY_ENV == "OPENAI_API_KEY"
+    assert route.transport_policy.base_url == OPENAI_BASE_URL
+    assert route.transport_policy.native_retry_count == 0
+    # Same stall/wall policy shape as openrouter (600s cap, ~90s idle).
+    assert route.transport_policy.timeout_seconds == 600.0
+    assert route.transport_policy.idle_timeout_seconds == 90.0
+
+
+def test_openai_lane_config_identity_distinct_from_openrouter() -> None:
+    # (Task 19.1) Same model, different provider -> DISTINCT config id, so
+    # the lane folds into route/graph identity and records distinctly.
+    oa = openai_direct_route(model="gpt-5.4-nano", temperature=0.0)
+    orr = route_for(
+        "openrouter", role="task", task_model="gpt-5.4-nano", temperature=0.0
+    )
+    assert oa.call_config.identity_hash != orr.call_config.identity_hash
+    assert oa.identity_summary()["lane"] == "openai"
+    assert oa.identity_summary()["base_url"] == OPENAI_BASE_URL
+
+
+def test_route_for_openai_lane_dispatch() -> None:
+    # (Task 19.1) route_for("openai", ...) selects the openai-direct route by
+    # role, honoring --task-model / --proposer-model.
+    task = route_for(
+        "openai", role="task", task_model="gpt-5.4-nano", temperature=0.5
+    )
+    assert task.lane == "openai" and task.model == "gpt-5.4-nano"
+    prop = route_for(
+        "openai", role="proposer", proposer_model="gpt-5.4-nano"
+    )
+    assert prop.lane == "openai" and prop.role == "proposer"
 
 
 def test_canonical_proposer_route_distinct_identity() -> None:

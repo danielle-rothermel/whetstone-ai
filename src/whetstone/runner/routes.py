@@ -37,6 +37,7 @@ from dr_providers import (
     ProviderCallConfig,
     ProviderTransportPolicy,
     anthropic_messages_config,
+    openai_chat_config,
     openrouter_chat_config,
     policy_for,
 )
@@ -163,6 +164,18 @@ OPENROUTER_KEY_ENV = "OPENROUTER_API_KEY"
 #: The OpenRouter API base URL (chat-completions). Every canonical route pins
 #: this so the transport policy has a non-None base_url and pre-flight passes.
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+#: The OpenAI DIRECT lane (``lane="openai"``): the OpenAI API keyed off
+#: ``OPENAI_API_KEY`` over the SAME chat-completions protocol as OpenRouter,
+#: through OpenAI's own provider. RATIONALE (run lesson): the OpenAI provider
+#: RESPECTS ``temperature`` for gpt-5.4-nano, whereas OpenRouter IGNORES it for
+#: that model -- so a temperature-sensitive study (or the screen at a chosen
+#: temp) must go direct. The lane folds into route/config identity (its
+#: ProviderKind is OPENAI, a DISTINCT identity_hash from the openrouter config
+#: for the same model), so ``cells.jsonl`` / the screen artifact record the
+#: provider distinctly (``lane="openai"``).
+OPENAI_KEY_ENV = "OPENAI_API_KEY"
+OPENAI_BASE_URL = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +320,45 @@ def canonical_task_route(
     )
 
 
+def openai_direct_route(
+    *,
+    role: str = "task",
+    model: str = CANONICAL_TASK_MODEL,
+    temperature: float | None = 0.0,
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
+    max_attempts: int = 3,
+) -> ProviderRoute:
+    """The OpenAI DIRECT route (``lane="openai"``): OpenAI's own API.
+
+    Same chat-completions protocol/shape as the OpenRouter transport, but keyed
+    off ``OPENAI_API_KEY`` at ``OPENAI_BASE_URL`` via ``ProviderKind.OPENAI``
+    -- so the config identity (hence graph route identity) is DISTINCT from the
+    openrouter route for the same model. Chosen when temperature must hold
+    (OpenAI respects it for gpt-5.4-nano; OpenRouter ignores it).
+    """
+    call_config = openai_chat_config(
+        model=model, controls=_controls(temperature)
+    )
+    transport_policy = policy_for(
+        api_key_env=OPENAI_KEY_ENV,
+        base_url=OPENAI_BASE_URL,
+        timeout_seconds=timeout_seconds,
+        idle_timeout_seconds=idle_timeout_seconds,
+        native_retry_count=0,
+    )
+    return ProviderRoute(
+        role=role,
+        lane="openai",
+        model=model,
+        call_config=call_config,
+        transport_policy=transport_policy,
+        execution_policy=_execution_policy(
+            transport_policy, max_attempts=max_attempts
+        ),
+    )
+
+
 def canonical_proposer_route(
     *,
     model: str = CANONICAL_PROPOSER_MODEL,
@@ -418,6 +470,27 @@ def route_for(
                 max_attempts=max_attempts,
             )
         return canonical_task_route(
+            model=task_model or CANONICAL_TASK_MODEL,
+            temperature=temperature,
+            timeout_seconds=timeout_seconds,
+            idle_timeout_seconds=idle_timeout_seconds,
+            max_attempts=max_attempts,
+        )
+    if lane == "openai":
+        # OpenAI DIRECT: same chat-completions shape, OpenAI's own provider.
+        # ``proposer_model``/``task_model`` select the model by role; the
+        # proposer default keeps the canonical proposer model + temp 1.0.
+        if role == "proposer":
+            return openai_direct_route(
+                role="proposer",
+                model=proposer_model or CANONICAL_PROPOSER_MODEL,
+                temperature=1.0 if temperature is None else temperature,
+                timeout_seconds=timeout_seconds,
+                idle_timeout_seconds=idle_timeout_seconds,
+                max_attempts=max_attempts,
+            )
+        return openai_direct_route(
+            role=role,
             model=task_model or CANONICAL_TASK_MODEL,
             temperature=temperature,
             timeout_seconds=timeout_seconds,

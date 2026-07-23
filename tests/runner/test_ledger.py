@@ -68,6 +68,8 @@ def test_cell_record_exact_schema_fields() -> None:
         "power_sizing",
         # ed1 enc-dec dual scores (None unless the env is ed1).
         "dual_scores",
+        # Per-cell task-side usage + latency totals (task 20).
+        "telemetry",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {

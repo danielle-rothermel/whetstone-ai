@@ -84,7 +84,7 @@ from whetstone.runner.routes import (
 
 __all__ = ["build_parser", "main"]
 
-_LANE_CHOICES = ("openrouter", *LANE_NAMES)
+_LANE_CHOICES = ("openrouter", "openai", *LANE_NAMES)
 
 #: The default model for the local codex-CLI proposer (--proposer-cli codex).
 #: Stronger than the canonical gpt-5.4-nano, and ChatGPT-plan billed ($0).
@@ -1282,16 +1282,22 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         f"  excluded (always-pass, all screened arms): "
         f"{len(report.excluded_task_ids)} tasks\n"
     )
+    def _fnum(v: float | None) -> str:
+        return "n/a" if v is None else f"{v:.3f}"
+
     for arm in report.arms:
         s = summary[arm]
+        lat = _fnum(s["mean_latency_s"])
+        reason = s["total_reasoning_tokens"]
         sys.stdout.write(
-            f"  {arm}: mean_pass={s['mean_pass_rate']:.3f} "
-            f"tasks_full_pass={int(s['tasks_full_pass'])}\n"
+            f"  {arm}: mean_pass={_fnum(s['mean_pass_rate'])} "
+            f"tasks_full_pass={int(s['tasks_full_pass'] or 0)} "
+            f"mean_latency_s={lat} reasoning_tokens={reason}\n"
         )
     for pair, d in deltas.items():
         sys.stdout.write(
-            f"  DELTA {pair}: canonical={d['canonical_mean_pass']:.3f} - "
-            f"renamed={d['renamed_mean_pass']:.3f} = {d['delta']:.3f}\n"
+            f"  DELTA {pair}: canonical={_fnum(d['canonical_mean_pass'])} - "
+            f"renamed={_fnum(d['renamed_mean_pass'])} = {_fnum(d['delta'])}\n"
         )
     sys.stdout.write(f"  -> {path}\n")
     return 0

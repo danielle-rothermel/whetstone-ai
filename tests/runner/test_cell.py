@@ -130,6 +130,34 @@ def test_cell_improvement_script(tmp_path: Path) -> None:
     assert len(ledger.cells()) == 1
 
 
+def test_cell_records_task_side_latency_telemetry(tmp_path: Path) -> None:
+    # (Task 20) A completed cell records per-cell task-side telemetry summed
+    # from the partial log. The FakeTransport supplies no usage block, so token
+    # coverage is 0 (coverage-honest -- never a fake 0 total), but the per-call
+    # latency IS captured from the driver clock, so latency_coverage > 0.
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env, optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=ScriptedProposer((WIN,)),
+    )
+    ledger = Ledger(root=tmp_path)
+    r = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    ).record
+    tel = r.telemetry
+    # Latency is captured for every driven call.
+    assert tel.latency_coverage > 0
+    assert tel.total_latency_s is not None
+    assert tel.mean_latency_s is not None
+    # No usage block -> token totals stay None (NOT a fake 0), coverage 0.
+    assert tel.token_coverage == 0
+    assert tel.total_tokens is None
+    assert tel.total_reasoning_tokens is None
+
+
 def test_cell_bad_placeholder_candidate_does_not_kill_cell(
     tmp_path: Path,
 ) -> None:
@@ -569,9 +597,12 @@ def test_cell_power_stage_off_is_byte_identical(tmp_path: Path) -> None:
 
     off_dump = off_record.model_dump(mode="json")
     off2_dump = off2_record.model_dump(mode="json")
-    # Wall time is the only nondeterministic field; drop it before comparing.
+    # Wall time + per-call latency telemetry are the nondeterministic fields
+    # (real monotonic clock); drop them before the byte-identity comparison.
     off_dump.pop("wall_s")
     off2_dump.pop("wall_s")
+    off_dump.pop("telemetry")
+    off2_dump.pop("telemetry")
     assert off_dump == off2_dump
     # Power fields are inert (null) and NO artifact directory was created.
     assert off_record.power_sizing is None

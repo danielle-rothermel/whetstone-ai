@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from tests.envs.support import FakeTransport, execution_policy
 from whetstone.envs.ed1 import build_ed1_experiment, load_ed1_tasks
 from whetstone.runner.task_screen import (
@@ -157,8 +159,10 @@ def test_screen_report_schema_and_verdicts(tmp_path: Path) -> None:
         assert row.always_pass is True
     assert len(report.excluded_task_ids) == 3
     # The written artifact carries the FULL config identity + summaries.
+    # Filename folds the budget ratio (r=0.25 -> r025) so the two-ratio encdec
+    # re-run never overwrites the compression screen.
     path = report.write(tmp_path)
-    assert path.name == "ed1_qwen_qwen3_coder_flash.json"
+    assert path.name == "ed1_qwen_qwen3_coder_flash_r025.json"
     data = json.loads(path.read_text())
     assert data["schema"] == SCREEN_SCHEMA
     assert data["arms"] == list(SCREEN_ARMS)
@@ -241,13 +245,22 @@ def test_cross_model_summary_table(tmp_path: Path) -> None:
         assert isinstance(r, dict)
         models.add(str(r.get("model")))
     assert models == expected_models
-    per_model = table["per_model_excluded"]
+    # Table rows carry the task-20 telemetry columns + the ratio key.
+    for r in rows:
+        assert isinstance(r, dict)
+        assert "budget_ratio" in r
+        assert "mean_latency_s" in r
+        assert "latency_coverage" in r
+        assert "total_reasoning_tokens" in r
+    per_model = table["per_model_ratio_excluded"]
     assert isinstance(per_model, dict)
-    assert set(per_model) == expected_models
-    # The cross-model rename deltas (paper figure) are present per model.
-    deltas_by_model = table["rename_deltas_by_model"]
-    assert isinstance(deltas_by_model, dict)
-    assert set(deltas_by_model) == expected_models
+    # Keyed per (model, ratio); both reports are r=0.25 -> model@r025.
+    expected_keys = {f"{m}@r025" for m in expected_models}
+    assert set(per_model) == expected_keys
+    # The cross-model rename deltas (paper figure) present per (model,ratio).
+    deltas = table["rename_deltas_by_model_ratio"]
+    assert isinstance(deltas, dict)
+    assert set(deltas) == expected_keys
 
 
 # --- pool filter: exclusion folds into split identity ------------------------
@@ -449,3 +462,222 @@ def test_screen_resumes_from_partials_without_repaying() -> None:
     first_counts = {r.task_id: r.pass_counts for r in first.rows}
     resumed_counts = {r.task_id: r.pass_counts for r in resumed.rows}
     assert resumed_counts == first_counts
+
+
+# --- Task 19 ext: per-(model, ratio) filenames + phase isolation -------------
+
+
+def test_screen_stem_folds_ratio_into_filename() -> None:
+    from whetstone.runner.task_screen import ratio_tag, screen_stem
+
+    assert ratio_tag(0.25) == "r025"
+    assert ratio_tag(1.0) == "r100"
+    assert screen_stem("qwen/q3", 0.25) == "ed1_qwen_q3_r025"
+    assert screen_stem("qwen/q3", 1.0) == "ed1_qwen_q3_r100"
+
+
+def test_two_ratio_screens_write_distinct_files(tmp_path: Path) -> None:
+    # (Task 19 ext) A r=0.25 full screen and a r=1.0 encdec-only re-run write
+    # DISTINCT files -- the fair-channel run never overwrites the compression
+    # screen.
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    full = run_task_screen(
+        model="qwen/qwen3-coder-flash", transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, budget_ratio=0.25,
+    )
+    encdec = run_task_screen(
+        model="qwen/qwen3-coder-flash", transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, budget_ratio=1.0,
+        variants=("encdec_naive", "encdec_renamed"),
+    )
+    p_full = full.write(tmp_path)
+    p_enc = encdec.write(tmp_path)
+    assert p_full.name.endswith("_r025.json")
+    assert p_enc.name.endswith("_r100.json")
+    assert p_full != p_enc and p_full.exists() and p_enc.exists()
+    # The encdec-only artifact has just the 2 encdec arms.
+    data = json.loads(p_enc.read_text())
+    assert data["arms"] == ["encdec_naive", "encdec_renamed"]
+    assert data["budget_ratio"] == 1.0
+
+
+def test_ratio_phase_isolation_no_cross_ratio_resume(tmp_path: Path) -> None:
+    # (Task 19 ext) A r=1.0 encdec run must NOT restore-skip against r=0.25
+    # encdec partials -- a different ratio is a different rollout, re-driven.
+    from whetstone.execution.partials import PartialLog
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    log = PartialLog(path=tmp_path / "screen.partial.jsonl")
+    # First: r=0.25 encdec only, records partials under the r025 phase.
+    run_task_screen(
+        model="qwen/qwen3-coder-flash", transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, budget_ratio=0.25,
+        variants=("encdec_naive",), partial_log=log,
+    )
+    # Now r=1.0 encdec with a transport that RAISES if called: if the r=0.25
+    # rows were wrongly restored, no call happens; but they must NOT be, so the
+    # transport IS called -> the raise proves the rows were re-driven.
+    calls = {"n": 0}
+
+    def _reply(_prompt: str) -> str:
+        calls["n"] += 1
+        return "def x():\n    return None\n"
+
+    run_task_screen(
+        model="qwen/qwen3-coder-flash", transport=FakeTransport(reply=_reply),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2, budget_ratio=1.0,
+        variants=("encdec_naive",), partial_log=log,
+    )
+    assert calls["n"] > 0, "r=1.0 must re-drive, not resume r=0.25 rows"
+
+
+# --- Task 20: reasoning-token + latency telemetry (coverage-honest) ----------
+
+
+def _telemetry_transport(tasks, *, reasoning: int | None):
+    # A transport that returns the canonical solution AND a usage block
+    # (prompt/completion/total + optional reasoning_tokens) so call_telemetry
+    # reads tokens; latency comes from the driver's real monotonic clock.
+    from dr_providers import (
+        ProviderCallRequest,
+        ProviderInvocationEvidence,
+        ProviderTransportResponse,
+        RawHttpRequest,
+        token_usage_from_body,
+    )
+
+    from tests.envs.support import _prompt_of, transport_policy
+
+    by_entry = {
+        t.humaneval_task.entry_point: t.humaneval_task.ground_truth_code
+        for t in tasks
+    }
+
+    class _T:
+        policy = transport_policy()
+
+        def __call__(self, request: ProviderCallRequest):
+            prompt = _prompt_of(request)
+            if prompt.startswith("Provide") or prompt.startswith("Compress"):
+                for ep in by_entry:
+                    if f"def {ep}(" in prompt:
+                        text = f"REBUILD:{ep}"
+                        break
+                else:
+                    text = "REBUILD:x"
+            elif prompt.startswith("REBUILD") or "REBUILD:" in prompt:
+                text = next(iter(by_entry.values()))
+                for ep, gt in by_entry.items():
+                    if f"REBUILD:{ep}" in prompt:
+                        text = gt
+                        break
+            else:
+                text = next(iter(by_entry.values()))
+                for ep, gt in by_entry.items():
+                    if ep in prompt:
+                        text = gt
+                        break
+            usage_body = {
+                "usage": {
+                    "prompt_tokens": 11, "completion_tokens": 22,
+                    "total_tokens": 33,
+                    **({"completion_tokens_details": {
+                        "reasoning_tokens": reasoning}} if reasoning
+                       is not None else {}),
+                }
+            }
+            raw = RawHttpRequest.build(
+                url="https://example.test/v1/chat/completions",
+                headers={"content-type": "json"},
+                body={"model": "m"},
+            )
+            resp = ProviderTransportResponse(
+                text=text,
+                raw_body={"choices": [{"message": {"content": text}}]},
+                usage=token_usage_from_body(usage_body),
+                response_id="r", model="m", finish_reason="stop",
+            )
+            return ProviderInvocationEvidence.build(
+                request=request, policy=self.policy, raw_request=raw,
+                outcome=resp,
+            )
+
+    return _T()
+
+
+def test_screen_captures_reasoning_and_latency_telemetry(
+    tmp_path: Path,
+) -> None:
+    # (Task 20) Screen rows capture reasoning tokens + latency; the artifact's
+    # arm_summary reports mean/median latency + total reasoning with coverage.
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    report = run_task_screen(
+        model="gpt-5.4-nano",
+        transport=_telemetry_transport(tasks, reasoning=5),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=2, concurrency=2,
+    )
+    summary = report.arm_summary()
+    # Direct arm = 1 call (reasoning 5); encdec arm = 2 calls (reasoning 10).
+    direct = summary["direct_original"]
+    assert direct["reasoning_coverage"] == 4  # 2 tasks x 2 repeats
+    assert direct["total_reasoning_tokens"] == 20  # 4 rows x 5
+    assert direct["mean_reasoning_tokens"] == 5.0
+    assert direct["latency_coverage"] == 4
+    assert direct["mean_latency_s"] is not None  # a real (tiny) wall-clock
+    encdec = summary["encdec_naive"]
+    assert encdec["total_reasoning_tokens"] == 40  # 4 rows x (5+5)
+    # The artifact carries the telemetry aggregates.
+    data = json.loads(report.write(tmp_path).read_text())
+    summ = data["arm_summary"]["direct_original"]
+    assert summ["total_reasoning_tokens"] == 20
+
+
+def test_screen_telemetry_coverage_honest_when_absent(tmp_path: Path) -> None:
+    # (Task 20) A provider exposing NO reasoning detail -> reasoning_tokens
+    # None (never 0-conflated); coverage counts the rows-with-field only.
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    report = run_task_screen(
+        model="qwen/qwen3-coder-flash",
+        transport=_telemetry_transport(tasks, reasoning=None),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2,
+    )
+    s = report.arm_summary()["direct_original"]
+    # No reasoning reported anywhere -> total is None, coverage 0.
+    assert s["total_reasoning_tokens"] is None
+    assert s["reasoning_coverage"] == 0
+    # Latency IS still captured (from the driver clock).
+    assert s["latency_coverage"] == 2
+
+
+def test_screen_telemetry_mixed_coverage_counts_not_conflated() -> None:
+    # (Task 20 coverage honesty) When only SOME rows report reasoning, the
+    # aggregate is over rows-with-field with a coverage count -- nulls NEVER
+    # summed as zeros. Simulated by a report with mixed per-row samples.
+    from whetstone.runner.task_screen import TaskScreenReport, TaskScreenRow
+
+    rows = (
+        TaskScreenRow(
+            task_id="t1", entry_point="f", repeats=2,
+            pass_counts={"direct_original": 2},
+            fail_counts={"direct_original": 0},
+            arm_latencies={"direct_original": [0.1, 0.2]},
+            arm_reasoning={"direct_original": [5]},  # only 1 of 2 reported
+        ),
+    )
+    report = TaskScreenReport(
+        model="m", budget_ratio=0.25, repeats=2,
+        arms=("direct_original",), rename_token="target_fxn",
+        dataset_revision="rev", name_only_wrapper="w", rows=rows,
+    )
+    s = report.arm_summary()["direct_original"]
+    assert s["reasoning_coverage"] == 1  # NOT 2 -- only rows with the field
+    assert s["total_reasoning_tokens"] == 5
+    assert s["mean_reasoning_tokens"] == 5.0
+    assert s["latency_coverage"] == 2
+    assert s["median_latency_s"] == pytest.approx(0.15)

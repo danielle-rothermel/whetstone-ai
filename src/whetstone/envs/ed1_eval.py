@@ -73,6 +73,7 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.envs.internal_eval import RolloutOutput
+from whetstone.execution.call_support import CallTelemetry, call_telemetry
 from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.graph.character_budget import CharacterBudgetRule
@@ -152,6 +153,11 @@ class _Ed1RowOutcome:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    #: Task-20 telemetry: summed encoder+decoder reasoning tokens + summed
+    #: wall-clock latency for the row. ``None`` when the provider exposed no
+    #: reasoning detail (never 0-conflated).
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
     #: Budget diagnostics: the per-task MAX_BUDGET (chars) the encoder was told
     #: to respect and the actual encoder-output length. ``over_budget`` is a
     #: derived flag (encoder_len > max_budget) -- an over-budget row is NOT
@@ -193,33 +199,35 @@ def _max_budget(input_code: str, rule: CharacterBudgetRule) -> int:
     return round(rule.ratio * len(input_code))
 
 
-def _call_usage(result: object) -> tuple[int | None, int | None, int | None]:
-    """(prompt, completion, total) tokens of one succeeded call, else Nones."""
-    gen = getattr(result, "generation", None)
-    if gen is None or not getattr(result, "succeeded", False):
-        return (None, None, None)
-    usage = getattr(getattr(gen, "response", None), "usage", None)
-    if usage is None:
-        return (None, None, None)
-    return (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+def _none_add(x: float | None, y: float | None) -> float | None:
+    """Sum two optional numbers, None-preserving (None iff BOTH are None)."""
+    if x is None and y is None:
+        return None
+    return (x or 0) + (y or 0)
 
 
-def _sum_usage(
-    a: tuple[int | None, int | None, int | None],
-    b: tuple[int | None, int | None, int | None],
-) -> tuple[int | None, int | None, int | None]:
-    """Sum two (prompt, completion, total) usage triples, None-preserving.
+def _sum_telemetry(a: CallTelemetry, b: CallTelemetry) -> CallTelemetry:
+    """Sum two per-call telemetries into one row telemetry (enc + dec).
 
-    A field is ``None`` only if BOTH calls lacked it; otherwise the present
-    values sum (a missing side counts as 0) so the encoder+decoder token spend
-    is the row's total.
+    Each field is ``None`` only if BOTH calls lacked it; otherwise the present
+    values sum (a missing side counts as 0) so the row carries the enc+dec
+    token/reasoning spend + total latency. Coverage-honest: a reasoning-free
+    provider keeps ``reasoning_tokens=None``, never 0.
     """
-    def _add(x: int | None, y: int | None) -> int | None:
-        if x is None and y is None:
-            return None
-        return (x or 0) + (y or 0)
+    def _int(v: float | None) -> int | None:
+        return None if v is None else int(v)
 
-    return (_add(a[0], b[0]), _add(a[1], b[1]), _add(a[2], b[2]))
+    return CallTelemetry(
+        prompt_tokens=_int(_none_add(a.prompt_tokens, b.prompt_tokens)),
+        completion_tokens=_int(
+            _none_add(a.completion_tokens, b.completion_tokens)
+        ),
+        total_tokens=_int(_none_add(a.total_tokens, b.total_tokens)),
+        reasoning_tokens=_int(
+            _none_add(a.reasoning_tokens, b.reasoning_tokens)
+        ),
+        latency_s=_none_add(a.latency_s, b.latency_s),
+    )
 
 
 def _render_encoder(body: str, *, input_code: str, max_budget: int) -> str:
@@ -301,9 +309,7 @@ def _drive_row(
             redrivable=is_transient_transport_failure(dec),
         )
     decoder_text = dec.generation.text
-    prompt_t, completion_t, total_t = _sum_usage(
-        _call_usage(enc), _call_usage(dec)
-    )
+    tel = _sum_telemetry(call_telemetry(enc), call_telemetry(dec))
 
     # Correctness (decoder output) -- may be an infrastructure-unknown, which
     # fails the row (never scored 0). Compression (encoder output) is always
@@ -315,8 +321,10 @@ def _drive_row(
             pass_value=None, compression_value=None,
             encoder_text=encoder_text, decoder_text=decoder_text,
             failed=True, failure_code="code_eval_infrastructure_unknown",
-            prompt_tokens=prompt_t, completion_tokens=completion_t,
-            total_tokens=total_t,
+            prompt_tokens=tel.prompt_tokens,
+            completion_tokens=tel.completion_tokens,
+            total_tokens=tel.total_tokens,
+            reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
             max_budget=max_budget, encoder_len=encoder_len,
         )
     compression = _compression_ratio(encoder_text, input_code)
@@ -325,8 +333,10 @@ def _drive_row(
         compression_value=compression,
         encoder_text=encoder_text, decoder_text=decoder_text,
         failed=False,
-        prompt_tokens=prompt_t, completion_tokens=completion_t,
-        total_tokens=total_t,
+        prompt_tokens=tel.prompt_tokens,
+        completion_tokens=tel.completion_tokens,
+        total_tokens=tel.total_tokens,
+        reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         max_budget=max_budget, encoder_len=encoder_len,
     )
 

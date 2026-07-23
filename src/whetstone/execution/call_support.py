@@ -10,17 +10,78 @@ place so the two phases classify identically.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from whetstone.execution.fanout import GUARD_MARGIN_SECONDS
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.classification import SemanticFailureClass
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = [
+    "CallTelemetry",
+    "call_telemetry",
     "failure_code_of",
     "guard_deadline_seconds",
     "is_rate_limit_failure",
     "is_transient_transport_failure",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class CallTelemetry:
+    """Per-call usage + latency telemetry (task 20).
+
+    Every field is ``None`` when the provider did not expose it -- NEVER
+    conflated with 0 (a reasoning-free model reports ``reasoning_tokens=None``,
+    not 0, so an aggregate can compute over rows-with-field and report
+    coverage). ``latency_s`` is the accepted attempt's wall-clock (request
+    start -> completion), one number, no streaming decomposition.
+    """
+
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
+
+
+def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
+    """Extract usage (incl. reasoning tokens) + latency from a call Result.
+
+    Reads the accepted Generation's response usage (prompt/completion/total AND
+    ``reasoning_tokens`` where the provider exposes
+    ``completion_tokens_details.reasoning_tokens``) and the accepted attempt's
+    wall-clock latency. Returns all-``None`` for a failed/absent call; a
+    present call with no usage block or no reasoning detail leaves those None
+    (coverage-honest, never 0-conflated).
+    """
+    if result is None or not result.succeeded or result.generation is None:
+        return CallTelemetry(latency_s=_accepted_latency(result))
+    usage = result.generation.response.usage
+    if usage is None:
+        return CallTelemetry(latency_s=_accepted_latency(result))
+    return CallTelemetry(
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        reasoning_tokens=getattr(usage, "reasoning_tokens", None),
+        latency_s=_accepted_latency(result),
+    )
+
+
+def _accepted_latency(result: ProviderCallResult | None) -> float | None:
+    """The accepted (or last) attempt's wall-clock seconds, else ``None``."""
+    if result is None or not result.attempts:
+        return None
+    # Prefer the accepted (generation-bearing) attempt; else the terminal one.
+    chosen = next(
+        (a for a in result.attempts if a.generation is not None),
+        result.attempts[-1],
+    )
+    started, ended = chosen.started_at, chosen.ended_at
+    if started is None or ended is None:
+        return None
+    return max(0.0, ended - started)
 
 #: The transient transport failure classes that a bounded re-drive may retry:
 #: a wire/connection transport error, a rate limit, or a timeout. A clean

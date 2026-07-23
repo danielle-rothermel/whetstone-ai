@@ -57,6 +57,10 @@ class PartialCallRecord:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    #: Task-20 telemetry (present only from that commit forward; a pre-tel
+    #: record leaves these ``None`` -- coverage-honest, never 0-conflated).
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
     raw_response: str = ""
 
     def key(self) -> tuple[str, str, str, int]:
@@ -76,6 +80,8 @@ class PartialCallRecord:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "latency_s": self.latency_s,
             "raw_response": self.raw_response,
         }
 
@@ -92,6 +98,8 @@ class PartialCallRecord:
             prompt_tokens=_opt_int(data.get("prompt_tokens")),
             completion_tokens=_opt_int(data.get("completion_tokens")),
             total_tokens=_opt_int(data.get("total_tokens")),
+            reasoning_tokens=_opt_int(data.get("reasoning_tokens")),
+            latency_s=_opt_float(data.get("latency_s")),
             raw_response=str(data.get("raw_response", "")),
         )
 
