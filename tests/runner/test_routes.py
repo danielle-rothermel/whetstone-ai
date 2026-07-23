@@ -281,3 +281,79 @@ def test_reasoning_effort_serializes_per_lane_shape() -> None:
         orr.definition.constraints.reasoning_shape.value == "reasoning_object"
     )
     assert oa.definition.constraints.reasoning_shape.value == "effort_field"
+
+
+# --- Task 25: verified reasoning + temperature on-wire serialization -------
+
+
+def _payload(route):
+    from dr_providers import (
+        MessageRole,
+        PromptMessage,
+        ProviderCallRequest,
+        Transcript,
+    )
+    from dr_providers.request import build_payload
+
+    req = ProviderCallRequest(
+        config=route.call_config,
+        transcript=Transcript(
+            messages=(PromptMessage(role=MessageRole.USER, content="x"),)
+        ),
+    )
+    return build_payload(req)
+
+
+def test_temperature_zero_vs_none_distinct_and_on_wire() -> None:
+    # (Task 25.1) --temperature is OUTPUT-AFFECTING: temp 0.0 (the legacy task
+    # default) is a DISTINCT config identity from an explicit 0.5 or unset.
+    t0 = route_for("openrouter", role="task", task_model="gpt-5-nano",
+                   temperature=0.0)
+    t5 = route_for("openrouter", role="task", task_model="gpt-5-nano",
+                   temperature=0.5)
+    tn = route_for("openrouter", role="task", task_model="gpt-5-nano",
+                   temperature=None)
+    ids = {
+        t0.call_config.identity_hash, t5.call_config.identity_hash,
+        tn.call_config.identity_hash,
+    }
+    assert len(ids) == 3
+    # temp 0.0 serializes on the wire (not dropped).
+    assert _payload(t0)["temperature"] == 0.0
+
+
+def test_openrouter_reasoning_wire_shape_verified() -> None:
+    # (Task 25.2, VERIFIED live) openrouter serializes reasoning as the
+    # {reasoning: {effort: <v>}} object; 'none' disables (deepseek honored it,
+    # reasoning_tokens -> 0). temp0 co-exists with it (no 400 on openrouter).
+    none = route_for(
+        "openrouter", role="task", task_model="deepseek/deepseek-v4-flash",
+        temperature=0.0, reasoning=reasoning_effort_for("none"),
+    )
+    low = route_for(
+        "openrouter", role="task", task_model="deepseek/deepseek-v4-flash",
+        temperature=0.0, reasoning=reasoning_effort_for("low"),
+    )
+    assert _payload(none)["reasoning"] == {"effort": "none"}
+    assert _payload(none)["temperature"] == 0.0
+    assert _payload(low)["reasoning"] == {"effort": "low"}
+
+
+def test_openai_reasoning_wire_shape_verified() -> None:
+    # (Task 25.2, VERIFIED live) openai serializes reasoning as the flat
+    # reasoning_effort field. temp0+none is ACCEPTED live; temp0+low 400s
+    # (OpenAI requires temp=1 with a non-default effort) -- a provider
+    # constraint, NOT our mapping. This locks the shape.
+    from whetstone.runner.routes import openai_direct_route
+
+    none = openai_direct_route(
+        model="gpt-5.4-nano", temperature=0.0,
+        reasoning=reasoning_effort_for("none"),
+    )
+    low = openai_direct_route(
+        model="gpt-5.4-nano", temperature=0.0,
+        reasoning=reasoning_effort_for("low"),
+    )
+    assert _payload(none)["reasoning_effort"] == "none"
+    assert _payload(none)["temperature"] == 0.0
+    assert _payload(low)["reasoning_effort"] == "low"

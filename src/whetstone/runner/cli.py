@@ -98,6 +98,36 @@ def _reasoning_arg(args: argparse.Namespace):
     return reasoning_effort_for(getattr(args, "reasoning_effort", None))
 
 
+def _temperature_arg(args: argparse.Namespace) -> float | None:
+    """The task-role temperature from ``--temperature`` (default 0.0).
+
+    The task/rollout role has always sent temperature 0.0 (agreement checks);
+    the flag defaults to 0.0 so absence is unchanged legacy behavior, and an
+    explicit value folds into the Provider Call Config identity.
+    """
+    return getattr(args, "temperature", 0.0)
+
+
+def _add_temperature_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared ``--temperature`` flag (task role; default 0.0).
+
+    OUTPUT-AFFECTING: folds into the Provider Call Config identity. The task/
+    rollout role has always sent 0.0, so the default is 0.0 -- absent is
+    unchanged legacy behavior; an explicit value is a distinct config variant.
+    """
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        metavar="T",
+        help=(
+            "task-model sampling temperature (OUTPUT-AFFECTING, folds into "
+            "config identity). Default 0.0 (the legacy task-role value); a "
+            "distinct value is a distinct config variant."
+        ),
+    )
+
+
 def _add_reasoning_effort_arg(parser: argparse.ArgumentParser) -> None:
     """Add the shared ``--reasoning-effort`` flag to a subparser.
 
@@ -275,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     _add_reasoning_effort_arg(pilot)
+    _add_temperature_arg(pilot)
     pilot.add_argument(
         "--budget-ratio",
         type=float,
@@ -298,6 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     cell.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     cell.add_argument("--attempt", type=int, default=0)
     _add_reasoning_effort_arg(cell)
+    _add_temperature_arg(cell)
     cell.add_argument(
         "--task-model",
         default=None,
@@ -535,6 +567,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     screen.add_argument("--lane", choices=_LANE_CHOICES, default="openrouter")
     _add_reasoning_effort_arg(screen)
+    _add_temperature_arg(screen)
     screen.add_argument(
         "--budget-ratio", type=float, default=0.25, metavar="R",
         help="the encdec-arm Character Budget ratio (default 0.25)",
@@ -818,7 +851,7 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     route = route_for(
         args.lane,
         role="task",
-        temperature=0.0,
+        temperature=_temperature_arg(args),
         task_model=resolved_task_model,
         reasoning=_reasoning_arg(args),
     )
@@ -902,7 +935,7 @@ def _run_ed1_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         args.env, override=getattr(args, "task_model", None)
     )
     route = route_for(
-        args.lane, role="task", temperature=0.0,
+        args.lane, role="task", temperature=_temperature_arg(args),
         task_model=resolved_task_model,
         reasoning=_reasoning_arg(args),
     )
@@ -1117,7 +1150,7 @@ def _build_cell_config(
         args.env, override=getattr(args, "task_model", None)
     )
     task_route = route_for(
-        args.lane, role="task", temperature=0.0,
+        args.lane, role="task", temperature=_temperature_arg(args),
         task_model=resolved_task_model,
         reasoning=_reasoning_arg(args),
     )
@@ -1359,7 +1392,8 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
 
     effort = getattr(args, "reasoning_effort", None)
     route = route_for(
-        args.lane, role="task", temperature=0.0, task_model=args.task_model,
+        args.lane, role="task", temperature=_temperature_arg(args),
+        task_model=args.task_model,
         reasoning=reasoning_effort_for(effort),
     )
     tag = model_tag(args.task_model)
