@@ -96,7 +96,17 @@ class CellArtifacts(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    #: The per-cell optimizer-search trace path (relative to the ledger root),
+    #: e.g. ``optimization_traces/copro__c11__a0.json``. Historically this held
+    #: the bare best-candidate id string; it now points at the on-disk trace
+    #: artifact so the search is auditable. The bare id is preserved on
+    #: :attr:`best_candidate_id` for backward compatibility.
     optimization_result_ref: StrictStr | None = None
+    #: The accepted candidate's id (e.g. ``copro-p2`` or ``<env>-naive``) --
+    #: the value ``optimization_result_ref`` carried before the trace artifact
+    #: existed. Kept so existing readers of the accepted-candidate id still
+    #: work.
+    best_candidate_id: StrictStr | None = None
     official_record_before: StrictStr | None = None
     official_record_after: StrictStr | None = None
 
@@ -295,6 +305,39 @@ class Ledger:
     @property
     def env_cache_path(self) -> Path:
         return self.root / "env_official_cache.jsonl"
+
+    @property
+    def optimization_traces_dir(self) -> Path:
+        return self.root / "optimization_traces"
+
+    def optimization_trace_path(self, cell_id: str) -> Path:
+        """The per-cell optimizer-search trace artifact path.
+
+        One JSON file per cell id
+        (``<root>/optimization_traces/<cell_id>.json``, with any ``:`` in the
+        id -- ``optimizer:env:aN`` -- mapped to ``__`` so the name is
+        filesystem-safe). Holds the full per-round candidate evidence the
+        in-memory ``OptimizeResult`` would otherwise drop.
+        """
+        safe = cell_id.replace(":", "__")
+        return self.optimization_traces_dir / f"{safe}.json"
+
+    def write_optimization_trace(
+        self, cell_id: str, trace: dict[str, object]
+    ) -> Path:
+        """Write (overwrite) the per-cell optimizer-search trace artifact.
+
+        Overwrite-by-cell-id (a re-run/resume of the SAME attempt supersedes
+        its prior trace; distinct attempts have distinct cell ids, so the store
+        is append-safe across attempts). Returned path is recorded on the cell
+        line's ``artifacts.optimization_result_ref`` so the trace is
+        discoverable from the ledger. Written even for incomplete-arm/halted
+        cells so a failed cell still leaves its (partial) search evidence.
+        """
+        self.optimization_traces_dir.mkdir(parents=True, exist_ok=True)
+        path = self.optimization_trace_path(cell_id)
+        path.write_text(json.dumps(trace, indent=2, sort_keys=True) + "\n")
+        return path
 
     def load(self) -> list[CellRecord]:
         """Parse the existing ``cells.jsonl`` (validating every line)."""

@@ -55,7 +55,11 @@ from whetstone.runner.ledger import (
     Ledger,
     SpendRecord,
 )
-from whetstone.runner.optimizers import OptimizeResult, run_optimize
+from whetstone.runner.optimizers import (
+    OPTIMIZATION_TRACE_SCHEMA,
+    OptimizeResult,
+    run_optimize,
+)
 from whetstone.runner.statistics import (
     BootstrapCI,
     bootstrap_mean_ci,
@@ -108,6 +112,14 @@ class CellConfig:
     proposer_transport: ProposerTransport
     rollout_transport: TransportCall
     execution_policy: ProviderExecutionPolicy
+    #: Internal-split repeats per task. ``run_optimize`` passes this verbatim
+    #: to every internal ``evaluate_split`` (baseline + each proposal
+    #: candidate), so the as-run internal repeat count is 3 by default -- NOT
+    #: the ``..._repeat_count = 1`` documented in
+    #: ``reports/optimizer-briefs.md`` (see the "as-run: r=3" correction
+    #: there). The internal-signal analysis depends on r=3; the per-cell
+    #: optimizer-search trace records the concrete value as
+    #: ``internal_repeat_count_as_run``.
     repeats: int = 3
     #: Official-split repeats (baseline/ceiling/best). The statistical-
     #: confidence directive raises the default 3 -> 5 for statistical power;
@@ -310,6 +322,67 @@ def _tolerated_skip_note(
     return "skipped rows tolerated within declared bound: " + ", ".join(parts)
 
 
+def _write_optimization_trace(
+    ledger: Ledger,
+    *,
+    cell_id: str,
+    config: CellConfig,
+    status: str,
+    opt: OptimizeResult | None,
+    failure_detail: str | None = None,
+) -> str:
+    """Persist the per-cell optimizer-search trace; return its ledger ref.
+
+    Serializes the FULL per-round candidate evidence (each candidate's id +
+    prompt text, internal score, accept/reject disposition + typed reason, and
+    per-task per-repeat scoring vectors) plus the accepted-candidate prompt
+    text -- the search trace the in-memory ``OptimizeResult`` would otherwise
+    drop at process exit. Written for EVERY terminal cell, including
+    incomplete-arm / halted cells (which pass ``opt=None`` + a
+    ``failure_detail``) so a failed cell still leaves its search evidence on
+    disk. The returned ref is the trace path relative to the ledger root,
+    recorded on the cell line's ``artifacts.optimization_result_ref`` so the
+    trace is discoverable.
+    """
+    header: dict[str, object] = {
+        "cell_id": cell_id,
+        "optimizer": config.optimizer,
+        "env": config.env,
+        "attempt": config.attempt,
+        "status": status,
+        "task_model": config.task_model,
+        "proposer_model": config.proposer_model,
+        # The as-run internal repeat count (CellConfig.repeats default 3); the
+        # briefs' documented internal repeat_count=1 is NOT what the runner
+        # drives, so the trace records the value analysis must use.
+        "internal_repeat_count_as_run": config.repeats,
+    }
+    if opt is not None:
+        trace = opt.to_trace(header=header)
+    else:
+        # Baseline anchor failure (incomplete-arm) or a pre-optimize halt: no
+        # OptimizeResult exists, but we still write a stub so the failed cell
+        # leaves typed evidence (why the search never produced steps).
+        trace = {
+            **header,
+            "schema": OPTIMIZATION_TRACE_SCHEMA,
+            "best_candidate_id": None,
+            "best_candidate_template": None,
+            "baseline_internal_score": None,
+            "best_internal_score": None,
+            "optimizer_steps": 0,
+            "internal_evals_count": 0,
+            "rejected_candidate_count": 0,
+            "internal_task_count_scaled": 0,
+            "failure_detail": failure_detail,
+            "steps": [],
+        }
+    ledger.write_optimization_trace(cell_id, trace)
+    return str(
+        ledger.optimization_trace_path(cell_id).relative_to(ledger.root)
+    )
+
+
 def _rejected_candidates_note(opt: OptimizeResult) -> str | None:
     """A visible note for proposal candidates the optimizer did not score.
 
@@ -445,6 +518,12 @@ def _halted_before_optimize(
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"
         )
+    # A cell halted before the optimize phase produced no proposal steps; the
+    # stub trace records the halt so even a halted cell leaves search evidence.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="halted",
+        opt=None, failure_detail=f"halted before optimize: {halt_reason}",
+    )
     record = CellRecord(
         cell_id=cell_id, optimizer=config.optimizer, env=config.env,
         attempt=config.attempt, canonical=config.canonical,
@@ -459,7 +538,10 @@ def _halted_before_optimize(
         internal_evals_count=0, optimizer_steps=0,
         spend_usd=_spend_between(spend_before, spend_after), wall_s=wall_s,
         lane=config.lane, window_notes=config.window_notes, status="halted",
-        artifacts=CellArtifacts(official_record_before=baseline_before_ref),
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            official_record_before=baseline_before_ref,
+        ),
         sampling_overrides=config.record_overrides(),
     )
     ledger.append_cell(record)
@@ -535,6 +617,13 @@ def _incomplete_internal_arm(
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"
         )
+    # A failed cell still leaves its (stub) search evidence on disk: the anchor
+    # baseline eval failed before any proposal step, so there is no
+    # OptimizeResult -- the trace records WHY the search produced no steps.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="incomplete-arm",
+        opt=None, failure_detail=failure_detail,
+    )
     record = CellRecord(
         cell_id=cell_id, optimizer=config.optimizer, env=config.env,
         attempt=config.attempt, canonical=config.canonical,
@@ -550,7 +639,10 @@ def _incomplete_internal_arm(
         spend_usd=spend_usd, wall_s=wall_s,
         lane=config.lane, window_notes=config.window_notes,
         status="incomplete-arm",
-        artifacts=CellArtifacts(official_record_before=baseline_before_ref),
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            official_record_before=baseline_before_ref,
+        ),
         sampling_overrides=config.record_overrides(),
     )
     ledger.append_cell(record)
@@ -1083,6 +1175,13 @@ def run_cell(
         )
     combined_note = "; ".join(notes)
 
+    # Persist the full optimizer-search trace (per-round candidate evidence +
+    # the accepted-candidate prompt text) and point the cell's
+    # optimization_result_ref at it so the search is auditable from disk.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status=status, opt=opt
+    )
+
     record = CellRecord(
         cell_id=cell_id,
         optimizer=config.optimizer,
@@ -1117,7 +1216,8 @@ def run_cell(
         window_notes=config.window_notes,
         status=status,
         artifacts=CellArtifacts(
-            optimization_result_ref=opt.best_candidate.candidate_id,
+            optimization_result_ref=trace_ref,
+            best_candidate_id=opt.best_candidate.candidate_id,
             official_record_before=baseline_before_ref,
             official_record_after=best.artifact_ref.content_hash,
         ),

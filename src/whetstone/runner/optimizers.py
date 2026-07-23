@@ -57,6 +57,7 @@ from whetstone.runner.execution_mode import ExecutionMode
 
 __all__ = [
     "INVALID_TEMPLATE_PLACEHOLDERS",
+    "OPTIMIZATION_TRACE_SCHEMA",
     "OPTIMIZERS",
     "UNSCORABLE_CANDIDATE",
     "OptimizeResult",
@@ -182,6 +183,9 @@ def scaling_help() -> str:
     return "\n".join(lines)
 
 
+#: The schema tag stamped on the per-cell optimizer-search trace artifact.
+OPTIMIZATION_TRACE_SCHEMA = "whetstone.runner.optimization_trace/v1"
+
 #: The typed rejection reason for a candidate whose template references a
 #: placeholder the env's render cannot fill. Recorded on the rejected
 #: :class:`ProposalStep` so the offending fields are visible in step evidence.
@@ -232,6 +236,48 @@ class ProposalStep:
     def rejected(self) -> bool:
         return self.rejected_reason is not None
 
+    def to_trace_dict(self) -> dict[str, Any]:
+        """The per-step evidence for the on-disk optimizer-search trace.
+
+        Carries the candidate identity + FULL prompt text, the internal score,
+        the accepted/rejected disposition + typed reason, and (for an evaluated
+        candidate) the per-task per-repeat scoring evidence from its
+        ``SplitEvaluation`` (per-task means, observation counts, task/repeat
+        scope, aggregate value + row accounting). A rejected candidate carries
+        ``evaluation=None`` -- its ``internal_score`` is null and the reason
+        explains why it never scored.
+        """
+        entry: dict[str, Any] = {
+            "step_index": self.step_index,
+            "candidate_id": self.candidate_id,
+            "template": self.template,
+            "internal_score": self.internal_score,
+            "accepted": not self.rejected,
+            "rejected": self.rejected,
+            "rejected_reason": self.rejected_reason,
+            "rejected_detail": self.rejected_detail,
+            "rejected_fields": list(self.rejected_fields),
+        }
+        ev = self.evaluation
+        if ev is not None:
+            agg = ev.aggregate
+            entry["evaluation"] = {
+                "score": ev.score,
+                "task_count": ev.task_count,
+                "repeat_count": ev.repeat_count,
+                "per_task_scores": list(ev.per_task_scores),
+                "per_task_counts": list(ev.per_task_counts),
+                "rows_present": agg.rows_present,
+                "rows_missing": agg.rows_missing,
+                "rows_failed": agg.rows_failed,
+                "rows_invalid": agg.rows_invalid,
+                "graph_hash": agg.graph_hash,
+                "eval_config_hash": agg.eval_config_hash,
+            }
+        else:
+            entry["evaluation"] = None
+        return entry
+
 
 @dataclass(slots=True)
 class OptimizeResult:
@@ -264,6 +310,37 @@ class OptimizeResult:
     def rejected_candidate_count(self) -> int:
         """How many drafted candidates were rejected at intake (visible)."""
         return sum(1 for step in self.steps if step.rejected)
+
+    def to_trace(self, *, header: dict[str, Any]) -> dict[str, Any]:
+        """The full on-disk optimizer-search trace for this result.
+
+        ``header`` carries the cell-level identity/status the runner supplies
+        (cell id, optimizer, env, attempt, terminal status). The trace pins the
+        accepted-candidate prompt text (``best_candidate_template``) so reports
+        can quote it directly, the baseline vs best internal scores that drove
+        selection, the as-run internal repeat count, and every per-round step's
+        candidate evidence (:meth:`ProposalStep.to_trace_dict`).
+        """
+        return {
+            **header,
+            "schema": OPTIMIZATION_TRACE_SCHEMA,
+            "best_candidate_id": self.best_candidate.candidate_id,
+            "best_candidate_template": str(
+                self.best_candidate.payload.get(MUTATION_FIELD, "")
+            ),
+            "baseline_internal_score": self.baseline_internal_score,
+            "best_internal_score": self.best_internal_score,
+            "optimizer_steps": self.optimizer_steps,
+            "internal_evals_count": self.internal_evals_count,
+            "rejected_candidate_count": self.rejected_candidate_count,
+            "internal_task_count_scaled": int(
+                self.scaled_hyperparameters.get(
+                    "internal_task_count_scaled", 0
+                )
+                or 0
+            ),
+            "steps": [step.to_trace_dict() for step in self.steps],
+        }
 
 
 def _proposal_rounds(hyper: dict[str, Any]) -> tuple[int, int]:

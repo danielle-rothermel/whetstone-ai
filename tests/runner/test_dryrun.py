@@ -9,6 +9,7 @@ is a scripted fake, so no live paid LLM call is ever made.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from whetstone.runner.dryrun import (
 )
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
+from whetstone.runner.optimizers import OPTIMIZATION_TRACE_SCHEMA
 
 
 def test_dry_cell_eval_exact_match_env_baseline_equals_best(
@@ -81,6 +83,53 @@ def test_dry_cell_copro_exact_match_env_improves(tmp_path: Path) -> None:
     assert r.escalated is False
     assert r.pooled_observation_counts["naive"] > 0
     assert r.pooled_observation_counts["best"] > 0
+
+
+def test_dry_cell_writes_optimization_trace_with_per_task_and_text(
+    tmp_path: Path,
+) -> None:
+    # The optimizer-search trace is persisted per cell (the highest-value
+    # logging addition from the internal-signal analysis): a completed cell's
+    # trace file carries the accepted-candidate PROMPT TEXT and each step's
+    # per-task per-repeat scoring evidence, so internal-signal reliability is
+    # analyzable from disk.
+    outcome = run_dry_cell(
+        env="c11",
+        optimizer="copro",
+        root=tmp_path,
+        execution_mode=ExecutionMode.IN_PROCESS,
+    )
+    ledger = Ledger(root=tmp_path)
+    cell_id = outcome.record.cell_id
+    trace_path = ledger.optimization_trace_path(cell_id)
+    assert trace_path.exists(), "the per-cell trace artifact must be written"
+    # cells.jsonl points optimization_result_ref at the trace (relative path);
+    # the bare accepted-candidate id is preserved on best_candidate_id.
+    ref = outcome.record.artifacts.optimization_result_ref
+    assert ref is not None and ref.endswith(".json")
+    assert (tmp_path / ref) == trace_path
+    assert outcome.record.artifacts.best_candidate_id  # bare id kept
+
+    trace = json.loads(trace_path.read_text())
+    assert trace["schema"] == OPTIMIZATION_TRACE_SCHEMA
+    assert trace["cell_id"] == cell_id
+    # The accepted-candidate prompt text is trivially extractable (reports).
+    assert isinstance(trace["best_candidate_template"], str)
+    assert trace["best_candidate_template"]  # non-empty
+    # The as-run internal repeat count is recorded (the r=3 the runner drives,
+    # not the briefs' documented r=1).
+    assert trace["internal_repeat_count_as_run"] == 3
+    assert trace["baseline_internal_score"] is not None
+    assert trace["best_internal_score"] is not None
+    # Every scored step carries its per-task evidence + full prompt text.
+    scored = [s for s in trace["steps"] if s["accepted"]]
+    assert scored, "at least one candidate must have scored"
+    step = scored[0]
+    assert isinstance(step["template"], str) and step["template"]
+    assert step["evaluation"] is not None
+    assert isinstance(step["evaluation"]["per_task_scores"], list)
+    assert step["evaluation"]["per_task_scores"]  # one entry per internal task
+    assert isinstance(step["evaluation"]["per_task_counts"], list)
 
 
 def test_dry_cell_runs_every_env_without_crashing(tmp_path: Path) -> None:

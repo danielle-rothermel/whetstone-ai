@@ -17,6 +17,7 @@ Two coupled fixes for the ling/c11 anchor exit-1 defect:
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -261,6 +262,20 @@ def test_searching_cell_incomplete_internal_arm_not_raw_exit(
     ).exists()
     # The incomplete cell must NOT poison the per-env official cache.
     assert ledger.env_cache_for(env, task_model=TASK_MODEL) is None
+    # A failed cell STILL leaves its (partial/stub) optimizer-search trace on
+    # disk: the baseline anchor failed before any proposal step, so the trace
+    # records the typed failure detail and empty steps rather than nothing.
+    trace_path = ledger.optimization_trace_path(r.cell_id)
+    assert trace_path.exists(), "incomplete-arm cell must still write a trace"
+    trace = json.loads(trace_path.read_text())
+    assert trace["status"] == "incomplete-arm"
+    assert trace["steps"] == []
+    assert trace["failure_detail"]  # names WHY the search produced no steps
+    assert trace["internal_repeat_count_as_run"] == 3
+    # cells.jsonl points at the trace even for the failed cell.
+    assert r.artifacts.optimization_result_ref == str(
+        trace_path.relative_to(tmp_path)
+    )
 
 
 # --- Belt-and-braces: a residual render KeyError on a NON-canonical template

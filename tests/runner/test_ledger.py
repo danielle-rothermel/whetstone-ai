@@ -68,6 +68,7 @@ def test_cell_record_exact_schema_fields() -> None:
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
         "optimization_result_ref",
+        "best_candidate_id",
         "official_record_before",
         "official_record_after",
     }
