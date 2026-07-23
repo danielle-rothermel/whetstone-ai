@@ -31,7 +31,6 @@ from enum import StrEnum
 
 from dr_code.eval import (
     AggregationConfig,
-    AggregationDefinition,
     EvalConfig,
     EvalDefinition,
     EvaluationProcedureConfig,
@@ -42,6 +41,11 @@ from dr_code.eval import (
 )
 from whetstone_envs.core import Instance, PoolSplit, TaskPool
 
+from whetstone.code_eval.aggregate import (
+    CompletenessPolicy,
+    RowPolicy,
+    aggregation_definition,
+)
 from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
 from whetstone.envs.task import EnvTask
 
@@ -59,16 +63,37 @@ class Completeness(StrEnum):
     ``PROPAGATE`` (default): any missing/failed row makes the aggregate
     incomplete (the mean is not reported over an incomplete matrix).
     ``SKIP``: excluded rows are dropped from the reduction but their
-    exclusion is still counted in provenance.
+    exclusion is still counted in provenance -- bounded by a declared
+    ``max_skip_fraction`` completeness tolerance (see
+    :func:`build_aggregation_config`): beyond the bound the aggregate is
+    forced incomplete rather than certified over an out-of-tolerance matrix.
     """
 
     PROPAGATE = "propagate"
     SKIP = "skip"
 
+    def to_policy(
+        self, *, max_skip_fraction: float = 0.0
+    ) -> CompletenessPolicy:
+        """The :class:`CompletenessPolicy` this enum + tolerance denotes."""
+        row_policy = (
+            RowPolicy.PROPAGATE
+            if self is Completeness.PROPAGATE
+            else RowPolicy.SKIP
+        )
+        return CompletenessPolicy(
+            row_policy=row_policy, max_skip_fraction=max_skip_fraction
+        )
+
 
 def _dataset_revision(env: EnvSpec) -> str:
-    """The env pool's generator version -- the Task Set dataset revision."""
-    return str(env.generate.GENERATOR_VERSION)
+    """The env pool's generator version -- the Task Set dataset revision.
+
+    Reads :attr:`EnvSpec.generator_version` (not the module's constant) so a
+    preset variant (c22h -> ``c22-generate-1+hard``) records a DISTINCT dataset
+    revision from its base env even though both load the same module.
+    """
+    return str(env.generator_version)
 
 
 def task_identities(env: EnvSpec, instances: tuple[Instance, ...]) -> tuple[
@@ -145,22 +170,28 @@ def build_aggregation_config(
     env: EnvSpec,
     *,
     completeness: Completeness = Completeness.PROPAGATE,
+    max_skip_fraction: float = 0.0,
 ) -> AggregationConfig:
     """The ``mean`` Aggregation Config with an explicit completeness policy.
 
-    ``reduction=mean`` with ``missing_data`` set from ``completeness`` and
+    ``reduction=mean`` with ``missing_data`` set from ``completeness``,
     ``zero_denominator=not_applicable`` (an empty reduction is an explicit
-    non-OK status, never a fabricated value).
+    non-OK status, never a fabricated value), and an identity-bearing
+    ``max_skip_fraction`` completeness tolerance. The tolerance folds into the
+    config identity, so a tolerant SKIP config has a DISTINCT
+    ``eval_config_hash`` from an untolerant one (or from PROPAGATE). Under
+    ``PROPAGATE`` the bound is inert but still declared (and defaults ``0.0``,
+    preserving the legacy identity of untolerant configs).
     """
-    definition = AggregationDefinition(
-        definition_id=f"whetstone.env.{env.name}.aggregation",
-        version=_DEFINITION_VERSION,
-    )
-    return definition.materialize(
+    policy = completeness.to_policy(max_skip_fraction=max_skip_fraction)
+    return aggregation_definition(
+        f"whetstone.env.{env.name}.aggregation"
+    ).materialize(
         {
             "reduction": "mean",
-            "missing_data": completeness.value,
+            "missing_data": policy.missing_data,
             "zero_denominator": "not_applicable",
+            "max_skip_fraction": policy.skip_fraction_token(),
         }
     )
 
@@ -390,6 +421,7 @@ def build_eval_configs(
     pool: TaskPool,
     procedure: EvaluationProcedureConfig,
     completeness: Completeness = Completeness.PROPAGATE,
+    max_skip_fraction: float = 0.0,
     repeats: int = DEFAULT_REPEATS,
     split_sizes: tuple[int, int, int] | None = None,
     overrides: SamplingOverrides | None = None,
@@ -411,7 +443,9 @@ def build_eval_configs(
     the internal split is never affected. ``None`` keeps the spec-default.
     """
     split = _split(env, pool, split_sizes)
-    aggregation = build_aggregation_config(env, completeness=completeness)
+    aggregation = build_aggregation_config(
+        env, completeness=completeness, max_skip_fraction=max_skip_fraction
+    )
 
     ov = overrides or SamplingOverrides()
     official_instances = split.official

@@ -27,6 +27,7 @@ rather than a fabricated value.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 from dr_code.eval import (
@@ -51,6 +52,61 @@ class RowPolicy(StrEnum):
 
     PROPAGATE = "propagate"
     SKIP = "skip"
+
+
+@dataclass(frozen=True, slots=True)
+class CompletenessPolicy:
+    """A declared missing-data policy with an optional bounded skip tolerance.
+
+    ``row_policy`` is the dr-code ``missing_data`` rule. ``max_skip_fraction``
+    is the DECLARED completeness tolerance: under ``SKIP`` the aggregate is
+    only certified when the fraction of skipped (missing + failed + invalid)
+    rows over the complete planned matrix is at or below this bound; beyond it
+    the aggregate is forced ``MISSING_DATA`` (an incomplete arm), never a value
+    reduced over an out-of-tolerance matrix. Under ``PROPAGATE`` the bound is
+    inert (any skipped row already makes the aggregate missing).
+
+    The tolerance is identity-bearing: it is folded into the Aggregation Config
+    identity (a distinct ``max_skip_fraction`` yields a distinct
+    ``eval_config_hash``). ``0.0`` is exact completeness — SKIP with a ``0.0``
+    bound certifies only a fully complete matrix, matching PROPAGATE's numeric
+    result while remaining a declared, distinct config identity.
+    """
+
+    row_policy: RowPolicy = RowPolicy.PROPAGATE
+    max_skip_fraction: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.max_skip_fraction <= 1.0:
+            raise ValueError(
+                "max_skip_fraction must be in [0.0, 1.0]; got "
+                f"{self.max_skip_fraction}"
+            )
+
+    @property
+    def missing_data(self) -> str:
+        return (
+            "propagate" if self.row_policy is RowPolicy.PROPAGATE else "skip"
+        )
+
+    def skip_fraction_token(self) -> str:
+        """The canonical, identity-bearing string form of the tolerance.
+
+        A fixed 4-decimal token so ``0.02`` and ``0.0200`` are one identity
+        and float formatting never perturbs the config hash.
+        """
+        return f"{self.max_skip_fraction:.4f}"
+
+    def within_tolerance(self, *, skipped: int, planned: int) -> bool:
+        """Whether ``skipped`` of ``planned`` rows is within the bound.
+
+        Only meaningful under ``SKIP``; under ``PROPAGATE`` any skip is
+        already fatal to the scalar via the dr-code reduction, so this is not
+        consulted.
+        """
+        if planned <= 0:
+            return True
+        return (skipped / planned) <= self.max_skip_fraction
 
 
 class RowValue(BaseModel):
@@ -199,20 +255,95 @@ def _row_counts(rows: tuple[RowValue, ...]) -> tuple[int, int, int, int]:
     return present, missing, failed, invalid
 
 
-def _aggregation_config(
-    reduction: str, policy: RowPolicy
-) -> AggregationConfig:
-    definition = AggregationDefinition(
-        definition_id="whetstone.rollout_aggregate",
-        version="1",
+#: The extra declared Variable that folds the bounded skip tolerance into the
+#: Aggregation Config identity. Kept here so both this module and the
+#: internal-eval loop build byte-identical tolerant configs.
+SKIP_TOLERANCE_VARIABLE = "max_skip_fraction"
+
+
+def tolerance_variable_spec() -> object:
+    """The ``max_skip_fraction`` :class:`VariableSpec` (declared, defaulted).
+
+    Returned as a builder so callers materialize an Aggregation Config whose
+    identity folds in the tolerance. The default ``"0.0000"`` keeps the legacy
+    (untolerant) config identity unchanged for envs that never declare a bound.
+    """
+    from dr_code.eval import VariableSpec
+
+    return VariableSpec(
+        name=SKIP_TOLERANCE_VARIABLE,
+        default="0.0000",
+        has_default=True,
     )
-    missing_data = "propagate" if policy is RowPolicy.PROPAGATE else "skip"
-    return definition.materialize(
+
+
+def aggregation_definition(definition_id: str) -> AggregationDefinition:
+    """An Aggregation Definition that additionally declares the skip tolerance.
+
+    The base dr-code definition declares reduction / missing_data /
+    zero_denominator; this appends the identity-bearing ``max_skip_fraction``
+    Variable so a declared completeness tolerance changes the config identity.
+    """
+    base = AggregationDefinition(definition_id=definition_id, version="1")
+    return base.model_copy(
+        update={"variables": (*base.variables, tolerance_variable_spec())}
+    )
+
+
+def as_completeness_policy(
+    policy: RowPolicy | CompletenessPolicy,
+) -> CompletenessPolicy:
+    """Coerce a bare ``RowPolicy`` to the legacy (unbounded) policy.
+
+    A bare ``RowPolicy`` carries NO declared tolerance, so it keeps the legacy
+    behaviour exactly: ``PROPAGATE`` is unchanged, and ``SKIP`` is the old
+    *unbounded* skip (``max_skip_fraction`` 1.0 — any number of skipped rows is
+    tolerated). The bounded completeness tolerance is opt-in: it applies only
+    when a caller passes an explicit :class:`CompletenessPolicy` declaring a
+    ``max_skip_fraction`` below 1.0.
+    """
+    if isinstance(policy, CompletenessPolicy):
+        return policy
+    fraction = 1.0 if policy is RowPolicy.SKIP else 0.0
+    return CompletenessPolicy(row_policy=policy, max_skip_fraction=fraction)
+
+
+def _aggregation_config(
+    reduction: str, policy: CompletenessPolicy
+) -> AggregationConfig:
+    return aggregation_definition("whetstone.rollout_aggregate").materialize(
         {
             "reduction": reduction,
-            "missing_data": missing_data,
+            "missing_data": policy.missing_data,
             "zero_denominator": "not_applicable",
+            SKIP_TOLERANCE_VARIABLE: policy.skip_fraction_token(),
         }
+    )
+
+
+def enforce_skip_tolerance(
+    output: AggregationOutput,
+    *,
+    policy: CompletenessPolicy,
+    skipped: int,
+    planned: int,
+) -> AggregationOutput:
+    """Force ``MISSING_DATA`` when SKIP exceeds the declared skip tolerance.
+
+    Under ``SKIP`` the dr-code reduction happily certifies a value over the
+    surviving rows no matter how many were skipped; the DECLARED completeness
+    tolerance bounds that. When the skipped fraction exceeds
+    ``max_skip_fraction`` the arm is out of tolerance and its scalar is set to
+    ``None`` (``MISSING_DATA``) so the incomplete-arm guard fires — the skipped
+    rows are still recorded as explicit counts on the aggregate. Within the
+    bound the reduced value stands unchanged.
+    """
+    if policy.row_policy is not RowPolicy.SKIP:
+        return output
+    if policy.within_tolerance(skipped=skipped, planned=planned):
+        return output
+    return output.model_copy(
+        update={"value": None, "status": AggregationStatus.MISSING_DATA}
     )
 
 
@@ -223,7 +354,7 @@ def average_binary_test_pass_rate(
     evaluation_context_id: str,
     task_rows: tuple[TaskRows, ...],
     repeat_count: int,
-    policy: RowPolicy = RowPolicy.PROPAGATE,
+    policy: RowPolicy | CompletenessPolicy = RowPolicy.PROPAGATE,
 ) -> RolloutAggregate:
     """Average Binary Test Pass Rate over the complete Task Set.
 
@@ -243,7 +374,8 @@ def average_binary_test_pass_rate(
     provenance.
     """
 
-    per_task_config = _aggregation_config("mean", policy)
+    completeness = as_completeness_policy(policy)
+    per_task_config = _aggregation_config("mean", completeness)
 
     all_rows: list[RowValue] = []
     per_task_inputs: list[AggregationInput] = []
@@ -278,10 +410,16 @@ def average_binary_test_pass_rate(
                 AggregationInput(value=None, applicable=True)
             )
 
-    cross_task_config = _aggregation_config("mean", policy)
+    cross_task_config = _aggregation_config("mean", completeness)
     output = aggregate(cross_task_config, tuple(per_task_inputs))
 
     present, missing, failed, invalid = _row_counts(tuple(all_rows))
+    output = enforce_skip_tolerance(
+        output,
+        policy=completeness,
+        skipped=missing + failed + invalid,
+        planned=len(all_rows),
+    )
     return RolloutAggregate(
         name="average_binary_test_pass_rate",
         graph_hash=graph_hash,
@@ -305,7 +443,7 @@ def mean_compression_ratio(
     rows: tuple[RowValue, ...],
     task_count: int,
     repeat_count: int,
-    policy: RowPolicy = RowPolicy.PROPAGATE,
+    policy: RowPolicy | CompletenessPolicy = RowPolicy.PROPAGATE,
 ) -> RolloutAggregate:
     """Mean Compression Ratio over the complete planned matrix.
 
@@ -326,13 +464,20 @@ def mean_compression_ratio(
             f"{len(rows)} rows != {planned}"
         )
 
-    config = _aggregation_config("mean", policy)
+    completeness = as_completeness_policy(policy)
+    config = _aggregation_config("mean", completeness)
     output = aggregate(
         config,
         tuple(row.to_aggregation_input() for row in rows),
     )
 
     present, missing, failed, invalid = _row_counts(rows)
+    output = enforce_skip_tolerance(
+        output,
+        policy=completeness,
+        skipped=missing + failed + invalid,
+        planned=len(rows),
+    )
     return RolloutAggregate(
         name="mean_compression_ratio",
         graph_hash=graph_hash,
@@ -349,10 +494,13 @@ def mean_compression_ratio(
 
 
 __all__ = [
+    "CompletenessPolicy",
     "RolloutAggregate",
     "RowPolicy",
     "RowValue",
     "TaskRows",
+    "aggregation_definition",
+    "as_completeness_policy",
     "average_binary_test_pass_rate",
     "mean_compression_ratio",
 ]

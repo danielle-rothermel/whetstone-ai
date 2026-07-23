@@ -31,7 +31,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from whetstone.envs.sampling import SamplingOverrides
+from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import (
@@ -66,6 +66,7 @@ from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     LANE_NAMES,
     ProviderRoute,
+    completeness_for_env,
     route_for,
     task_model_for_env,
 )
@@ -193,6 +194,17 @@ def build_parser() -> argparse.ArgumentParser:
     pilot.add_argument("--instances", type=int, default=10)
     pilot.add_argument("--spec-estimate-tokens", type=int, default=None)
     pilot.add_argument(
+        "--task-model",
+        default=None,
+        help=(
+            "override the task model for this pilot (openrouter lane only). "
+            "Absent, the per-env matrix default applies (c18/c22/c22h -> "
+            "deepseek, others -> nano). The chosen model folds into the task "
+            "route's Provider Call Config identity and is recorded on the "
+            "pilot report."
+        ),
+    )
+    pilot.add_argument(
         "--max-wall-seconds",
         type=float,
         default=DEFAULT_PILOT_MAX_WALL_SECONDS,
@@ -259,6 +271,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cell.add_argument(
+        "--missing-data",
+        choices=("propagate", "skip"),
+        default=None,
+        help=(
+            "override the per-env matrix completeness policy. 'propagate' "
+            "(strict): any missing/failed official row makes the arm "
+            "incomplete. 'skip': tolerate up to --max-skip-fraction skipped "
+            "rows as an explicit-count SKIP, else force incomplete. Default "
+            "None = the env matrix default (c18 -> skip@2%%, others -> "
+            "propagate). Folds into the official Eval Config identity."
+        ),
+    )
+    cell.add_argument(
+        "--max-skip-fraction",
+        type=float,
+        default=None,
+        help=(
+            "the declared completeness tolerance (fraction in [0,1]) for a "
+            "SKIP policy: the max fraction of skipped official rows still "
+            "certified. Default None = the env matrix default. Identity-"
+            "bearing (a distinct value -> a distinct eval_config_hash)."
+        ),
+    )
+    cell.add_argument(
         "--non-canonical",
         action="store_true",
         help="mark this cell non-canonical (a debug/iteration cell)",
@@ -311,6 +347,134 @@ def _live_transport(
     return provider.invoke
 
 
+def _proposal_prompt(request: ProposalRequest) -> str:  # pragma: no cover
+    """The instruction prompt a live proposer LM drafts one template from.
+
+    COPRO's proposer rewrites the base ``user_prompt_template`` into an
+    improved variant. The prompt hands the LM the current template and asks for
+    a single rewritten template that (a) preserves every ``{placeholder}`` and
+    (b) differs from the base (the Mutation-Surface diff check rejects a draft
+    identical to the base). Only the template text is requested back, so the
+    completion is used verbatim as the drafted template.
+    """
+    base = request.base_template
+    return (
+        "You are optimizing the instruction template of a prompt-based "
+        "task solver. Rewrite the template below into a SINGLE improved "
+        "variant that is clearer and more likely to elicit a correct answer. "
+        "Rules: keep every {placeholder} token exactly as written; change the "
+        "wording so the result is NOT identical to the original; output ONLY "
+        "the rewritten template text with no preamble, quotes, or "
+        "commentary.\n"
+        f"\nORIGINAL TEMPLATE:\n{base}\n\nREWRITTEN TEMPLATE:"
+    )
+
+
+class _HttpProposerTransport:
+    """A live OpenRouter-backed proposer transport for a real optimizer run.
+
+    Drafts ``count`` template variants by driving the proposer route through
+    the SAME bounded dr-providers attempt loop the rollout uses. Each draft is
+    one provider call whose completion text becomes the drafted template; a
+    failed draft yields the base template unchanged (which the optimizer's
+    Mutation-Surface diff check then rejects, so a failed draft never silently
+    becomes a fabricated candidate). Performs NO evaluation and derives NO
+    Reward -- it only produces text.
+
+    ``transport`` is injectable (a scripted fake in tests); the default builds
+    the real dr-providers ``HttpProvider.invoke`` for the route.
+    """
+
+    def __init__(
+        self, route: ProviderRoute, transport: TransportCall | None = None
+    ) -> None:
+        self._route = route
+        if transport is None:  # pragma: no cover - live only
+            from dr_providers.transport import HttpProvider
+
+            transport = HttpProvider(policy=route.transport_policy).invoke
+        self._transport: TransportCall = transport
+        self._served = 0
+
+    def draft(
+        self,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        count: int,
+    ) -> tuple[ProposalDraft, ...]:
+        from dr_providers import (
+            MessageRole,
+            PromptMessage,
+            ProviderCallRequest,
+            Transcript,
+        )
+
+        from whetstone.provider.driver import run_provider_call
+
+        prompt = _proposal_prompt(request)
+        drafts: list[ProposalDraft] = []
+        for index in range(count):
+            self._served += 1
+            call_request = ProviderCallRequest(
+                config=self._route.call_config,
+                transcript=Transcript(
+                    messages=(
+                        PromptMessage(role=MessageRole.USER, content=prompt),
+                    )
+                ),
+            )
+            result = run_provider_call(
+                request=call_request,
+                policy=self._route.execution_policy,
+                transport=self._transport,
+                logical_call_id=(
+                    f"proposer:{request.proposal_mode}:"
+                    f"{request.request_ordinal}:{index}"
+                ),
+            )
+            if result.succeeded and result.generation is not None:
+                template = result.generation.text.strip()
+                usage = result.generation.response.usage
+                drafts.append(
+                    ProposalDraft(
+                        template=template or request.base_template,
+                        request_evidence={
+                            "proposal_mode": request.proposal_mode,
+                            "request_ordinal": request.request_ordinal,
+                            "draft_index": index,
+                        },
+                        response_evidence={"finish": "stop"},
+                        usage={
+                            "proposer_calls": 1,
+                            "total_tokens": (
+                                usage.total_tokens if usage is not None else 0
+                            ),
+                        },
+                        # Per-call USD cost is not on the wire usage; cell
+                        # spend is attributed via credits-delta in the ledger.
+                        cost=None,
+                    )
+                )
+            else:
+                # A failed draft returns the base unchanged; the diff check
+                # rejects it (no fabricated candidate from a failed call).
+                drafts.append(
+                    ProposalDraft(
+                        template=request.base_template,
+                        request_evidence={
+                            "proposal_mode": request.proposal_mode,
+                            "request_ordinal": request.request_ordinal,
+                            "draft_index": index,
+                            "failed": True,
+                        },
+                        response_evidence={"finish": "failed"},
+                        usage={"proposer_calls": 1},
+                        cost=None,
+                    )
+                )
+        return tuple(drafts)
+
+
 def _proposer_config(lane: str, optimizer: str) -> ProposerConfig:
     """The proposer route Config identity for a cell.
 
@@ -350,7 +514,23 @@ def _failure_summary_line(report: PilotReport) -> str:
 
 def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
     _require_live(args)
-    route = route_for(args.lane, role="task", temperature=0.0)
+    # Resolve the task model the same way a cell does: explicit --task-model
+    # override, else the per-env matrix default (c18/c22/c22h -> deepseek,
+    # others -> nano). Applied to the openrouter task route only; plan lanes
+    # ignore it (their model is the endpoint's advertised model).
+    resolved_task_model = (
+        task_model_for_env(
+            args.env, override=getattr(args, "task_model", None)
+        )
+        if args.lane == "openrouter"
+        else None
+    )
+    route = route_for(
+        args.lane,
+        role="task",
+        temperature=0.0,
+        task_model=resolved_task_model,
+    )
     transport = _live_transport(route)
     # A per-env resumable partial log (round-2 crashes lost every call). A
     # crashed run leaves this on disk; the report/resume path reads it.
@@ -473,6 +653,28 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
     )
     ledger = Ledger(root=args.root)
     ledger.load()
+    # Resolve the completeness tolerance: explicit flags override the per-env
+    # matrix default. c18 defaults to SKIP-with-2%-tolerance; others PROPAGATE.
+    default_missing, default_skip = completeness_for_env(args.env)
+    missing_data = getattr(args, "missing_data", None) or default_missing
+    max_skip_fraction = (
+        args.max_skip_fraction
+        if getattr(args, "max_skip_fraction", None) is not None
+        else default_skip
+    )
+    completeness = Completeness(missing_data)
+    # The proposer transport: an eval-row cell never drafts (its "best" is the
+    # naive candidate), so it needs no live proposer. A real optimizer (COPRO /
+    # MIPROv2) on the openrouter lane drafts through the live OpenRouter
+    # proposer route; codex uses its own bridge (not built here). The raising
+    # placeholder stays only where a live proposer genuinely cannot be built.
+    if args.optimizer in ("eval", "codex") or args.lane != "openrouter":
+        proposer_transport: object = _LiveProposerUnavailable()
+    else:
+        proposer_route = route_for(
+            args.lane, role="proposer", temperature=1.0
+        )
+        proposer_transport = _HttpProposerTransport(proposer_route)
     config = CellConfig(
         optimizer=args.optimizer,
         env=args.env,
@@ -488,7 +690,7 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
         ),
         canonical=not args.non_canonical,
         proposer_config=_proposer_config(args.lane, args.optimizer),
-        proposer_transport=_LiveProposerUnavailable(),
+        proposer_transport=proposer_transport,  # type: ignore[arg-type]
         rollout_transport=_live_transport(task_route),
         execution_policy=task_route.execution_policy,
         execution_mode=decision.mode,
@@ -499,6 +701,8 @@ def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live
             official_n=getattr(args, "official_n", None),
             official_repeats=getattr(args, "official_repeats", None),
         ),
+        completeness=completeness,
+        max_skip_fraction=max_skip_fraction,
     )
     credits_fetcher = (
         openrouter_credits_fetcher(task_route.key_env)

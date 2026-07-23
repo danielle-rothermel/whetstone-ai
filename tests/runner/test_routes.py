@@ -122,3 +122,18 @@ def test_temperature_folds_into_config_identity() -> None:
     assert (
         t0.call_config.identity_hash != t1.call_config.identity_hash
     )
+
+
+def test_c18_completeness_matrix_default_is_skip_2pct() -> None:
+    from whetstone.runner.routes import completeness_for_env
+
+    # c18's matrix default declares a SKIP-with-2%-tolerance policy.
+    assert completeness_for_env("c18") == ("skip", 0.02)
+
+
+def test_unlisted_env_completeness_default_is_strict_propagate() -> None:
+    from whetstone.runner.routes import completeness_for_env
+
+    # Every env not in the matrix keeps the strict, untolerant default.
+    for env in ("c11", "c19", "c22", "c23"):
+        assert completeness_for_env(env) == ("propagate", 0.0)

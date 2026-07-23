@@ -27,7 +27,6 @@ from dataclasses import dataclass
 
 from dr_code.eval import (
     AggregationConfig,
-    AggregationDefinition,
     AggregationInput,
     AggregationStatus,
     aggregate,
@@ -42,10 +41,14 @@ from dr_providers import (
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
+    CompletenessPolicy,
     RolloutAggregate,
     RowPolicy,
     RowValue,
     TaskRows,
+    aggregation_definition,
+    as_completeness_policy,
+    enforce_skip_tolerance,
 )
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.oracle_operator import (
@@ -128,21 +131,22 @@ def _per_task_count(task: TaskRows) -> int:
     return len(task.completed_rows())
 
 
-def _mean_aggregation_config(policy: RowPolicy) -> AggregationConfig:
-    """A ``mean`` Aggregation Config with the row policy's missing-data rule.
+def _mean_aggregation_config(policy: CompletenessPolicy) -> AggregationConfig:
+    """A ``mean`` Aggregation Config with the declared completeness policy.
 
-    Kept local (public dr-code APIs only) so the internal-eval loop owns its
-    completeness policy rather than reaching into a private helper.
+    Folds in the ``missing_data`` rule AND the identity-bearing bounded skip
+    tolerance (``max_skip_fraction``) so a tolerant config has a distinct
+    identity from an untolerant one. Kept local (public dr-code APIs only) so
+    the internal-eval loop owns its completeness policy.
     """
-    missing_data = "propagate" if policy is RowPolicy.PROPAGATE else "skip"
-    return AggregationDefinition(
-        definition_id="whetstone.env.internal_eval.aggregation",
-        version="1",
+    return aggregation_definition(
+        "whetstone.env.internal_eval.aggregation"
     ).materialize(
         {
             "reduction": "mean",
-            "missing_data": missing_data,
+            "missing_data": policy.missing_data,
             "zero_denominator": "not_applicable",
+            "max_skip_fraction": policy.skip_fraction_token(),
         }
     )
 
@@ -221,9 +225,10 @@ def _env_exact_match_aggregate(
     evaluation_context_id: str,
     task_rows: tuple[TaskRows, ...],
     repeat_count: int,
-    policy: RowPolicy,
+    policy: RowPolicy | CompletenessPolicy,
 ) -> RolloutAggregate:
     """The ``env_exact_match`` internal Rollout Aggregate (two-stage mean)."""
+    policy = as_completeness_policy(policy)
     per_task_config = _mean_aggregation_config(policy)
     all_rows: list[RowValue] = []
     per_task_inputs: list[AggregationInput] = []
@@ -253,6 +258,12 @@ def _env_exact_match_aggregate(
     missing = sum(1 for r in all_rows if r.missing)
     failed = sum(1 for r in all_rows if r.failed)
     invalid = sum(1 for r in all_rows if r.invalid)
+    output = enforce_skip_tolerance(
+        output,
+        policy=policy,
+        skipped=missing + failed + invalid,
+        planned=len(all_rows),
+    )
     return RolloutAggregate(
         name=ENV_EXACT_MATCH_NAME,
         graph_hash=graph_hash,
@@ -276,7 +287,7 @@ def run_internal_eval(
     execution_policy: ProviderExecutionPolicy,
     transport: TransportCall,
     repeats: int = DEFAULT_REPEATS,
-    policy: RowPolicy = RowPolicy.PROPAGATE,
+    policy: RowPolicy | CompletenessPolicy = RowPolicy.PROPAGATE,
     fanout: FanoutConfig | None = None,
     partial_log: PartialLog | None = None,
     partial_phase: str = "cell",
@@ -462,7 +473,7 @@ def run_internal_eval(
         evaluation_context_id=evaluation_context_id,
         task_rows=tuple(task_rows),
         repeat_count=repeats,
-        policy=policy,
+        policy=as_completeness_policy(policy),
     )
     # Reward is caller-controlled: internal/optimizer passes derive it; an
     # official pass MUST derive no Reward (aggregate + per-task vectors only).

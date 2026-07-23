@@ -24,11 +24,15 @@ Deliverables:
 """
 
 from whetstone.code_eval.aggregate import (
+    CompletenessPolicy,
     RolloutAggregate,
     RowPolicy,
     RowValue,
     TaskRows,
+    aggregation_definition,
+    as_completeness_policy,
     average_binary_test_pass_rate,
+    enforce_skip_tolerance,
     mean_compression_ratio,
 )
 from whetstone.code_eval.compression_selection import (
@@ -76,6 +80,7 @@ __all__ = [
     "CandidateEvaluation",
     "CandidateRunner",
     "CandidateVerdict",
+    "CompletenessPolicy",
     "CorrectnessOutcome",
     "CorrectnessResult",
     "ExperimentTaskView",
@@ -84,6 +89,8 @@ __all__ = [
     "RowPolicy",
     "RowValue",
     "TaskRows",
+    "aggregation_definition",
+    "as_completeness_policy",
     "average_binary_test_pass_rate",
     "binary_test_pass_score",
     "build_resolver",
@@ -94,6 +101,7 @@ __all__ = [
     "compression_reference_binding",
     "compression_reference_key",
     "correctness_absent",
+    "enforce_skip_tolerance",
     "evaluate_candidate_correctness",
     "mean_compression_ratio",
     "select_compression_reference",

@@ -92,7 +92,33 @@ DEEPSEEK_TASK_MODEL = "deepseek/deepseek-v4-flash"
 TASK_MODEL_BY_ENV: dict[str, str] = {
     "c18": DEEPSEEK_TASK_MODEL,
     "c22": DEEPSEEK_TASK_MODEL,
+    # c22h inherits c22's constraint-heavy deepseek default (the c22-column
+    # convention; overridable via --task-model for the pilot / anchor).
+    "c22h": DEEPSEEK_TASK_MODEL,
 }
+
+
+#: Per-env DEFAULT completeness tolerance (the matrix config). A missing entry
+#: is the strict, untolerant default: PROPAGATE (``max_skip_fraction`` 0.0),
+#: any missing/failed row makes the official arm incomplete. c18 declares a
+#: SKIP-with-visible-counts policy tolerating up to 2% skipped rows -- deepseek
+#: is ~1% non-retryably flaky under concurrency, so a strict PROPAGATE anchor
+#: never certifies; the bounded tolerance certifies while the skipped rows stay
+#: explicit counts on the aggregate + cell line (never silently dropped). The
+#: tolerance is identity-bearing: a c18 tolerant cell has a DISTINCT
+#: ``eval_config_hash`` from a strict one. Value: ``(missing_data, fraction)``.
+COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
+    "c18": ("skip", 0.02),
+}
+
+
+def completeness_for_env(env: str) -> tuple[str, float]:
+    """The ``(missing_data, max_skip_fraction)`` matrix default for an env.
+
+    Returns the env's declared completeness tolerance, or the strict
+    untolerant default (``("propagate", 0.0)``) for any env not listed.
+    """
+    return COMPLETENESS_BY_ENV.get(env, ("propagate", 0.0))
 
 
 def task_model_for_env(env: str, *, override: str | None = None) -> str:

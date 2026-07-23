@@ -27,7 +27,12 @@ _MODEL = "openai/gpt-5-nano"
 _SPLIT = (1, 1, 1)
 
 
-def _eval_configs(env_name: str, *, completeness=Completeness.PROPAGATE):
+def _eval_configs(
+    env_name: str,
+    *,
+    completeness=Completeness.PROPAGATE,
+    max_skip_fraction: float = 0.0,
+):
     env = env_spec(env_name)
     # A balanced tiny (1, 1, 1) split. For a contiguous-split env one instance
     # per stratum is enough; for a stratified-split env (c22, blocked pool)
@@ -49,6 +54,7 @@ def _eval_configs(env_name: str, *, completeness=Completeness.PROPAGATE):
         pool=pool,
         procedure=procedure,
         completeness=completeness,
+        max_skip_fraction=max_skip_fraction,
         split_sizes=(a, b, c),
     )
 
@@ -133,6 +139,44 @@ def test_aggregation_is_mean_with_completeness_policy(
     assert dict(propagate.assignment)["zero_denominator"] == "not_applicable"
     # The completeness policy is identity-bearing.
     assert propagate.config_identity_hash != skip.config_identity_hash
+
+
+def test_skip_tolerance_is_identity_bearing() -> None:
+    # A DECLARED skip tolerance folds into the Aggregation Config identity:
+    # skip@2% is a DISTINCT config from skip@0% and from an untolerant skip.
+    from whetstone.envs.sampling import build_aggregation_config
+
+    env = env_spec("c18")
+    skip_0 = build_aggregation_config(
+        env, completeness=Completeness.SKIP, max_skip_fraction=0.0
+    )
+    skip_2 = build_aggregation_config(
+        env, completeness=Completeness.SKIP, max_skip_fraction=0.02
+    )
+    skip_5 = build_aggregation_config(
+        env, completeness=Completeness.SKIP, max_skip_fraction=0.05
+    )
+    assert dict(skip_2.assignment)["max_skip_fraction"] == "0.0200"
+    hashes = {
+        skip_0.config_identity_hash,
+        skip_2.config_identity_hash,
+        skip_5.config_identity_hash,
+    }
+    assert len(hashes) == 3
+
+
+def test_c18_tolerant_official_eval_config_hash_differs_from_strict() -> None:
+    # c18's matrix default (skip@2%) yields a DISTINCT official
+    # eval_config_hash from the strict propagate config -- a tolerant anchor is
+    # a declared, distinct Eval Config identity.
+    _, strict = _eval_configs("c18", completeness=Completeness.PROPAGATE)
+    _, tolerant = _eval_configs(
+        "c18", completeness=Completeness.SKIP, max_skip_fraction=0.02
+    )
+    assert (
+        strict.official.eval_config.config_identity_hash
+        != tolerant.official.eval_config.config_identity_hash
+    )
 
 
 def _stratum_counts(instances) -> dict[str, int]:

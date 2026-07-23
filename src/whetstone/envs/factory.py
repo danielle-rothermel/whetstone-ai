@@ -12,8 +12,9 @@ lives in :mod:`whetstone.envs.internal_eval`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from whetstone.code_eval.aggregate import CompletenessPolicy
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import DEFAULT_REPEATS, env_spec
 from whetstone.envs.reward import build_reward_policy
@@ -49,6 +50,13 @@ class EnvExperiment:
     ceiling_candidate: Candidate
     eval_configs: EnvEvalConfigs
     reward_policy: RewardPolicy
+    #: The declared completeness policy the aggregation reduction MUST use --
+    #: the SAME policy folded into the official Eval Config identity, so the
+    #: runtime reduction and the config hash never disagree on missing-data
+    #: behaviour.
+    completeness_policy: CompletenessPolicy = field(
+        default_factory=CompletenessPolicy
+    )
 
     def as_dict(self) -> dict[str, object]:
         """The factory's contract shape (the keys the runner reads)."""
@@ -67,6 +75,7 @@ def build_env_experiment(
     model: str,
     pool_n_per_stratum: int | None = None,
     completeness: Completeness = Completeness.PROPAGATE,
+    max_skip_fraction: float = 0.0,
     repeats: int = DEFAULT_REPEATS,
     split_sizes: tuple[int, int, int] | None = None,
     overrides: SamplingOverrides | None = None,
@@ -83,6 +92,11 @@ def build_env_experiment(
         Override the env's spec-default pool size (tests use a tiny pool).
     completeness:
         The Aggregation Config completeness policy (default propagate).
+    max_skip_fraction:
+        The declared completeness tolerance for a SKIP policy: the maximum
+        fraction of skipped (missing/failed/invalid) rows still certified as a
+        value; beyond it the official arm is forced incomplete. Identity-
+        bearing (folds into ``eval_config_hash``). Inert under PROPAGATE.
     repeats:
         The Repeat Plan repeat count (default the spec-default 3).
     split_sizes:
@@ -107,9 +121,13 @@ def build_env_experiment(
         pool=pool,
         procedure=procedure,
         completeness=completeness,
+        max_skip_fraction=max_skip_fraction,
         repeats=repeats,
         split_sizes=split_sizes,
         overrides=overrides,
+    )
+    completeness_policy = completeness.to_policy(
+        max_skip_fraction=max_skip_fraction
     )
     # The Rollout Definition's Procedure identity is the one both Eval Configs
     # fold in -- assert the partition holds at construction so a divergence is
@@ -128,6 +146,7 @@ def build_env_experiment(
         ceiling_candidate=ceiling_candidate(env),
         eval_configs=eval_configs,
         reward_policy=build_reward_policy(env),
+        completeness_policy=completeness_policy,
     )
 
 

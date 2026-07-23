@@ -30,6 +30,7 @@ from dr_providers import (
 from tests.envs.support import _prompt_of, _response, transport_policy
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import initial_candidate, render_prompt
+from whetstone.envs.sampling import Completeness
 from whetstone.runner.cell import CellConfig, run_cell
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import Ledger
@@ -57,7 +58,14 @@ def _pool_n(env: str) -> int:
     return n
 
 
-def _config(env: str, exp, *, transport) -> CellConfig:
+def _config(
+    env: str,
+    exp,
+    *,
+    transport,
+    completeness=Completeness.PROPAGATE,
+    max_skip_fraction: float = 0.0,
+) -> CellConfig:
     return CellConfig(
         optimizer="eval", env=env, lane="openrouter", attempt=0,
         task_model=TASK_MODEL, proposer_model=PROPOSER_MODEL, canonical=True,
@@ -67,6 +75,7 @@ def _config(env: str, exp, *, transport) -> CellConfig:
         execution_policy=runner_execution_policy(),
         repeats=3, pool_n_per_stratum=_pool_n(env), split_sizes=SPLIT,
         execution_mode=ExecutionMode.IN_PROCESS, max_wall_seconds=10_000.0,
+        completeness=completeness, max_skip_fraction=max_skip_fraction,
     )
 
 
@@ -186,3 +195,94 @@ def test_incomplete_best_arm_also_incomplete(tmp_path: Path) -> None:
     assert r.headroom_delta is None
     assert r.no_demonstrable_headroom is None
     assert "incomplete official arm" in r.escalation_note
+
+
+@dataclass
+class _FailFirstNCalls:
+    """Fail (PERMANENT) the first ``n`` calls served, then succeed all others.
+
+    Models a low-rate non-retryable flake: a handful of rows fail across the
+    matrix, leaving a small skipped fraction rather than a whole failed task.
+    """
+
+    n: int
+    reply: Callable[[str], str]
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+    served: int = 0
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        self.served += 1
+        prompt = _prompt_of(request)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"content-type": "json"}, body={"model": "test-model"},
+        )
+        if self.served <= self.n:
+            failure = ProviderTransportFailure(
+                failure_class=FailureClass.PERMANENT,
+                code="empty_completion",
+                message="scripted permanent failure (empty completion)",
+                retryable=False,
+            )
+            return ProviderInvocationEvidence.build(
+                request=request, policy=self.policy,
+                raw_request=raw_request, outcome=failure,
+            )
+        return ProviderInvocationEvidence.build(
+            request=request, policy=self.policy, raw_request=raw_request,
+            outcome=_response(self.reply(prompt)),
+        )
+
+
+def test_tolerant_skip_certifies_a_low_rate_flaky_naive_arm(
+    tmp_path: Path,
+) -> None:
+    # The same low-rate flake that leaves an arm incomplete under PROPAGATE is
+    # CERTIFIED under a declared SKIP-with-tolerance config: one failed row of
+    # a 10-row naive arm (10%) is within a 20% bound, so the naive scalar
+    # resolves (a real value) instead of propagating to None. The skipped row
+    # stays an explicit count on the aggregate + a visible cell-line note.
+    env = "c11"
+    exp = tiny_experiment(env)
+    transport = _FailFirstNCalls(n=1, reply=correct_reply(exp))
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        _config(
+            env, exp, transport=transport,
+            completeness=Completeness.SKIP, max_skip_fraction=0.2,
+        ),
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 617.0)]),
+    )
+    r = outcome.record
+    # The naive arm CERTIFIED despite the skipped row (not incomplete-arm).
+    assert r.status != "incomplete-arm"
+    assert r.baseline_official is not None
+    # The skipped row is NOT silently dropped: its count is on the cell line.
+    assert "skipped rows tolerated" in r.escalation_note
+    assert "rows_failed=1" in r.escalation_note
+
+
+def test_tolerant_skip_still_incomplete_when_over_bound(
+    tmp_path: Path,
+) -> None:
+    # Beyond the declared tolerance the arm is STILL incomplete: a 10% skip
+    # under a 5% bound forces the naive scalar to None (incomplete-arm), never
+    # a certified value over an out-of-tolerance matrix.
+    env = "c11"
+    exp = tiny_experiment(env)
+    transport = _FailFirstNCalls(n=1, reply=correct_reply(exp))
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        _config(
+            env, exp, transport=transport,
+            completeness=Completeness.SKIP, max_skip_fraction=0.05,
+        ),
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 617.0)]),
+    )
+    r = outcome.record
+    assert r.status == "incomplete-arm"
+    assert r.baseline_official is None

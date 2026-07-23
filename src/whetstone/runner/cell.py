@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from dr_store import MemoryBackend, ObjectStore
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.sampling import SamplingOverrides
+from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
 from whetstone.execution.partials import PartialLog
 from whetstone.optimization.proposer import ProposerConfig, ProposerTransport
@@ -132,6 +132,14 @@ class CellConfig:
     sampling_overrides: SamplingOverrides = field(
         default_factory=SamplingOverrides
     )
+    #: The declared missing-data completeness policy for this cell's official
+    #: aggregation (the matrix default, resolved by the CLI). PROPAGATE is the
+    #: strict default; a SKIP policy with ``max_skip_fraction`` tolerates that
+    #: fraction of skipped rows as an explicit-count SKIP before the arm is
+    #: forced incomplete. Both fold into the official Eval Config identity.
+    completeness: Completeness = Completeness.PROPAGATE
+    #: The declared completeness tolerance (fraction). Inert under PROPAGATE.
+    max_skip_fraction: float = 0.0
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -269,6 +277,36 @@ def _arm_incomplete_detail(
         f"rows_failed={agg.rows_failed} rows_missing={agg.rows_missing} "
         f"rows_invalid={agg.rows_invalid})"
     )
+
+
+def _tolerated_skip_note(
+    *evaluations: tuple[str, SplitEvaluation | None],
+) -> str | None:
+    """A visible-counts note for arms that CERTIFIED with some rows skipped.
+
+    Under a bounded SKIP tolerance a certified arm (``score is not None``) may
+    still have skipped (missing/failed/invalid) rows within the declared
+    bound. Those skipped rows are NEVER silently dropped: this records their
+    explicit counts on the cell line so a tolerant anchor honestly shows what
+    it skipped. Returns ``None`` when every arm was fully complete.
+    """
+    parts: list[str] = []
+    for label, evaluation in evaluations:
+        if evaluation is None or evaluation.score is None:
+            continue
+        agg = evaluation.aggregate
+        skipped = agg.rows_missing + agg.rows_failed + agg.rows_invalid
+        if skipped == 0:
+            continue
+        planned = agg.task_count * agg.repeat_count
+        parts.append(
+            f"{label}(rows_present={agg.rows_present} "
+            f"rows_missing={agg.rows_missing} rows_failed={agg.rows_failed} "
+            f"rows_invalid={agg.rows_invalid} skipped={skipped}/{planned})"
+        )
+    if not parts:
+        return None
+    return "skipped rows tolerated within declared bound: " + ", ".join(parts)
 
 
 def _incomplete_arm_note(
@@ -510,6 +548,8 @@ def run_cell(
         config.env,
         model=config.task_model,
         pool_n_per_stratum=config.pool_n_per_stratum,
+        completeness=config.completeness,
+        max_skip_fraction=config.max_skip_fraction,
         split_sizes=config.split_sizes,
         overrides=config.sampling_overrides,
     )
@@ -579,6 +619,7 @@ def run_cell(
             split_role="official",
             transport=config.rollout_transport,
             execution_policy=config.execution_policy,
+            policy=experiment.completeness_policy,
             repeats=official_repeats,
             store=backing,
             execution_mode=config.execution_mode,
@@ -606,6 +647,7 @@ def run_cell(
             split_role="official",
             transport=config.rollout_transport,
             execution_policy=config.execution_policy,
+            policy=experiment.completeness_policy,
             repeats=official_repeats,
             store=backing,
             execution_mode=config.execution_mode,
@@ -669,6 +711,7 @@ def run_cell(
         split_role="official",
         transport=config.rollout_transport,
         execution_policy=config.execution_policy,
+        policy=experiment.completeness_policy,
         repeats=official_repeats,
         store=backing,
         execution_mode=config.execution_mode,
@@ -765,6 +808,7 @@ def run_cell(
                 experiment, candidate=naive, instances=official,
                 split_role="official", transport=config.rollout_transport,
                 execution_policy=config.execution_policy,
+                policy=experiment.completeness_policy,
                 repeats=official_repeats, store=backing,
                 execution_mode=config.execution_mode, fanout=_fanout(),
             )
@@ -773,6 +817,7 @@ def run_cell(
                 experiment, candidate=opt.best_candidate, instances=official,
                 split_role="official", transport=config.rollout_transport,
                 execution_policy=config.execution_policy,
+                policy=experiment.completeness_policy,
                 repeats=official_repeats, store=backing,
                 execution_mode=config.execution_mode, fanout=_fanout(),
             )
@@ -860,6 +905,14 @@ def run_cell(
         notes.append(escalation_note)
     if incomplete_note is not None and status == "incomplete-arm":
         notes.append(incomplete_note)
+    # A tolerant SKIP anchor that certified with some rows skipped records the
+    # explicit skipped-row counts here so the anchor is honest about what it
+    # tolerated (never a silently-dropped row).
+    tolerated_note = _tolerated_skip_note(
+        ("naive", baseline_eval), ("best", best)
+    )
+    if tolerated_note is not None:
+        notes.append(tolerated_note)
     if concurrency_halved:
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"

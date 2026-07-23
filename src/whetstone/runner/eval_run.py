@@ -25,7 +25,11 @@ from typing import Any
 from dr_store import MemoryBackend, ObjectStore
 from whetstone_envs.core import Instance
 
-from whetstone.code_eval.aggregate import RolloutAggregate, RowPolicy
+from whetstone.code_eval.aggregate import (
+    CompletenessPolicy,
+    RolloutAggregate,
+    RowPolicy,
+)
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import run_internal_eval
 from whetstone.execution.fanout import FanoutConfig
@@ -109,7 +113,7 @@ def evaluate_split(
     repeats: int,
     store: ObjectStore | None = None,
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
-    policy: RowPolicy = RowPolicy.PROPAGATE,
+    policy: RowPolicy | CompletenessPolicy = RowPolicy.PROPAGATE,
     fanout: FanoutConfig | None = None,
     partial_log: PartialLog | None = None,
 ) -> SplitEvaluation:
