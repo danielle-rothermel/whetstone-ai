@@ -711,12 +711,18 @@ def run_ed1_eval(
             )
         pass_rows.append((task_id, p_rows))
         comp_rows.append((task_id, c_rows))
-        # Per-task pass mean (failed rows count 0) for the paired CI.
+        # Per-task pass mean + observation weight for the paired CI. Computed
+        # IDENTICALLY to the QA lane (``internal_eval._per_task_score`` /
+        # ``_per_task_count``) so ed1 skipped rows feed the paired/pooled
+        # bootstrap exactly as c18's SKIP lane does: the mean divides by the
+        # planned repeats (an absent/failed row counts 0), and the weight is
+        # the planned repeat count -- not the present-only count, which would
+        # mis-weight a task with skipped rows when escalation pools repeats.
         total = sum(
             float(r.value or 0.0) if r.is_present else 0.0 for r in p_rows
         )
         per_task_scores.append(total / len(p_rows) if p_rows else 0.0)
-        per_task_counts.append(sum(1 for r in p_rows if r.is_present))
+        per_task_counts.append(len(p_rows))
         per_task_compression.append(
             sum(comp_vals) / len(comp_vals) if comp_vals else None
         )

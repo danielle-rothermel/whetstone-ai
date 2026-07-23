@@ -663,3 +663,100 @@ def test_ed1_pilot_healthy_arm_has_no_none_reason() -> None:
     assert report.naive.present_rows == 3
     assert report.naive.none_reason is None
     assert len(report.naive.row_diags) == 3
+
+
+# --- Task 16: SKIP tolerance for ed1 anchors (identical to c18's lane) -------
+
+
+def test_ed1_skip_policy_certifies_arm_with_bounded_failed_rows() -> None:
+    # (Task 16b) Under a SKIP completeness policy with tolerance, an ed1 arm
+    # whose per-row failures stay within the tolerance still CERTIFIES (a
+    # present aggregate) -- exactly as c18's deepseek lane does -- instead of
+    # the whole arm dying on any failure under PROPAGATE. Here 1 of 4 tasks
+    # fails scoring (25%, under a 30% tolerance) and the arm still aggregates.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1_eval import run_ed1_eval
+    from whetstone.envs.ed1_scoring import CodeScore
+    from whetstone.envs.sampling import Completeness
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=4)
+    transport = _fake_encdec_transport(tasks)
+    fail_task = str(tasks[0].instance.id)
+
+    # A scorer that reports infra-unknown for ONE task (a hung-harness row),
+    # PASSED for the rest -- the bounded-failure shape the anchor tolerates.
+    def _scorer(*, raw_submission, task, **_kw) -> CodeScore:
+        if task.entry_point == tasks[0].humaneval_task.entry_point:
+            return CodeScore(
+                passed=False, infrastructure_unknown=True,
+                outcome="TIMED_OUT",
+            )
+        return CodeScore(
+            passed=True, infrastructure_unknown=False, outcome="PASSED",
+        )
+
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=4, official_n=4, budget_ratio=0.5,
+        completeness=Completeness.SKIP, max_skip_fraction=0.30,
+    )
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template,
+        candidate_id="ed1-naive",
+        instances=exp.eval_configs.official.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=transport, repeats=1, scorer=_scorer, apply_reward=False,
+        policy=exp.completeness_policy,
+    )
+    # The one failing task is dropped under tolerance; the arm CERTIFIES.
+    assert ed.pass_aggregate.rows_failed == 1
+    assert ed.pass_aggregate.aggregation_output.value is not None
+    # The remaining 3 tasks all passed -> the certified pass rate is 1.0.
+    assert ed.pass_aggregate.aggregation_output.value == pytest.approx(1.0)
+    # Per-task weights are the PLANNED repeat count (QA-identical), so a task
+    # with a failed row is not mis-weighted when escalation pools repeats.
+    assert all(c == 1 for c in ed.per_task_counts)
+    assert len(ed.per_task_counts) == 4
+    _ = fail_task  # (the dropped task id, retained for clarity)
+
+
+def test_ed1_per_task_count_matches_qa_planned_repeats_semantics() -> None:
+    # (Task 16b) ed1's per_task_counts is the PLANNED repeat count (len rows),
+    # matching the QA lane's _per_task_count (len(completed_rows)) -- NOT the
+    # present-only count -- so the paired/pooled bootstrap weights ed1 tasks
+    # identically to c18 even when some repeats failed.
+    from tests.envs.support import execution_policy
+    from whetstone.envs.ed1_eval import run_ed1_eval
+    from whetstone.envs.ed1_scoring import CodeScore
+    from whetstone.envs.sampling import Completeness
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=1)
+    transport = _fake_encdec_transport(tasks)
+    calls = {"n": 0}
+
+    # Fail the FIRST repeat of the single task, pass the second (both planned).
+    def _scorer(*, raw_submission, task, **_kw) -> CodeScore:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return CodeScore(
+                passed=False, infrastructure_unknown=True, outcome="TIMED_OUT",
+            )
+        return CodeScore(
+            passed=True, infrastructure_unknown=False, outcome="PASSED",
+        )
+
+    exp = build_ed1_experiment(
+        tasks=tasks, internal_n=1, official_n=1, budget_ratio=0.5,
+        completeness=Completeness.SKIP, max_skip_fraction=0.60,
+    )
+    template = ed1_initial_candidate().payload[MUTATION_FIELD]
+    ed = run_ed1_eval(
+        exp, candidate_template=template,
+        candidate_id="ed1-naive",
+        instances=exp.eval_configs.official.instances,
+        execution_policy=execution_policy(max_attempts=1),
+        transport=transport, repeats=2, scorer=_scorer, apply_reward=False,
+        policy=exp.completeness_policy,
+    )
+    # The weight is the PLANNED 2 repeats, not the 1 present row.
+    assert ed.per_task_counts == (2,)

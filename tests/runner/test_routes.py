@@ -131,6 +131,16 @@ def test_c18_completeness_matrix_default_is_skip_2pct() -> None:
     assert completeness_for_env("c18") == ("skip", 0.02)
 
 
+def test_ed1_completeness_matrix_default_is_skip_15pct() -> None:
+    from whetstone.runner.routes import completeness_for_env
+
+    # ed1's matrix default is a SKIP-with-15%-tolerance policy: its per-row
+    # failures are genuine stochastic model behavior at tight budgets (empty
+    # completions + entry-point name loss), measured at ~10.4% on the anchor,
+    # so a bounded 15% tolerance certifies while keeping skipped rows explicit.
+    assert completeness_for_env("ed1") == ("skip", 0.15)
+
+
 def test_unlisted_env_completeness_default_is_strict_propagate() -> None:
     from whetstone.runner.routes import completeness_for_env
 

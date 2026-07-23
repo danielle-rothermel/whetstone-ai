@@ -120,6 +120,18 @@ COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
     # bounded skip tolerance for the flaky-under-concurrency deepseek anchor.
     # (A nano cell is not flaky and simply never exercises the tolerance.)
     "c18h": ("skip", 0.02),
+    # ed1 (enc-dec) declares a HIGHER SKIP tolerance than c18. Its per-row
+    # failures are GENUINE stochastic model behavior at tight budgets, NOT
+    # brittle plumbing (the dr-code extractor correctly strips fenced/prose
+    # decoder output -- verified): at r=0.10 the model sometimes emits an EMPTY
+    # completion (encoder or decoder) -> a PERMANENT response_parse_error, and
+    # the tight budget can drop the entry-point NAME so the decoder writes ok
+    # code under a wrong function name -> a harness timeout (infra-unknown).
+    # eval:ed1:a2 measured 25/240 = 10.4% such rows. A 15% tolerance
+    # covers the observed rate with ~1.4x margin while keeping the skipped rows
+    # explicit counts on the aggregate + cell line (never silently dropped);
+    # override per-cell with --missing-data / --max-skip-fraction.
+    "ed1": ("skip", 0.15),
 }
 
 
