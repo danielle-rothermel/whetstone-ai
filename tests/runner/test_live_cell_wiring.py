@@ -41,11 +41,17 @@ from whetstone.runner.cli import (
 )
 from whetstone.runner.optimizers import OPTIMIZERS
 
-#: Optimizer kinds that draft real proposals through the live proposer route.
-#: (``gepa`` reflects through the same ProposerTransport seam; ``codex`` uses
-#: its own MCP bridge, ``eval`` never drafts -- both keep the placeholder.)
+#: Optimizer kinds that draft real proposals through the live OpenRouter
+#: proposer route by default (``gepa`` reflects through the same
+#: ProposerTransport seam).
 _PROPOSAL_USING = ("copro", "miprov2", "gepa")
-_NO_PROPOSER = ("eval", "codex")
+#: The codex OPTIMIZER drafts through the local codex CLI (its proposer IS the
+#: codex CLI), NOT the OpenRouter route -- so its live proposer is a
+#: CodexProposerTransport, never the placeholder.
+_CODEX_CLI_OPTIMIZER = "codex"
+#: Only the eval identity optimizer never drafts, so ONLY it keeps the raising
+#: placeholder (and run_optimize never calls draft() for it).
+_NO_PROPOSER = ("eval",)
 
 
 def _cell_args(optimizer: str, **overrides: object) -> argparse.Namespace:
@@ -142,11 +148,42 @@ def test_proposal_using_optimizer_never_reaches_fixture_seam(
 
 @pytest.mark.parametrize("optimizer", _NO_PROPOSER)
 def test_non_proposal_optimizer_keeps_placeholder(optimizer: str) -> None:
-    # eval never drafts; codex uses its own MCP bridge -- both keep the
-    # placeholder, which is fine because run_optimize never calls draft() for
-    # them (eval is identity; codex bridges elsewhere).
+    # ONLY eval keeps the placeholder -- it is the identity optimizer, so
+    # run_optimize never calls draft() for it (breadth x depth = 0).
     config, _ = _build_cell_config(_cell_args(optimizer))
     assert isinstance(config.proposer_transport, _LiveProposerUnavailable)
+
+
+def test_codex_optimizer_wires_codex_cli_proposer_not_placeholder() -> None:
+    # Regression for the live codex-OPTIMIZER crash: run_optimize DOES draft
+    # for codex (breadth 4 x depth 1), but the live path used to wire the
+    # _LiveProposerUnavailable placeholder -> .draft() raised an unhandled
+    # RuntimeError that killed the cell. The codex optimizer's proposer IS the
+    # local codex CLI (briefs §5), so it now wires a CodexProposerTransport,
+    # constructs with no network, and records models.proposer distinctly.
+    config, task_route = _build_cell_config(_cell_args("codex"))
+    assert isinstance(config.proposer_transport, CodexProposerTransport)
+    assert not isinstance(config.proposer_transport, _LiveProposerUnavailable)
+    # Recorded distinctly as codex-cli/<agent model> (briefs §5 gpt-5.6).
+    assert config.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.6"
+    assert CODEX_CLI_LANE in config.proposer_config.provider_call_config_ref
+    assert len(config.proposer_config.provider_call_config_hash) == 64
+    # The task route is still the openrouter lane (proposer is independent).
+    assert task_route.lane == "openrouter"
+
+
+def test_codex_optimizer_honors_proposer_model_override() -> None:
+    # --proposer-model overrides the codex agent model and folds a distinct
+    # proposer Config identity (never a graph identity).
+    default_cfg, _ = _build_cell_config(_cell_args("codex"))
+    override_cfg, _ = _build_cell_config(
+        _cell_args("codex", proposer_model="gpt-5.3-codex")
+    )
+    assert override_cfg.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.3-codex"
+    assert (
+        default_cfg.proposer_config.identity_hash()
+        != override_cfg.proposer_config.identity_hash()
+    )
 
 
 @pytest.mark.parametrize("optimizer", _PROPOSAL_USING)

@@ -84,6 +84,13 @@ _LANE_CHOICES = ("openrouter", *LANE_NAMES)
 #: Stronger than the canonical gpt-5.4-nano, and ChatGPT-plan billed ($0).
 CODEX_PROPOSER_DEFAULT_MODEL = "gpt-5.4-mini"
 
+#: The default agent model for the codex OPTIMIZER (``--optimizer codex``),
+#: whose proposer IS the local ``codex exec`` CLI
+#: (``reports/optimizer-briefs.md`` §5: ``agent_model = gpt-5.6``). Overridable
+#: by ``--proposer-model``. Recorded as ``codex-cli/<model>`` on the cell
+#: line's ``models.proposer``.
+CODEX_OPTIMIZER_AGENT_MODEL = "gpt-5.6"
+
 #: Progress heartbeat interval (seconds): how often the CLI prints a progress
 #: line during a long cell/pilot run so nohup logs stream something regularly.
 HEARTBEAT_SECONDS = 60.0
@@ -251,12 +258,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--proposer-model",
         default=None,
         help=(
-            "override the canonical proposer model (the routes registry "
-            "default 'openai/gpt-5.4-nano') for a proposal-using optimizer "
-            "(copro/miprov2/gepa). Folds into the proposer route's Config "
+            "override the proposer model. For copro/miprov2/gepa this is the "
+            "canonical OpenRouter proposer (default 'openai/gpt-5.4-nano'); "
+            "with --proposer-cli codex it selects the codex-CLI model "
+            "(default "
+            "gpt-5.4-mini); for --optimizer codex it selects the codex agent "
+            "model (default gpt-5.6). Folds into the proposer route Config "
             "identity (never a graph identity) and is recorded in cells.jsonl "
-            "models.proposer. Ignored by eval/codex. With --proposer-cli "
-            "codex this selects the codex-CLI model (default gpt-5.4-mini)."
+            "models.proposer. Ignored by eval (the identity optimizer)."
         ),
     )
     cell.add_argument(
@@ -532,9 +541,9 @@ def _proposer_config(
 ) -> ProposerConfig:
     """The proposer route Config identity for a cell.
 
-    Canonical proposer is the OpenRouter ``gpt-5.4-nano`` route; Codex (the
-    optimizer) uses the local ``codex exec`` bridge. When ``codex_cli_model``
-    is set (``--proposer-cli codex`` on a proposal-using optimizer) the
+    Canonical proposer is the OpenRouter ``gpt-5.4-nano`` route. When
+    ``codex_cli_model`` is set -- the codex OPTIMIZER (its proposer IS the
+    codex CLI) OR ``--proposer-cli codex`` on copro/miprov2/gepa -- the
     proposer route is the LOCAL codex CLI: ``codex-cli/<model>`` folds into the
     proposer Config identity (never a graph identity), and the model choice
     changes that identity distinctly. ``proposer_model`` overrides the
@@ -545,12 +554,6 @@ def _proposer_config(
         return ProposerConfig(
             provider_call_config_ref=ref,
             provider_call_config_hash=_deterministic_hash(ref),
-            temperature=1.0,
-        )
-    if optimizer == "codex":
-        return ProposerConfig(
-            provider_call_config_ref="codex://codex_cli/gpt-5.6",
-            provider_call_config_hash="c" * 64,
             temperature=1.0,
         )
     model = proposer_model or CANONICAL_PROPOSER_MODEL
@@ -715,48 +718,61 @@ def _run_dry_cell(args: argparse.Namespace) -> int:
 def _uses_codex_cli_proposer(args: argparse.Namespace) -> bool:
     """Whether this cell drafts through the local codex CLI proposer.
 
-    True iff ``--proposer-cli codex`` was passed for a proposal-using optimizer
-    (copro/miprov2/gepa). The eval/codex optimizers never draft here, so they
-    ignore the flag.
+    True for the codex OPTIMIZER (``--optimizer codex``) -- its proposer IS the
+    local ``codex exec`` CLI (``reports/optimizer-briefs.md`` §5: the opaque
+    codex agent proposes; Whetstone measures each draft on the internal split;
+    ``run_optimize`` reduces that tool-using inner loop to the shared
+    breadth x depth seam) -- OR when ``--proposer-cli codex`` is passed for
+    another proposal-using optimizer (copro/miprov2/gepa). The eval identity
+    optimizer never drafts, so it never uses the codex proposer.
     """
-    return (
-        getattr(args, "proposer_cli", None) == "codex"
-        and args.optimizer not in ("eval", "codex")
-    )
+    if args.optimizer == "eval":
+        return False
+    if args.optimizer == "codex":
+        return True
+    return getattr(args, "proposer_cli", None) == "codex"
 
 
 def _codex_proposer_model(args: argparse.Namespace) -> str:
-    """The codex-CLI proposer model: --proposer-model or the codex default."""
-    return (
-        getattr(args, "proposer_model", None)
-        or CODEX_PROPOSER_DEFAULT_MODEL
-    )
+    """The codex-CLI proposer model.
+
+    ``--proposer-model`` overrides; else the codex OPTIMIZER uses its brief
+    agent model (``gpt-5.6``) and a ``--proposer-cli codex`` cell uses the
+    codex proposer default (``gpt-5.4-mini``).
+    """
+    override = getattr(args, "proposer_model", None)
+    if override:
+        return override
+    if args.optimizer == "codex":
+        return CODEX_OPTIMIZER_AGENT_MODEL
+    return CODEX_PROPOSER_DEFAULT_MODEL
 
 
 def _proposer_transport_for(
     args: argparse.Namespace, *, proposer_model: str | None
 ) -> ProposerTransport:
-    """Build the proposer transport for a live cell (the fixture-only seam).
+    """Build the proposer transport for a live cell.
 
-    A proposal-using optimizer (COPRO / MIPROv2 / GEPA) drafts through either:
+    A proposal-using optimizer drafts template mutations through either:
 
-    * the LOCAL codex CLI (``--proposer-cli codex``) via
-      :class:`CodexProposerTransport` -- available on ANY task lane, since the
-      proposer route is a separate identity from the task route; or
-    * the live OpenRouter ``_HttpProposerTransport`` (the default, openrouter
-      task lane only).
+    * the LOCAL codex CLI (:class:`CodexProposerTransport`) -- the codex
+      OPTIMIZER always (its proposer IS the codex CLI), and copro/miprov2/gepa
+      when ``--proposer-cli codex`` is passed. Available on ANY task lane,
+      since the proposer route is a separate identity from the task route; or
+    * the live OpenRouter ``_HttpProposerTransport`` (the default for
+      copro/miprov2/gepa on the openrouter task lane).
 
-    An eval-row cell never drafts (its "best" is the naive candidate) and the
-    codex OPTIMIZER drafts through its own MCP bridge (not built here), so
-    neither needs a proposer here. The raising
-    :class:`_LiveProposerUnavailable`
-    placeholder is reachable ONLY where a live proposer genuinely cannot be
-    built -- never from a proposal-using optimizer that selected a concrete
-    proposer route.
+    Only the eval identity optimizer never drafts, so ONLY it keeps the raising
+    :class:`_LiveProposerUnavailable` placeholder -- and ``run_optimize`` never
+    calls ``draft()`` for the identity optimizer (breadth x depth = 0), so that
+    placeholder is never reached from a live run. (Pre-fix the codex optimizer
+    ALSO got the placeholder, yet ``run_optimize`` DOES draft for codex
+    (breadth 4 x depth 1) -> an unhandled ``RuntimeError`` that killed the live
+    codex cell.)
     """
     if _uses_codex_cli_proposer(args):
         return CodexProposerTransport(model=_codex_proposer_model(args))
-    if args.optimizer in ("eval", "codex") or args.lane != "openrouter":
+    if args.optimizer == "eval" or args.lane != "openrouter":
         return _LiveProposerUnavailable()
     proposer_route = route_for(
         args.lane, role="proposer", temperature=1.0,
@@ -805,8 +821,9 @@ def _build_cell_config(
     )
     completeness = Completeness(missing_data)
     # Resolve the proposer model: explicit --proposer-model override, else the
-    # routes-registry canonical (gpt-5.4-nano). Codex (the optimizer) uses its
-    # own bridge; --proposer-cli codex selects the local codex CLI proposer.
+    # routes-registry canonical (gpt-5.4-nano). The codex OPTIMIZER and any
+    # --proposer-cli codex cell draft through the local codex CLI, recorded
+    # distinctly as codex-cli/<model>.
     proposer_model_override = getattr(args, "proposer_model", None)
     codex_cli_model = (
         _codex_proposer_model(args)
@@ -817,8 +834,6 @@ def _build_cell_config(
     )
     if codex_cli_model is not None:
         recorded_proposer_model = codex_proposer_ref(codex_cli_model)
-    elif args.optimizer == "codex":
-        recorded_proposer_model = "codex_cli/gpt-5.6"
     else:
         recorded_proposer_model = (
             proposer_model_override or CANONICAL_PROPOSER_MODEL

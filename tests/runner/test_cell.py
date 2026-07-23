@@ -22,6 +22,10 @@ from tests.envs.support import (
     transport_policy,
 )
 from whetstone.envs.registry import env_spec
+from whetstone.optimization.codex_proposer import (
+    CodexInvocation,
+    CodexProposerTransport,
+)
 from whetstone.optimization.proposer import FakeProposerTransport
 from whetstone.runner.budget import BudgetGuard, ReserveError
 from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
@@ -237,6 +241,84 @@ def test_cell_unscorable_round2_candidate_completes_loud_not_silent(
     assert "unscorable_candidate_internal_eval" in r.escalation_note
     assert "not scored" in r.escalation_note
     assert len(ledger.cells()) == 1
+
+
+@dataclass
+class _SequencedCodexInvoker:
+    """A codex-CLI invoker returning a scripted template per successive call.
+
+    The codex OPTIMIZER drafts ``returned_proposal_count = 4`` candidates in
+    one round, so ``draft`` calls the invoker 4 times; this returns
+    ``templates[i]`` for call ``i`` (last value repeated if the script short).
+    """
+
+    templates: tuple[str, ...]
+    calls: int = 0
+
+    def __call__(self, *, prompt: str, model: str) -> CodexInvocation:
+        idx = min(self.calls, len(self.templates) - 1)
+        self.calls += 1
+        return CodexInvocation(text=self.templates[idx], returncode=0)
+
+
+def test_cell_codex_optimizer_completes_with_isolation_and_trace(
+    tmp_path: Path,
+) -> None:
+    # The codex OPTIMIZER's live path drafts through the local codex CLI (its
+    # proposer IS the codex CLI). Driven end-to-end with an injected
+    # CodexProposerTransport (fake invoker, no network): a winning draft + a
+    # poison draft whose internal rollouts fail. The cell COMPLETES (pre-fix a
+    # live codex cell raised an unhandled RuntimeError from the placeholder
+    # proposer), the poison candidate is ISOLATED (never best), and the
+    # optimizer-search TRACE is persisted -- all free via the shared
+    # run_optimize seam.
+    import json
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    win = "CODEX_WIN {input}"
+    poison = "CODEX_POISON {input}"
+    invoker = _SequencedCodexInvoker(
+        templates=(win, poison, "neutral-a {input}", "neutral-b {input}")
+    )
+    proposer = CodexProposerTransport(model="gpt-5.6", invoker=invoker)
+    cfg = _config(
+        env,
+        optimizer="codex",
+        rollout_transport=_PoisonRoundTwoTransport(
+            poison_marker="CODEX_POISON",
+            reply=improvement_reply(exp, win),
+        ),
+        proposer_transport=proposer,
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg,
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # The codex cell COMPLETED (no unhandled RuntimeError); picked the winner.
+    assert r.status == "improved"
+    assert r.best_official == pytest.approx(1.0)
+    assert r.optimizer_steps > 0
+    # codex drafted 4 candidates through the codex CLI (one round of 4).
+    assert invoker.calls == 4
+    # Per-candidate isolation: the poison candidate is dropped, loud + typed.
+    assert "unscorable_candidate_internal_eval" in r.escalation_note
+    # Trace persistence: the codex cell's search trace lands on disk with the
+    # accepted-candidate prompt text + per-step evidence.
+    trace_path = ledger.optimization_trace_path(r.cell_id)
+    assert trace_path.exists()
+    trace = json.loads(trace_path.read_text())
+    assert trace["optimizer"] == "codex"
+    assert trace["best_candidate_template"] == win
+    poisoned = [
+        s for s in trace["steps"]
+        if s["rejected"]
+        and s["rejected_reason"] == "unscorable_candidate_internal_eval"
+    ]
+    assert poisoned, "the poison codex candidate must be a rejected trace step"
 
 
 def test_cell_no_improvement_script(tmp_path: Path) -> None:
