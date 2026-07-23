@@ -79,9 +79,10 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c18.html">&larr; Back to c18 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c18.html">&larr; c18 candidate page</a></nav>
 
-<h1>c18 Related Work: Depth-Controlled Synthetic Deduction (True/False/Unknown)</h1>
+<h1>c18's task shape is thin; its empty cell is a specific combination no peer holds</h1>
+<p class="dek">Seven papers on synthetic depth-binned deduction bound c18's design space.</p>
 <div class="byline">whetstone-ai · 2026-07-22</div>
 
 <p>Seven 2023-2025 papers bound c18's design space, all synthetic depth-binned deduction with an
@@ -96,7 +97,7 @@ collapse point is set by rule-set breadth, not depth alone &mdash; c18's plain i
 the easier, shallower-collapse regime.</p>
 
 <!-- PAPER DOSSIERS -->
-<div class="section-head"><h2>Paper dossiers</h2></div>
+<div class="section-head"><h2>What does each paper claim, and does it support the corpus's use of it?</h2><span class="tag">Paper dossiers</span></div>
 
 <div class="paper-card">
   <div class="paper-head">
@@ -395,7 +396,7 @@ the easier, shallower-collapse regime.</p>
 </div>
 
 <!-- POSITIONING MAP -->
-<div class="section-head"><h2>Positioning: the family across three axes</h2></div>
+<div class="section-head"><h2>Where does c18 sit across the three axes, and which cell is empty?</h2><span class="tag">Positioning map</span></div>
 <p>The protocol axis (single-shot vs. interactive) is <span class="key">near-degenerate</span> for this
 family: all seven papers are single-forward-pass at the model-under-test level. The only genuine
 multi-turn probes are JustLogic's tree-of-thought ablation and FLD's stepwise T5 prover &mdash; both
@@ -438,7 +439,7 @@ space.</p>
 </div>
 
 <!-- CAPABILITY SYNTHESIS -->
-<div class="section-head"><h2>Capability synthesis</h2></div>
+<div class="section-head"><h2>What accuracy should the c18 baseline expect, and where does it fail?</h2><span class="tag">Capability synthesis</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -483,7 +484,7 @@ space.</p>
   distractors is the single biggest swing factor and must be checked directly in the harness.</p>
 </div>
 
-<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the c18 reseed-only baseline</h2></div>
+<div class="section-head" style="margin-top:32px;"><h2>What floor and ceiling should the c18 reseed-only baseline hit?</h2><span class="tag">Floor &amp; ceiling</span></div>
 <p>c18 config being scored: PrOntoQA instances regenerated as-is (fresh seeds, fresh fictional ontologies),
 existing hop-depth settings, native <span class="key">True/False exact-match</span> output (the codebase's
 native closed-world 2-way label &mdash; no added Unknown handling or distractor/soft-rule strata beyond
@@ -519,7 +520,7 @@ cheap tier is stronger than the 2024 GPT-4o-mini/Llama3-8B proxies used througho
 </div>
 
 <!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
-<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+<div class="section-head"><h2>Is the baseline publishable, and against which neighbor?</h2><span class="tag">Positioning &amp; publishability</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -598,6 +599,16 @@ cheap tier is stronger than the 2024 GPT-4o-mini/Llama3-8B proxies used througho
   against pitching c18 as a novel benchmark and for using it as an instrument in the more decisively
   surging prompt-optimizer-benchmarking line instead. <em>All OpenAlex counts undercount relative to
   Google Scholar.</em></p>
+</div>
+
+<div class="colophon">
+  <p>whetstone-ai &middot; 2026-07-22. Synthesized from the c18 related-work corpus &mdash; seven
+  2023&ndash;2025 papers on synthetic depth-binned deduction (JustLogic and the six per-paper dossiers).
+  Citation counts fetched from OpenAlex on 2026-07-22. PrOntoQA = Proof and Ontology-Generated QA;
+  CSP = constraint-satisfaction problem.</p>
+  <p>OpenAlex counts materially undercount relative to Google Scholar and are near-zero by construction for the
+  2024&ndash;2025 papers (indexing lag, not neglect); each is flagged inline and should be read as a coarse
+  recency floor only, not a measurement.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

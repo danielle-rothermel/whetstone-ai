@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,11 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +40,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,25 +54,30 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
-.unverified::after {
-  content: "unverified";
-  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-  border: 1px dashed var(--amber); background: var(--amber-soft);
-  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
-  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
-}
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -98,6 +93,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c18 Depth-Controlled Synthetic Deduction</title>
@@ -105,41 +101,38 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c18</span>Depth-Controlled Synthetic Deduction (True/False/Unknown)</h1>
   <span class="badge backup">BACKUP</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">RuleTaker / ProofWriter / PrOntoQA-style depth-binned synthetic deduction</span> — sampled facts plus if-then rules over fictional predicates, queried for a True/False/Unknown entailment at a controlled proof depth.</div>
+<p class="dek">Depth-binned RuleTaker/ProofWriter-style deduction — the round's cheapest, highest-value insurance pick.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict good">
-  <p><strong>Backup behind the grid-world pick, and the highest-value insurance in the pool.</strong>
-  c18 sits second after the implementation-aware rescore because it pairs a strong task idea with the
-  single most decisive practical fact discovered in round 2: the
-  <a href="https://github.com/asaparov/prontoqa">asaparov/prontoqa</a> generator was run-verified
-  end-to-end, threading <code>--seed</code> into both <code>random</code> and <code>np.random</code>
-  to emit byte-identical gold-labeled JSON with no model call. That makes the entire adaptation roughly
-  a hundred lines of subprocess-and-scoring glue with no required repo edits, so its middle-of-the-pack
-  implementation total is dragged down almost entirely by <span class="key">design breadth</span> — a
-  second constraint-puzzle stratum and CWA-vs-Unknown pinning — rather than by any codebase doubt. The
-  clinching reason it is the named backup rather than a lower-ranked alternate is <span class="key">leverage</span>:
-  the c18 harness is roughly four-fifths of a future c21 harness, so building it keeps round 1's
-  theoretical winner alive at marginal cost.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">27/2</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">13/16</span></span>
-  </div>
+<p><strong>Backup behind the grid-world pick, and the highest-value insurance in the pool.</strong>
+c18 sits second after the implementation-aware rescore because it pairs a strong task idea with the
+single most decisive practical fact discovered in round 2: the
+<a href="https://github.com/asaparov/prontoqa">asaparov/prontoqa</a> generator was run-verified
+end-to-end, threading <code>--seed</code> into both <code>random</code> and <code>np.random</code>
+to emit byte-identical gold-labeled JSON with no model call. That makes the entire adaptation roughly
+a hundred lines of subprocess-and-scoring glue with no required repo edits, so its middle-of-the-pack
+implementation total is dragged down almost entirely by <span class="key">design breadth</span> — a
+second constraint-puzzle stratum and CWA-vs-Unknown pinning — rather than by any codebase doubt. The
+clinching reason it is the named backup rather than a lower-ranked alternate is <span class="key">leverage</span>:
+the c18 harness is roughly four-fifths of a future c21 harness, so building it keeps round 1's
+theoretical winner alive at marginal cost.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric/TB</span><span class="v">27/2</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">13/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Classify a multi-hop entailment at a dialed-in proof depth</h3>
@@ -156,7 +149,7 @@
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative, hand-traced from a run-verified prontoqa output — seeded with <code>--ontology fictional</code>, two-hop depth, seed 12345. The nonce predicates and the negation flag come from the seed, so the surface text carries no real-world prior.</p>
+    <p class="aside">Illustrative, hand-traced from a run-verified prontoqa output — seeded with <code>--ontology fictional</code>, two-hop depth, seed 12345. The nonce predicates and the negation flag come from the seed, so the surface text carries no real-world prior.</p>
 <pre><code>Facts &amp; rules:
   Wren is an impus.
   Every impus is a vumpus.
@@ -171,8 +164,7 @@ the two stated rules in order yields True.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -205,8 +197,7 @@ the two stated rules in order yields True.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2501.14851">JustLogic: A Comprehensive Benchmark for Evaluating Deductive Reasoning in LLMs</a> (Chen, Zhang &amp; Tao, arXiv 2025)</span> — a synthetic, prior-knowledge-independent deductive benchmark with fine-grained error analysis over reasoning depth and argument form; a direct 2025 successor to the c18 family.</li>
@@ -216,8 +207,7 @@ the two stated rules in order yields True.</code></pre>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -256,8 +246,7 @@ the two stated rules in order yields True.</code></pre>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
   <div class="step"><h3>Subprocess generation per stratum</h3><p>Call <code>run_experiment.py --model-name json</code> per depth stratum, looping <code>--min-hops/--max-hops</code> for the D0-D5 ladder, <code>--ontology fictional</code> for nonce vocabulary, and <code>--distractors</code> plus deduction rule as difficulty knobs; run from the repo root so the relative <code>bad_patterns.txt</code> import resolves (~40 lines of driver plus an arg table).</p></div>
   <div class="step"><h3>Parse the JSON into the instance schema</h3><p>Read <code>example{i}.test_example.{question,query,answer}</code>, treating <code>answer</code> as the 0/1 exact-match gold and dropping the optional <code>chain_of_thought</code> (~30 lines).</p></div>
@@ -278,14 +267,12 @@ the two stated rules in order yields True.</code></pre>
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/asaparov/prontoqa">asaparov/prontoqa</a> (Apache-2.0, maintained, actively cited) — deep-read notes at <a href="../repos/asaparov-prontoqa.md">repos/asaparov-prontoqa.md</a>.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status pass">verified</span>
-        <code>--seed</code> threads into both <code>random</code> and <code>np.random</code>; two runs at seed 12345 were byte-identical, seed 999 differed, and 3/3 hand-traced labels plus proof chains were correct and derivable purely from in-instance rules. Only new caveat: must run from repo root for <code>bad_patterns.txt</code>.</li>
+      <li><span class="key">Run verification:</span> <span class="status pass">verified</span>
+        — <code>--seed</code> threads into both <code>random</code> and <code>np.random</code>; two runs at seed 12345 were byte-identical, seed 999 differed, and 3/3 hand-traced labels plus proof chains were correct and derivable purely from in-instance rules. Only new caveat: must run from repo root for <code>bad_patterns.txt</code>.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -313,6 +300,12 @@ the two stated rules in order yields True.</code></pre>
     <a href="../related-work/c18-baseline-spec.html">Baseline spec</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric/TB 27/2 · I1 3 · I2 2 · I3 1 · I4 1 · I5 1 · I6 2 · Impl total 13/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations.html">recommendations.md (round 1)</a> · <a href="../recommendations-round2.html#c18">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c18">candidates-merged.md</a> · <a href="../related-work/c18-related-work.html">related work</a> · <a href="../related-work/c18-baseline-spec.html">baseline spec</a>.
+  Regenerated from <code>c18.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

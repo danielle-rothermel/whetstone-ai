@@ -95,20 +95,14 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c22.html">&larr; Back to c22 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c22.html">&larr; c22 candidate page</a></nav>
 
 <div class="hdr-row">
-  <h1>c22 Baseline Spec: Headroom Before Complexity</h1>
+  <h1>Measure the reseed-only IFEval shape's headroom before building c22's complexity</h1>
   <span class="badge draft">Draft</span>
 </div>
+<p class="dek">A cheap go/no-go probe: is the naive-vs-ceiling gap wide but shallow — closable by one prompt?</p>
 <div class="byline">whetstone-ai &middot; 2026-07-22</div>
-
-<div class="callout warn">
-  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
-  frozen parameter. The model set (&sect;4), the decision thresholds (&sect;3), and six other open items
-  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
-  anything here as final.
-</div>
 
 <p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt
 on c22's <span class="key">reseed-only baseline</span> &mdash; standard IFEval checker atoms only, before any
@@ -119,6 +113,13 @@ c22's related-work synthesis shows the reseed-only baseline strips out exactly t
 may be wide but shallow &mdash; closable by a single well-drafted enumerate-the-atoms prompt. If that risk is
 real, this baseline finds it cheaply, before the Selection/OOD/generator work that is c22's real cost gets
 built.</p>
+
+<div class="summary">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision thresholds (&sect;3), and six other open items
+  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
+  anything here as final.
+</div>
 
 <div class="constraint">
   <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
@@ -145,7 +146,7 @@ built.</p>
 </div>
 
 <!-- STRATA -->
-<div class="section-head"><h2>1. Strata design</h2></div>
+<div class="section-head"><h2>How is the instance pool stratified, and how big is it?</h2><span class="tag">§1 · Strata</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -188,7 +189,7 @@ built.</p>
 </div>
 
 <!-- PROBE PROMPTS -->
-<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<div class="section-head"><h2>What exactly do the naive and ceiling prompts say?</h2><span class="tag">§2 · Probes</span></div>
 <p>Both prompts receive the same generated instance: a base micro-task line plus the concatenated per-atom
 constraint descriptions emitted by <code>build_description</code>. These operationalize rubric criterion 4
 (default prompts score low; better prompts close the gap) and criterion 9 (floor, ceiling, and a reference
@@ -241,7 +242,7 @@ The ceiling prompt's enumerate-and-verify design is calibrated to that fully-sta
 Selection/OOD layer.</div>
 
 <!-- DECISION RULE -->
-<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<div class="section-head"><h2>What does each measured outcome tell the project to do next?</h2><span class="tag">§3 · Decision rule</span></div>
 <p>Let <strong>naive</strong> = pooled all-pass rate under probe (a), <strong>ceiling</strong> = pooled all-pass
 rate under probe (b), <strong>gap</strong> = ceiling &minus; naive. Thresholds are anchored to the
 related-work synthesis's point estimates for the expected default (3&ndash;5 mixed atoms, cheap tier, temp 0,
@@ -300,8 +301,8 @@ to the ceiling-prompt expectation, not 1.0.</p>
 </div>
 
 <!-- MODEL EVIDENCE -->
-<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
-<div class="callout warn">Not finalized here. See &sect;7.1. The owner decides the primary cheap-tier model,
+<div class="section-head"><h2>Which cheap models should the run cover, and on what evidence?</h2><span class="tag">§4 · Models (open)</span></div>
+<div class="callout">Not finalized here (see &sect;7.1). The owner decides the primary cheap-tier model,
 whether to add a frontier anchor, and the exact model versions/snapshots.</div>
 
 <h3 style="margin-top:18px;">4.1 What the related-work dossiers measured (strict all-pass / prompt-level, the c22-comparable metric)</h3>
@@ -356,7 +357,7 @@ whether to add a frontier anchor, and the exact model versions/snapshots.</div>
 </div>
 
 <!-- COST -->
-<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<div class="section-head"><h2>What does one full baseline run cost in dollars and minutes?</h2><span class="tag">§5 · Cost</span></div>
 <p><span class="key">Formula:</span> N &times; repeats &times; prompts = rollouts/model; rollouts &times;
 tokens/rollout = tokens; tokens &times; price = cost. Fixed factors: N = 120 instances (6 strata &times; 20); 2
 prompts (naive, ceiling); repeats = 3.</p>
@@ -402,7 +403,7 @@ confirmed provider pricing. Confirm actual rates for the chosen models before co
 (&sect;7.7).</div>
 
 <!-- RUBRIC MAPPING -->
-<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="section-head"><h2>Which rubric criteria does each design choice satisfy?</h2><span class="tag">§6 · Rubric map</span></div>
 <div class="table-wrap">
   <table>
     <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
@@ -428,7 +429,7 @@ multi-node routing, sandbox execution, dr-code preprocessing, the second (output
 repeat-averaging under real variance &mdash; all out of scope for a headroom baseline.</p>
 
 <!-- OPEN DECISIONS -->
-<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="section-head" id="open"><h2>What must the owner decide before this spec can run?</h2><span class="tag">§7 · Open decisions</span></div>
 <div class="open-decisions">
   <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
   <ol>
@@ -454,6 +455,16 @@ repeat-averaging under real variance &mdash; all out of scope for a headroom bas
     <code>random</code> (or holds a <code>random.Random(seed)</code>) before each <code>build_description</code>,
     and passes explicit kwargs for nonce vocab; the repo's <code>config.seed</code> is a decoy.</li>
   </ol>
+</div>
+
+<div class="colophon">
+  <p>Draft spec, whetstone-ai &middot; 2026-07-22. Every number is a proposal pending owner sign-off; cost
+  figures use illustrative placeholder prices until real provider pricing is confirmed for the chosen models.</p>
+  <p>Atoms and scoring reuse the <code>google-research</code> IFEval checker library
+  (<code>instructions_registry.INSTRUCTION_DICT</code>, <code>check_following</code>,
+  <code>evaluation_lib.test_instruction_following_strict</code>). Instances synthesized per
+  <code>random.seed(instance_seed)</code>, fresh seeds only. Floor/ceiling grounded in the related-work
+  synthesis (IFEval prompt-strict 2311.07911, VFF strict 2502.04498). IFEval = Instruction-Following Eval.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Classification Under Nonstandard / Remapped Label Semantics</title>
+<title>whetstone-ai · Nonstandard-label classification: the deliverable is a generator, not a benchmark</title>
 </head>
 <body>
 <main>
-<h1>Classification Under Nonstandard / Remapped Label Semantics</h1>
+<h1>Nonstandard-label classification needs a synthetic generator, not a published benchmark</h1>
+<p class="dek">A 12-candidate literature scan for opaque-codebook, precedence-ordered classification as the quick-test task.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,24 +21,20 @@
   <span class="here">Remapped labels</span>
 </div>
 
-<div class="intro">
-  <p>Breadth-focused literature scan for the whetstone-ai quick-test task: existing tasks, benchmarks, and dataset-generation methods that could be <strong>used or adapted</strong> as the single cheap task that validates the prompt-optimizers (Eval, COPRO, MIPROv2, GEPA, Codex agent) end to end. Up to 12 candidates, <span class="key">not ranked or narrowed</span>. This is the seed domain ("classification under nonstandard label semantics") and maps directly onto the brainstorm's <a href="brainstorm.html">Theme F</a> — contrarian sentiment codebooks, cipher-category tagging, inverted MC, priority/override policies. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
-  <p class="small muted">Rubric essentials: single LLM call + exact deterministic scoring (no sandbox); output bounded to MC or a few words; default prompts score well below a KNOWN ceiling; the gap closes INCREMENTALLY through prompt improvements (not one-shot guessable); difficulty decomposes into independent latent rules; synthetic/generatable pool with exact ground truth, hundreds of instances, contamination-resistant; diagnostic failures; few-shot demos measurably help; prompt-quality differences resolvable on 10-20 evals at temperature 0.</p>
+<p>Breadth-focused literature scan for the whetstone-ai quick-test task: existing tasks, benchmarks, and dataset-generation methods that could be <b>used or adapted</b> as the single cheap task that validates the prompt-optimizers (Eval, COPRO, MIPROv2, GEPA, Codex agent) end to end. Up to 12 candidates, <span class="key">not ranked or narrowed</span>. This is the seed domain ("classification under nonstandard label semantics") and maps directly onto the brainstorm's <a href="brainstorm.html">Theme F</a> — contrarian sentiment codebooks, cipher-category tagging, inverted MC, priority/override policies. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+<p class="aside">Rubric essentials: single LLM call + exact deterministic scoring (no sandbox); output bounded to MC or a few words; default prompts score well below a KNOWN ceiling; the gap closes INCREMENTALLY through prompt improvements (not one-shot guessable); difficulty decomposes into independent latent rules; synthetic/generatable pool with exact ground truth, hundreds of instances, contamination-resistant; diagnostic failures; few-shot demos measurably help; prompt-quality differences resolvable on 10-20 evals at temperature 0.</p>
+
+<p><b>The realistic deliverable is a generator, not an off-the-shelf benchmark.</b> The strongest fit is almost never a published benchmark — those are contaminated, use natural labels, or lack decomposable latent rules. The winning recipe: take a generation method or task template from this literature and regenerate it synthetically with (a) an <span class="key">opaque per-instance codebook</span> that defeats the prior, (b) <span class="key">3-5 independent latent rules with precedence/override</span> so the score ladder is incremental, and (c) a bounded MC or short-token output for exact scoring. The foundational ICL papers are mostly <i>evidence the mechanism works</i>; the rule / cipher / tabular generators are the drop-in adaptation targets. <span class="key">LLMTabBench (C6)</span> and the <span class="key">decision-list literature (C7)</span> are the most directly reusable methods; <span class="key">Contrarian Sentiment Codebook (C12)</span> is the brainstorm-native synthesis that hits all core criteria at once.</p>
+
+<div class="callout space-top">
+  <b>Domain-wide risk to watch on every candidate: floor immovability on cheap models.</b> Candidates 3 and 4 (2025-2026) show that ≤~12B models may produce a <i>zero</i> override rate or pathological collapse under label inversion. If the quick-test model is small, a nonstandard-label task can sit at the floor for <i>every</i> prompt, killing the incremental gap (criterion 4). Mitigate by conveying rules via instruction (not demo-only inversion), keeping per-rule difficulty low, and piloting floor/ceiling on the actual quick-test model before committing.
 </div>
 
-<div class="verdict">
-  <p><strong>The realistic deliverable is a generator, not an off-the-shelf benchmark.</strong> The strongest fit is almost never a published benchmark — those are contaminated, use natural labels, or lack decomposable latent rules. The winning recipe: take a generation method or task template from this literature and regenerate it synthetically with (a) an <span class="key">opaque per-instance codebook</span> that defeats the prior, (b) <span class="key">3-5 independent latent rules with precedence/override</span> so the score ladder is incremental, and (c) a bounded MC or short-token output for exact scoring. The foundational ICL papers are mostly <em>evidence the mechanism works</em>; the rule / cipher / tabular generators are the drop-in adaptation targets. <span class="key">LLMTabBench (C6)</span> and the <span class="key">decision-list literature (C7)</span> are the most directly reusable methods; <span class="key">Contrarian Sentiment Codebook (C12)</span> is the brainstorm-native synthesis that hits all core criteria at once.</p>
-</div>
+<div class="section-head" id="how-to-read"><h2>How should the rubric-fit notes be read?</h2></div>
 
-<div class="callout warn space-top">
-  <strong>Domain-wide risk to watch on every candidate: floor immovability on cheap models.</strong> Candidates 3 and 4 (2025-2026) show that ≤~12B models may produce a <em>zero</em> override rate or pathological collapse under label inversion. If the quick-test model is small, a nonstandard-label task can sit at the floor for <em>every</em> prompt, killing the incremental gap (criterion 4). Mitigate by conveying rules via instruction (not demo-only inversion), keeping per-rule difficulty low, and piloting floor/ceiling on the actual quick-test model before committing.
-</div>
+<p>The foundational ICL papers below are mostly <i>evidence that the mechanism works</i> rather than drop-in tasks; the rule / cipher / tabular generators are the drop-in adaptation targets. Two reusable ingredients dominate the whole scan: an <span class="key">opaque / flipped label space</span> (C1-C5, C11) makes the default prompt score low with a known 100% ceiling, and an <span class="key">ordered rule list / precedence</span> (C6-C8) gives the incremental, decomposable, diagnostic ladder. The best quick-test task combines both.</p>
 
-<div class="section-head" id="how-to-read"><h2>How to read the rubric-fit notes</h2></div>
-
-<p>The foundational ICL papers below are mostly <em>evidence that the mechanism works</em> rather than drop-in tasks; the rule / cipher / tabular generators are the drop-in adaptation targets. Two reusable ingredients dominate the whole scan: an <span class="key">opaque / flipped label space</span> (C1-C5, C11) makes the default prompt score low with a known 100% ceiling, and an <span class="key">ordered rule list / precedence</span> (C6-C8) gives the incremental, decomposable, diagnostic ladder. The best quick-test task combines both.</p>
-
-<div class="section-head" id="pillars"><h2>Two research pillars</h2></div>
+<div class="section-head" id="pillars"><h2>What are the two research pillars behind this domain?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -50,7 +47,7 @@
   </div>
 </div>
 
-<div class="section-head" id="candidates"><h2>The 12 candidates</h2></div>
+<div class="section-head" id="candidates"><h2>What are the 12 candidates?</h2></div>
 
 <p class="small muted">Grouped by role: label-mechanism evidence (C1-C5, C11), rule / codebook generators (C6-C10), and the brainstorm-native synthesis (C12). Not ranked. Each card carries what it is, citations, the adaptation for the rubric, and rubric-fit notes including weaknesses.</p>
 
@@ -150,7 +147,7 @@
   <p><strong>Rubric-fit notes.</strong> Best alignment with <em>all</em> core criteria simultaneously — this is why the brainstorm nominates it. It inherits the flipped-label evidence base (default scores low, ceiling known) and adds genuine independent-rule decomposition + precedence for the incremental ladder and diagnostic failures. <em>Brainstorm-flagged risk: one-shot risk MEDIUM-HIGH</em> — a small fixed codebook can be enumerated in one paragraph by a diligent engineer; mitigate with 4+ interacting rules, a per-instance key, and/or compositional labels so no single paragraph captures the full mapping. Also inherits C3/C4's caution: confirm the cheap quick-test model is large enough to climb the ladder rather than sitting at the floor regardless of prompt.</p>
 </div>
 
-<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+<div class="section-head" id="cross-cutting"><h2>What patterns cut across every candidate?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -175,7 +172,7 @@
   </div>
 </div>
 
-<div class="section-head" id="sources"><h2>Sources</h2></div>
+<div class="section-head" id="sources"><h2>Where do these candidates come from?</h2><span class="tag">sources</span></div>
 
 <div class="table-wrap">
 <table>

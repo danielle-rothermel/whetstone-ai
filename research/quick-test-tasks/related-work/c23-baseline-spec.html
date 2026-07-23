@@ -95,20 +95,14 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c23.html">&larr; Back to c23 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c23.html">&larr; c23 candidate page</a></nav>
 
 <div class="hdr-row">
-  <h1>c23 Baseline Spec: Headroom Before Complexity</h1>
+  <h1>Measure the existing task's headroom before building c23's complexity</h1>
   <span class="badge draft">Draft</span>
 </div>
+<p class="dek">A cheap go/no-go probe: how large is the naive-vs-ceiling prompt gap, and is it prompt-closable?</p>
 <div class="byline">whetstone-ai &middot; 2026-07-22</div>
-
-<div class="callout warn">
-  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
-  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), the k=3 stratum keep/drop
-  call, and five other open items (&sect;7) are explicitly owner-gated &mdash; see the
-  <a href="#open">open decisions</a> list before treating anything here as final.
-</div>
 
 <p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt on
 the <span class="key">existing</span> InductionBench-style single-rule ISL/OSL task shape &mdash; before any
@@ -118,6 +112,13 @@ InductionBench's own headline finding is that frontier models collapse to 0.00&n
 moderate difficulty. If the existing shape is already unreachable &mdash; or already trivial &mdash; at the
 cheap tier, this baseline finds that cheaply, before the composition-ladder work that is c23's real cost gets
 built.</p>
+
+<div class="summary">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), the k=3 stratum keep/drop
+  call, and five other open items are explicitly owner-gated &mdash; see the
+  <a href="#open">open decisions</a> list before treating anything here as final.
+</div>
 
 <div class="constraint">
   <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
@@ -142,7 +143,7 @@ built.</p>
 </div>
 
 <!-- STRATA -->
-<div class="section-head"><h2>1. Strata design</h2></div>
+<div class="section-head"><h2>How is the instance pool stratified, and how big is it?</h2><span class="tag">§1 · Strata</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -203,7 +204,7 @@ built.</p>
 </div>
 
 <!-- PROBE PROMPTS -->
-<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<div class="section-head"><h2>What exactly do the naive and ceiling prompts say?</h2><span class="tag">§2 · Probes</span></div>
 <p>Both probes are run <span class="key">verbatim, temperature 0, repeats=3</span>, against the same pinned
 instance pool; the only difference between them is the instruction text &mdash; same demos, same query, same
 extraction. These operationalize rubric criterion 4 (default prompts score low; better prompts close the gap)
@@ -273,7 +274,7 @@ cheap tier even with perfect conventions stated. <strong>Open:</strong> the owne
 does not over-hint and inflate the ceiling (&sect;7.6).</div>
 
 <!-- DECISION RULE -->
-<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<div class="section-head"><h2>What does each measured outcome tell the project to do next?</h2><span class="tag">§3 · Decision rule</span></div>
 <p>Read the <strong>pooled naive rate A</strong> and <strong>pooled ceiling rate C</strong> (across all 200
 instances &times; 3 repeats &times; chosen models, exact-match). Thresholds are proposals grounded in the
 capability synthesis, whose headline predictions are: naive floor ~5&ndash;25%, ceiling ~35&ndash;65%, gap
@@ -333,8 +334,8 @@ capability synthesis, whose headline predictions are: naive floor ~5&ndash;25%, 
 </div>
 
 <!-- MODEL EVIDENCE -->
-<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
-<div class="callout warn">Not finalized here. See &sect;7.1. No dossier tests c23's exact cheap tier; all
+<div class="section-head"><h2>Which cheap models should the run cover, and on what evidence?</h2><span class="tag">§4 · Models (open)</span></div>
+<div class="callout">Not finalized here (see open decision 1). No dossier tests c23's exact cheap tier; all
 cheap-tier numbers below are same-family proxies. This table is the evidence the owner needs to choose &mdash;
 it is not a recommendation.</div>
 
@@ -390,7 +391,7 @@ it is not a recommendation.</div>
 </div>
 
 <!-- COST -->
-<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<div class="section-head"><h2>What does one full baseline run cost in dollars and minutes?</h2><span class="tag">§5 · Cost</span></div>
 <p><span class="key">Formula:</span> instances &times; prompts &times; models &times; repeats = LLM calls; calls
 &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: N = 200 instances; 2 prompts (naive,
 ceiling); repeats = 3.</p>
@@ -433,7 +434,7 @@ ceiling); repeats = 3.</p>
 pin real per-model pricing before the owner signs off.</div>
 
 <!-- RUBRIC MAPPING -->
-<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="section-head"><h2>Which rubric criteria does each design choice satisfy?</h2><span class="tag">§6 · Rubric map</span></div>
 <div class="table-wrap">
   <table>
     <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
@@ -454,7 +455,7 @@ pin real per-model pricing before the owner signs off.</div>
 </div>
 
 <!-- OPEN DECISIONS -->
-<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="section-head" id="open"><h2>What must the owner decide before this spec can run?</h2><span class="tag">§7 · Open decisions</span></div>
 <div class="open-decisions">
   <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
   <ol>
@@ -478,6 +479,17 @@ pin real per-model pricing before the owner signs off.</div>
     <li><strong>Pilot gate</strong> (&sect;1.2, repo Step 5) &mdash; a small pilot must confirm reachability
     before freezing the pool. Owner approves the pilot-first sequencing and the go/no-go it feeds.</li>
   </ol>
+</div>
+
+<div class="colophon">
+  <p>Draft spec, whetstone-ai &middot; 2026-07-22. Every number is a proposal pending owner sign-off; nothing is
+  frozen until the pilot (repo adaptation plan, Step 5) calibrates reachability on real generations.</p>
+  <p>Floor/ceiling expectations and model proxies are grounded in the c23 work products:
+  <a href="work/c23/synthesis-capability.md">synthesis-capability.md</a>,
+  <a href="work/c23/synthesis-positioning.md">synthesis-positioning.md</a>, and the per-paper
+  dossiers under <code>work/c23/</code>. IB = InductionBench; MIR/WILT are the cited induction benchmarks.
+  Seed-determinism fix: replace <code>list(set(...))</code> with <code>sorted(...)</code> at generator lines
+  53/61/107/132/208/244.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

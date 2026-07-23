@@ -47,7 +47,8 @@
 </head>
 <body>
 <main>
-<h1>Codex CLI Agent Optimization Run Design</h1>
+<h1>An opaque Codex agent runs one Optimization Step behind the same evaluation contract</h1>
+<p class="dek">One out-of-process Step proposes four base-bound encoder templates; official evaluation stays authoritative.</p>
 <div class="byline">whetstone-ai · 2026-07-20</div>
 
 <div class="family-nav">
@@ -74,7 +75,7 @@
   </ul>
 </div>
 
-<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<div class="section-head" id="target"><h2>What does the designer freeze before the agent starts?</h2><span class="tag">example setup</span></div>
 <h3 id="registry">Configuration, contract, and observation registry</h3>
 <p class="small muted">Codex exposes no algorithm hyperparameters. Process settings, Tool Config limits, output requirements, post-run observations, and derived maxima remain separate categories.</p>
 <div class="table-wrap">
@@ -131,7 +132,7 @@
   </div>
 </div>
 
-<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+<div class="section-head" id="specified"><h2>What crosses the process boundary as the Step Request?</h2><span class="tag">run configurations</span></div>
 
 <div class="plane">
   <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-optimization-step-request">Optimization Step Request</a> <span class="sub">· the single Step's frozen, serializable input; rendered as a prompt plus files</span></div>
@@ -156,7 +157,7 @@
 
 <div class="callout"><b>Measurement and <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>.</b> <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> remains Sampling + Evaluation Procedure + Aggregation and references the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned statically to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>. Procedure changes therefore change both <code>graph_hash</code> and <code>eval_config_hash</code>; Sampling/Aggregation changes affect only <code>eval_config_hash</code>. This cheaper <a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">internal evaluation</a> uses the same facts-first Procedure Config as <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">official evaluation</a>, so matching <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> retain the same <code>graph_hash</code>; role, authority when official, and realized-environment attestation remain in <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a>, while an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. The <a class="term-ref" href="vocab_and_defs.html#term-tool-config">Tool Config</a> separately owns pass ↑ / compression ↓ <a class="term-ref" href="vocab_and_defs.html#term-reward-policy">Reward Policy</a>. Official evaluation computes <a class="term-ref" href="vocab_and_defs.html#term-objective-vector">Objective Vectors</a>/Aggregates, never <a class="term-ref" href="vocab_and_defs.html#term-reward">Reward</a>. Provider evidence retains least-processed request and response or failure bodies alongside normalized usage, cost and diagnostics; agent conversation evidence and control usage remain separate optimizer evidence.</div>
 
-<div class="section-head" id="system"><h2>One Out-of-Process Optimization Step Inside the Run</h2></div>
+<div class="section-head" id="system"><h2>How does the single opaque Step flow into official evaluation?</h2><span class="tag">one out-of-process step</span></div>
 
 <div class="flow">
   <div class="plane">
@@ -248,7 +249,7 @@
   </div>
 </div>
 
-<div class="section-head" id="run"><h2>Full Run Walkthrough: One Step with <a class="term-ref" href="#local-param-observed-tool-call-count"><code>observed_tool_call_count=18</code></a></h2></div>
+<div class="section-head" id="run"><h2>What happens across one Step of <a class="term-ref" href="#local-param-observed-tool-call-count"><code>observed_tool_call_count=18</code></a>?</h2><span class="tag">full run walkthrough</span></div>
 
 <div class="run">
   <div class="tick optim">
@@ -314,11 +315,11 @@
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: four base-bound <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> against matched baselines</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot?</h2><span class="tag">four base-bound proposals vs matched baselines</span></div>
 
 <p>In the stated nonconvergent case, the four <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a> each produce one base-specific curve of 4 <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregates</a>: <a class="term-ref" href="vocab_and_defs.html#term-average-binary-test-pass-rate">Average Binary Test Pass Rate</a> vs <a class="term-ref" href="vocab_and_defs.html#term-mean-compression-ratio">Mean Compression Ratio</a> derived from integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a>. Converged <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hashes</a> deduplicate aggregate identity. Baseline reuse requires matching <a class="term-ref" href="vocab_and_defs.html#term-rollout-key">Rollout Keys</a>, attestation and environment compatibility.</p>
 
-<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="section-head" id="notes"><h2>What edge cases and guarantees should you keep in mind?</h2><span class="tag">additional notes</span></div>
 
 <div class="grid-3">
   <div class="card optim">
@@ -361,6 +362,10 @@
       <li>The hashes keep the two measurement regimes separate either way</li>
     </ul>
   </div>
+</div>
+
+<div class="colophon">
+  Whetstone design family · 2026-07-20 · one of five optimizer run designs. Terms link to <a href="vocab_and_defs.html">Vocab &amp; Defs</a>; sibling runs: <a href="eval-run.html">Eval</a>, <a href="copro-run.html">COPRO</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="gepa-run.html">GEPA</a>. Purple (<span class="key">optim</span>) marks what this run changes relative to the Eval run; all counts (18 tool calls, 7,872 official Rollouts) are illustrative for one nonconvergent walkthrough, not required behavior.
 </div>
 
 </main>

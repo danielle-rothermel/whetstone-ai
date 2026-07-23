@@ -32,8 +32,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose.
    A chip is a label + value pair; only chips carry digits on the page. */
@@ -56,8 +57,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,16 +106,17 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<!-- (1) HEADER: id + name, status badge, dek, academic-anchor aside ----------->
 <div class="cand-head">
   <h1><span class="cand-id">c07</span>Case-Marked Micro-Conlang Translation</h1>
   <span class="badge gated">GATED</span>
 </div>
+<p class="dek">Gated: the gloss table hands over the one rule that was supposed to carry difficulty.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">MTOB's paradigm shrunk to quick-test scale</span> — learn an agglutinative micro-grammar from an in-context gloss table, then translate one short phrase (constructed-language morphology).</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict bad">
-  <p><strong>GATED.</strong> This candidate scores well on structure but was refuted on the
+<!-- (2) VERDICT: round-2 standing + one-paragraph why, score chips ----------->
+<p><strong>GATED.</strong> This candidate scores well on structure but was refuted on the
   optimization path outright, and the round-2 gate is categorical: a candidate whose measurement
   story was refuted in round 1 without a concrete rescue cannot be recommended no matter how easy
   it is to build. The refutation is specific and hard to dodge. The per-instance
@@ -122,12 +124,13 @@
   so there is no hidden knowledge left for a better prompt to discover; and the one rule meant to
   carry the difficulty — that a case suffix determines subject versus object regardless of linear
   position — is the <span class="key">highest-prior rule in all of linguistics</span>, so a single
-  competent paragraph one-shots most of the gap. The only fix on offer, an MTOB-style redesign that
+  competent paragraph one-shots most of the gap.</p>
+  <p>The only fix on offer, an MTOB-style redesign that
   withholds affix semantics from the gloss, changes what the task is, which makes it a
   <span class="key">different candidate, not a rescue</span> of this one. The implementation total is
   low and academic here: even a perfect build cannot lift a gated candidate off the floor, and the
   one repo that touched this cluster offers essentially nothing reusable for morphology.</p>
-  <div class="chips">
+  <div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
     <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
@@ -137,10 +140,9 @@
     <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">7 / 16</span></span>
   </div>
-</div>
 
 <!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Learn a per-run agglutinative micro-grammar in context, then translate one phrase to a rigid template</h3>
@@ -177,7 +179,7 @@ Naive-SVO miss:     "the cat chases the dog"
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -207,7 +209,7 @@ Naive-SVO miss:     "the cat chases the dog"
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What live 2025-2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2509.21820">Can LLMs Generate and Solve Linguistic Olympiad Puzzles?</a> (Majmudar et al., EMNLP 2025)</span> — 2025 work on LLM generation and solving of Rosetta-style linguistic puzzles; informs a contamination-proof synthetic-generator design for this cluster.</li>
@@ -216,7 +218,7 @@ Naive-SVO miss:     "the cat chases the dog"
 </div>
 
 <!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -256,7 +258,7 @@ Naive-SVO miss:     "the cat chases the dog"
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
   <div class="step"><h3>Build the morphology generator from scratch</h3><p>No reusable code exists; write a seeded generator that samples roots plus a rotating inventory of case/number/tense affixes, a topic-fronting particle, and an allomorphy stratum, emitting a conlang sentence plus a tiny gloss table per instance.</p></div>
   <div class="step"><h3>Write the deterministic template filler</h3><p>Implement the oracle that maps a parsed sentence to the rigid three-to-six-word English template (fixed articles, fixed slot order) and canonicalize for exact match.</p></div>
@@ -308,6 +310,10 @@ Naive-SVO miss:     "the cat chases the dog"
     <a href="../candidates-merged.html#c07">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>. The gate is a round-1 verdict-health decision and applies regardless of implementation score.
+</div>
 
 </main>
 </body>

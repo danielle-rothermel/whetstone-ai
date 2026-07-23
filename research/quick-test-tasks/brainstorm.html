@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Task Brainstorm</title>
+<title>Quick-Test Task Brainstorm · whetstone-ai</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Task Brainstorm</h1>
+<h1>The strongest quick-test task families cluster in a few themes across independent lenses</h1>
+<p class="dek">All 76 brainstormed candidate tasks, grouped by theme A–H, each tagged with its source lens.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,15 +21,11 @@
   <span class="here">Brainstorm</span>
 </div>
 
-<div class="intro">
-  <p>The full idea pool for the quick-test task: the one cheap, single-call, exact-scored task family that validates the prompt-optimization harness (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) before the expensive HumanEval+ code-compression experiment. This page preserves all <span class="key">76 brainstormed ideas</span>, grouped by <span class="key">theme (A-H)</span>, each tagged with the <span class="key">source model lens</span> that produced it and with duplicates flagged inline. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
-</div>
+<p>The full idea pool for the quick-test task: the one cheap, single-call, exact-scored task family that validates the prompt-optimization harness (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) before the expensive HumanEval+ code-compression experiment. This page preserves all <span class="key">76 brainstormed ideas</span>, grouped by <span class="key">theme (A-H)</span>, each tagged with the <span class="key">source model lens</span> that produced it and with duplicates flagged inline. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
 
-<div class="verdict good">
-  <p><strong>The recurring signal is that the strongest task families cluster in a few places, and repeats across independent model lenses mark the robust themes.</strong> The most robust regions are <span class="key">rewrite-to-normal-form</span> (Theme D, 3-4 independent instances), <span class="key">deterministic simulation / state machines</span> (Theme E), <span class="key">invented-notation arithmetic</span> (Theme A), <span class="key">remapped-label classification</span> (Theme F), and <span class="key">canonicalization / extraction</span> (Theme G, the largest cluster and the closest analog to the project's own dr-serialize work). See <a href="landscape.html">Landscape</a> for how these 76 ideas were merged with 108 literature candidates and scored, and <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
-</div>
+<div class="summary"><b>Where the strong candidates cluster.</b> The most robust regions — repeated across independent model lenses — are <span class="key">rewrite-to-normal-form</span> (Theme D, 3–4 instances), <span class="key">deterministic simulation / state machines</span> (Theme E), <span class="key">invented-notation arithmetic</span> (Theme A), <span class="key">remapped-label classification</span> (Theme F), and <span class="key">canonicalization / extraction</span> (Theme G, the largest cluster and the closest analog to the project's own dr-serialize work). See <a href="landscape.html">Landscape</a> for the merged-and-scored pool and <a href="recommendations.html">Recommendations</a> for the adoption case.</div>
 
-<div class="section-head" id="scope"><h2>Scope and reading key</h2></div>
+<div class="section-head" id="scope"><h2>What makes a task ideal, and how is each entry tagged?</h2><span class="tag">scope · reading key</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -504,7 +501,7 @@
   </div>
 </div>
 
-<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+<div class="section-head" id="cross-cutting"><h2>What patterns recur across all the themes?</h2><span class="tag">cross-cutting observations</span></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>Most robust themes</strong> (appear repeatedly across independent lenses): <span class="key">rewrite-to-normal-form</span> (Theme D, 3-4 instances), <span class="key">deterministic simulation/state machines</span> (Theme E), invented-notation arithmetic (Theme A), remapped-label classification (Theme F), and canonicalization/extraction (Theme G, the largest cluster and the closest analog to the project's own dr-serialize work).</li>
@@ -515,7 +512,9 @@
   <li><strong>Vestigial second metric</strong> (rubric callout): <span class="key">output length in characters</span> as the compression analog, with a length-budget knob as the variance source, applies cheaply to most text-output tasks here (Themes A/D/E/G especially).</li>
 </ul>
 
-<p class="small muted space-top">Next step: these 76 ideas were merged with 108 literature candidates and scored — see <a href="landscape.html">Landscape</a> for the ranked pool and <a href="recommendations.html">Recommendations</a> for the finalist adoption case.</p>
+<div class="colophon">
+  Consolidated brainstorm of 76 candidate quick-test tasks, preserved in full and grouped by theme A–H. Each entry keeps its raw source-model lens (<code>claude-opus-4-8[1m]</code>, <code>kimi-k2p7</code>, <code>deepseek-v4-flash</code>, <code>minimax-m3</code>, <code>gpt-5.x-codex</code>, and untagged first-principles entries); duplicates and near-duplicates across the independent passes are flagged inline as a robustness signal. Authoritative criteria: <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. Next step: these 76 ideas were merged with 108 literature candidates and scored — see <a href="landscape.html">Landscape</a> for the ranked pool and <a href="recommendations.html">Recommendations</a> for the finalist adoption case.
+</div>
 
 </main>
 </body>

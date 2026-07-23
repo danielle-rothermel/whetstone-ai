@@ -7,16 +7,19 @@
 <link rel="stylesheet" href="doc.css">
 <title>Code Compression Experiment Report</title>
 <style>
-  .metric { color: var(--accent); font: 800 30px/1 var(--font-system); }
+  /* page-local; doc.css v2 tokens only */
+  .space-top { margin-top: 18px; }
+  .table-wrap { margin: 14px 0; overflow-x: auto; }
+  nav.toc .group { margin: 14px 0 6px; color: var(--muted); font: 600 11px/1.4 var(--font-system); letter-spacing: .05em; text-transform: uppercase; }
+  .metric { color: var(--accent); font: 700 30px/1 var(--font-system); }
   .label { margin-top: 7px; color: var(--muted); font: 600 11.5px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; }
-  .status { display: inline-block; padding: 2px 8px; border-radius: 999px; color: var(--accent); background: var(--accent-soft); font: 600 11.5px/1.5 var(--font-system); white-space: nowrap; }
   .muted { color: var(--muted); }
   .progress-track { height: 10px; overflow: hidden; border-radius: 999px; background: #e3e8ef; }
   .progress-fill { width: 89.19%; height: 100%; background: var(--accent); }
   .progress-label { display: flex; justify-content: space-between; margin-top: 7px; color: var(--muted); font-size: 13px; }
   .experiment { margin-top: 58px; scroll-margin-top: 24px; }
   .experiment-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 12px; border-bottom: 2px solid var(--line); }
-  .experiment-head h2 { max-width: 900px; font-size: 24px; line-height: 1.25; }
+  .experiment-head h2 { max-width: 900px; font: 700 18px/1.3 var(--font-system); }
   .experiment-kicker { margin-bottom: 5px; color: var(--muted); font: 600 12px/1.4 var(--font-system); letter-spacing: .06em; text-transform: uppercase; }
   .experiment-kicker a { text-decoration: none; }
   .linear-link { flex: none; margin-top: 3px; font: 600 13px/1.4 var(--font-system); text-decoration: none; }
@@ -25,7 +28,7 @@
   .target p:last-child { margin-bottom: 0; }
   .result-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .75fr); gap: 18px; margin-top: 18px; }
   .result-shell { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
-  .result-shell > h3 { margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--line); background: #f1f4f9; font-size: 14px; letter-spacing: .04em; }
+  .result-shell > h3 { margin: 0; padding: 13px 18px; border-bottom: 1px solid var(--line); background: #f1f4f9; font: 700 16.5px/1.3 var(--font-system); }
   .result-fields { display: grid; grid-template-columns: minmax(160px, .38fr) minmax(0, 1fr); margin: 0; }
   .result-fields dt,
   .result-fields dd { margin: 0; padding: 11px 14px; border-bottom: 1px solid var(--line); }
@@ -74,12 +77,9 @@
 </nav>
 
 <main>
-<h1>Code Compression Experiment Report</h1>
-<div class="byline">whetstone-ai · living results report · 2026-07-19</div>
-
-<div class="hero" id="overview">
-  Four experimental runs remain: an <span class="key">uncompressed baseline</span>, a <span class="key">coarse compression sweep</span>, the <span class="key">headroom Go/No-Go</span>, and a <span class="key">COPRO optimization test</span>. No run has started and no result is populated. This page is the shared report surface: each section defines the intended outcome, reserves the result fields and artifacts that will support the claim, and provides an empty progress log for implementation and run updates.
-</div>
+<h1>Four compression experiments are queued; none has run yet</h1>
+<p class="dek" id="overview">The shared report surface for baseline, coarse sweep, headroom Go/No-Go, and COPRO.</p>
+<div class="byline">whetstone-ai · 2026-07-19</div>
 
 <div class="grid-4 space-top">
   <div class="card"><div class="metric">4</div><div class="label">experiments queued</div></div>
@@ -93,6 +93,8 @@
   <div class="progress-track" aria-label="Linear project progress: 89 percent"><div class="progress-fill"></div></div>
   <div class="progress-label"><span>33 completed issues</span><span>4 non-canceled issues remain</span></div>
 </div>
+
+<div class="summary">No run has started and no result is populated. Every result field and progress log below is <span class="key">intentionally empty</span> — each section reserves the outcome, result fields, and artifacts that will support its claim once the experiment runs.</div>
 
 <div class="section-head" id="state"><h2>The result templates are ready; the experiment system is not</h2></div>
 
@@ -332,6 +334,10 @@
     <tr><td>Project target</td><td>September 24, 2026 in Linear; internal presentable-results and draft target is August 31.</td></tr>
   </tbody>
 </table>
+</div>
+
+<div class="colophon">
+  Living results report, whetstone-ai · last updated 2026-07-19. Linear issues <a href="https://linear.app/danielle-rothermel/issue/RES-7">RES-7</a>, <a href="https://linear.app/danielle-rothermel/issue/RES-8">RES-8</a>, <a href="https://linear.app/danielle-rothermel/issue/RES-2">RES-2</a>, <a href="https://linear.app/danielle-rothermel/issue/RES-3">RES-3</a>. Repository evidence: <a href="current-state-and-dependencies.html">current-state and dependency audit</a>. COPRO subsystem removed in Whetstone PR&nbsp;#55.
 </div>
 
 </main>

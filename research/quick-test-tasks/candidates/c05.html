@@ -32,8 +32,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose.
    A chip is a label + value pair; only chips carry digits on the page. */
@@ -56,8 +57,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,16 +106,17 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<!-- (1) HEADER: id + name, status badge, dek, academic-anchor aside ----------->
 <div class="cand-head">
   <h1><span class="cand-id">c05</span>Deterministic Execution &amp; State Tracking (FSM / protocol / pointer)</h1>
   <span class="badge gated">GATED</span>
 </div>
+<p class="dek">Gated: textbook conventions one-shot the gap; no trace length keeps both a floor and ceiling.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">state-machine simulation</span> — run a small deterministic FSM, message protocol, tag-system, or pointer chain and report one derived final token.</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict bad"><!-- .good = adopt/backup · .bad = gated/below-cut · plain = ranked -->
-  <p><strong>Gated: removed from contention regardless of a decent implementation score.</strong>
+<!-- (2) VERDICT: round-2 standing + one-paragraph why, score chips ----------->
+<p><strong>Gated: removed from contention regardless of a decent implementation score.</strong>
   c05 topped the mechanical round-1 sort on rubric total, and its implementation story is genuinely
   middling-to-workable — a run-verifiable permutation-composition generator plus a running-sum
   generator both exist as small, permissive, single-file libraries. But standing here is decided by a
@@ -122,14 +124,15 @@
   refutation had a concrete rescue that kept the task the same task. The named latent rules —
   AUTH-before-DATA ordering, undefined-transition fallback, monotone sequence numbers — are textbook
   protocol and interpreter conventions that a competent prompt engineer states in one shot, which
-  collapses the incremental gap the rubric depends on. The difficulty knob makes it worse: the
+  collapses the incremental gap the rubric depends on.</p>
+  <p>The difficulty knob makes it worse: the
   candidate's own cited literature shows a trace-length dilemma where long traces put the ceiling out
   of reach of a single no-scratchpad call, while short traces plus chain-of-thought leave only a
   two-or-three-rung ladder that a single demo bootstrap flattens. The proposed fixes exist, but they
-  converge on arbitrary counter-intuitive conventions — which is to say they redesign c05 into c21 or
-  c03. The gate removes it from the recommended set even though its implementation total would
+  converge on arbitrary counter-intuitive conventions — which is to say they redesign c05 into <a href="c21.html">c21</a> or
+  <a href="c03.html">c03</a>. The gate removes it from the recommended set even though its implementation total would
   otherwise place it mid-pack.</p>
-  <div class="chips">
+  <div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">28/2</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
     <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
@@ -139,10 +142,9 @@
     <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">8/16</span></span>
   </div>
-</div>
 
 <!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>The task: run one small deterministic machine, report one derived token</h3>
@@ -182,7 +184,7 @@ of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.<
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -213,7 +215,7 @@ of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.<
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What live 2025-2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2504.20771">Computational Reasoning of Large Language Models (TMBench)</a> (Wu et al., arXiv 2025)</span> — active m-tag / Turing-machine step-simulation benchmark; the closest live analogue to c05's execution core and evidence the family is current.</li>
@@ -224,7 +226,7 @@ of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.<
 </div>
 
 <!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -264,7 +266,7 @@ of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.<
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
   <div class="step"><h3>Lift a seeded generator core</h3><p>Reuse belindal/state-tracking's <code>permutation_task.py</code> (~180 LOC, MIT) as a library, or lift long-horizon-execution's <code>dict_sum_util.py</code> generator core (~130 LOC); in both cases inject seeding on the active path before use, since neither plumbs a seed by default.</p></div>
   <div class="step"><h3>Write the exact-match scoring glue outside the repo</h3><p>~60-90 LOC: roll out K actions, capture the final state (or running sum / parity) as the 0/1 oracle recomputed independently, render the prompt, single LLM call, exact string match. No oracle edits.</p></div>
@@ -323,6 +325,10 @@ of walking S0-&gt;S1-&gt;S2-&gt;S2-&gt;S3. The wrong-rule signature is legible.<
     <a href="../candidates-merged.html#c05">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>. The gate is a round-1 verdict-health decision and applies regardless of implementation score.
+</div>
 
 </main>
 </body>

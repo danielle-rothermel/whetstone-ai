@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,11 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +40,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,25 +54,30 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
-.unverified::after {
-  content: "unverified";
-  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-  border: 1px dashed var(--amber); background: var(--amber-soft);
-  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
-  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
-}
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -98,6 +93,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c21 Relational Micro-World with Invented Vocabulary</title>
@@ -105,31 +101,28 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c21</span>Relational Micro-World with Invented Vocabulary</h1>
   <span class="badge ranked">RANKED #6</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">CLUTRR-style kinship/relational QA</span> — infer relations by traversing a graph, here over nonce entities under seeded nonstandard relation properties and an invented closed answer vocabulary.</div>
+<p class="dek">CLUTRR-style kinship QA over nonce entities under a seeded relation rulebook — round 1's cleanest.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain = ranked -->
-  <p><strong>Ranked #6 of 20 after the implementation-aware rescore — round-1's outright winner, still the best theoretical task in the pool.</strong> In round 1 this was the single cleanest design: a straight sheet of top marks on the rubric and the only finalist both adversarial lenses left standing with nothing worse than minor, pinning-level caveats. What moved it down was not the task but the build. Round 1's own adaptation table demands the <span class="key">most intricate generator in the set</span> — a graph/nonce sampler, per-seed relation-property profiles, a unique-answer rejection sampler, MC/foil balancing, and stratified minibatches — which scores the moving-part axis at zero. On top of that sit <span class="key">four-plus pre-freeze calibration gates</span> (empirical ceiling tuning, naive floor, a literal-logician baseline held below roughly half, a per-rule discoverability check, and an adversarial induce-the-conventions probe), which scores the calibration axis at zero as well. Both zeros are unique among eligible top-tier candidates. The <span class="key">codebase is not the problem</span>: it rides the same run-verified prontoqa base as c18, so the reusable-codebase axis is a full mark and the skeptic-debt axis is a full mark. The saving grace is that the c18 harness is roughly four-fifths of a future c21 harness, so the backup path keeps this candidate alive at marginal cost.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
-    <span class="chip"><span class="k">TB</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">0</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">0</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">11/16</span></span>
-  </div>
+<p><strong>Ranked #6 of 20 after the implementation-aware rescore — round-1's outright winner, still the best theoretical task in the pool.</strong> In round 1 this was the single cleanest design: a straight sheet of top marks on the rubric and the only finalist both adversarial lenses left standing with nothing worse than minor, pinning-level caveats. What moved it down was not the task but the build. Round 1's own adaptation table demands the <span class="key">most intricate generator in the set</span> — a graph/nonce sampler, per-seed relation-property profiles, a unique-answer rejection sampler, MC/foil balancing, and stratified minibatches — which scores the moving-part axis at zero. On top of that sit <span class="key">four-plus pre-freeze calibration gates</span> (empirical ceiling tuning, naive floor, a literal-logician baseline held below roughly half, a per-rule discoverability check, and an adversarial induce-the-conventions probe), which scores the calibration axis at zero as well. Both zeros are unique among eligible top-tier candidates. The <span class="key">codebase is not the problem</span>: it rides the same run-verified prontoqa base as c18, so the reusable-codebase axis is a full mark and the skeptic-debt axis is a full mark. The saving grace is that the c18 harness is roughly four-fifths of a future c21 harness, so the backup path keeps this candidate alive at marginal cost.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
+  <span class="chip"><span class="k">TB</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">0</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">0</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">11/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Relational QA over a nonce graph whose relation rules and answer words are both seeded secrets</h3>
@@ -137,7 +130,7 @@
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">One seed's conventions: <code>tovv</code> is transitive and non-symmetric; two <code>tovv</code> hops map to the codeword <code>nieph</code>; <code>brell</code> is symmetric; the closed-world default for <code>tovv</code> is <code>unknown</code>. From recommendations.md; conventions are the seeded latent rules.</p>
+    <p class="aside">One seed's conventions: <code>tovv</code> is transitive and non-symmetric; two <code>tovv</code> hops map to the codeword <code>nieph</code>; <code>brell</code> is symmetric; the closed-world default for <code>tovv</code> is <code>unknown</code>. From recommendations.md; conventions are the seeded latent rules.</p>
 <pre><code>Facts:
 - Marn tovv Belu.
 - Belu tovv Sagre.
@@ -154,8 +147,7 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -183,8 +175,7 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2502.09933">MIR-Bench</a> (Yan et al., arXiv 2025)</span> — corpus tie-breaker anchor: many-shot in-context pattern/function induction, the ICL rule-induction line c21 sits in.</li>
@@ -196,8 +187,7 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -236,8 +226,7 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
   <div class="step"><h3>Build the two pinned artifacts</h3><p>A graph sampler (nonce entities plus per-seed relation-property profiles) and a traversal oracle computing exact answers; pin generator version, dataset manifest, and disjoint split identities. On the prontoqa base this maps to <code>--OOD --deduction-rule Composed --proofs-only --ordering random</code> plus <code>--disjoint-concept-names</code> for the invented vocab.</p></div>
   <div class="step"><h3>Cap hop depth and balance outcomes</h3><p>Tune hop depth down until the full-rule reference prompt reaches roughly 100%; balance the four MC outcomes and the closed-vocab answer distribution so constant-guess baselines pin low (25% MC floor).</p></div>
@@ -259,14 +248,12 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/asaparov/prontoqa">asaparov/prontoqa</a> (Apache-2.0) — deep-read notes at <a href="../repos/asaparov-prontoqa.md">repos/asaparov-prontoqa.md</a>.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status partial">partial</span>
-        the prontoqa generator was run in a fresh venv — same-seed byte-identical, different-seed varies, three ground-truth hand-checks correct — but that confirms the shared base, not c21's own relational/invented-vocab strata, rejection sampler, or calibration gates, none of which have been built or run.</li>
+      <li><span class="key">Run verification:</span> <span class="status partial">partial</span>
+        — the prontoqa generator was run in a fresh venv — same-seed byte-identical, different-seed varies, three ground-truth hand-checks correct — but that confirms the shared base, not c21's own relational/invented-vocab strata, rejection sampler, or calibration gates, none of which have been built or run.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -292,6 +279,12 @@ A naive prompt guessing symmetry answers A -> 0.</code></pre>
     <a href="../candidates-merged.html#c21">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 28 · TB 2 · I1 3 · I2 2 · I3 0 · I4 0 · I5 1 · I6 2 · Impl total 11/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations.html#c21">recommendations.md (round 1)</a> · <a href="../recommendations-round2.html#table">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c21">candidates-merged.md</a>.
+  Regenerated from <code>c21.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

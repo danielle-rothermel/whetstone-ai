@@ -32,8 +32,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose.
    A chip is a label + value pair; only chips carry digits on the page. */
@@ -56,8 +57,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,34 +106,36 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<!-- (1) HEADER: id + name, status badge, dek, academic-anchor aside ----------->
 <div class="cand-head">
   <h1><span class="cand-id">c04</span>Term-Rewriting to Normal Form</h1>
   <span class="badge ranked">RANKED #7</span>
 </div>
+<p class="dek">Strongest anti-one-shot design in the pool; a run-verified base offsets real calibration debt.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">abstract rewriting systems (ARS/TRS)</span> — apply invented productions to a start string until nothing more can fire, plus a parallel-rewriting L-system stratum.</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain = ranked -->
-  <p><strong>Ranked #7 of 20 after the implementation-aware rescore.</strong> The round-1
+<!-- (2) VERDICT: round-2 standing + one-paragraph why, score chips ----------->
+<p><strong>Ranked #7 of 20 after the implementation-aware rescore.</strong> The round-1
   landscape called this the <span class="key">strongest anti-one-shot design in the whole
   pool</span>: its latent rules are <span class="key">abstract productions over invented
   symbols</span>, so there is literally nothing for a competent prompt to guess or recall —
   the model must read the rule table and execute it. It now carries
   <span class="key">I1 = 3 on the run-verified reasoning-gym base</span> (carried over from
-  c24). That standing is tempered by real caveats: the round-1
+  <a href="c24.html">c24</a>). That standing is tempered by real caveats: the round-1
   <span class="key">too-hard risk</span> and <span class="key">char-level temp-0 noise on
   longer normal forms</span> flags, the <span class="key">I4 = 0</span> calibration burden,
-  and a <span class="key">tie-breaker of 1</span>. Provenance: c04 was initially excluded
+  and a <span class="key">tie-breaker of 1</span>.</p>
+  <p>Provenance: c04 was initially excluded
   by the round-1 tie-breaker=1 filter and was folded into the official ranking by the
   2026-07-21 amendment; scored via the same pipeline post-hoc (web discovery + desk scoring
-  with the same rubric and exercises + a deep active-path code read written to repos/), on
+  with the same rubric and exercises + a deep active-path code read written to <code>repos/</code>), on
   equal terms with the other candidates. Run-verification status: c04's best repo,
   open-thought/reasoning-gym, was run-verified during round 2 (under c24: same-seed
   byte-identical, 6/6 independent ground-truth checks), so repo-level verification carries
   over; the candidate-specific rewrite-system task logic is authored on top of that reused
   infrastructure.</p>
-  <div class="chips">
+  <div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">26</span></span>
     <span class="chip"><span class="k">TB</span><span class="v">1</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
@@ -143,10 +146,9 @@
     <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">11</span></span>
   </div>
-</div>
 
 <!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Execute a seeded abstract rewrite system to its unique normal form</h3>
@@ -188,7 +190,7 @@ fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches Ð
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -219,7 +221,7 @@ fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches Ð
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025–2026)</h2></div>
+<div class="section-head"><h2>What live 2025–2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2411.06409">Zhang, Mitterwallner et al., Automated Strategy Invention for Confluence of Term Rewrite Systems</a> (arXiv:2411.06409, 2024)</span> — automated confluence-strategy invention; directly supports the generator's need to certify unique normal forms.</li>
@@ -229,7 +231,7 @@ fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches Ð
 </div>
 
 <!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -269,7 +271,7 @@ fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches Ð
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <p class="small muted">Implementation scoring was produced by the <strong>same pipeline</strong> as every other candidate — web discovery + desk scoring with the same rubric and exercises + a deep active-path code read written to repos/ — and folded into the official ranking by the 2026-07-21 amendment. Run-verification: open-thought/reasoning-gym was <strong>run-verified during round 2</strong> (under c24: same-seed byte-identical, 6/6 independent ground-truth checks), so repo-level verification carries over; the c04-specific rewrite-system logic is authored on top of that reused, verified infrastructure.</p>
 <div class="steps">
   <div class="step"><h3>Adopt reasoning-gym as substrate</h3><p>Reuse <code>ProceduralDataset</code>, per-instance <code>Random(seed+idx)</code> seeding, <code>register_dataset</code>, and the exact-match <code>score_answer</code> (already strict 0/1)</p></div>
@@ -325,6 +327,10 @@ fresh ØÞ/ÞØ pair against its neighbour). Only iterate-to-fixpoint reaches Ð
     <a href="../candidates-merged.html#c04">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>. c04 was folded into the official ranking by the 2026-07-21 amendment; scored via the same pipeline post-hoc, on equal terms with the other candidates.
+</div>
 
 </main>
 </body>

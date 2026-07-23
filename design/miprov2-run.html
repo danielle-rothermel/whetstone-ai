@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>MIPROv2 Run Design</title>
+<title>MIPROv2 Run Design · whetstone-ai</title>
 </head>
 <body>
 <main>
-<h1>MIPROv2 Run Design</h1>
+<h1>The optimizer only proposes; Whetstone evaluates and records every step</h1>
+<p class="dek">How a MIPROv2 optimization run drives external evaluation across an immutable step boundary.</p>
 <div class="byline">whetstone-ai · 2026-07-22</div>
 
 <div class="family-nav">
@@ -24,11 +25,9 @@
   <a href="quick-test-rubric.html">Quick Test</a>
 </div>
 
-<div class="intro">
-  <p>A MIPROv2 <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> is an ordered history of single <a class="term-ref" href="#local-optimization-step">Optimization Steps</a>: initialize and bootstrap candidate pools, fully evaluate the default program, run seeded TPE minibatch trials, periodically and finally promote the best eligible combination to full evaluation, then complete with ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>. Each optimizer invocation only proposes candidates and an <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a>. Whetstone validates, materializes and evaluates outside that invocation, persists an immutable <a class="term-ref" href="#local-optimization-step-result">Optimization Step Result</a>, and passes its references to the next invocation.</p>
-</div>
+<p>A MIPROv2 <a class="term-ref" href="vocab_and_defs.html#term-optimization-run">Optimization Run</a> is an ordered history of single <a class="term-ref" href="#local-optimization-step">Optimization Steps</a>: initialize and bootstrap candidate pools, fully evaluate the default program, run seeded TPE minibatch trials, periodically and finally promote the best eligible combination to full evaluation, then complete with ordered <a class="term-ref" href="vocab_and_defs.html#term-optimization-proposal">Optimization Proposals</a>. Each optimizer invocation only proposes candidates and an <a class="term-ref" href="#local-evaluation-intent">Evaluation Intent</a>. Whetstone validates, materializes and evaluates outside that invocation, persists an immutable <a class="term-ref" href="#local-optimization-step-result">Optimization Step Result</a>, and passes its references to the next invocation.</p>
 
-<p class="small muted">Purple marks the optimization machinery; everything unmarked follows the Eval run. The step boundary is deliberate: optimizer code never executes evaluation.</p>
+<p class="aside">Purple marks the optimization machinery; everything unmarked follows the Eval run. The step boundary is deliberate: optimizer code never executes evaluation.</p>
 
 <div class="callout">
   <b>Algorithm-local vocabulary</b> — these anchors describe this MIPROv2 protocol without adding shared Whetstone vocabulary:
@@ -58,7 +57,7 @@
   A <a class="term-ref" href="vocab_and_defs.html#term-content-hash">Content Hash</a> covers a complete persisted object for storage integrity and never substitutes for these identities.
 </div>
 
-<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<div class="section-head" id="target"><h2>What does one concrete run fix?</h2><span class="tag">example setup</span></div>
 <h3>Registry: hyperparameters, evaluation configuration, output contract and derived counts</h3>
 <div class="table-wrap">
 <table>
@@ -126,7 +125,7 @@
   </div>
 </div>
 
-<div class="section-head" id="specified"><h2>Run Configurations and Step Boundary</h2></div>
+<div class="section-head" id="specified"><h2>Where does the optimizer stop and Whetstone begin?</h2><span class="tag">run configs · step boundary</span></div>
 
 <div class="plane">
   <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> <span class="sub">· identical to the Eval experiment</span></div>
@@ -266,7 +265,7 @@
   <b>Boundary invariant.</b> An optimizer invocation cannot validate a final graph, materialize it, select task/repeat work, execute a Rollout, or manufacture a score. Whetstone resolves each Evaluation Intent against the exact referenced Eval Config, performs those operations through the ordinary evaluation path, and records the evidence in the Step Result. A retry with the same immutable inputs must recover or reproduce the same transition identity; later state is carried by a new object reference, never mutation.
 </div>
 
-<div class="section-head" id="run"><h2>Full Run Walkthrough</h2></div>
+<div class="section-head" id="run"><h2>What happens at each step, start to finish?</h2><span class="tag">full run walkthrough</span></div>
 
 <div class="run">
   <div class="tick">
@@ -350,10 +349,10 @@
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What Lands on the Plot</h2></div>
+<div class="section-head" id="output"><h2>What lands on the official plot?</h2></div>
 <p>All three returned Optimization Proposals receive final official evaluation. In the nonconvergent case, they produce three new four-point budget-response curves — 12 certified Rollout Aggregates, each over 164 tasks × 3 repeats — beside eligible template A/B baselines. The optimization history remains queryable as measured search cost and record-local provenance but stays outside the official plot: bootstrap measurements, the default-program full score, repeated minibatch observations, their per-combination means, and periodic/final promotion scores are not certified by being used in the study.</p>
 
-<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="section-head" id="notes"><h2>What invariants hold across the whole run?</h2><span class="tag">additional notes</span></div>
 <div class="grid-3">
   <div class="card optim">
     <h3>One mutation, two internal axes</h3>
@@ -395,6 +394,10 @@
       <li>The final official evaluation covers every returned proposal and is not a reuse of internal promotion evidence.</li>
     </ul>
   </div>
+</div>
+
+<div class="colophon">
+  Design specification for the whetstone-ai MIPROv2 optimization run. All hyperparameter values, task counts, and derived totals are one illustrative configuration chosen to make the arithmetic concrete; a real run substitutes its own registered values. Algorithm-local terms (Optimization Step, Evaluation Intent, and the identity documents) name this protocol only and add no shared Whetstone vocabulary — shared terms link to <a href="vocab_and_defs.html">Vocab &amp; Defs</a>. Purple (<span class="key">--optim</span>) marks optimizer-owned machinery; green marks the Whetstone evaluation boundary. Sibling run designs: <a href="eval-run.html">Eval</a>, <a href="copro-run.html">COPRO</a>, <a href="gepa-run.html">GEPA</a>, <a href="codex-agent-run.html">Codex CLI agent</a>.
 </div>
 
 </main>

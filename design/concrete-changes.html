@@ -10,7 +10,8 @@
 </head>
 <body>
 <main>
-<h1>Concrete Changes</h1>
+<h1>Nine bounded workstreams turn the shared vocabulary into a breaking cross-repo release</h1>
+<p class="dek">From identity hashing to official selection — versioned PyPI deps, no compatibility shims.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -28,7 +29,7 @@
   <p>This page turns the shared <a href="vocab_and_defs.html">vocabulary and definitions</a> into nine bounded implementation workstreams: dr-serialize identity; immutable storage; platform integration, orchestration, retry, and concurrency; dr-providers transport ownership; dr-code evaluation-kernel ownership; graph/Whetstone binding; the durable optimizer and Reward protocol; Objectives and official selection; and authority, certification, and publication. A cross-repository breaking release sequence makes those contracts usable through versioned PyPI dependencies without compatibility shims or Git revision pins.</p>
 </div>
 
-<div class="section-head" id="decisions"><h2>Decisions at a Glance</h2></div>
+<div class="section-head" id="decisions"><h2>What are the load-bearing decisions?</h2><span class="tag">at a glance</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -63,7 +64,7 @@
   </div>
 </div>
 
-<div class="callout warn">
+<div class="callout">
   <strong>These hashes answer different questions.</strong> An <a class="term-ref" href="vocab_and_defs.html#term-identity-hash">Identity Hash</a> asks whether two values have the same domain identity under a named schema version. A <a class="term-ref" href="vocab_and_defs.html#term-content-hash">Content Hash</a> asks whether two complete persisted records are byte-for-byte equivalent after canonicalization. Neither may substitute for the other.
 </div>
 
@@ -113,7 +114,7 @@
 
 <div class="section-head" id="identity-reset"><h2>Coordinated Breaking Identity Reset</h2></div>
 
-<div class="verdict">
+<div class="summary">
   <p>Adopt the new identity contract as one coordinated break across dr-serialize, dr-graph, dr-code, dr-platform, dr-providers where they expose identity-bearing values, and whetstone-ai. Update producers, consumers, fixtures, and stored test values together.</p>
   <p><strong>No compatibility aliases, legacy-hash acceptance, or dual-read paths.</strong> Old and new identities are intentionally distinct. Any persisted development data, caches, indexes, or references keyed by replaced identities must be regenerated or cleanly reseeded.</p>
 </div>
@@ -244,7 +245,7 @@
   </div>
 </div>
 
-<div class="callout warn">
+<div class="callout">
   <strong>Accepted external-effect ambiguity.</strong> A crash or ambiguous timeout after the provider effect but before the DBOS checkpoint may create duplicate physical calls or billing. Only the checkpointed physical outcome is retained. The design does not guarantee exactly-once provider effects or evidence for every billed call.
 </div>
 
@@ -254,7 +255,7 @@
 
 <div class="section-head" id="operator-retry-gate"><h2><a class="term-ref" href="vocab_and_defs.html#term-operator-retry">Operator Retry</a> Gate</h2></div>
 
-<div class="verdict">
+<div class="summary">
   <p>A Whetstone operator command or gateway first verifies that the platform Stage is <code>FAILED</code> and the <a class="term-ref" href="vocab_and_defs.html#term-rollout-execution-key">Rollout Execution Key</a> is unbound, then invokes the rebuilt dr-platform <code>retry_stage</code>. The retried Whetstone executor repeats the binding check before any new semantic effect because a concurrent actor may have won after the gateway check.</p>
   <p><strong>The <a class="term-ref" href="vocab_and_defs.html#term-result-store">Result Store</a>'s atomic binding is authoritative.</strong> An unbound key may acquire one reference and the same reference may replay idempotently. A different-reference conflict preserves the existing binding; it cannot overwrite the winner, authorize replacement, or turn the conflicting candidate into the terminal Result. An orphan <a class="term-ref" href="vocab_and_defs.html#term-object-reference">Object Reference</a> that was persisted but never bound does not itself prohibit operator retry.</p>
 </div>
@@ -289,7 +290,7 @@
   </div>
 </div>
 
-<div class="callout warn">
+<div class="callout">
   <strong><a class="term-ref" href="vocab_and_defs.html#term-provider-concurrency-control">Provider Concurrency Control</a> non-goals.</strong> This workstream does not implement exact call-boundary concurrency, requests-per-minute or tokens-per-minute accounting, token reservation, global, cross-stage, or cross-version quotas, strict fairness, adaptive header-driven limiting, or credential-aware quota identity.
 </div>
 
@@ -403,7 +404,7 @@
 </table>
 </div>
 
-<div class="callout warn">
+<div class="callout">
   <strong>No authoritative optimizer pickle.</strong> An adapter may use transient in-process objects or persist a diagnostic snapshot, but no opaque mutable optimizer pickle may establish current Step, history, accepted candidates, budget, or restart position. Only validated immutable requests, results, and referenced state/history/evidence objects are authoritative.
 </div>
 
@@ -420,7 +421,7 @@
 
 <p>Implement <a class="term-ref" href="vocab_and_defs.html#term-evaluation-authority">Evaluation Authority</a>, <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> with one <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Role</a> field, <a class="term-ref" href="vocab_and_defs.html#term-internal-evaluation">Internal Evaluation</a>, <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a>, immutable <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Records</a>, and <a class="term-ref" href="vocab_and_defs.html#term-official-plot-manifest">Official Plot Manifests</a>. The authority certifies ordinary Rollout Result references in the Official Evaluation Record; there is no distinct result role or type for official evidence. Every record owns typed, record-local <a class="term-ref" href="vocab_and_defs.html#term-provenance">Provenance</a> fields rather than importing a universal Provenance class.</p>
 
-<div class="section-head" id="integration-boundaries"><h2>Integration and Ownership</h2></div>
+<div class="section-head" id="integration-boundaries"><h2>Who owns what across the repositories?</h2><span class="tag">integration and ownership</span></div>
 
 <div class="flow">
   <div class="plane">
@@ -510,7 +511,7 @@
   <strong>Release before real runs.</strong> Publish every dependency repository publicly and publish its package to PyPI before executing real campaigns. Replace Git revision dependencies with released package versions, lock the resolved versions, and record those exact versions in execution and environment provenance.
 </div>
 
-<div class="section-head" id="implementation-order"><h2>Implementation Order</h2></div>
+<div class="section-head" id="implementation-order"><h2>In what order should this be built?</h2><span class="tag">implementation order</span></div>
 
 <div class="steps">
   <div class="step">
@@ -579,7 +580,7 @@
   </div>
 </div>
 
-<div class="section-head" id="acceptance-criteria"><h2>Acceptance Criteria</h2></div>
+<div class="section-head" id="acceptance-criteria"><h2>How do we know each workstream is done?</h2><span class="tag">acceptance criteria</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -709,7 +710,7 @@
   </ul>
 </div>
 
-<div class="section-head" id="implementation-implications"><h2>Implementation Implications</h2></div>
+<div class="section-head" id="implementation-implications"><h2>What follows from these changes downstream?</h2><span class="tag">implementation implications</span></div>
 
 <div class="grid-3">
   <div class="card">
@@ -724,6 +725,10 @@
     <h3>Policy stays above storage</h3>
     <p>dr-store guarantees immutable verified content and one-way bindings. Whetstone decides which key may be bound, what constitutes a terminal result, and which evaluation is official.</p>
   </div>
+</div>
+
+<div class="colophon">
+  Whetstone design family · 2026-07-21 · the implementation plan behind the shared <a href="vocab_and_defs.html">Vocab &amp; Defs</a>. Nine workstreams span dr-serialize, dr-store, dr-platform, dr-providers, dr-code, dr-graph, and whetstone-ai as one coordinated breaking release — no compatibility shims or Git-revision pins. Sibling run designs: <a href="eval-run.html">Eval</a>, <a href="copro-run.html">COPRO</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="gepa-run.html">GEPA</a>, <a href="codex-agent-run.html">Codex CLI agent</a>.
 </div>
 
 </main>

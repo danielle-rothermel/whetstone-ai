@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Candidates: Constructed-Language Translation &amp; Layered Ciphers</title>
+<title>whetstone-ai · Synthetic generators beat published benchmarks for conlang and cipher quick-tests</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Candidates: Constructed-Language Translation &amp; Layered Ciphers</h1>
+<h1>Synthetic generators, not published benchmarks, fit the conlang/cipher quick-test</h1>
+<p class="dek">Twelve candidates for constructed-language translation and layered ciphers, scored against the rubric.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,19 +21,15 @@
   <span class="here">Conlang &amp; ciphers</span>
 </div>
 
-<div class="intro">
-  <p>Breadth-focused literature scan for the whetstone-ai quick-test task — the cheap, single-call, exact-scored task that validates the COPRO / MIPROv2 / GEPA / Codex-agent optimizers before the HumanEval+ code-compression run. Domain seed: <span class="key">constructed-language translation and layered ciphers/encodings</span> (brainstorm Themes B &amp; C). Twelve candidates below, unranked, each tagged <code>existing-benchmark</code>, <code>adaptation</code>, or <code>synthetic-family</code>. Scored against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+<p>Breadth-focused literature scan for the whetstone-ai quick-test task — the cheap, single-call, exact-scored task that validates the COPRO / MIPROv2 / GEPA / Codex-agent optimizers before the HumanEval+ code-compression run. Domain seed: <span class="key">constructed-language translation and layered ciphers/encodings</span> (brainstorm Themes B &amp; C). Twelve candidates below, unranked, each tagged <code>existing-benchmark</code>, <code>adaptation</code>, or <code>synthetic-family</code>. Scored against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+
+<p><b>The deployable winners are synthetic generators, not the published benchmarks.</b> The best translation-flavor fits are <span class="key">#8 synthetic Rosetta/Match-Up MC</span>, <span class="key">#7 case-marked micro-language</span>, and <span class="key">#4 ConLang generator</span> — all synthetic, exact-scorable, latent-rule-decomposed, contamination-proof. The best cipher-flavor fits are <span class="key">#9 composable structural cipher chain → closed vocab</span> and <span class="key">#6 novel-cipher subset</span>, but only when outputs are snapped to a closed vocabulary or MC. The named benchmarks (MTOB, LingOly, CipherBank) contribute paradigm, format library, and realism, but each fails the rubric as-shipped on long inputs, soft scoring, or contamination.</p>
+
+<div class="callout">
+  <b>Two universal caveats.</b> (1) <span class="key">Criterion 5 — char noise:</span> the cipher literature is unanimous that even reasoning models sit at ~40-45% exact-match on char-level ciphers because LLMs do char-level bijections stochastically, so temp-0 outputs are noisy and prompt effects get swamped. Every cipher/char candidate must move noise out of the score via closed-vocabulary nearest-match snapping or MC. (2) <span class="key">Criterion 4 — one-shot guessability:</span> every translation candidate must stack ≥3 interacting latent rules where the <i>interaction/precedence</i> is the load-bearing hard rule, not any single affix or cipher layer. Constructed-language/morphology candidates fit the rubric better than raw ciphers because their rules are lexical/structural, not per-character arithmetic.
 </div>
 
-<div class="verdict good">
-  <p><strong>The deployable winners are synthetic generators, not the published benchmarks.</strong> The best translation-flavor fits are <span class="key">#8 synthetic Rosetta/Match-Up MC</span>, <span class="key">#7 case-marked micro-language</span>, and <span class="key">#4 ConLang generator</span> — all synthetic, exact-scorable, latent-rule-decomposed, contamination-proof. The best cipher-flavor fits are <span class="key">#9 composable structural cipher chain → closed vocab</span> and <span class="key">#6 novel-cipher subset</span>, but only when outputs are snapped to a closed vocabulary or MC. The named benchmarks (MTOB, LingOly, CipherBank) contribute paradigm, format library, and realism, but each fails the rubric as-shipped on long inputs, soft scoring, or contamination.</p>
-</div>
-
-<div class="callout warn">
-  <strong>Two universal caveats.</strong> (1) <span class="key">Criterion 5 — char noise:</span> the cipher literature is unanimous that even reasoning models sit at ~40-45% exact-match on char-level ciphers because LLMs do char-level bijections stochastically, so temp-0 outputs are noisy and prompt effects get swamped. Every cipher/char candidate must move noise out of the score via closed-vocabulary nearest-match snapping or MC. (2) <span class="key">Criterion 4 — one-shot guessability:</span> every translation candidate must stack ≥3 interacting latent rules where the <em>interaction/precedence</em> is the load-bearing hard rule, not any single affix or cipher layer. Constructed-language/morphology candidates fit the rubric better than raw ciphers because their rules are lexical/structural, not per-character arithmetic.</p>
-</div>
-
-<div class="section-head" id="rubric-anchors"><h2>Rubric anchors used to score fit</h2></div>
+<div class="section-head" id="rubric-anchors"><h2>Which rubric criteria score fit?</h2></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>1.</strong> Single LLM-call node + one eval node (no encoder→decoder chain).</li>
@@ -48,7 +45,7 @@
   <li><strong>12.</strong> Few-shot demos measurably help.</li>
 </ul>
 
-<div class="section-head" id="deployable"><h2>Deployable synthetic families</h2></div>
+<div class="section-head" id="deployable"><h2>Which synthetic families are deployable as-is?</h2></div>
 
 <div class="card">
   <h3>#7 · Synthetic Case-Marked Micro-Language Translation <span class="small muted">synthetic-family · Theme B</span></h3>
@@ -90,7 +87,7 @@
   <p class="small muted">Sources: LINGOLY (2024) — https://arxiv.org/abs/2406.06196 · Reasoning Over the Glyphs: Decipherment of Rare Scripts (2025) — https://arxiv.org/pdf/2501.17785</p>
 </div>
 
-<div class="section-head" id="benchmarks"><h2>Existing benchmarks — usable only after adaptation</h2></div>
+<div class="section-head" id="benchmarks"><h2>Which existing benchmarks need adaptation first?</h2></div>
 
 <div class="card">
   <h3>#2 · LingOly — Olympiad-Level Linguistic Reasoning Puzzles <span class="small muted">existing-benchmark</span></h3>
@@ -132,7 +129,7 @@
   <p class="small muted">Sources: SIGMORPHON 2019 Shared Task (cross-lingual inflection) — https://arxiv.org/abs/1910.11493 · CoNLL-SIGMORPHON 2018 (103 languages) — https://arxiv.org/pdf/1810.07125 · SIGMORPHON shared-tasks index — https://sigmorphon.github.io/sharedtasks/</p>
 </div>
 
-<div class="section-head" id="inspiration"><h2>Inspiration and evidence — not deployable as-is</h2></div>
+<div class="section-head" id="inspiration"><h2>Which sources are inspiration only, not deployable?</h2></div>
 
 <div class="card">
   <h3>#1 · MTOB — Machine Translation from One Book (Kalamang) <span class="small muted">adaptation</span></h3>
@@ -156,7 +153,7 @@
   <p class="small muted">Sources: StringLLM (2024) — https://arxiv.org/pdf/2410.01208 · CUTE (2024) — https://arxiv.org/pdf/2409.15452 · Counting Ability of LLMs and Impact of Tokenization (2024) — https://arxiv.org/html/2410.19730v2 · Why Do LLMs Struggle to Count Letters? (2024) — https://arxiv.org/html/2412.18626v1 · Enhancing LLM Character-Level Manipulation via Divide and Conquer (2025) — https://arxiv.org/pdf/2502.08180</p>
 </div>
 
-<div class="section-head" id="synthesis"><h2>Cross-cutting synthesis</h2></div>
+<div class="section-head" id="synthesis"><h2>What is the cross-cutting synthesis?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -176,7 +173,11 @@
 </div>
 
 <div class="callout">
-  <strong>Two guardrails restated for the generator design.</strong> <span class="key">Criterion 5:</span> every cipher/char candidate must move noise out of the score via closed-vocab snapping or MC. <span class="key">Criterion 4:</span> every translation candidate must guard one-shot guessability by stacking ≥3 interacting latent rules where the interaction/precedence is the load-bearing hard rule, not any single affix or cipher layer.
+  <b>Two guardrails restated for the generator design.</b> <span class="key">Criterion 5:</span> every cipher/char candidate must move noise out of the score via closed-vocab snapping or MC. <span class="key">Criterion 4:</span> every translation candidate must guard one-shot guessability by stacking ≥3 interacting latent rules where the interaction/precedence is the load-bearing hard rule, not any single affix or cipher layer.
+</div>
+
+<div class="colophon">
+  Sources are listed per-candidate above (arXiv / ACL / project links, MTOB, LingOly, CipherBank, CipherBench, SIGMORPHON). Not ranked; breadth-focused scan, 12 candidates.
 </div>
 
 </main>

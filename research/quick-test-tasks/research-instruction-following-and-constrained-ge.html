@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Instruction Following &amp; Constrained Generation as Quick-Test Task Candidates</title>
+<title>whetstone-ai · Instruction following is a strong quick-test fit with one fixed adaptation tax</title>
 </head>
 <body>
 <main>
-<h1>Instruction Following &amp; Constrained Generation as Quick-Test Task Candidates</h1>
+<h1>Instruction following fits the quick-test rubric well, at one fixed adaptation cost</h1>
+<p class="dek">Twelve IFEval-style constrained-generation candidates surveyed for prompt-optimizer validation.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,15 +21,11 @@
   <span class="here">Instruction following</span>
 </div>
 
-<div class="intro">
-  <p>This surveys IFEval-style instruction-following and constrained-generation benchmarks for use or adaptation as the cheap quick-test task that validates prompt optimizers (COPRO, MIPROv2, GEPA, agentic) against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. Breadth over depth: <span class="key">12 candidates</span>, not ranked.</p>
-</div>
+<p>This surveys IFEval-style instruction-following and constrained-generation benchmarks for use or adaptation as the cheap quick-test task that validates prompt optimizers (COPRO, MIPROv2, GEPA, agentic) against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. Breadth over depth: <span class="key">12 candidates</span>, not ranked.</p>
 
-<div class="verdict good">
-  <p><strong>The domain is a strong structural match, with one fixed adaptation tax.</strong> Verifiable instructions are checked by <span class="key">deterministic Python functions</span> (no judge LLM, no sandbox), and each instruction is an <span class="key">independent latent rule</span> that adds score when the prompt captures it (criterion 10). The recommended shape is a <span class="key">synthetic multi-atom constrained micro-generation</span>: base task "produce a short answer," plus 3-4 stacked verifiable atoms, scored as fraction-of-atoms-satisfied. Every candidate needs the same three fixes: <span class="key">bound outputs to short strings</span> (most literature scores paragraphs, violating criterion 3), <span class="key">restrict to the code-verifiable subset</span> (many benchmarks lean on an LLM judge, disqualified by criterion 2), and <span class="key">regenerate synthetically</span> to dodge contamination (criterion 8).</p>
-</div>
+<p><b>The domain is a strong structural match, with one fixed adaptation tax.</b> Verifiable instructions are checked by <span class="key">deterministic Python functions</span> (no judge LLM, no sandbox), and each instruction is an <span class="key">independent latent rule</span> that adds score when the prompt captures it (criterion 10). The recommended shape is a <span class="key">synthetic multi-atom constrained micro-generation</span>: base task "produce a short answer," plus 3-4 stacked verifiable atoms, scored as fraction-of-atoms-satisfied. Every candidate needs the same three fixes: <span class="key">bound outputs to short strings</span> (most literature scores paragraphs, violating criterion 3), <span class="key">restrict to the code-verifiable subset</span> (many benchmarks lean on an LLM judge, disqualified by criterion 2), and <span class="key">regenerate synthetically</span> to dodge contamination (criterion 8).</p>
 
-<div class="section-head" id="fit"><h2>Why this domain fits the rubric, and where it strains</h2></div>
+<div class="section-head" id="fit"><h2>Why does this domain fit the rubric, and where does it strain?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -50,7 +47,7 @@
   </div>
 </div>
 
-<div class="section-head" id="table"><h2>All 12 candidates at a glance</h2></div>
+<div class="section-head" id="table"><h2>How do all 12 candidates compare at a glance?</h2></div>
 
 <p class="small muted">Not ranked. "Off-the-shelf generator" = synthetic, exact, compositional by construction; "mechanic" = borrow the method, not the scorer; "components" = mine the checker functions only.</p>
 
@@ -74,7 +71,7 @@
 </table>
 </div>
 
-<div class="section-head" id="generators"><h2>Off-the-shelf generators: synthetic, exact, compositional</h2></div>
+<div class="section-head" id="generators"><h2>Which sources are off-the-shelf generators?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -107,7 +104,7 @@
   </div>
 </div>
 
-<div class="section-head" id="mechanics"><h2>Design mechanics to borrow (adopt method, not scorer)</h2></div>
+<div class="section-head" id="mechanics"><h2>Which design mechanics are worth borrowing?</h2><span class="tag">adopt method, not scorer</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -140,7 +137,7 @@
   </div>
 </div>
 
-<div class="section-head" id="authority"><h2>Authority / priority variant (Theme H, hot 2025-2026)</h2></div>
+<div class="section-head" id="authority"><h2>What is the authority/priority variant?</h2><span class="tag">Theme H, hot 2025-2026</span></div>
 
 <div class="card">
   <h3>9 · IHEval — instruction hierarchy: system vs user vs tool</h3>
@@ -150,7 +147,7 @@
   <p><span class="key">Rubric fit / weaknesses:</span> Very clean deterministic scoring (criterion 2), naturally short outputs, strong 2025-2026 research interest (tie-breaker), and diagnostic failures ("model obeyed the wrong authority"). Weakness: the default-prompt-scores-low criterion (4) is only satisfied if base models genuinely mis-prioritize — literature ("Control Illusion") says they <em>do</em>, which is favorable, but you must verify a meaningful, <em>incrementally closable</em> gap rather than a binary the model either gets or doesn't. Fewer independent rules than the pure-constraint tasks (may need combining with format atoms for enough latent dimensions).</p>
 </div>
 
-<div class="section-head" id="floor"><h2>Low-floor and single-axis sources</h2></div>
+<div class="section-head" id="floor"><h2>Which sources give the strongest low-floor guarantees?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -169,7 +166,7 @@
   </div>
 </div>
 
-<div class="section-head" id="components"><h2>Verifier components to mine</h2></div>
+<div class="section-head" id="components"><h2>Which verifier components are worth mining?</h2></div>
 
 <div class="card">
   <h3>12 · RewardBench 2 "Precise Instruction Following" / IF-RewardBench</h3>
@@ -179,7 +176,7 @@
   <p><span class="key">Rubric fit / weaknesses:</span> Provides ready deterministic checkers (criterion 2) that produce short outputs (criterion 3) and clean negatives for the failure-path machinery (criterion 13). The forbidden-letter style constraints are hard for small models but capturable by better prompts (good for criteria 4, 12). Weakness: it's a reward-model benchmark, not a generation task — you're mining components, not adopting it wholesale; single-constraint atoms need to be composed to satisfy criterion 10.</p>
 </div>
 
-<div class="section-head" id="synthesis"><h2>Cross-cutting synthesis for the designer</h2></div>
+<div class="section-head" id="synthesis"><h2>What should the designer actually adopt?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -202,7 +199,9 @@
   </div>
 </div>
 
-<p class="small muted space-top">Domain fit against the full rubric: see the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. For where this domain sits among all eight search domains, see the <a href="landscape.html">Landscape</a>; for the adoption case, see <a href="recommendations.html">Recommendations</a>.</p>
+<div class="colophon">
+  Domain fit against the full rubric: see the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. For where this domain sits among all eight search domains, see the <a href="landscape.html">Landscape</a>; for the adoption case, see <a href="recommendations.html">Recommendations</a>.
+</div>
 
 </main>
 </body>

@@ -5,12 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
-<link rel="stylesheet" href="flow.css">
-<title>Synthetic Rule-Induction &amp; Compositional Generalization: Task Candidates</title>
+<style>
+  /* page-local; doc.css tokens only */
+  .family-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 28px; }
+  .family-nav a, .family-nav span.here {
+    font: 600 12.5px/1.4 var(--font-system); padding: 4px 12px; border-radius: 999px;
+    border: 1px solid var(--line); text-decoration: none; color: var(--accent); background: var(--surface);
+  }
+  .family-nav span.here { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .status { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font: 600 11px/1.6 var(--font-mono); background: var(--green-soft); color: var(--green); }
+</style>
+<title>Generator-native rule-induction tasks need the least adaptation to fit the rubric</title>
 </head>
 <body>
 <main>
-<h1>Synthetic Rule-Induction &amp; Compositional Generalization: Task Candidates</h1>
+
+<h1>Generator-native rule-induction tasks need the least adaptation to fit the rubric</h1>
+<p class="dek">Twelve candidates for synthetic rule-induction and compositional generalization, judged against the quick-test rubric.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,19 +31,10 @@
   <span class="here">Rule induction</span>
 </div>
 
-<div class="intro">
-  <p>A breadth-focused literature scan for existing tasks, benchmarks, and dataset generators that could be used or adapted as the <em>quick-test</em> task for the whetstone-ai prompt-optimizer harness (COPRO, MIPROv2, GEPA, Codex agent), judged against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. Twelve candidates plus adjacent leads, not ranked.</p>
-</div>
+<div class="section-head"><h2>What does the rubric demand of a rule-induction task?</h2></div>
+<p>A breadth-focused scan for tasks, benchmarks, and dataset generators that could be used or adapted as the <i>quick-test</i> task for the whetstone-ai prompt-optimizer harness (COPRO, MIPROv2, GEPA, Codex agent), judged against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a> — the authority for every verdict below. Twelve candidates plus adjacent leads, not ranked.</p>
 
-<div class="verdict good">
-  <p><strong>The most rubric-aligned families are generator-native rule-induction tasks.</strong> Five candidates — <span class="key">PCFG SET</span>, <span class="key">InductionBench</span>, <span class="key">List Functions</span>, <span class="key">Boolean Concept Learning</span>, and <span class="key">ICL Ciphers</span> — already ship exact ground truth, a demo format, and a complexity dial, so they minimize adaptation. Two universal fixes apply to nearly all candidates: bound output to one MC letter or short token (C2/C3), and re-seed the latent key per run (C8). Two traps recur: the <span class="key">ceiling-reachability trap</span> (the hardest tasks may have no ~100% prompt, killing C4's headroom) and the <span class="key">one-shot-guessability trap</span> (single ciphers, single-rule concepts, and "just use CoT" tasks are one-shot solvable). Prioritize the generator-native five for a first prototype, restricted to the easy end of each complexity hierarchy.</p>
-</div>
-
-<div class="section-head" id="rubric"><h2>What the rubric demands</h2></div>
-
-<p>The <a href="../../design/quick-test-rubric.html">rubric</a> is the authority. Every candidate below is judged against these load-bearing criteria.</p>
-
-<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
+<ul class="card">
   <li><span class="key">C1/C2/C3 (cheap)</span> — single LLM call, exact deterministic programmatic scoring (no sandbox), output bounded to multiple-choice or a few words / short token sequence.</li>
   <li><span class="key">C4 (incremental gap)</span> — default prompt scores well below a known ceiling, and the gap closes in steps; the best prompt is not one-shot guessable by a competent prompt engineer.</li>
   <li><span class="key">C5 (resolvable at n=10-20, temp 0)</span> — effect size of a ≥10pt prompt change must exceed residual noise on a tiny eval.</li>
@@ -45,157 +47,160 @@
 </ul>
 
 <div class="callout">
-  <strong>Recurring adaptation pattern.</strong> Because almost all published benchmarks are fixed corpora, contamination (C8) and one-shot-guessability (C4) are the two dimensions that most often need engineering. The winning move for most candidates: (a) keep the task <em>generator</em> but discard the published split, (b) re-key / re-seed the latent rules per run, (c) bound output to a single MC letter or one short token, and (d) tune rule count so the naive-prompt floor sits well below the write-the-rules-out ceiling.
+<b>The most rubric-aligned families are generator-native rule-induction tasks.</b> Five candidates — <span class="key">PCFG SET</span>, <span class="key">InductionBench</span>, <span class="key">List Functions</span>, <span class="key">Boolean Concept Learning</span>, and <span class="key">ICL Ciphers</span> — already ship exact ground truth, a demo format, and a complexity dial, minimizing adaptation. Two universal fixes apply to nearly all candidates: bound output to one MC letter or short token (C2/C3), and re-seed the latent key per run (C8). Two traps recur: the <span class="key">ceiling-reachability trap</span> (the hardest tasks may have no ~100% prompt, killing C4's headroom) and the <span class="key">one-shot-guessability trap</span> (single ciphers, single-rule concepts, and "just use CoT" tasks are one-shot solvable).
 </div>
 
-<div class="callout good">
-  <strong>Tie-breaker note (2025-2026 research heat, lower priority).</strong> In-context rule induction is unusually active right now — InductionBench (2025), ICL Ciphers (2025), HERO'S JOURNEY (2026), SCFG in-context transduction (2026), LingOly / Rosetta-to-Match-Up (2024-2026). A quick-test built on a synthetic rule-induction generator has a natural path to becoming its own research artifact.
-</div>
+<p>In-context rule induction is unusually active right now — InductionBench (2025), ICL Ciphers (2025), HERO'S JOURNEY (2026), SCFG in-context transduction (2026), LingOly / Rosetta-to-Match-Up (2024-2026) — so a quick-test built on a synthetic rule-induction generator has a natural path to becoming its own research artifact. Because almost all published benchmarks are fixed corpora, contamination (C8) and one-shot-guessability (C4) are the two dimensions that most often need engineering; the winning move for most candidates is to keep the generator but discard the published split, re-key the latent rules per run, bound output to one MC letter or short token, and tune rule count so the naive-prompt floor sits well below the ceiling.</p>
 
-<div class="section-head" id="candidates"><h2>Twelve candidates (breadth, not ranked)</h2></div>
+<div class="section-head"><h2>What are the twelve candidates?</h2></div>
 
 <div class="grid-2">
 
   <div class="card">
     <h3>1. SCAN / MiniSCAN</h3>
-    <p class="small muted">Compositional command → action grammar</p>
-    <p><strong>What:</strong> Lake &amp; Baroni's SCAN maps synthetic navigation commands ("jump twice and walk left") to action sequences via ~20 phrase-structure grammar rules over ~20 words. MiniSCAN / "few-shot rule learning" variants shrink it to a handful of invented primitives learned purely from in-context examples.</p>
-    <p><strong>Sources:</strong> Lake &amp; Baroni, ICML 2018 (<a href="https://arxiv.org/abs/1711.00350">arXiv:1711.00350</a>); least-to-most prompting solves SCAN few-shot (<a href="https://arxiv.org/abs/2205.10625">arXiv:2205.10625</a>, 2022); Lake, "human few-shot learning of compositional instructions" (MiniSCAN).</p>
-    <p><strong>Adaptation:</strong> SCAN outputs are long action sequences — violates C2/C3. Convert to a single-step variant: give k demo (command, action) pairs with an <span class="key">invented</span> grammar, then ask for only the first action token or a single MC among candidate sequences. Regenerate grammar per run (dodges C8; SCAN is heavily contaminated). Independent rules = per-primitive mappings + modifiers ("twice", "thrice", "left") → clean C10 decomposition.</p>
-    <p><strong>Rubric fit:</strong> Strong on C7/C10/C12 (built for compositional demos). <span class="key">Weaknesses:</span> canonical SCAN is memorized (C8) and long-output (C2/C3), both fixed only by the MiniSCAN-style rewrite. As-is it fails C2/C3.</p>
+    <p class="small">Compositional command → action grammar</p>
+    <p><b>What.</b> Lake &amp; Baroni's SCAN maps synthetic navigation commands ("jump twice and walk left") to action sequences via ~20 phrase-structure grammar rules over ~20 words. MiniSCAN shrinks it to a handful of invented primitives learned purely in-context.</p>
+    <p><b>Adaptation.</b> Raw SCAN outputs are long action sequences (violates C2/C3). Convert to a single-step variant: give k demo pairs with an <span class="key">invented</span> grammar, ask for only the first action token or a single MC among candidates. Regenerate the grammar per run to dodge C8.</p>
+    <p><b>Fit.</b> Strong C7/C10/C12. <b>Weaknesses:</b> canonical SCAN is memorized (C8) and long-output (C2/C3) — both fixed only by the MiniSCAN-style rewrite.</p>
+    <p class="small">Lake &amp; Baroni, ICML 2018 (<a href="https://arxiv.org/abs/1711.00350">arXiv:1711.00350</a>); least-to-most prompting on SCAN (<a href="https://arxiv.org/abs/2205.10625">arXiv:2205.10625</a>, 2022).</p>
   </div>
 
   <div class="card">
     <h3>2. gSCAN / ReaSCAN</h3>
-    <p class="small muted">Grounded grid-world compositional instructions</p>
-    <p><strong>What:</strong> gSCAN grounds SCAN commands in a grid world; tests 8 compositional splits (novel adjective-noun, verb-adverb, target locations). ReaSCAN adds relational reasoning.</p>
-    <p><strong>Sources:</strong> Ruis et al., NeurIPS 2020 (<a href="https://arxiv.org/abs/2003.05161">arXiv:2003.05161</a>); ReaSCAN (<a href="https://arxiv.org/abs/2109.08994">arXiv:2109.08994</a>, 2021); repo <a href="https://github.com/LauraRuis/groundedSCAN">github.com/LauraRuis/groundedSCAN</a>.</p>
-    <p><strong>Adaptation:</strong> Full gSCAN wants an action sequence over a rendered grid — too heavy (C1/C2/C3 fail). Usable only if collapsed to a textual single-question form: describe grid in text, ask one MC ("which cell is the referent?"). The synthetic generator + 8 named generalization types is the asset (C10). Heavy adaptation.</p>
-    <p><strong>Rubric fit:</strong> Excellent latent-rule decomposition (C10) and generator control (C7). <span class="key">But</span> grid rendering + sequence output make it the most expensive to bound; likely not worth the adaptation cost versus lighter candidates.</p>
+    <p class="small">Grounded grid-world compositional instructions</p>
+    <p><b>What.</b> gSCAN grounds SCAN commands in a grid world; tests 8 compositional splits. ReaSCAN adds relational reasoning.</p>
+    <p><b>Adaptation.</b> Full gSCAN wants an action sequence over a rendered grid — too heavy (C1/C2/C3 fail). Usable only collapsed to a textual single-question form: describe the grid in text, ask one MC.</p>
+    <p><b>Fit.</b> Excellent C10/C7, but grid rendering plus sequence output make it the most expensive to bound — likely not worth the adaptation cost against lighter candidates.</p>
+    <p class="small">Ruis et al., NeurIPS 2020 (<a href="https://arxiv.org/abs/2003.05161">arXiv:2003.05161</a>); ReaSCAN (<a href="https://arxiv.org/abs/2109.08994">arXiv:2109.08994</a>, 2021); <a href="https://github.com/LauraRuis/groundedSCAN">code</a>.</p>
   </div>
 
   <div class="card">
     <h3>3. COGS / SLOG</h3>
-    <p class="small muted">Compositional semantic parsing</p>
-    <p><strong>What:</strong> COGS maps procedurally-generated English sentences to logical forms; 21 generalization categories (18 lexical, 3 structural). SLOG extends structural generalization.</p>
-    <p><strong>Sources:</strong> Kim &amp; Linzen, EMNLP 2020 (COGS); SLOG (<a href="https://arxiv.org/abs/2604.26157">arXiv:2604.26157</a> / earlier 2023 EMNLP).</p>
-    <p><strong>Adaptation:</strong> Output is a logical form (structured string) — partial-credit temptation violates C2. Bound to exact-match of a short canonicalized logical form, or convert to MC over candidate parses. Generator dodges C8 if re-run. Latent rules = lexical roles + structural rules (C10).</p>
-    <p><strong>Rubric fit:</strong> Good C7/C10; the 18-vs-3 lexical/structural split is a natural incremental-difficulty knob (C4). <span class="key">Weakness:</span> exact-match on logical forms is brittle (format-violation heavy — arguably good for C13 but noisy for C5). Long-ish outputs pressure C3.</p>
+    <p class="small">Compositional semantic parsing</p>
+    <p><b>What.</b> COGS maps procedurally-generated English sentences to logical forms; 21 generalization categories (18 lexical, 3 structural). SLOG extends structural generalization.</p>
+    <p><b>Adaptation.</b> Output is a logical form — partial-credit temptation violates C2. Bound to exact-match of a short canonicalized form, or MC over candidate parses.</p>
+    <p><b>Fit.</b> Good C7/C10; the 18-vs-3 lexical/structural split is a natural C4 knob. <b>Weakness:</b> exact-match on logical forms is brittle — long-ish outputs pressure C3.</p>
+    <p class="small">Kim &amp; Linzen, EMNLP 2020 (COGS); SLOG (<a href="https://arxiv.org/abs/2604.26157">arXiv:2604.26157</a>).</p>
   </div>
 
   <div class="card">
     <h3>4. PCFG SET</h3>
-    <p class="small muted">String-edit transduction, 5 named generalization axes</p>
-    <p><strong>What:</strong> Sequences from a probabilistic CFG must be translated to their "meaning" by applying string-edit operators (copy, reverse, shift, echo, append…). Five explicit test axes: systematicity, productivity, substitutivity, localism, overgeneralization.</p>
-    <p><strong>Sources:</strong> Hupkes et al., JAIR 2020, "Compositionality Decomposed" (<a href="https://arxiv.org/abs/1908.08351">arXiv:1908.08351</a>).</p>
-    <p><strong>Adaptation:</strong> Fully synthetic generator already exists → strong C7/C8. Output is a sequence; bound to first-token or fixed-short-length output, or MC. Each operator is an independent latent rule (C10) and the five axes give graded difficulty (C4). Re-seed the operator inventory per run.</p>
-    <p><strong>Rubric fit:</strong> One of the best structural fits: explicitly designed so difficulty decomposes into independent, nameable rules (C10) with an incremental path (C4), and generator-native (C7/C8). <span class="key">Weakness:</span> output-length bounding still required (C3); operators like "reverse" produce longer outputs.</p>
+    <p class="small">String-edit transduction, 5 named generalization axes</p>
+    <p><b>What.</b> Sequences from a probabilistic CFG must be translated to their "meaning" via string-edit operators (copy, reverse, shift, echo, append…) across five axes: systematicity, productivity, substitutivity, localism, overgeneralization.</p>
+    <p><b>Adaptation.</b> Fully synthetic generator already exists (strong C7/C8). Bound output to first-token or fixed-short-length, or MC; each operator is an independent latent rule (C10) and the five axes grade difficulty (C4).</p>
+    <p><b>Fit.</b> One of the best structural fits: explicitly designed for independent, nameable rules with an incremental path, generator-native. <b>Weakness:</b> output-length bounding still required (C3).</p>
+    <p class="small">Hupkes et al., JAIR 2020, "Compositionality Decomposed" (<a href="https://arxiv.org/abs/1908.08351">arXiv:1908.08351</a>).</p>
   </div>
 
   <div class="card">
-    <h3>5. InductionBench <span class="status pass">generator-native</span></h3>
-    <p class="small muted">Subregular function/transducer induction — 2025</p>
-    <p><strong>What:</strong> LLMs must induce the underlying rule of a string-to-string function drawn from the simplest subregular complexity classes (ISL/OSL/etc.), from input-output demonstrations. Reports that even o1/o3 fail the simplest classes.</p>
-    <p><strong>Sources:</strong> Hua et al., "InductionBench: LLMs Fail in the Simplest Complexity Class" (<a href="https://arxiv.org/abs/2502.15823">arXiv:2502.15823</a>, 2025); code on GitHub.</p>
-    <p><strong>Adaptation:</strong> Very close to ideal. Native rule-induction from demos (C12), synthetic with exact ground truth (C7/C8), complexity-classed (C4/C10). To fit: bound output to applying the induced rule to one held-out input (few-token exact match) rather than emitting the rule; re-generate keys per run. The complexity hierarchy gives a principled floor/ceiling (C9).</p>
-    <p><strong>Rubric fit:</strong> Among the strongest overall (C4/C7/C8/C10/C11/C12). <span class="key">Weakness:</span> "simplest classes still fail" means the ceiling may be hard to reach even with a great prompt — must verify a reference prompt can hit ≈100% (C9) on the <em>easiest</em> classes, else C4's headroom collapses to "nobody succeeds."</p>
+    <h3>5. InductionBench <span class="status">generator-native</span></h3>
+    <p class="small">Subregular function/transducer induction — 2025</p>
+    <p><b>What.</b> LLMs must induce the rule of a string-to-string function from the simplest subregular complexity classes (ISL/OSL/etc.), from I/O demos. Even o1/o3 fail the simplest classes.</p>
+    <p><b>Adaptation.</b> Very close to ideal — native rule-induction from demos (C12), synthetic with exact ground truth (C7/C8), complexity-classed (C4/C10). Bound output to applying the induced rule to one held-out input (few-token exact match); re-generate keys per run.</p>
+    <p><b>Fit.</b> Among the strongest overall (C4/C7/C8/C10/C11/C12). <b>Weakness:</b> "simplest classes still fail" means the ceiling may be hard to reach — must verify a reference prompt hits ≈100% on the easiest classes, else C4's headroom collapses.</p>
+    <p class="small">Hua et al., "InductionBench" (<a href="https://arxiv.org/abs/2502.15823">arXiv:2502.15823</a>, 2025).</p>
   </div>
 
   <div class="card">
-    <h3>6. List Functions <span class="status pass">generator-native</span></h3>
-    <p class="small muted">Program/concept induction over integer lists</p>
-    <p><strong>What:</strong> 250 human-authored list→list functions (map, filter, sort, dedupe, arithmetic). A gold standard for few-shot concept induction with human baselines. Present in BIG-Bench as <code>list_functions</code>.</p>
-    <p><strong>Sources:</strong> Rule PhD thesis (2020); Alet et al., "A large-scale benchmark for few-shot program induction and synthesis," ICML 2021; BIG-bench <code>list_functions</code>.</p>
-    <p><strong>Adaptation:</strong> Give k input→output list demos, ask for the output list on one query (short exact-match) — no sandbox needed, the label is precomputed (C2). Regenerate the <em>parameters</em> of each function family per run for C8 (the 250 concepts are published → contamination risk). Concept families are the independent latent rules (C10); Boolean/algorithmic complexity grades difficulty (C4).</p>
-    <p><strong>Rubric fit:</strong> Strong C7/C10/C11/C12 and clean exact-match scoring (C2). <span class="key">Weakness:</span> some functions produce long list outputs (C3) — restrict to length-bounded output families; published concepts need re-parameterization for C8.</p>
+    <h3>6. List Functions <span class="status">generator-native</span></h3>
+    <p class="small">Program/concept induction over integer lists</p>
+    <p><b>What.</b> 250 human-authored list→list functions (map, filter, sort, dedupe, arithmetic) — a gold standard for few-shot concept induction with human baselines; present in BIG-Bench as <code>list_functions</code>.</p>
+    <p><b>Adaptation.</b> Give k input→output demos, ask for the output on one query (short exact-match, no sandbox — label precomputed, C2). Regenerate the parameters of each function family per run for C8 (the 250 concepts are published).</p>
+    <p><b>Fit.</b> Strong C7/C10/C11/C12 and clean exact-match scoring. <b>Weakness:</b> some functions produce long list outputs (C3) — restrict to length-bounded families.</p>
+    <p class="small">Rule PhD thesis (2020); Alet et al., ICML 2021; BIG-bench <code>list_functions</code>.</p>
   </div>
 
   <div class="card">
-    <h3>7. In-Context Boolean Concept Learning <span class="status pass">generator-native</span></h3>
-    <p class="small muted">Complexity-graded — 2024</p>
-    <p><strong>What:</strong> LLMs learn a hidden Boolean concept over feature vectors from labeled in-context examples; task accuracy correlates with the concept's Boolean complexity, mirroring the human simplicity bias.</p>
-    <p><strong>Sources:</strong> "Minimization of Boolean Complexity in In-Context Concept Learning" (<a href="https://arxiv.org/abs/2412.02823">arXiv:2412.02823</a>, 2024).</p>
-    <p><strong>Adaptation:</strong> Almost turnkey. Output is a single YES/NO or MC label (C2/C3 satisfied natively). Fully synthetic feature vectors + Boolean formula → exact ground truth, unlimited instances, contamination-proof (C7/C8). Boolean complexity is a direct, dial-able floor→ceiling knob (C4/C9); each literal/clause is an independent latent rule (C10); few-shot is the entire mechanism (C12).</p>
-    <p><strong>Rubric fit:</strong> Possibly the tightest fit to C1-C5 of any candidate (binary output, synthetic, complexity-graded, demo-driven). <span class="key">Weakness:</span> with only a binary label per item, C5 noise is high per-instance — needs enough query items per eval to resolve; failures are less individually diagnostic than sequence tasks (C11 weaker — "wrong label" reveals less than "wrong token in position 3").</p>
+    <h3>7. In-Context Boolean Concept Learning <span class="status">generator-native</span></h3>
+    <p class="small">Complexity-graded — 2024</p>
+    <p><b>What.</b> LLMs learn a hidden Boolean concept over feature vectors from labeled in-context examples; accuracy correlates with the concept's Boolean complexity, mirroring the human simplicity bias.</p>
+    <p><b>Adaptation.</b> Almost turnkey — output is a single YES/NO or MC label (C2/C3 native). Fully synthetic feature vectors plus Boolean formula give exact ground truth, unlimited instances, contamination-proof (C7/C8). Boolean complexity is a direct floor→ceiling knob (C4/C9).</p>
+    <p><b>Fit.</b> Possibly the tightest fit to C1-C5 of any candidate. <b>Weakness:</b> binary label per item means C5 noise is high per-instance — needs enough query items per eval; failures are less individually diagnostic (C11 weaker).</p>
+    <p class="small">"Minimization of Boolean Complexity in In-Context Concept Learning" (<a href="https://arxiv.org/abs/2412.02823">arXiv:2412.02823</a>, 2024).</p>
   </div>
 
   <div class="card">
-    <h3>8. ICL Ciphers / Rashid <span class="status pass">generator-native</span></h3>
-    <p class="small muted">Substitution-cipher in-context learning — 2025-2026</p>
-    <p><strong>What:</strong> Re-map the token/vocabulary of a task via a bijective substitution cipher so the model must learn the mapping in-context rather than recall pretraining knowledge. Explicitly built to quantify genuine ICL and to be contamination-proof.</p>
-    <p><strong>Sources:</strong> "ICL CIPHERS: Quantifying Learning in In-Context Learning via Substitution Ciphers" (<a href="https://arxiv.org/abs/2504.19395">arXiv:2504.19395</a>, 2025); "Rashid: A Cipher-Based Framework for Exploring In-Context Language Learning" (<a href="https://arxiv.org/abs/2603.22497">arXiv:2603.22497</a>, 2026).</p>
-    <p><strong>Adaptation:</strong> The cipher key IS the latent rule; regenerate per run → C8 solved by construction (its headline feature). Bound to decoding one short ciphered token/answer, exact match. Compose multiple independent sub-ciphers (e.g., per-position or per-class keys) for C10 decomposition and a graded floor→ceiling (C4).</p>
-    <p><strong>Rubric fit:</strong> Best-in-class on C8 (contamination-resistance is the paper's raison d'être) and strong on C12. <span class="key">Weakness:</span> a single monoalphabetic cipher IS one-shot solvable once a prompt engineer says "it's a substitution cipher" (fails C4) — needs <em>composed/keyed</em> ciphers or hidden structure so no single instruction unlocks it.</p>
+    <h3>8. ICL Ciphers / Rashid <span class="status">generator-native</span></h3>
+    <p class="small">Substitution-cipher in-context learning — 2025-2026</p>
+    <p><b>What.</b> Re-maps the token/vocabulary of a task via a bijective substitution cipher so the model must learn the mapping in-context rather than recall pretraining knowledge — built explicitly to be contamination-proof.</p>
+    <p><b>Adaptation.</b> The cipher key IS the latent rule; regenerate per run solves C8 by construction. Bound to decoding one short ciphered token/answer, exact match. Compose multiple independent sub-ciphers for C10 decomposition and a graded floor→ceiling (C4).</p>
+    <p><b>Fit.</b> Best-in-class on C8 and strong on C12. <b>Weakness:</b> a single monoalphabetic cipher is one-shot solvable once a prompt engineer names it (fails C4) — needs composed/keyed ciphers or hidden structure.</p>
+    <p class="small">"ICL CIPHERS" (<a href="https://arxiv.org/abs/2504.19395">arXiv:2504.19395</a>, 2025); "Rashid" (<a href="https://arxiv.org/abs/2603.22497">arXiv:2603.22497</a>, 2026).</p>
   </div>
 
   <div class="card">
     <h3>9. HERO'S JOURNEY</h3>
-    <p class="small muted">Complex rule induction in text games — 2026</p>
-    <p><strong>What:</strong> Agents infer hidden rules from demonstrations in goal-directed episodic text games; 8 tasks across attribute-induction and procedural-induction families, each with 4 structural rule forms, controllable lexical grounding, and identifiability conditions. Finds current LLM rule induction limited and uneven; procedural induction is the hard open gap.</p>
-    <p><strong>Sources:</strong> Zheng, Misra, Beaver, Li, "HERO'S JOURNEY: Testing Complex Rule Induction with Text Games" (<a href="https://arxiv.org/abs/2606.02556">arXiv:2606.02556</a>, June 2026).</p>
-    <p><strong>Adaptation:</strong> Multi-step execution violates C1/C2 as-is. Extract the single-decision form: show demos of the hidden rule, ask for one next action / MC. The generator's controllable lexical grounding is exactly the "swap surface to dodge contamination" knob (C8); attribute vs. procedural families + 4 structural forms give C10/C4 structure. The paper reports "surface semantics has minimal effect" — useful evidence the latent-rule signal survives lexical randomization.</p>
-    <p><strong>Rubric fit:</strong> Very strong on C7/C8/C10/C11 and freshest research heat. <span class="key">Weakness:</span> procedural family may be too hard (ceiling unreachable → C9/C4 risk), and reducing to a single decision loses some of what the benchmark measures. Newest → tooling less mature.</p>
+    <p class="small">Complex rule induction in text games — 2026</p>
+    <p><b>What.</b> Agents infer hidden rules from demonstrations in goal-directed episodic text games; 8 tasks across attribute-induction and procedural-induction families, each with 4 structural rule forms. Finds current LLM rule induction limited and uneven.</p>
+    <p><b>Adaptation.</b> Multi-step execution violates C1/C2 as-is. Extract the single-decision form: show demos of the hidden rule, ask for one next action / MC. Controllable lexical grounding is the "swap surface to dodge contamination" knob (C8).</p>
+    <p><b>Fit.</b> Very strong on C7/C8/C10/C11 and freshest research heat. <b>Weakness:</b> procedural family may be too hard (ceiling unreachable → C9/C4 risk); newest, so tooling is less mature.</p>
+    <p class="small">Zheng, Misra, Beaver, Li (<a href="https://arxiv.org/abs/2606.02556">arXiv:2606.02556</a>, June 2026).</p>
   </div>
 
   <div class="card">
     <h3>10. Re-ARC / 1D-ARC / MiniARC / ARC-GEN</h3>
-    <p class="small muted">Procedural ARC-style grid rule induction</p>
-    <p><strong>What:</strong> ARC = infer a grid transformation from 2-3 demos, apply to a test grid. Re-ARC (Hodel 2024) is a procedural generator with configurable difficulty for all 400 training tasks; 1D-ARC linearizes to arrays (18 categories, 901 tasks); MiniARC is 5x5; ARC-GEN (2025) is a mimetic procedural generator.</p>
-    <p><strong>Sources:</strong> Chollet ARC (2019, <a href="https://arxiv.org/abs/1911.01547">arXiv:1911.01547</a>); Hodel, "Addressing ARC via Procedural Example Generation" / re-arc (<a href="https://arxiv.org/abs/2404.07353">arXiv:2404.07353</a>, 2024; <a href="https://github.com/michaelhodel/re-arc">github.com/michaelhodel/re-arc</a>); 1D-ARC (<a href="https://arxiv.org/abs/2305.18354">arXiv:2305.18354</a>); ARC-GEN (<a href="https://arxiv.org/abs/2511.00162">arXiv:2511.00162</a>, 2025).</p>
-    <p><strong>Adaptation:</strong> Full 2D-grid output is verbose and hard to bound (C3) and exact-match on grids is format-fragile. Prefer 1D-ARC linearized to short arrays, output bounded to the transformed array (short exact-match) or MC over candidate outputs. Re-ARC's difficulty dial + infinite generation directly serve C4/C7/C8. Each transformation primitive is an independent latent rule (C10).</p>
-    <p><strong>Rubric fit:</strong> Excellent C7/C8 (Re-ARC is a generator with difficulty control) and C10. <span class="key">Weaknesses:</span> grid serialization inflates tokens (C3); ARC is famously hard so ceiling reachability (C9) is a real risk unless restricted to easy 1D transforms; grid exact-match causes many format failures (good for C13, noisy for C5).</p>
+    <p class="small">Procedural ARC-style grid rule induction</p>
+    <p><b>What.</b> ARC = infer a grid transformation from 2-3 demos, apply to a test grid. Re-ARC is a procedural generator with configurable difficulty for all 400 training tasks; 1D-ARC linearizes to arrays (18 categories, 901 tasks); ARC-GEN (2025) is a mimetic procedural generator.</p>
+    <p><b>Adaptation.</b> Full 2D-grid output is verbose and format-fragile (C3). Prefer 1D-ARC linearized to short arrays, output bounded to the transformed array or MC. Re-ARC's difficulty dial plus infinite generation directly serve C4/C7/C8.</p>
+    <p><b>Fit.</b> Excellent C7/C8 and C10. <b>Weaknesses:</b> grid serialization inflates tokens; ARC is famously hard, so ceiling reachability is a real risk unless restricted to easy 1D transforms.</p>
+    <p class="small">Chollet ARC (<a href="https://arxiv.org/abs/1911.01547">arXiv:1911.01547</a>); Re-ARC (<a href="https://arxiv.org/abs/2404.07353">arXiv:2404.07353</a>, 2024, <a href="https://github.com/michaelhodel/re-arc">code</a>); 1D-ARC (<a href="https://arxiv.org/abs/2305.18354">arXiv:2305.18354</a>); ARC-GEN (<a href="https://arxiv.org/abs/2511.00162">arXiv:2511.00162</a>, 2025).</p>
   </div>
 
   <div class="card">
     <h3>11. BIG-Bench Hard — symbolic subset</h3>
-    <p class="small muted">Boolean expressions, logical deduction, tracking shuffled objects, Dyck languages, web-of-lies</p>
-    <p><strong>What:</strong> 23-27 hard BBH tasks; several are algorithmically generatable with MC / short answers: <code>boolean_expressions</code>, <code>logical_deduction</code>, <code>dyck_languages</code>, <code>tracking_shuffled_objects</code>, <code>web_of_lies</code>, <code>multistep_arithmetic</code>.</p>
-    <p><strong>Sources:</strong> Suzgun et al., "Challenging BIG-Bench Tasks and Whether CoT Can Solve Them" (<a href="https://arxiv.org/abs/2210.09261">arXiv:2210.09261</a>, 2022); BIG-bench repo.</p>
-    <p><strong>Adaptation:</strong> Use only the synthetic subset and <em>regenerate</em> instances from the underlying generators (published BBH is contaminated → C8). Bound to MC letter / single token (many already are). Rules decompose: e.g., logical_deduction = ordering constraints; tracking_shuffled_objects = swap-tracking (C10). CoT vs. direct is a known incremental-headroom lever (C4).</p>
-    <p><strong>Rubric fit:</strong> Strong C1/C2/C3 (many are MC already), good C4 (default-vs-CoT gap is well documented), decent C10. <span class="key">Weakness:</span> heavy contamination as published (C8) — MUST regenerate; latent-rule decomposition is per-task and less clean than the grammar/cipher families.</p>
+    <p class="small">Boolean expressions, logical deduction, tracking shuffled objects, Dyck languages, web-of-lies</p>
+    <p><b>What.</b> 23-27 hard BBH tasks; several are algorithmically generatable with MC/short answers: <code>boolean_expressions</code>, <code>logical_deduction</code>, <code>dyck_languages</code>, <code>tracking_shuffled_objects</code>, <code>web_of_lies</code>, <code>multistep_arithmetic</code>.</p>
+    <p><b>Adaptation.</b> Use only the synthetic subset and regenerate instances from the underlying generators (published BBH is contaminated). Many are already MC/short-token. Rules decompose per-task (ordering constraints, swap-tracking); CoT vs. direct is a known incremental-headroom lever (C4).</p>
+    <p><b>Fit.</b> Strong C1/C2/C3, good C4, decent C10. <b>Weakness:</b> heavy contamination as published — must regenerate; latent-rule decomposition is per-task and less clean than the grammar/cipher families.</p>
+    <p class="small">Suzgun et al., "Challenging BIG-Bench Tasks" (<a href="https://arxiv.org/abs/2210.09261">arXiv:2210.09261</a>, 2022).</p>
   </div>
 
   <div class="card">
     <h3>12. LingOly / Rosetta-to-Match-Up</h3>
-    <p class="small muted">Rosetta-stone linguistic puzzles — 2024-2026</p>
-    <p><strong>What:</strong> Olympiad linguistic puzzles: from paired examples in a low-resource/invented language, induce morphology/syntax rules and translate. LingOly (1,133 UKLO puzzles, NeurIPS 2024) reports SOTA ~21.7% exact-match. Rosetta-to-Match-Up (2026) pairs human + LLM benchmarks.</p>
-    <p><strong>Sources:</strong> Bean et al., "LINGOLY" (<a href="https://arxiv.org/abs/2406.06196">arXiv:2406.06196</a>, NeurIPS 2024); "From Rosetta to Match-Up" (<a href="https://arxiv.org/abs/2605.13408">arXiv:2605.13408</a>, 2026); "Can LLMs Solve and Generate Linguistic Olympiad Puzzles?" (<a href="https://arxiv.org/abs/2509.21820">arXiv:2509.21820</a>, EMNLP 2025); LingBench++ (<a href="https://arxiv.org/abs/2507.16809">arXiv:2507.16809</a>, 2025).</p>
-    <p><strong>Adaptation:</strong> Published puzzles are fixed and partly contaminated (C8). Use a <em>synthetic conlang generator</em> (morphological rules + lexicon) instead of UKLO corpora, ask to translate one short word/phrase (short exact-match) or MC. Morpheme rules = independent latent rules (C10); rule count grades difficulty (C4). The 2025 "generate puzzles" work and ConlangCrafter (<a href="https://arxiv.org/abs/2508.06094">arXiv:2508.06094</a>) provide generation machinery.</p>
-    <p><strong>Rubric fit:</strong> Very strong C4 (low SOTA = huge headroom), C10 (morphology decomposes cleanly), C12 (Rosetta format IS few-shot). Fresh research heat. <span class="key">Weakness:</span> hand-built puzzles fail C7/C8 — the whole value depends on building/adopting a <em>synthetic</em> conlang generator, which is real engineering; exact-match on morphology is noisy (C5).</p>
+    <p class="small">Rosetta-stone linguistic puzzles — 2024-2026</p>
+    <p><b>What.</b> Olympiad linguistic puzzles: from paired examples in a low-resource/invented language, induce morphology/syntax rules and translate. LingOly (1,133 UKLO puzzles, NeurIPS 2024) reports SOTA ~21.7% exact-match.</p>
+    <p><b>Adaptation.</b> Published puzzles are fixed and partly contaminated. Use a synthetic conlang generator instead of UKLO corpora; ask to translate one short word/phrase. Morpheme rules are independent latent rules (C10); rule count grades difficulty (C4).</p>
+    <p><b>Fit.</b> Very strong C4 (low SOTA = huge headroom), C10, C12. <b>Weakness:</b> hand-built puzzles fail C7/C8 — the whole value depends on building a synthetic conlang generator; exact-match on morphology is noisy (C5).</p>
+    <p class="small">Bean et al., "LINGOLY" (<a href="https://arxiv.org/abs/2406.06196">arXiv:2406.06196</a>, NeurIPS 2024); "From Rosetta to Match-Up" (<a href="https://arxiv.org/abs/2605.13408">arXiv:2605.13408</a>, 2026).</p>
   </div>
 
 </div>
 
-<div class="section-head" id="adjacent"><h2>Adjacent leads (not full candidates)</h2></div>
+<div class="section-head"><h2>What are the adjacent leads, short of a full candidate?</h2></div>
 
-<ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
-  <li><strong>Synchronous CFG in-context transduction</strong> (<a href="https://arxiv.org/abs/2604.07320">arXiv:2604.07320</a>, 2026): evaluate ICL by translating between two formal languages defined by a synchronous CFG — a clean generator for compositional, contamination-proof few-shot transduction. Strong latent adaptation base overlapping #4 / #5.</li>
-  <li><strong>"Understanding the Relationship between ICL and Compositional Generalization"</strong> (<a href="https://arxiv.org/abs/2403.11834">arXiv:2403.11834</a>, 2024): methodological grounding for why demos help compositional tasks (supports C12 design choices).</li>
-  <li><strong>Grammar prompting for DSL generation</strong> (<a href="https://arxiv.org/abs/2305.19234">arXiv:2305.19234</a>): BNF-constrained output — a technique to bound outputs (helps C2/C3/C13) rather than a task itself.</li>
-  <li><strong>ConlangCrafter</strong> (<a href="https://arxiv.org/abs/2508.06094">arXiv:2508.06094</a>, 2025) and <strong>"Creating ConLangs to Probe Metalinguistic Knowledge"</strong> (<a href="https://arxiv.org/abs/2510.07591">arXiv:2510.07591</a>, 2025): generators to make #12 synthetic.</li>
+<ul class="card">
+  <li><b>Synchronous CFG in-context transduction</b> (<a href="https://arxiv.org/abs/2604.07320">arXiv:2604.07320</a>, 2026): evaluates ICL by translating between two formal languages defined by a synchronous CFG — a clean, compositional, contamination-proof generator overlapping #4/#5.</li>
+  <li><b>"Understanding the Relationship between ICL and Compositional Generalization"</b> (<a href="https://arxiv.org/abs/2403.11834">arXiv:2403.11834</a>, 2024): methodological grounding for why demos help compositional tasks (supports C12 design choices).</li>
+  <li><b>Grammar prompting for DSL generation</b> (<a href="https://arxiv.org/abs/2305.19234">arXiv:2305.19234</a>): BNF-constrained output — a technique to bound outputs (helps C2/C3/C13) rather than a task itself.</li>
+  <li><b>ConlangCrafter</b> (<a href="https://arxiv.org/abs/2508.06094">arXiv:2508.06094</a>, 2025) and <b>"Creating ConLangs to Probe Metalinguistic Knowledge"</b> (<a href="https://arxiv.org/abs/2510.07591">arXiv:2510.07591</a>, 2025): generators that would make #12 synthetic.</li>
 </ul>
 
-<div class="section-head" id="recommendations"><h2>Cross-cutting recommendations for the harness designer</h2></div>
+<div class="section-head"><h2>What should the harness designer do with this?</h2></div>
 
-<div class="steps">
-  <div class="step">
-    <strong>Prioritize the generator-native rule-induction families.</strong> #4 PCFG SET, #5 InductionBench, #6 List Functions, #7 Boolean Concept Learning, #8 ICL Ciphers already have exact ground truth + demo format + a complexity dial (C4/C7/C8/C10/C12). These minimize adaptation — favor them for a first prototype.
+<div class="grid-2">
+  <div class="card">
+    <h3>Prioritize the generator-native five</h3>
+    <p class="small">#4 PCFG SET, #5 InductionBench, #6 List Functions, #7 Boolean Concept Learning, #8 ICL Ciphers already have exact ground truth, a demo format, and a complexity dial (C4/C7/C8/C10/C12). They minimize adaptation — favor them for a first prototype.</p>
   </div>
-  <div class="step">
-    <strong>Apply the two universal adaptations.</strong> (a) Bound output to one MC letter / one short token for C2/C3, and (b) re-seed the latent key per run for C8. Almost every candidate needs both.
+  <div class="card">
+    <h3>Apply the two universal adaptations</h3>
+    <p class="small">Bound output to one MC letter / one short token for C2/C3, and re-seed the latent key per run for C8. Almost every candidate needs both.</p>
   </div>
-  <div class="step">
-    <strong>Watch the ceiling-reachability trap (C9).</strong> The freshest/hardest tasks — InductionBench, HERO'S JOURNEY procedural, full ARC — may have <em>no</em> prompt that reaches ~100%, which kills C4's "close the gap" story. Restrict to the easy end of each complexity hierarchy and verify a reference prompt hits ~100% before adopting.
+  <div class="card">
+    <h3>Watch the ceiling-reachability trap (C9)</h3>
+    <p class="small">The freshest/hardest tasks — InductionBench, HERO'S JOURNEY procedural, full ARC — may have no prompt that reaches ~100%, killing C4's "close the gap" story. Restrict to the easy end of each complexity hierarchy and verify a reference prompt hits ~100% before adopting.</p>
   </div>
-  <div class="step">
-    <strong>Watch the one-shot-guessability trap (C4).</strong> Single monoalphabetic ciphers, single-rule concepts, and "just use chain-of-thought" tasks are one-shot solvable by a competent prompt engineer. Use <em>composed</em> independent rules (multiple ciphers/operators/morphemes) so partial prompts earn partial score and the best prompt is genuinely non-obvious.
-  </div>
-  <div class="step">
-    <strong>Cover the failure paths (C13).</strong> Sequence/array outputs get failure-path coverage for free (parse failures happen naturally); pure-MC tasks (#7, #11) may need deliberate malformed-output injection.
+  <div class="card">
+    <h3>Watch the one-shot-guessability trap (C4)</h3>
+    <p class="small">Single monoalphabetic ciphers, single-rule concepts, and "just use chain-of-thought" tasks are one-shot solvable by a competent prompt engineer. Use composed independent rules so partial prompts earn partial score and the best prompt is genuinely non-obvious.</p>
   </div>
 </div>
 
-<p class="small muted space-top">See the <a href="landscape.html">Landscape</a> for how these families map onto the ranked candidate pool, and <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
+<p>Failure-path coverage (C13) comes free from sequence/array outputs (parse failures happen naturally); pure-MC tasks (#7, #11) may need deliberate malformed-output injection. See the <a href="landscape.html">Landscape</a> for how these families map onto the ranked candidate pool, and <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
+
+<div class="colophon">
+Scope: candidates judged against <code>design/quick-test-rubric.html</code> criteria C1-C13, breadth-first and not ranked.
+</div>
 
 </main>
 </body>

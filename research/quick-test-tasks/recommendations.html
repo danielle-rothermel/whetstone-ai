@@ -6,11 +6,19 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Task Recommendations</title>
+<title>Quick-Test Task Recommendations · whetstone-ai</title>
+<style>
+  /* Page-local, v2 tokens only. Inline verdict-status scan label:
+     status colors keyed (green = adopt/survived, amber = partial/bounded). */
+  .status { font: 600 11px/1.4 var(--font-system); letter-spacing: .05em; text-transform: uppercase; margin-right: 6px; }
+  .status.pass { color: var(--green); }
+  .status.partial { color: var(--amber); }
+</style>
 </head>
 <body>
 <main>
-<h1>Quick-Test Task Recommendations</h1>
+<h1>Adopt c21, back up with c03: skeptic verdicts, not raw scores, pick the winner</h1>
+<p class="dek">Round-1 finalists for the cheap task that validates every optimizer before the full experiment.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -19,15 +27,13 @@
   <a href="landscape.html">Landscape</a>
 </div>
 
-<div class="intro">
-  <p>Top candidates for the single cheap task family that validates the optimizer implementations (COPRO, MIPROv2, GEPA, Codex CLI agent) end to end before the HumanEval+ compression experiment. Inputs: the merged candidate list (<a href="candidates-merged.html">candidates-merged.html</a>), rubric scorecards, and two adversarial skeptic passes per finalist (an optimization-path lens and a measurement lens).</p>
+<p>Top candidates for the single cheap task family that validates the optimizer implementations (COPRO, MIPROv2, GEPA, Codex CLI agent) end to end before the HumanEval+ compression experiment. Inputs: the merged candidate list (<a href="candidates-merged.html">candidates-merged.html</a>), rubric scorecards, and two adversarial skeptic passes per finalist (an optimization-path lens and a measurement lens).</p>
+
+<div class="summary">
+  <p><b>Adopt c21 — Relational Micro-World with Invented Vocabulary.</b> It is the only finalist that survived both adversarial lenses with only <span class="key">minor-severity caveats</span>, and every caveat is a pinning/verification obligation inside artifacts the adaptation plan already builds. <b>Backup: c03 — Keyed Custom-Operator Expression Evaluation</b>, the only other candidate both skeptics left unrefuted. Three more (c14, c11, c12) are viable with real but bounded redesign work.</p>
 </div>
 
-<div class="verdict good">
-  <p><strong>Adopt c21 — Relational Micro-World with Invented Vocabulary.</strong> It is the only finalist that survived both adversarial lenses with only <span class="key">minor-severity caveats</span>, and every caveat is a pinning/verification obligation inside artifacts the adaptation plan already builds. <strong>Backup: c03 — Keyed Custom-Operator Expression Evaluation</strong>, the only other candidate both skeptics left unrefuted. Three more (c14, c11, c12) are viable with real but bounded redesign work.</p>
-</div>
-
-<div class="section-head" id="ordering"><h2>Skeptic verdicts override the raw scores</h2></div>
+<div class="section-head" id="ordering"><h2>Why do skeptic verdicts override the raw scores?</h2><span class="tag">ordering</span></div>
 
 <p>The mechanical sort is by rubric total (28 or 27 of 28), which puts c05 (FSM/state tracking) in the top tier. This doc demotes c05 out of the recommended set and promotes c03 (total 27) to #2:</p>
 
@@ -37,7 +43,7 @@
   <li><strong>c03 — promoted.</strong> Scored 27 (criterion 4 = 1) but is the only candidate besides c21 where <span class="key">neither skeptic refuted the design</span> — both lenses concluded the incremental ladder survives, contingent on concrete, cheap fixes. A candidate whose weakest criterion survived adversarial attack outranks 28-scorers whose measurement story did not.</li>
 </ul>
 
-<p class="small muted">Remaining order weighs verdict health first, then tie-breaker strength, then adaptation cost.</p>
+<p class="aside">Remaining order weighs verdict health first, then tie-breaker strength, then adaptation cost.</p>
 
 <div class="section-head" id="c21"><h2>1 · c21 — Relational Micro-World with Invented Vocabulary</h2></div>
 
@@ -318,7 +324,7 @@ Naive extraction: 7203 or 72.03 → 0.</code></pre>
 
 <p class="space-top"><strong>Tie-breaker: solid, not flagship (2/2 with caveats).</strong> EDC (<a href="https://arxiv.org/abs/2404.03868">arXiv:2404.03868</a>) canonicalization, StructText (<a href="https://arxiv.org/abs/2507.21340">arXiv:2507.21340</a>) as a reverse generator, plus an LLMStructBench-style "prompting beats model size" finding whose provenance is unverified — <span class="key">do not cite it publicly without checking</span>.</p>
 
-<div class="section-head" id="exclusions"><h2>Near-misses and exclusions</h2></div>
+<div class="section-head" id="exclusions"><h2>Which strong scorers were excluded, and why?</h2><span class="tag">near-misses · exclusions</span></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>c06 — Artificial-Grammar Violation Classification (28/28).</strong> Same verdict profile as c11/c12 (opt-path survives with major caveats, measurement refuted-then-rescued). Excluded from the top five only because its rescue moves headroom from execution difficulty to hidden rule tables — converging on what c21 and c03 already do more cleanly — and its convention-exploiting-prompt floor (~50-60% if instantiations are mnemonic) needs a red-team gate the others don't. A fine sixth choice. Sources: MLRegTest (JMLR 2024), FLaRe (<a href="https://arxiv.org/abs/2411.07107">arXiv:2411.07107</a>).</li>
@@ -372,8 +378,12 @@ Naive extraction: 7203 or 72.03 → 0.</code></pre>
   </div>
 </div>
 
-<div class="verdict good space-top">
-  <p><strong>Recommended path.</strong> Build c21; while its generator is under construction, stand up c03 in a day or two as the <span class="key">plumbing smoke test</span> (its evaluator is trivial), then retire c03 or keep it as a second pinned family for cross-checking optimizer rankings. If the team later wants the quick test to grow into its own research direction, c14 is the one to invest the extra calibration effort in.</p>
+<div class="summary">
+  <p><b>Recommended path.</b> Build c21; while its generator is under construction, stand up c03 in a day or two as the <span class="key">plumbing smoke test</span> (its evaluator is trivial), then retire c03 or keep it as a second pinned family for cross-checking optimizer rankings. If the team later wants the quick test to grow into its own research direction, c14 is the one to invest the extra calibration effort in.</p>
+</div>
+
+<div class="colophon">
+  Round-1 finalist analysis for the quick-test task, ranked by adversarial verdict health rather than raw rubric score. Inputs: <a href="candidates-merged.html">merged candidate pool</a>, rubric scorecards, and two skeptic passes per finalist (optimization-path and measurement lenses). Superseded on adoption by the implementation-aware <a href="recommendations-round2.html">round-2 rescore</a> (which adopts c19); this document's design analysis remains current. Full pool and scores: <a href="landscape.html">Landscape</a>. Selection criteria: <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.
 </div>
 
 </main>

@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,11 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +40,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,11 +54,8 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
 .unverified::after {
   content: "unverified";
   margin-left: 6px; padding: 1px 7px; border-radius: 999px;
@@ -79,10 +66,25 @@
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -98,6 +100,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c17 Invented-Gate Circuit Evaluation</title>
@@ -105,40 +108,37 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c17</span>Invented-Gate Circuit Evaluation</h1>
   <span class="badge ranked">RANKED #3</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">a synthetic boolean-circuit / invented-connective evaluator</span> — a small DAG of gates whose truth tables are invented and randomized per run, closest in spirit to CIRCUIT-style logic-gate reasoning but built, not borrowed.</div>
+<p class="dek">A randomized-truth-table gate DAG, evaluated per query — the podium finish of the 27-tier.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain tone = ranked -->
-  <p><strong>Officially ranked #3 of 20 after the implementation-aware rescore — the podium finish out of the 27-tier.</strong>
-  This candidate carries the <span class="key">best desk profile in the whole pool</span>: its second oracle, stratification,
-  seeding discipline, and skeptic verdict all scored the maximum, which is what lifts it above two run-verified generators that
-  beat it only on codebase reuse. The reason it did not go higher is entirely on the build side. The BeyondBench generator it
-  would adapt is genuinely run-verified — same-seed byte-identical, re-seeds cleanly, and its independent oracle checked out on
-  every emitted instance — but the repo ships a <span class="key">confirmed XOR-dropping bug</span> (a string-replace ordering
-  error, reproduced live at zero XOR instances out of two hundred), and the <span class="key">invented-gate core</span> c17
-  actually needs is a small rewrite of the gate-evaluation logic rather than a config change. So the design is arguably the
-  purest "demos are load-bearing" task in the set, but its codebase reuse is capped below the top by a required fix plus real
-  new logic.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
-    <span class="chip"><span class="k">R1 TB</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">13/16</span></span>
-  </div>
+<p><strong>Officially ranked #3 of 20 after the implementation-aware rescore — the podium finish out of the 27-tier.</strong>
+This candidate carries the best desk profile in the whole pool: its second oracle, stratification, seeding discipline, and
+skeptic verdict all scored the maximum, which is what lifts it above two run-verified generators that beat it only on
+codebase reuse. The reason it did not go higher is entirely on the build side. The BeyondBench generator it would adapt is
+genuinely run-verified — same-seed byte-identical, re-seeds cleanly, and its independent oracle checked out on every
+emitted instance — but the repo ships a confirmed correctness bug (<span class="key">XOR is silently dropped</span> by a
+string-replace ordering error, reproduced live at zero XOR instances out of two hundred), and the invented-gate core c17
+actually needs is a small rewrite of the gate-evaluation logic rather than a config change. So the design is arguably the
+purest "demos are load-bearing" task in the set, but its codebase reuse is capped below the top by a required fix plus
+real new logic.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+  <span class="chip"><span class="k">R1 TB</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">13/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Evaluate a randomized-truth-table gate DAG and name the value at a queried node</h3>
@@ -147,14 +147,15 @@
     <span class="key">connective glyphs</span> with nonstandard precedence, undefined-atom propagation, and ill-formedness
     detection. Each instance supplies the primary inputs and asks for the value at a <span class="key">named node</span> as a
     single bit, or an MC verdict (true / false / undefined / ill-formed). Output is one token, scored by exact match against
-    evaluating the DAG or formula directly. The point is that each gate or connective table is an independent, cleanly
-    demo-learnable latent rule: no fixed instruction can encode a randomized truth table without showing demonstrations, which
-    is exactly what makes the optimizer's demo axis load-bearing. Wrong-gate errors leave diagnostic patterns, seeded semantics
-    are contamination-proof, and boolean arithmetic gives strong temperature-0 determinism.</p>
+    evaluating the DAG or formula directly.</p>
+    <p>The point is that each gate or connective table is an independent, cleanly demo-learnable latent rule: no fixed
+    instruction can encode a randomized truth table without showing demonstrations, which is exactly what makes the
+    optimizer's demo axis load-bearing. Wrong-gate errors leave diagnostic patterns, seeded semantics are contamination-proof,
+    and boolean arithmetic gives strong temperature-0 determinism.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative. Seeded conditions: gate <code>G1</code> gets a randomized 2-input truth table this run,
+    <p class="aside">Illustrative. Seeded conditions: gate <code>G1</code> gets a randomized 2-input truth table this run,
     <code>G2</code> a NAND-like table; primary inputs <code>A=1, B=0, C=1</code>; query node is <code>N3</code>.</p>
 <pre><code>Gate tables (this seed):
   G1(x,y):  00->1  01->0  10->0  11->1
@@ -176,8 +177,7 @@ recoverable from demos.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -193,7 +193,7 @@ recoverable from demos.</code></pre>
       during propositional reasoning — <em>not</em> evaluation of boolean logic-gate circuits. Technically accurate but easily
       conflated with the c17 gate-DAG task; the word "circuit" means two different things.</li>
     </ul>
-    <p class="small muted">Both cited papers resolve to real, confirmed arXiv entries — no fabricated-provenance issue. The gap
+    <p class="aside">Both cited papers resolve to real, confirmed arXiv entries — no fabricated-provenance issue. The gap
     is semantic adjacency only: the "merged from literature" list is thin (two adjacent sources), and the research file itself
     flags that no off-the-shelf synthetic gate-eval benchmark was found. This is a synthetic-family candidate you would build,
     essentially unanchored in a published benchmark.</p>
@@ -226,8 +226,7 @@ recoverable from demos.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2505.14615">SATBench</a> (Wei et al., EMNLP 2025)</span> —
@@ -237,8 +236,7 @@ recoverable from demos.</code></pre>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -291,23 +289,22 @@ recoverable from demos.</code></pre>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
   <div class="step"><h3>Vendor the generator core</h3><p>Copy <code>_make_expr</code> / <code>_eval_expr</code> (~25 lines) from
   BeyondBench's <code>logical_operations_task.py</code> into an external <code>c17_gates.py</code>; do not run BeyondBench's
-  engine (instantiation is coupled to a model_handler plus disk I/O)</p></div>
+  engine (instantiation is coupled to a model_handler plus disk I/O).</p></div>
   <div class="step"><h3>Fix the verified XOR-dropping bug</h3><p>Reorder the chained string replaces (or use word-boundary regex)
   so <code>OR</code> inside <code>XOR</code> is not replaced first — the shipped code emits zero XOR instances out of two
-  hundred and falls back to trivial expressions</p></div>
+  hundred and falls back to trivial expressions.</p></div>
   <div class="step"><h3>Write the invented-gate core (the real work)</h3><p>Replace the fixed AND/OR/XOR set with N generated gate
   symbols each backed by a random truth table, and evaluate via table lookup instead of Python <code>eval</code> (~40 new
-  lines) — genuine new logic, not glue</p></div>
+  lines) — genuine new logic, not glue.</p></div>
   <div class="step"><h3>Thread a per-instance RNG</h3><p>Use an explicit <code>random.Random(seed)</code> per instance instead of
-  the module-global <code>random.seed</code>, removing the repo's global-RNG red flag on our side</p></div>
+  the module-global <code>random.seed</code>, removing the repo's global-RNG red flag on our side.</p></div>
   <div class="step"><h3>Reuse prompt + scoring glue</h3><p>Keep the <code>\boxed{}</code> prompt shape and
   <code>parse_logical_answer</code> for exact 0/1 match; add strata whose query nodes cover different gates, and add
-  multi-output or deeper circuits to escape the 50% single-bit floor</p></div>
+  multi-output or deeper circuits to escape the 50% single-bit floor.</p></div>
 </div>
 
 <div class="grid-2 space-top">
@@ -315,11 +312,11 @@ recoverable from demos.</code></pre>
     <h3>Risks</h3>
     <ul>
       <li>The gate-evaluation core is a rewrite, not config: the repo evaluates standard ops via <code>eval</code>, so
-      table-driven invented-gate evaluation is net-new logic that must be authored and tested</li>
+      table-driven invented-gate evaluation is net-new logic that must be authored and tested.</li>
       <li>The shipped XOR bug is confirmed live (0/200 XOR instances) and the repo's own tests do not catch it — the fix is
-      one-line but is a hard prerequisite, and module-global RNG discipline must be enforced per instance</li>
+      one-line but is a hard prerequisite, and module-global RNG discipline must be enforced per instance.</li>
       <li>Coarse single-token boolean output carries a 50% guess floor on the binary variant; strata must use multiple outputs /
-      deeper circuits or an MC verdict to keep the effect size resolvable on 10-20 tasks</li>
+      deeper circuits or an MC verdict to keep the effect size resolvable on 10-20 tasks.</li>
     </ul>
   </div>
   <div class="card">
@@ -327,8 +324,7 @@ recoverable from demos.</code></pre>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/ctrl-gaurav/BeyondBench">BeyondBench</a> (Apache-2.0) —
       deep-read notes at <a href="../repos/beyondbench.md">repos/beyondbench.md</a>. I1 = 2.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status pass">verified</span>
+      <li><span class="key">Run verification:</span> <span class="status pass">verified</span>
         (2026-07-21). Ran the real <code>LogicalOperationsTask.generate_data</code>: same seed twice was byte-identical
         (matching md5), a different seed diverged substantially, and an independent recursive-descent evaluator matched all 50
         of 50 emitted instances. The XOR-dropping bug was reproduced live (0/50 XOR instances) — the one substantive defect,
@@ -337,7 +333,6 @@ recoverable from demos.</code></pre>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -363,6 +358,12 @@ recoverable from demos.</code></pre>
     <a href="../candidates-merged.html#c17">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 27 · TB 2 · I1 2 · I2 2 · I3 2 · I4 1 · I5 2 · I6 2 · Impl total 13/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations.html">recommendations.md (round 1)</a> · <a href="../recommendations-round2.html#table">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c17">candidates-merged.md</a>.
+  Regenerated from <code>c17.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

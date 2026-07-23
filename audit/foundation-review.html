@@ -6,6 +6,26 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <title>The dr-* stack covers every stage of the compression eval; the experiment loop and optimizer are the gap</title>
+<style>
+  /* page-local; doc.css v2 tokens only */
+  .space-top { margin-top: 18px; }
+  .table-wrap { margin: 14px 0; overflow-x: auto; }
+  nav.toc .group { margin: 14px 0 6px; color: var(--muted); font: 600 11px/1.4 var(--font-system); letter-spacing: .05em; text-transform: uppercase; }
+  td.path { white-space: nowrap; font: 600 13px/1.4 var(--font-system); }
+  /* status = keyed encoding (green ready / amber open), never a link */
+  .status { display: inline-block; padding: 2px 9px; border-radius: 999px; font: 600 11.5px/1.5 var(--font-system); white-space: nowrap; }
+  .status.addressed { color: var(--green); background: var(--green-soft); }
+  .status.open { color: var(--amber); background: var(--amber-soft); }
+  /* finding = keyed library-review unit (claim + evidence line) */
+  .finding { margin: 14px 0; padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .finding-head h3 { margin-bottom: 6px; font: 700 16.5px/1.3 var(--font-system); }
+  .finding p { margin: 0 0 8px; }
+  .finding .evidence { margin: 0; color: var(--muted); font-size: 13px; }
+  .steps { display: grid; gap: 14px; margin: 16px 0; }
+  .step { padding: 16px 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  .step h3 { margin-bottom: 6px; font: 700 16.5px/1.3 var(--font-system); }
+  .step p { margin: 0; color: var(--muted); font-size: 14.5px; }
+</style>
 </head>
 <body class="with-toc">
 <nav class="toc" aria-label="Contents">
@@ -25,13 +45,10 @@
 
 <main>
 <h1>The dr-* stack covers every stage of the compression eval; the experiment loop and optimizer are the gap</h1>
-<div class="byline">whetstone-ai · foundation review before planning · 2026-07-19</div>
+<p class="dek">Every pipeline stage has a home in the dr-* libraries; the eval layer does not.</p>
+<div class="byline">whetstone-ai · 2026-07-19</div>
 
-<div class="hero">
-  Every stage of the target flow — ground-truth code, encoder/decoder LLM calls, lossless compression, sandboxed test scoring — already has a home in one of the five dr-* libraries, and whetstone's surviving core supplies the <span class="key">failure taxonomy</span> and <span class="key">provider boundary</span> that connect them. What does not exist anywhere yet is the layer this project is: the <span class="key">eval program</span> that wires the stages together, the <span class="key">metric records</span> that become correctness-vs-compression pareto plots, and the <span class="key">optimizer loop</span> that proposes and selects encoder prompts. dspy's COPRO, MIPROv2, and GEPA are reviewed below as reference algorithms only — each has clear weaknesses worth improving in a from-scratch implementation.
-</div>
-
-<div class="section-head" id="verdict"><h2>Verdict: assembly problem, not a missing-parts problem</h2></div>
+<div class="section-head" id="verdict"><h2>Is this a missing-parts problem or an assembly problem?</h2><span class="tag">verdict</span></div>
 
 <div class="table-wrap">
 <table>
@@ -47,7 +64,9 @@
 </table>
 </div>
 
-<div class="section-head" id="flow"><h2>Every stage of the fixed flow maps onto an existing entry point</h2></div>
+<div class="summary">An <span class="key">assembly problem</span>. The parts exist; what does not exist anywhere yet is the layer this project is — the <span class="key">eval program</span> wiring the stages, the <span class="key">metric records</span> that become correctness-vs-compression pareto plots, and the <span class="key">optimizer loop</span> over encoder prompts. dspy's COPRO, MIPROv2, and GEPA are algorithmic references only.</div>
+
+<div class="section-head" id="flow"><h2>Where does each stage of the fixed flow already live?</h2><span class="tag">stage coverage</span></div>
 
 <p>The flow is <em>ground truth → encoder → description → compress → decompress → decoder → reconstructed code → run ground-truth tests</em>, scored as test pass rate vs compressed-description bytes over ground-truth bytes.</p>
 
@@ -70,7 +89,7 @@
 
 <div class="callout">Notably, dr-code's <code>Trace</code>/<code>Artifact</code> contract (typed artifacts, <code>Absent</code> for propagated failures, lossless serialization) and its <span class="key">CodeLeakage</span> operator — which detects the encoder smuggling literal code into the description — were built for exactly this experiment shape.</div>
 
-<div class="section-head" id="core"><h2>Whetstone today: a 576-line neutral core with no legacy design</h2></div>
+<div class="section-head" id="core"><h2>What does whetstone's surviving core give us?</h2><span class="tag">576-line neutral core</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -93,7 +112,7 @@
 
 <p class="space-top">All 47 unit tests pass; lint and typecheck are clean. Only dr-providers and dr-serialize are imported so far — dr-graph, dr-code, and dr-platform are declared dependencies awaiting the rebuild.</p>
 
-<div class="section-head" id="libs"><h2>The five libraries: strengths and the seams they leave to us</h2></div>
+<div class="section-head" id="libs"><h2>What does each library give us, and what seams does it leave?</h2><span class="tag">the five libraries</span></div>
 
 <div class="finding">
   <div class="finding-head"><h3>dr-serialize — identity never depends on serialization policy</h3></div>
@@ -125,7 +144,7 @@
   <div class="evidence">Only dr-serialize is imported (deterministic workflow IDs). It knows nothing of prompts, metrics, or pareto fronts — that read side is ours. Alpha status; CANCELLED work keys are permanently dead within a campaign, so an optimizer that cancels in-flight variants must mint fresh keys.</div>
 </div>
 
-<div class="section-head" id="optimizers"><h2>The three reference optimizers trade eval cost against proposal richness</h2></div>
+<div class="section-head" id="optimizers"><h2>How do the three reference optimizers trade cost against proposal richness?</h2><span class="tag">COPRO · MIPROv2 · GEPA</span></div>
 
 <div class="grid-3">
   <div class="card">
@@ -157,9 +176,9 @@
   </div>
 </div>
 
-<div class="callout good">GEPA's pareto archive is over <em>validation tasks</em>; our objective is a pareto front over <em>correctness and compression</em>. A from-scratch implementation can make the two-objective front the native selection structure rather than a per-task proxy — a real improvement opportunity, not just a port. The other obvious upgrades: budgeted minibatch evaluation everywhere (COPRO's absence), and proposal that can react mid-run (MIPROv2's absence).</div>
+<div class="callout">GEPA's pareto archive is over <em>validation tasks</em>; our objective is a pareto front over <em>correctness and compression</em>. A from-scratch implementation can make the two-objective front the native selection structure rather than a per-task proxy — a real improvement opportunity, not just a port. The other obvious upgrades: budgeted minibatch evaluation everywhere (COPRO's absence), and proposal that can react mid-run (MIPROv2's absence).</div>
 
-<div class="section-head" id="machinery"><h2>A reimplementation needs three primitives, not the dspy stack</h2></div>
+<div class="section-head" id="machinery"><h2>What minimal primitives replace the dspy stack?</h2><span class="tag">minimal equivalents</span></div>
 
 <div class="steps">
   <div class="step"><h3>An editable program object</h3><p>A container of named components, each with a mutable instruction string (and optionally demos). In our setting: the encoder prompt (and later the decoder prompt) as fields of a dr-graph spec — candidate identity falls out of <code>graph_digest</code> for free, replacing dspy's deepcopy-heavy program snapshots and <code>id()</code>-keyed bookkeeping.</p></div>
@@ -167,9 +186,9 @@
   <div class="step"><h3>A proposal LM channel</h3><p>Meta-prompt calls that turn attempt history (COPRO), grounded context (MIPROv2), or feedback-annotated traces (GEPA) into new instruction text — just dr-providers calls with dedicated prompts, no global LM context switching needed.</p></div>
 </div>
 
-<p class="space-top small muted">The local dspy copy also carries <code>optimizer_guides/</code> — a 19-page HTML site covering these three plus OPRO, EvoPrompt, text-gradient methods, and others — useful when we widen the algorithm search later.</p>
+<span class="aside">The local dspy copy also carries <code>optimizer_guides/</code> — a 19-page HTML site covering these three plus OPRO, EvoPrompt, text-gradient methods, and others — useful when we widen the algorithm search later.</span>
 
-<div class="section-head" id="gap"><h2>What must be built: the whetstone layer itself</h2></div>
+<div class="section-head" id="gap"><h2>What must be built?</h2><span class="tag">the whetstone layer itself</span></div>
 
 <ul>
   <li><strong>Stage implementations</strong> — the <code>run_node</code> bodies wiring encoder call → compression → decoder call → preprocessing → sandbox scoring, with whetstone failure classification at each step.</li>
@@ -181,6 +200,10 @@
 </ul>
 
 <div class="callout">One open design tension to settle during planning: the flow treats compression as a <em>pipeline stage</em> (the decoder sees decompressed text), while dr-code models compressed length as a <em>metric operator</em>. Since lossless round-trip means the decoder input equals the encoder output, measuring compression as a metric may suffice — worth deciding explicitly.</div>
+
+<div class="colophon">
+  Foundation review before planning, whetstone-ai · 2026-07-19. Libraries reviewed: dr-code, dr-providers, dr-graph, dr-serialize, dr-platform. dspy optimizers (COPRO, MIPROv2, GEPA) reviewed as algorithmic reference only. Companion audits: <a href="current-state-and-dependencies.html">current-state and dependencies</a>, <a href="code-compression-project-audit.html">experiment report</a>.
+</div>
 
 </main>
 </body>

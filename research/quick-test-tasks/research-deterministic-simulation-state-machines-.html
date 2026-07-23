@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Candidates: Deterministic Simulation, State Machines, and Protocol/Game Execution</title>
+<title>whetstone-ai · Output projection is the fix for every execution-benchmark quick-test candidate</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Candidates: Deterministic Simulation, State Machines, and Protocol/Game Execution</h1>
+<h1>Output projection turns multi-step execution benchmarks into quick-test candidates</h1>
+<p class="dek">Twelve deterministic-simulation and state-machine candidates scanned against the rubric, unranked.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,15 +21,11 @@
   <span class="here">State machines</span>
 </div>
 
-<div class="intro">
-  <p>A breadth-focused literature scan of execution and state-tracking benchmarks, evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. This domain earns attention because it offers bounded single-token / few-word answers, rich decomposition into independent latent rules, deliberate per-rule violation injection (criterion 13), and a mature literature that quantifies where models break — which directly informs floor/ceiling calibration (criteria 4 and 9). Twelve candidates below, not ranked.</p>
-</div>
+<p>A breadth-focused literature scan of execution and state-tracking benchmarks, evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. This domain earns attention because it offers bounded single-token / few-word answers, rich decomposition into independent latent rules, deliberate per-rule violation injection (criterion 13), and a mature literature that quantifies where models break — which directly informs floor/ceiling calibration (criteria 4 and 9). Twelve candidates below, not ranked.</p>
 
-<div class="verdict good">
-  <p><strong>The dominant adaptation across the whole domain is output projection.</strong> Almost every execution benchmark natively wants a <span class="key">multi-step trace</span>, which violates criterion 3's bounded output. The fix is identical everywhere: ask only for the <span class="key">final state or one derived token</span>, generated deep enough that it is not guessable. Candidates that are natively single-token need the least surgery. The best-fit picks are the <span class="key">synthetic-family</span> tasks — FSM/protocol execution (#12), invented card games (#11), circuits (#9) — which are contamination-proof by construction, at the cost of authoring effort and a reference 100%-scoring prompt.</p>
-</div>
+<p><b>The dominant adaptation across the whole domain is output projection.</b> Almost every execution benchmark natively wants a <span class="key">multi-step trace</span>, which violates criterion 3's bounded output. The fix is identical everywhere: ask only for the <span class="key">final state or one derived token</span>, generated deep enough that it is not guessable. Candidates that are natively single-token need the least surgery. The best-fit picks are the <span class="key">synthetic-family</span> tasks — FSM/protocol execution (#12), invented card games (#11), circuits (#9) — which are contamination-proof by construction, at the cost of authoring effort and a reference 100%-scoring prompt.</p>
 
-<div class="section-head" id="how-to-read"><h2>How to read the rubric-fit notes</h2></div>
+<div class="section-head" id="how-to-read"><h2>Which rubric criteria matter most for this domain?</h2></div>
 
 <p>The rubric's load-bearing criteria for this domain:</p>
 
@@ -43,7 +40,7 @@
 
 <p class="small muted">A recurring tension in this domain: most execution/state-tracking benchmarks ask for a multi-step trace (per-step queue/state), which violates criterion 3's bounded output. The adaptation is almost always the same — ask only for the final state / a single derived token, and generate depth so that the final token is not guessable. Flagged per candidate below.</p>
 
-<div class="section-head" id="summary"><h2>Candidate summary</h2></div>
+<div class="section-head" id="summary"><h2>How do the 12 candidates compare at a glance?</h2></div>
 
 <div class="table-wrap">
 <table>
@@ -65,7 +62,7 @@
 </table>
 </div>
 
-<div class="section-head" id="candidates"><h2>Candidate detail</h2></div>
+<div class="section-head" id="candidates"><h2>What is each candidate, and how does it adapt?</h2></div>
 
 <div class="grid-2">
 
@@ -167,7 +164,7 @@
 
 </div>
 
-<div class="section-head" id="cross-cutting"><h2>Cross-cutting observations</h2></div>
+<div class="section-head" id="cross-cutting"><h2>What patterns cut across the whole domain?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -192,7 +189,7 @@
   <strong>Tie-breaker (active 2025-2026 research).</strong> State-tracking / execution is a hot area — TMBench (#1), long-horizon execution (#2), FSM-in-transformers mechanistic work (#12), and cellular-automata-as-simulation (LOGOS-CA / LifeGPT, adjacent) all appeared in 2025-2026, so a quick test built here could grow into its own research direction.
 </div>
 
-<div class="section-head" id="adjacent"><h2>Adjacent items noted but not promoted to candidates</h2></div>
+<div class="section-head" id="adjacent"><h2>What adjacent items were noted but not promoted?</h2></div>
 
 <ul>
   <li><strong>Cellular-automata simulation</strong> (LOGOS-CA arXiv:2602.00036; LifeGPT arXiv:2409.12182): deterministic local-rule update, single-cell-next-state is a bounded output; promising as a synthetic family but currently framed as generative/simulation rather than a scored benchmark.</li>

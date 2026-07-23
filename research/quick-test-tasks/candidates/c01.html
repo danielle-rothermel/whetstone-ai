@@ -32,8 +32,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose.
    A chip is a label + value pair; only chips carry digits on the page. */
@@ -56,8 +57,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,17 +106,19 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<!-- (1) HEADER: id + name, status badge, dek, academic-anchor aside ----------->
 <div class="cand-head">
   <h1><span class="cand-id">c01</span>Invented-Glyph Positional Base Arithmetic</h1>
   <span class="badge gated">GATED</span>
 </div>
+<p class="dek">Gated: explicit legends one-shot the pool, implicit ones have no reachable ceiling.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">the counterfactual non-decimal base-arithmetic probe from <em>Reasoning or Reciting?</em></span> — dressed in a per-instance invented glyph alphabet so the model cannot fall back on memorized base tables.</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict bad">
-  <p><strong>Gated in round 2 — refuted by both round-1 skeptic lenses at major severity, with no concrete rescue.</strong> The task is structurally attractive: a ten-line positional evaluator gives exact ground truth, per-instance random legends make it contamination-proof, and the literature documents a genuine default-prompt floor. But it is trapped between two failure modes its own design cannot escape at once. When the base and legend are stated explicitly, a single competent instruction — read the glyph-to-digit map, apply place weights — one-shots the pool and collapses the incremental gap criterion four requires. When the quirks are left implicit, there is no writable reference prompt that reaches roughly full accuracy, so there is no known ceiling to optimize toward. Compounding this, the natural inverse of encoding a decimal into the glyph system has non-unique ground truth once null-glyph and signed-digit strata are active, which breaks exact-match scoring. The gate is a round-1 verdict-health decision, so it applies regardless of the implementation score: the only fixes are structural redesigns that turn this into a different candidate, closer to c03's opaque keyed operators. The implementation total is recorded for completeness but does not lift the gate.</p>
-  <div class="chips">
+<!-- (2) VERDICT: round-2 standing + one-paragraph why, score chips ----------->
+<p><strong>Gated in round 2 — refuted by both round-1 skeptic lenses at major severity, with no concrete rescue.</strong> The task is structurally attractive: a ten-line positional evaluator gives exact ground truth, per-instance random legends make it contamination-proof, and the literature documents a genuine default-prompt floor. But it is trapped between two failure modes its own design cannot escape at once. When the base and legend are stated explicitly, a single competent instruction — read the glyph-to-digit map, apply place weights — one-shots the pool and collapses the incremental gap criterion four requires. When the quirks are left implicit, there is no writable reference prompt that reaches roughly full accuracy, so there is no known ceiling to optimize toward.</p>
+<p>Compounding this, the natural inverse of encoding a decimal into the glyph system has non-unique ground truth once null-glyph and signed-digit strata are active, which breaks exact-match scoring. The gate is a round-1 verdict-health decision, so it applies regardless of the implementation score: the only fixes are structural redesigns that turn this into a different candidate, closer to c03's opaque keyed operators. The implementation total is recorded for completeness but does not lift the gate.</p>
+<div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
     <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
@@ -124,11 +127,10 @@
     <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
     <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">(9)</span></span>
-  </div>
 </div>
 
 <!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Evaluate a numeral in a per-instance invented glyph alphabet under a nonstandard positional base</h3>
@@ -150,7 +152,7 @@ invented legend also misses.</code></pre>
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -184,7 +186,7 @@ invented legend also misses.</code></pre>
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What live 2025-2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2512.16902">In-Context Algebra</a> (Todd et al., 2025 preprint / ICLR 2026)</span> — contextually-defined-symbol arithmetic; supports c01's invented-glyph legend-parse premise and its 2025-2026 currency (arXiv id 2512 = December 2025 submission, ICLR 2026 venue).</li>
@@ -193,7 +195,7 @@ invented legend also misses.</code></pre>
 </div>
 
 <!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -233,7 +235,7 @@ invented legend also misses.</code></pre>
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
   <div class="step"><h3>Subclass the reasoning-gym generator</h3><p><code>base_conversion</code> ships standard-glyph base conversion with no invented legend; write a new <code>ProceduralDataset</code> subclass (~80-120 LOC) that samples value + base with <code>rng = Random(seed + idx)</code>, samples an invented-glyph permutation from a nonce alphabet, and renders the source numeral under the legend</p></div>
   <div class="step"><h3>Build the oracle and strict scorer</h3><p>Compute the gold via standard integer conversion mapped through the same legend; override <code>score_answer</code> for strict 0/1 exact match (~10 LOC), since the base class gives substring partial credit</p></div>
@@ -289,6 +291,10 @@ invented legend also misses.</code></pre>
     <a href="../candidates-merged.html#c01">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>. R1 rubric score is the round-1 desk score (max 28); impl total sums 2&middot;I1+I2..I6 (max 16) and is parenthesized here because the round-1 gate makes it non-binding on standing.
+</div>
 
 </main>
 </body>

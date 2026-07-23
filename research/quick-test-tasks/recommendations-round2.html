@@ -6,17 +6,13 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Task Recommendations — Round 2</title>
+<title>Quick-Test Task Recommendations — Round 2 · whetstone-ai</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Task Recommendations — Round 2</h1>
+<h1>Codebase reuse reorders the field: adopt c19, back up with c18</h1>
+<p class="dek">The 24 candidates rescored by implementation difficulty on top of the round-1 ranking.</p>
 <div class="byline">whetstone-ai · 2026-07-21 · implementation-aware rescore</div>
-
-<div class="card">
-  <h3>Amended 2026-07-21</h3>
-  <p class="small">The round-1 tie-breaker=1 exclusion is dropped by user decision: <strong>c10, c04, and c02</strong> are folded into the official ranking on equal terms with the other 21 candidates — their I1–I6 scores were produced by the same pipeline (web discovery, desk scoring with the same rubric and exercises, deep active-path code reads under <a href="repos/">repos/</a>). Run verification carries over at the repo level for c10 and c04: their best repo, open-thought/reasoning-gym, was run-verified during round 2 under c24 (same-seed byte-identical, 6/6 independent ground-truth checks), while their candidate-specific task logic (interlocking-cycle semantics for c10, rewrite-system tasks for c04) is authored on top of the reused infra; c02's NUMCoT scored I1=1 and never met the run-verification bar. No previously published relative order changes — the three insert at ranks 5 (c10), 7 (c04), and 12 (c02), giving 20 ranked + 4 gated = 24 — and the adoption call (<strong>c19 adopt, c18 backup</strong>) is unchanged.</p>
-</div>
 
 <div class="family-nav">
   <a href="../../design/quick-test-rubric.html">Quick-test rubric</a>
@@ -25,15 +21,13 @@
   <a href="landscape.html">Landscape</a>
 </div>
 
-<div class="intro">
-  <p>Round 2 rescores the 24 candidates by <span class="key">implementation difficulty</span>, layered on top of the round-1 rubric ranking (initially published over the 21 candidates surviving the round-1 tie-breaker filter; the amendment above folds the three tie-breaker-1 candidates back in). Round 1 (<a href="recommendations.html">recommendations.html</a>) is preserved unchanged; this document supersedes its adoption call, not its design analysis. New inputs: per-candidate web discovery of reusable codebases, deep active-path code reads (<a href="repos/">repos/</a>), and run verification of finalist generators.</p>
+<p>Round 2 rescores the 24 candidates by <span class="key">implementation difficulty</span>, layered on top of the round-1 rubric ranking. Round 1 (<a href="recommendations.html">recommendations.html</a>) is preserved unchanged; this document supersedes its adoption call, not its design analysis. New inputs: per-candidate web discovery of reusable codebases, deep active-path code reads (<a href="repos/">repos/</a>), and run verification of finalist generators.</p>
+
+<div class="summary">
+  <p><b>Adopt c19 — Grid-World State Prediction on Farama-Foundation/Minigrid (14/16).</b> The only candidate combining a <span class="key">run-verified I1=3 codebase</span> with <span class="key">verification-only skeptic debt</span>: Apache-2.0, actively maintained, seed plumbing confirmed byte-identical, and the entire diff is ~120–200 lines of glue with zero repo edits. <b>Backup: c18 — Depth-Controlled Synthetic Deduction on asaparov/prontoqa (13/16)</b> — the other run-verified I1=3 generator (~100 lines of external glue). The prontoqa harness built for c18 is ~80% of a harness for <strong>c21</strong>, the round-1 winner (now #6 at 11/16), so the backup path keeps round 1's theoretical favorite alive at marginal cost.</p>
 </div>
 
-<div class="verdict good">
-  <p><strong>Adopt c19 — Grid-World State Prediction on Farama-Foundation/Minigrid (14/16).</strong> The only candidate combining a <span class="key">run-verified I1=3 codebase</span> with <span class="key">verification-only skeptic debt</span>: Apache-2.0, actively maintained, seed plumbing confirmed byte-identical, and the entire diff is ~120–200 lines of glue with zero repo edits. <strong>Backup: c18 — Depth-Controlled Synthetic Deduction on asaparov/prontoqa (13/16)</strong> — the other run-verified I1=3 generator (~100 lines of external glue). The prontoqa harness built for c18 is ~80% of a harness for <strong>c21</strong>, the round-1 winner (now #6 at 11/16), so the backup path keeps round 1's theoretical favorite alive at marginal cost.</p>
-</div>
-
-<div class="section-head" id="method"><h2>Methodology: codebase reuse is the primary sort key</h2></div>
+<div class="section-head" id="method"><h2>How were the candidates rescored?</h2><span class="tag">methodology · reuse is the primary sort key</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -60,9 +54,9 @@
   </div>
 </div>
 
-<div class="section-head" id="table"><h2>Full rescore: all 24 candidates (20 ranked + 4 gated)</h2></div>
+<div class="section-head" id="table"><h2>How do all 24 candidates rank?</h2><span class="tag">full rescore · 20 ranked + 4 gated</span></div>
 
-<p class="small muted">Sorted by implementation total; ties broken by I1 (per the reuse priority), then round-1 score, then round-1 tie-breaker. c09 edges c08 on salvageable-code substance. The three amendment fold-ins (c10, c04, c02) are marked ◆. c13 was desk-scored by a follow-up agent after its in-run scorer failed; the scores confirmed the synthesis estimates cell-for-cell, and its I1=0 is firm. Gated rows are ineligible regardless of total.</p>
+<p class="aside">Sorted by implementation total; ties broken by I1 (per the reuse priority), then round-1 score, then round-1 tie-breaker. c09 edges c08 on salvageable-code substance. The three amendment fold-ins (c10, c04, c02) are marked ◆. c13 was desk-scored by a follow-up agent after its in-run scorer failed; the scores confirmed the synthesis estimates cell-for-cell, and its I1=0 is firm. Gated rows are ineligible regardless of total.</p>
 
 <div class="table-wrap">
 <table>
@@ -205,16 +199,15 @@
 
 <p class="small space-top"><strong>Amendment note (2026-07-21):</strong> the adoption call above is unchanged (c19 adopt, c18 backup), but c10 (#5) and c04 (#7) are newly competitive options sharing the already-run-verified reasoning-gym base with c24 — one harness (reasoning-gym as a dependency, a generator subclass, a strict 0/1 <code>score_answer</code> override) could serve c24, c10, and c04.</p>
 
-<div class="verdict bad space-top">
+<div class="callout">
   <p><strong>Do not invest</strong> in c12/c13/c14/c16 — no reusable codebase exists, so every hour is from-scratch construction — or in the gated c01/c05/c07/c15, whose round-1 refutations have no concrete rescue.</p>
 </div>
 
-<div class="section-head" id="changelog"><h2>Change log</h2></div>
-
-<div class="card">
+<div class="colophon">
+  Implementation-aware rescore of the 24 quick-test candidates, layered on <a href="recommendations.html">round 1</a> (preserved unchanged; this supersedes its adoption call, not its design analysis). Scores drawn from web discovery, desk scoring against the same rubric, deep active-path code reads (<a href="repos/">repos/</a>), and run verification of finalist generators.
   <ul>
     <li><strong>2026-07-21 — initial publication.</strong> Round-2 rescore over the 21 candidates surviving the round-1 tie-breaker filter (17 ranked + 4 gated).</li>
-    <li><strong>2026-07-21 — amendment (fold-in).</strong> Tie-breaker=1 exclusion dropped by user decision; c10, c04, and c02 folded into the ranking on equal terms at ranks 5, 7, and 12 (20 ranked + 4 gated = 24). No previously published relative order changed; adoption call (c19 adopt, c18 backup) unchanged.</li>
+    <li><strong>2026-07-21 — amendment (fold-in).</strong> The tie-breaker=1 exclusion was dropped by user decision; c10, c04, and c02 folded into the official ranking on equal terms at ranks 5, 7, and 12 (20 ranked + 4 gated = 24). Their I1–I6 cells came from the same pipeline; reasoning-gym run-verification carries over from c24 for c10 and c04 (task logic authored on top), while c02's NUMCoT scored I1=1 and never met the run-verification bar. No previously published relative order changed; the adoption call (c19 adopt, c18 backup) is unchanged.</li>
   </ul>
 </div>
 

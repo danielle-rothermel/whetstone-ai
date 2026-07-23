@@ -32,8 +32,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose.
    A chip is a label + value pair; only chips carry digits on the page. */
@@ -56,8 +57,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,30 +106,32 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
+<!-- (1) HEADER: id + name, status badge, dek, academic-anchor aside ----------->
 <div class="cand-head">
   <h1><span class="cand-id">c06</span>Artificial-Grammar Violation Classification</h1>
   <span class="badge ranked">RANKED #13</span>
 </div>
+<p class="dek">A 28-tier finalist held mid-pack: keeping the ladder honest converges it on c21 and c03.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">formal-language / subregular membership testing (MLRegTest, Dyck)</span> — reframed from binary accept/reject into a multiple-choice "which rule class does this string violate" task.</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain tone: ranked, neither adopted nor gated -->
-  <p><strong>28-tier finalist, held at #13 after the implementation-aware rescore.</strong>
+<!-- (2) VERDICT: round-2 standing + one-paragraph why, score chips ----------->
+<p><strong>28-tier finalist, held at #13 after the implementation-aware rescore.</strong>
   This candidate entered round 2 as one of seven verified round-1 finalists, and on the design
   its appeal is real: a seeded formal grammar produces strings that are either well-formed or
   carry exactly one injected violation, and the model answers with a single multiple-choice letter
   naming the violated rule class, so scoring is trivially exact and each captured constraint catches
-  one violation class in a clean incremental ladder. The rescore pushed it down because the moves
+  one violation class in a clean incremental ladder.</p>
+  <p>The rescore pushed it down because the moves
   that keep the ladder honest &mdash; non-mnemonic rule instantiations plus label recomputation &mdash;
   shift the headroom off execution difficulty and onto hidden rule tables, at which point it converges
-  on what c21 and c03 already do more cleanly, and its convention-exploiting-prompt floor needs a
+  on what <a href="c21.html">c21</a> and <a href="c03.html">c03</a> already do more cleanly, and its convention-exploiting-prompt floor needs a
   red-team gate the other finalists do not. Both reusable repos donate a genuinely independent membership
   oracle but emit only a binary accept/reject label with no rule-violation taxonomy, so the entire
-  multiclass strata layer is new code and the generator was never run-verified for this task.
-  <span class="muted small">(Provenance note: recommendations.md line 230 records "28/28"; the
-  authoritative round-1 score/tie-break is 28/2, used in the chips below.)</span></p>
-  <div class="chips">
+  multiclass strata layer is new code and the generator was never run-verified for this task.</p>
+  <p class="aside">Provenance note: recommendations.md line 230 records "28/28"; the
+  authoritative round-1 score/tie-break is 28/2, used in the chips below.</p>
+  <div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
     <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
@@ -138,10 +141,9 @@
     <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">9</span></span>
   </div>
-</div>
 
 <!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>A grammar-violation classifier where the MC letter names the broken rule</h3>
@@ -183,7 +185,7 @@ most two of the four classes.</code></pre>
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -213,7 +215,7 @@ most two of the four classes.</code></pre>
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What live 2025-2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2604.20811">Diagnosing CFG Interpretation in LLMs / RoboGrid</a> (Li et al., arXiv 2026)</span> — directly tests LLMs on novel CFGs at inference and stress-tests recursion depth and complexity, which is exactly the c06 nesting / grammar-from-context threat model.</li>
@@ -223,7 +225,7 @@ most two of the four classes.</code></pre>
 </div>
 
 <!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -263,7 +265,7 @@ most two of the four classes.</code></pre>
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
   <div class="step"><h3>Vendor automata + oracle, not samplers</h3><p>Take the ~1,470 committed <code>.fst</code> files and the three-line composition oracle (<code>pynini.acceptor(s) @ fsa</code> non-empty == accepted) from heinz-jeffrey/subregular-learning; the 13-family filename tag becomes the latent-rule strata. Repo edits: zero — treat it as a data + oracle donor</p></div>
   <div class="step"><h3>Write a seeded sampler</h3><p>Author <code>c06_gen.py</code> (~90 LOC, outside the repo) with a threaded <code>random.Random(seed)</code> drawing fixed-length strings over each FST's alphabet, because neither donor's sampler is controllably re-seedable</p></div>
@@ -319,6 +321,10 @@ most two of the four classes.</code></pre>
     <a href="../candidates-merged.html#c06">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>.
+</div>
 
 </main>
 </body>

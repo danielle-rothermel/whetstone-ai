@@ -88,9 +88,10 @@ table.pos-table td.num { font-variant-numeric: tabular-nums; text-align: right; 
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c22.html">&larr; Back to c22 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c22.html">&larr; c22 candidate page</a></nav>
 
-<h1>c22 Related Work: Stacked Verifiable-Constraint Micro-Generation</h1>
+<h1>c22's baseline sits in the most crowded corner; its novelty lives in a layer the baseline never exercises</h1>
+<p class="dek">Eleven 2023–2026 constraint-following papers, positioned against c22's stacked-atom micro-generation design.</p>
 <div class="byline">whetstone-ai · 2026-07-22</div>
 
 <p>Eleven 2023-2026 papers bound c22's design space. c22's un-optimized baseline —
@@ -104,7 +105,7 @@ IF-RewardBench) states its branch condition in the prompt. The corpus also conta
 error, corrected below.</p>
 
 <!-- PAPER DOSSIERS -->
-<div class="section-head"><h2>Paper dossiers</h2></div>
+<div class="section-head"><h2>What does each paper claim, and does it support the corpus's use of it?</h2><span class="tag">Paper dossiers</span></div>
 
 <div class="paper-card">
   <div class="paper-head">
@@ -519,7 +520,7 @@ error, corrected below.</p>
 </div>
 
 <!-- POSITIONING MAP -->
-<div class="section-head"><h2>Positioning map</h2></div>
+<div class="section-head"><h2>Where does c22 sit in the family, and which cells are empty?</h2><span class="tag">Positioning map</span></div>
 <p>Three axes organize this family: <span class="key">verifier type</span> (deterministic code &rarr; hybrid
 &rarr; LLM judge &rarr; symbolic execution), <span class="key">rule provenance</span> (stated atoms &rarr;
 stated composition &rarr; hidden/discover &rarr; source-priority), and <span class="key">output shape</span>
@@ -582,7 +583,7 @@ by construction for 2025-2026 papers (indexing lag, not irrelevance). Treat as a
 </div>
 
 <!-- CAPABILITY SYNTHESIS -->
-<div class="section-head"><h2>Capability synthesis</h2></div>
+<div class="section-head"><h2>What accuracy should the reseed-only baseline expect?</h2><span class="tag">Capability synthesis</span></div>
 <p class="small muted">Scoped to c22's <span class="key">reseed-only baseline</span>: standard IFEval checker
 atoms only, no OOD/invented atoms, no Selection constraints yet — the framing that removes exactly the two
 mechanisms carrying c22's anti-enumeration story, so the evidence that applies most directly is the
@@ -627,7 +628,7 @@ IFEval/IFBench-in-domain/VFF/FollowBench body of work.</p>
   (76&rarr;53&rarr;35).</p>
 </div>
 
-<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the reseed-only baseline</h2></div>
+<div class="section-head" style="margin-top:32px;"><h2>What floor and ceiling should the reseed-only baseline hit?</h2><span class="tag">Floor &amp; ceiling</span></div>
 <p>Setup: cheap tier, temp 0, strict all-pass, 3-5 stated IFEval atoms sampled fresh per instance over a
 trivial micro-task. This is the intersection of the <span class="key">easiest task shape</span> in the
 literature (micro-output neutralizes the length/count confound) and the <span class="key">least-measured
@@ -669,7 +670,7 @@ model tier</span> — no dossier tests this exact cell, so both ranges carry rea
 </div>
 
 <!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
-<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+<div class="section-head"><h2>Is the baseline publishable, and as what?</h2><span class="tag">Positioning &amp; publishability</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -722,6 +723,17 @@ model tier</span> — no dossier tests this exact cell, so both ranges carry rea
   strength of the family and of c22's full design, and a genuine weakness of c22's baseline as specced.</span>
   The publishable path leans on optimizer-benchmarking currency (GEPA/MAS-PromptBench), not on out-citing the
   IF-benchmark corner.</p>
+</div>
+
+<div class="colophon">
+  <p>whetstone-ai &middot; 2026-07-22. Synthesized from the c22 work products —
+  <a href="work/c22/synthesis-positioning.md">synthesis-positioning.md</a>,
+  <a href="work/c22/synthesis-capability.md">synthesis-capability.md</a> — and the eleven per-paper
+  dossiers (<code>work/c22/dossier-*.json</code>). Citation counts fetched from OpenAlex on 2026-07-22.</p>
+  <p>OpenAlex counts materially undercount relative to Google Scholar and are near-zero by construction for
+  2025&ndash;2026 papers (indexing lag, not irrelevance); each is flagged inline where used and should be read
+  as a coarse recency signal only. Corrections to corpus claims are marked <span class="fix">correction</span>
+  in the affected dossier.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">
