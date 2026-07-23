@@ -78,6 +78,7 @@ def _config(
     attempt: int = 0,
     canonical: bool = True,
     lane: str = "openrouter",
+    power_config=None,
 ) -> CellConfig:
     return CellConfig(
         optimizer=optimizer,
@@ -95,6 +96,7 @@ def _config(
         pool_n_per_stratum=_pool_n(env),
         split_sizes=SPLIT,
         execution_mode=ExecutionMode.IN_PROCESS,
+        power_config=power_config,
     )
 
 
@@ -525,3 +527,117 @@ def test_stop_loss_halts_cell(tmp_path: Path) -> None:
     )
     assert outcome.record.status == "halted"
     assert outcome.record.spend_usd == pytest.approx(5.0)
+
+
+# --- Opt-in pre-run statistical-power stage --------------------------------
+
+
+def _power_cfg(alpha: float = 0.25):
+    from whetstone.runner.power import PowerConfig
+
+    # A small repeat cap + trials keeps the fake-cell test fast + seeded.
+    return PowerConfig(alpha=alpha, repeat_cap=6, trials=400, seed=99)
+
+
+def test_cell_power_stage_off_is_byte_identical(tmp_path: Path) -> None:
+    # The opt-in inertness guarantee: with power_config None (the default), the
+    # cell record + optimization trace are IDENTICAL to a run that never knew
+    # about the power stage. Only power_sizing/power_analysis_ref differ (both
+    # null), and no power_analysis artifact is written.
+    env = "c11"
+    exp = tiny_experiment(env)
+
+    def _run(root: Path, power_config):
+        cfg = _config(
+            env, optimizer="copro",
+            rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+            proposer_transport=ScriptedProposer((WIN,)),
+            power_config=power_config,
+        )
+        ledger = Ledger(root=root)
+        out = run_cell(
+            cfg, ledger=ledger,
+            credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+        )
+        return out.record, ledger
+
+    off_record, off_ledger = _run(tmp_path / "off", None)
+    # A second OFF run in a fresh root must produce an identical record (minus
+    # the cell-id-independent bits, which are the same here).
+    off2_record, _ = _run(tmp_path / "off2", None)
+
+    off_dump = off_record.model_dump(mode="json")
+    off2_dump = off2_record.model_dump(mode="json")
+    # Wall time is the only nondeterministic field; drop it before comparing.
+    off_dump.pop("wall_s")
+    off2_dump.pop("wall_s")
+    assert off_dump == off2_dump
+    # Power fields are inert (null) and NO artifact directory was created.
+    assert off_record.power_sizing is None
+    assert off_record.artifacts.power_analysis_ref is None
+    assert not (tmp_path / "off" / "power_analysis").exists()
+    # The optimizer trace records the brief-sourced internal task count.
+    import json
+
+    trace = json.loads(
+        off_ledger.optimization_trace_path(off_record.cell_id).read_text()
+    )
+    assert trace["internal_task_count_source"] == "brief"
+
+
+def test_cell_power_stage_on_writes_artifact_and_sets_sizes(
+    tmp_path: Path,
+) -> None:
+    # With the power stage ON: a power_analysis artifact is written, the cell
+    # line references it + records recommended-vs-used sizing, and the trace
+    # trace records the power-sourced internal task count.
+    import json
+
+    env = "c11"
+    exp = tiny_experiment(env)
+    cfg = _config(
+        env, optimizer="copro",
+        rollout_transport=FakeTransport(reply=improvement_reply(exp, WIN)),
+        proposer_transport=ScriptedProposer((WIN,)),
+        power_config=_power_cfg(),
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg, ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # The cell still completed (the power stage only sizes, never blocks).
+    assert r.status in {"improved", "inconclusive", "no-improvement"}
+    # The power_analysis artifact was written and is referenced from the line.
+    power_path = ledger.power_analysis_path(r.cell_id)
+    assert power_path.exists()
+    assert r.artifacts.power_analysis_ref == str(
+        power_path.relative_to(tmp_path)
+    )
+    art = json.loads(power_path.read_text())
+    assert art["schema"] == "whetstone.runner.power_analysis/v1"
+    # Full n x r surface + variance decomposition + recommendation persisted.
+    assert art["surface"]
+    assert "variance_decomposition" in art
+    assert "recommendation" in art
+    assert art["pool_ceiling"] == len(exp.eval_configs.internal.instances)
+    # The cell line records recommended-vs-used internal sizing.
+    ps = r.power_sizing
+    assert ps is not None
+    assert ps.used_n_tasks <= ps.pool_ceiling  # clamped to pool
+    assert ps.recommended_n_tasks >= 1
+    # The trace records the power-sourced internal task count (recommended-vs-
+    # brief both retained).
+    trace = json.loads(
+        ledger.optimization_trace_path(r.cell_id).read_text()
+    )
+    assert trace["internal_task_count_source"] == "power_stage"
+    assert trace["internal_task_count_scaled"] == ps.used_n_tasks
+    assert "internal_task_count_brief" in trace
+    # The trace reference resolves + the power reference resolves.
+    trace_ref = r.artifacts.optimization_result_ref
+    power_ref = r.artifacts.power_analysis_ref
+    assert trace_ref is not None and power_ref is not None
+    assert (tmp_path / trace_ref).exists()
+    assert (tmp_path / power_ref).exists()

@@ -20,7 +20,15 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    StrictStr,
+    model_validator,
+)
 
 __all__ = [
     "CELL_STATUSES",
@@ -115,6 +123,33 @@ class CellArtifacts(BaseModel):
     best_candidate_id: StrictStr | None = None
     official_record_before: StrictStr | None = None
     official_record_after: StrictStr | None = None
+    #: The per-cell power-analysis artifact path (relative to the ledger root),
+    #: e.g. ``power_analysis/copro__c22__a0.json``. ``None`` when the opt-in
+    #: power stage did not run (the strict default).
+    power_analysis_ref: StrictStr | None = None
+
+
+class PowerSizing(BaseModel):
+    """The power stage's recommended-vs-used internal-eval sizing.
+
+    Present on the cell line ONLY when the opt-in power stage ran; ``None``
+    otherwise (so a run without the stage is byte-identical). Records BOTH the
+    recommendation (from the power analysis) and the AS-USED sizes (clamped to
+    the pool), so a later reader sees exactly what was recommended and what was
+    driven.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    recommended_n_tasks: StrictInt
+    recommended_repeats: StrictInt
+    used_n_tasks: StrictInt
+    used_repeats: StrictInt
+    pool_ceiling: StrictInt
+    achievable: StrictBool
+    pool_limited: StrictBool
+    target_gap: float
+    achieved_mdd: float
 
 
 class CellRecord(BaseModel):
@@ -175,6 +210,9 @@ class CellRecord(BaseModel):
     sampling_overrides: CellSamplingOverrides = Field(
         default_factory=CellSamplingOverrides
     )
+    #: The opt-in power stage's recommended-vs-used internal sizing; ``None``
+    #: when the power stage did not run (a run without it is byte-identical).
+    power_sizing: PowerSizing | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> CellRecord:
@@ -327,6 +365,32 @@ class Ledger:
         """
         safe = cell_id.replace(":", "__")
         return self.optimization_traces_dir / f"{safe}.json"
+
+    @property
+    def power_analysis_dir(self) -> Path:
+        return self.root / "power_analysis"
+
+    def power_analysis_path(self, cell_id: str) -> Path:
+        """The per-cell power-analysis artifact path (``:`` -> ``__``)."""
+        safe = cell_id.replace(":", "__")
+        return self.power_analysis_dir / f"{safe}.json"
+
+    def write_power_analysis(
+        self, cell_id: str, artifact: dict[str, object]
+    ) -> Path:
+        """Write (overwrite) the per-cell ``power_analysis`` artifact.
+
+        One JSON per cell id under ``<root>/power_analysis/``. Holds the full
+        (n x r) MDD surface, the variance decomposition, alpha/target/seed, the
+        certified headroom used, the recommended n_tasks/repeats +
+        achievability verdict, and the pool ceiling -- everything needed to
+        re-derive or deepen the analysis later. The path is recorded on the
+        cell line so the artifact is discoverable from the ledger.
+        """
+        self.power_analysis_dir.mkdir(parents=True, exist_ok=True)
+        path = self.power_analysis_path(cell_id)
+        path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+        return path
 
     def write_optimization_trace(
         self, cell_id: str, trace: dict[str, object]

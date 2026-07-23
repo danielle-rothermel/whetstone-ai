@@ -64,6 +64,8 @@ def test_cell_record_exact_schema_fields() -> None:
         "escalated", "escalation_note", "pooled_observation_counts",
         # Reduced-sampling overrides (--official-n / --official-repeats).
         "sampling_overrides",
+        # Opt-in power stage (None unless --power-stage ran).
+        "power_sizing",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
@@ -71,7 +73,11 @@ def test_cell_record_exact_schema_fields() -> None:
         "best_candidate_id",
         "official_record_before",
         "official_record_after",
+        "power_analysis_ref",
     }
+    # The power stage did NOT run -> both power fields null (inert default).
+    assert dumped["power_sizing"] is None
+    assert dumped["artifacts"]["power_analysis_ref"] is None
 
 
 def test_invalid_status_rejected() -> None:

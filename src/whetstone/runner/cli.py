@@ -67,6 +67,7 @@ from whetstone.runner.pilot import (
     PilotReport,
     run_pilot,
 )
+from whetstone.runner.power import DEFAULT_ALPHA, PowerConfig
 from whetstone.runner.routes import (
     CANONICAL_PROPOSER_MODEL,
     LANE_NAMES,
@@ -285,6 +286,26 @@ def build_parser() -> argparse.ArgumentParser:
             "'codex-cli/<model>' into the proposer Config identity and "
             "records it in cells.jsonl models.proposer. Default (unset): the "
             "canonical OpenRouter gpt-5.4-nano proposer."
+        ),
+    )
+    cell.add_argument(
+        "--power-stage",
+        nargs="?",
+        type=float,
+        const=DEFAULT_ALPHA,
+        default=None,
+        metavar="ALPHA",
+        help=(
+            "OPT-IN pre-run statistical-power stage (default OFF). Runs after "
+            "the anchor arms: estimates the internal-eval sample size "
+            "(n_tasks x repeats) needed to reliably rank candidates whose "
+            f"score gap >= ALPHA x headroom (default ALPHA={DEFAULT_ALPHA}) "
+            "at the target ranking probability, persists a per-cell "
+            "power_analysis artifact (the full n x r MDD surface + variance "
+            "decomposition), and SETS the optimizer's internal sizes from the "
+            "recommendation (clamped to pool; recommended-vs-used recorded). "
+            "ABSENT (the default), behavior + internal-eval sizes are "
+            "byte-identical to a run without it."
         ),
     )
     cell.add_argument(
@@ -876,8 +897,22 @@ def _build_cell_config(
         ),
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
+        power_config=_power_config_for(args),
     )
     return config, task_route
+
+
+def _power_config_for(args: argparse.Namespace) -> PowerConfig | None:
+    """The opt-in power-stage config, or ``None`` (the strict default = OFF).
+
+    ``--power-stage`` with no value uses the default alpha; ``--power-stage
+    0.3`` sets alpha=0.3. Absent, returns ``None`` -- the power stage does not
+    run and the cell is byte-identical to a run without it.
+    """
+    alpha = getattr(args, "power_stage", None)
+    if alpha is None:
+        return None
+    return PowerConfig(alpha=float(alpha))
 
 
 def _run_cell(args: argparse.Namespace) -> int:  # pragma: no cover - live

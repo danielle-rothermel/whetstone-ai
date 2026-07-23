@@ -53,6 +53,7 @@ from whetstone.runner.ledger import (
     CellSamplingOverrides,
     EnvOfficialCache,
     Ledger,
+    PowerSizing,
     SpendRecord,
 )
 from whetstone.runner.optimizers import (
@@ -60,6 +61,7 @@ from whetstone.runner.optimizers import (
     OptimizeResult,
     run_optimize,
 )
+from whetstone.runner.power import PowerConfig, PowerResult, analyze_power
 from whetstone.runner.statistics import (
     BootstrapCI,
     bootstrap_mean_ci,
@@ -153,6 +155,13 @@ class CellConfig:
     completeness: Completeness = Completeness.PROPAGATE
     #: The declared completeness tolerance (fraction). Inert under PROPAGATE.
     max_skip_fraction: float = 0.0
+    #: OPT-IN pre-run statistical-power stage (``--power-stage``). ``None``
+    #: (the strict default) the power stage is OFF and behavior + internal-eval
+    #: sizes are byte-identical to a run without it. When set, the power stage
+    #: runs after the anchor arms, persists a per-cell ``power_analysis``
+    #: artifact, and SETS the optimizer's internal-eval sizes from the
+    #: recommendation (clamped to pool), recording recommended-vs-used.
+    power_config: PowerConfig | None = None
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -381,6 +390,68 @@ def _write_optimization_trace(
     return str(
         ledger.optimization_trace_path(cell_id).relative_to(ledger.root)
     )
+
+
+def _run_power_stage(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    naive_per_task: tuple[float, ...],
+    ceiling_per_task: tuple[float, ...],
+    pool_ceiling: int,
+) -> tuple[str | None, PowerSizing | None, int | None]:
+    """Run the opt-in power stage: persist the artifact + return the sizing.
+
+    Uses the anchor arms' per-task vectors (naive + ceiling) to compute the
+    internal sample-size recommendation, writes the per-cell ``power_analysis``
+    artifact, and returns ``(power_ref, power_sizing, task_override)``.
+    When the ceiling arm has no per-task vector (never measured), the stage is
+    skipped (returns all ``None``) -- it needs both anchors. The used sizes are
+    the recommendation CLAMPED to the pool (n); the caller's repeat budget is
+    taken from ``power_sizing.used_repeats``.
+    """
+    power_cfg = config.power_config
+    if (
+        power_cfg is None
+        or not naive_per_task
+        or not ceiling_per_task
+        or len(naive_per_task) != len(ceiling_per_task)
+    ):
+        return (None, None, None)
+    result: PowerResult = analyze_power(
+        naive_per_task=naive_per_task,
+        ceiling_per_task=ceiling_per_task,
+        pool_ceiling=pool_ceiling,
+        anchor_repeats=config.official_repeats_effective(),
+        config=power_cfg,
+    )
+    header = {
+        "cell_id": cell_id,
+        "optimizer": config.optimizer,
+        "env": config.env,
+        "attempt": config.attempt,
+        "task_model": config.task_model,
+    }
+    ledger.write_power_analysis(cell_id, result.to_artifact(header=header))
+    power_ref = str(
+        ledger.power_analysis_path(cell_id).relative_to(ledger.root)
+    )
+    rec = result.recommendation
+    used_n = min(rec.recommended_n_tasks, pool_ceiling)
+    used_r = rec.recommended_repeats
+    sizing = PowerSizing(
+        recommended_n_tasks=rec.recommended_n_tasks,
+        recommended_repeats=rec.recommended_repeats,
+        used_n_tasks=used_n,
+        used_repeats=used_r,
+        pool_ceiling=pool_ceiling,
+        achievable=rec.achievable,
+        pool_limited=rec.pool_limited,
+        target_gap=rec.target_gap,
+        achieved_mdd=rec.achieved_mdd,
+    )
+    return (power_ref, sizing, used_n)
 
 
 def _rejected_candidates_note(opt: OptimizeResult) -> str | None:
@@ -1004,6 +1075,30 @@ def run_cell(
             resumed=resumed, restarted=restarted,
         )
 
+    # --- 1b. OPT-IN pre-run statistical-power stage (after anchors). ---
+    # With ``power_config`` None (the strict default) this is a no-op and the
+    # internal-eval sizes are byte-identical to a run without it. When set, it
+    # computes the internal sample-size recommendation from the anchor per-task
+    # vectors, persists the ``power_analysis`` artifact, and SETS the
+    # optimizer's internal task count / repeats from the recommendation.
+    power_ref: str | None = None
+    power_sizing: PowerSizing | None = None
+    internal_task_count_override: int | None = None
+    internal_repeats = config.repeats
+    if config.power_config is not None:
+        power_ref, power_sizing, internal_task_count_override = (
+            _run_power_stage(
+                config=config, cell_id=cell_id, ledger=ledger,
+                naive_per_task=naive_per_task,
+                ceiling_per_task=ceiling_per_task,
+                pool_ceiling=len(
+                    experiment.eval_configs.internal.instances
+                ),
+            )
+        )
+        if power_sizing is not None:
+            internal_repeats = power_sizing.used_repeats
+
     # --- 2. Optimize on the internal split (Reward only). ---
     # Residual hardening: a searching optimizer's internal measurement can
     # still raise a typed CandidateEvaluationFailure when internal rollouts
@@ -1022,10 +1117,11 @@ def run_cell(
             rollout_transport=config.rollout_transport,
             execution_policy=config.execution_policy,
             internal_instances=experiment.eval_configs.internal.instances,
-            repeats=config.repeats,
+            repeats=internal_repeats,
             store=backing,
             execution_mode=config.execution_mode,
             fanout=_fanout(),
+            internal_task_count_override=internal_task_count_override,
         )
     except CandidateEvaluationFailure as exc:
         return _incomplete_internal_arm(
@@ -1279,6 +1375,16 @@ def run_cell(
     reject_note = _rejected_candidates_note(opt)
     if reject_note is not None:
         notes.append(reject_note)
+    # The power stage, when it ran, records whether its internal-size
+    # recommendation was achievable within the pool -- a pool-limited verdict
+    # surfaced LOUDLY on the line (never a silent clamp), per the c22 case.
+    if power_sizing is not None and power_sizing.pool_limited:
+        notes.append(
+            "power-stage POOL-LIMITED: no (n,r) within pool x r-cap reaches "
+            f"the target gap {power_sizing.target_gap:.3f}; best achievable "
+            f"MDD {power_sizing.achieved_mdd:.3f} at "
+            f"n={power_sizing.used_n_tasks}, r={power_sizing.used_repeats}"
+        )
     if concurrency_halved:
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"
@@ -1340,8 +1446,10 @@ def run_cell(
             best_candidate_id=opt.best_candidate.candidate_id,
             official_record_before=baseline_before_ref,
             official_record_after=best.artifact_ref.content_hash,
+            power_analysis_ref=power_ref,
         ),
         sampling_overrides=config.record_overrides(),
+        power_sizing=power_sizing,
     )
     ledger.append_cell(record)
     # A cleanly-completed (non-halted) cell has its authoritative result in the

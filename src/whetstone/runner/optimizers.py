@@ -392,6 +392,21 @@ class OptimizeResult:
                 )
                 or 0
             ),
+            # The internal-eval size provenance: "brief" (the brief-clamped
+            # default) or "power_stage" (from the power recommendation). The
+            # brief-clamped value is retained for the recommended-vs-used line.
+            "internal_task_count_source": self.scaled_hyperparameters.get(
+                "internal_task_count_source", "brief"
+            ),
+            "internal_task_count_brief": int(
+                self.scaled_hyperparameters.get(
+                    "internal_task_count_brief",
+                    self.scaled_hyperparameters.get(
+                        "internal_task_count_scaled", 0
+                    ),
+                )
+                or 0
+            ),
             "steps": [step.to_trace_dict() for step in self.steps],
         }
 
@@ -431,6 +446,7 @@ def run_optimize(
     store: ObjectStore | None = None,
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
     fanout: FanoutConfig | None = None,
+    internal_task_count_override: int | None = None,
 ) -> OptimizeResult:
     """Run the optimizer on the internal split; return the best candidate.
 
@@ -445,7 +461,20 @@ def run_optimize(
     hyper = scaled_hyperparameters(
         optimizer, internal_pool_size=len(internal_instances)
     )
-    task_scope = int(hyper.get("internal_task_count_scaled", 0) or 0)
+    brief_task_scope = int(hyper.get("internal_task_count_scaled", 0) or 0)
+    # The OPT-IN power stage may override the internal task count (clamped to
+    # the pool by the caller). Absent the override, the brief-clamped value
+    # drives -- byte-identical to a run without it. The trace records both.
+    if internal_task_count_override is not None:
+        task_scope = min(
+            int(internal_task_count_override), len(internal_instances)
+        )
+        hyper["internal_task_count_brief"] = brief_task_scope
+        hyper["internal_task_count_scaled"] = task_scope
+        hyper["internal_task_count_source"] = "power_stage"
+    else:
+        task_scope = brief_task_scope
+        hyper["internal_task_count_source"] = "brief"
     scoped = (
         internal_instances[:task_scope]
         if task_scope
