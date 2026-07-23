@@ -55,7 +55,7 @@ from whetstone.runner.ledger import (
     Ledger,
     SpendRecord,
 )
-from whetstone.runner.optimizers import run_optimize
+from whetstone.runner.optimizers import OptimizeResult, run_optimize
 from whetstone.runner.statistics import (
     BootstrapCI,
     bootstrap_mean_ci,
@@ -308,6 +308,33 @@ def _tolerated_skip_note(
     if not parts:
         return None
     return "skipped rows tolerated within declared bound: " + ", ".join(parts)
+
+
+def _rejected_candidates_note(opt: OptimizeResult) -> str | None:
+    """A visible note for proposal candidates the optimizer did not score.
+
+    A proposal candidate is dropped for exactly one of two TYPED reasons: an
+    invalid-placeholder template (rejected at intake, no eval spend) or an
+    unscorable internal eval (a transient rollout wipeout left the aggregate
+    missing under the FAIL Reward policy). Each is isolated to its candidate --
+    the optimizer keeps its best-so-far and continues -- but the drop is shown
+    here so a completed cell is never silent about drafts that did not count.
+    Returns ``None`` when every drafted candidate scored.
+    """
+    rejected = [step for step in opt.steps if step.rejected]
+    if not rejected:
+        return None
+    by_reason: dict[str, int] = {}
+    for step in rejected:
+        reason = step.rejected_reason or "unknown"
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    counts = ", ".join(
+        f"{reason}={count}" for reason, count in sorted(by_reason.items())
+    )
+    return (
+        f"{len(rejected)} proposal candidate(s) not scored (isolated, "
+        f"best-so-far kept): {counts}"
+    )
 
 
 def _incomplete_arm_note(
@@ -1032,6 +1059,14 @@ def run_cell(
     )
     if tolerated_note is not None:
         notes.append(tolerated_note)
+    # Surface any proposal candidates the optimizer rejected (bad-placeholder
+    # template) or could not score (transient internal-eval wipeout) so a
+    # completed cell is LOUD about drafts that spent calls but never counted --
+    # never a silent drop. The optimizer isolated each to its own candidate and
+    # kept the best-so-far; this line makes that visible in the ledger.
+    reject_note = _rejected_candidates_note(opt)
+    if reject_note is not None:
+        notes.append(reject_note)
     if concurrency_halved:
         notes.append(
             "concurrency halved after a rate-limit failure (all lanes one key)"

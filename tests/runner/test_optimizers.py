@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
-import pytest
+from dataclasses import dataclass, field
 
+import pytest
+from dr_providers import (
+    FailureClass,
+    ProviderCallRequest,
+    ProviderInvocationEvidence,
+    ProviderTransportFailure,
+    ProviderTransportPolicy,
+    RawHttpRequest,
+)
+
+from tests.envs.support import (
+    ReplyFn,
+    _prompt_of,
+    _response,
+    transport_policy,
+)
 from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposer import FakeProposerTransport
 from whetstone.runner.optimizers import (
     INVALID_TEMPLATE_PLACEHOLDERS,
     OPTIMIZERS,
+    UNSCORABLE_CANDIDATE,
     hyperparameters_for,
     run_optimize,
     scaled_hyperparameters,
@@ -204,3 +222,103 @@ def test_run_optimize_all_drafts_bad_keeps_naive_best() -> None:
         result.best_candidate.candidate_id
         == exp.initial_candidate.candidate_id
     )
+
+
+# A round-1 winner and a round-2 poison template whose internal rollouts all
+# fail transiently -- the (optimizer x postgres) live shape where a depth>=2
+# optimizer's second-round candidate could not be scored.
+WIN_R1 = "R1_WINNER {input}"
+POISON_R2 = "R2_POISON {input}"
+
+
+@dataclass
+class _PoisonInternalTransport:
+    """Fail (PERMANENT) every call whose prompt renders the poison template.
+
+    Models a transient internal-rollout wipeout scoped to ONE candidate: the
+    poison template's rendered prompt fails every repeat, so its internal
+    aggregate is missing (None) under the FAIL Reward policy, while every other
+    candidate (the round-1 winner, the naive baseline) scores cleanly.
+    """
+
+    poison_marker: str
+    reply: ReplyFn
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+    served: int = 0
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        self.served += 1
+        prompt = _prompt_of(request)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"content-type": "json"}, body={"model": "test-model"},
+        )
+        if self.poison_marker in prompt:
+            failure = ProviderTransportFailure(
+                failure_class=FailureClass.PERMANENT,
+                code="http_status_429",
+                message="scripted permanent failure (poison candidate)",
+                retryable=False,
+            )
+            return ProviderInvocationEvidence.build(
+                request=request, policy=self.policy,
+                raw_request=raw_request, outcome=failure,
+            )
+        return ProviderInvocationEvidence.build(
+            request=request, policy=self.policy, raw_request=raw_request,
+            outcome=_response(self.reply(prompt)),
+        )
+
+
+def test_unscorable_round2_candidate_isolated_not_whole_run() -> None:
+    # The (optimizer x postgres) live defect: a depth>=2 optimizer's round-2
+    # candidate whose internal eval could not be scored (transient wipeout)
+    # used to raise CandidateEvaluationFailure out of run_optimize, DISCARDING
+    # every already-scored round-1 step so the cell finalized incomplete-arm
+    # with optimizer_steps=0. Now the failure is ISOLATED to that candidate: it
+    # is recorded as a typed rejected step, round-1 progress survives, and the
+    # winning round-1 candidate stays best.
+    exp = tiny_experiment("c11")
+    # copro is depth=2: round 0 = seed_proposal, round 1 = history_proposal.
+    proposer = FakeProposerTransport(
+        script={
+            ("seed_proposal", 0): (WIN_R1,),
+            ("history_proposal", 1): (POISON_R2,),
+        },
+        default=("neutral {input}",),
+    )
+    transport = _PoisonInternalTransport(
+        poison_marker="R2_POISON",
+        reply=improvement_reply(exp, WIN_R1),
+    )
+    result = run_optimize(
+        exp,
+        optimizer="copro",
+        proposer_config=proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=transport,
+        execution_policy=runner_execution_policy(),
+        internal_instances=exp.eval_configs.internal.instances,
+        repeats=3,
+    )
+    # The run COMPLETED (no exception escaped) and kept the round-1 winner.
+    assert result.best_candidate.payload[MUTATION_FIELD] == WIN_R1
+    assert result.best_internal_score == pytest.approx(1.0)
+    # The poison round-2 candidate is recorded as a typed unscorable rejection,
+    # never selected as best, and counted -- not silently dropped.
+    poisoned = [
+        s for s in result.steps
+        if s.rejected and s.rejected_reason == UNSCORABLE_CANDIDATE
+    ]
+    assert poisoned, "the unscorable round-2 candidate must be a rejected step"
+    assert poisoned[0].template == POISON_R2
+    assert poisoned[0].evaluation is None
+    assert poisoned[0].rejected_detail  # a human-readable cause is retained
+    # Round-1 scored steps SURVIVED (pre-fix they were discarded).
+    scored = [s for s in result.steps if not s.rejected]
+    assert any(
+        s.template == WIN_R1 for s in scored
+    ), "round-1 winner step must survive the round-2 failure"
+    assert result.rejected_candidate_count == len(poisoned)

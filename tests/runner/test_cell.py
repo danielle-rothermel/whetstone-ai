@@ -2,11 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from dr_providers import (
+    FailureClass,
+    ProviderCallRequest,
+    ProviderInvocationEvidence,
+    ProviderTransportFailure,
+    ProviderTransportPolicy,
+    RawHttpRequest,
+)
 
+from tests.envs.support import (
+    ReplyFn,
+    _prompt_of,
+    _response,
+    transport_policy,
+)
 from whetstone.envs.registry import env_spec
+from whetstone.optimization.proposer import FakeProposerTransport
 from whetstone.runner.budget import BudgetGuard, ReserveError
 from whetstone.runner.cell import CellBaselineFailure, CellConfig, run_cell
 from whetstone.runner.execution_mode import ExecutionMode
@@ -130,6 +146,96 @@ def test_cell_bad_placeholder_candidate_does_not_kill_cell(
     assert r.status == "improved"
     assert r.best_official == pytest.approx(1.0)
     # A ledger line landed (the crash previously produced none).
+    assert len(ledger.cells()) == 1
+
+
+@dataclass
+class _PoisonRoundTwoTransport:
+    """Fail every internal call whose prompt renders the poison template.
+
+    Models the (optimizer x postgres) live shape: a depth>=2 optimizer's
+    round-2 candidate whose internal rollouts all fail transiently, leaving its
+    aggregate missing. Every other candidate (round-1 winner, naive, ceiling)
+    scores cleanly. Official arms never render the poison template, so they are
+    unaffected.
+    """
+
+    poison_marker: str
+    reply: ReplyFn
+    policy: ProviderTransportPolicy = field(default_factory=transport_policy)
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        prompt = _prompt_of(request)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"content-type": "json"}, body={"model": "test-model"},
+        )
+        if self.poison_marker in prompt:
+            failure = ProviderTransportFailure(
+                failure_class=FailureClass.PERMANENT,
+                code="http_status_429",
+                message="scripted permanent failure (poison candidate)",
+                retryable=False,
+            )
+            return ProviderInvocationEvidence.build(
+                request=request, policy=self.policy,
+                raw_request=raw_request, outcome=failure,
+            )
+        return ProviderInvocationEvidence.build(
+            request=request, policy=self.policy, raw_request=raw_request,
+            outcome=_response(self.reply(prompt)),
+        )
+
+
+def test_cell_unscorable_round2_candidate_completes_loud_not_silent(
+    tmp_path: Path,
+) -> None:
+    # The (optimizer x postgres) live defect: a depth>=2 optimizer's round-2
+    # candidate that could not be scored used to abort the whole optimize run,
+    # discarding round-1 progress -> incomplete-arm, optimizer_steps=0, and NO
+    # detail on the ledger line (the silence the coordinator flagged). Now the
+    # failure is isolated to that candidate; the cell COMPLETES with a real
+    # delta and nonzero optimizer_steps, and the drop is LOUD + typed on the
+    # ledger note.
+    env = "c11"
+    exp = tiny_experiment(env)
+    win_r1 = "R1_WINNER {input}"
+    poison_r2 = "R2_POISON {input}"
+    proposer = FakeProposerTransport(
+        script={
+            ("seed_proposal", 0): (win_r1,),
+            ("history_proposal", 1): (poison_r2,),
+        },
+        default=("neutral {input}",),
+    )
+    cfg = _config(
+        env,
+        optimizer="copro",
+        rollout_transport=_PoisonRoundTwoTransport(
+            poison_marker="R2_POISON",
+            reply=improvement_reply(exp, win_r1),
+        ),
+        proposer_transport=proposer,
+    )
+    ledger = Ledger(root=tmp_path)
+    outcome = run_cell(
+        cfg,
+        ledger=ledger,
+        credits_fetcher=credits_fetcher([(710.0, 616.0), (710.0, 616.5)]),
+    )
+    r = outcome.record
+    # The cell COMPLETED with a real delta (pre-fix: incomplete-arm/None).
+    assert r.status != "incomplete-arm"
+    assert r.status == "improved"
+    assert r.delta is not None
+    assert r.best_official == pytest.approx(1.0)
+    # Nonzero optimizer work survived the round-2 failure (pre-fix: 0).
+    assert r.optimizer_steps > 0
+    # LOUD + typed: the ledger note names the unscorable-candidate drop count.
+    assert "unscorable_candidate_internal_eval" in r.escalation_note
+    assert "not scored" in r.escalation_note
     assert len(ledger.cells()) == 1
 
 

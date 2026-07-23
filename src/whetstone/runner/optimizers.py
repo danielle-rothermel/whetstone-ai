@@ -37,6 +37,7 @@ from whetstone_envs.core import Instance
 
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.registry import env_spec
+from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.rollout_definition import valid_prompt_input_keys
 from whetstone.execution.fanout import FanoutConfig
 from whetstone.optimization.mutation import (
@@ -57,6 +58,7 @@ from whetstone.runner.execution_mode import ExecutionMode
 __all__ = [
     "INVALID_TEMPLATE_PLACEHOLDERS",
     "OPTIMIZERS",
+    "UNSCORABLE_CANDIDATE",
     "OptimizeResult",
     "ProposalStep",
     "hyperparameters_for",
@@ -185,6 +187,18 @@ def scaling_help() -> str:
 #: :class:`ProposalStep` so the offending fields are visible in step evidence.
 INVALID_TEMPLATE_PLACEHOLDERS = "invalid_template_placeholders"
 
+#: The typed rejection reason for a PROPOSAL candidate whose internal eval
+#: could not be scored into a Reward (its ``env_exact_match`` aggregate came
+#: back missing/incomplete under the FAIL Reward policy -- e.g. a transient
+#: internal rollout wipeout). This isolates the failure to THAT candidate: it
+#: is recorded as a failed step and never selected as best, and the optimizer
+#: keeps its best-so-far and continues. It is NOT allowed to abort the whole
+#: optimize run (which would discard every already-scored step and finalize the
+#: cell incomplete-arm with optimizer_steps=0). Only a BASELINE internal-eval
+#: failure -- the anchor itself -- legitimately makes the internal arm
+#: incomplete.
+UNSCORABLE_CANDIDATE = "unscorable_candidate_internal_eval"
+
 
 @dataclass(frozen=True, slots=True)
 class ProposalStep:
@@ -196,6 +210,13 @@ class ProposalStep:
     ``rejected_fields`` -- it spent NO eval calls and is never selectable as
     best, but is recorded here so the rejection is counted, not silently
     dropped.
+
+    A candidate whose INTERNAL EVAL could not be scored (a transient rollout
+    wipeout leaving a missing aggregate under the FAIL Reward policy) also
+    carries ``evaluation is None`` with ``rejected_reason`` =
+    :data:`UNSCORABLE_CANDIDATE` and a human-readable ``rejected_detail``; it
+    is isolated to this candidate (never best) so the optimize run continues
+    rather than aborting and discarding every prior step.
     """
 
     step_index: int
@@ -205,6 +226,7 @@ class ProposalStep:
     evaluation: SplitEvaluation | None
     rejected_reason: str | None = None
     rejected_fields: tuple[str, ...] = ()
+    rejected_detail: str | None = None
 
     @property
     def rejected(self) -> bool:
@@ -386,20 +408,44 @@ def run_optimize(
                 base_ref=naive.base_ref,
                 payload={MUTATION_FIELD: template},
             )
-            evaluation = evaluate_split(
-                experiment,
-                candidate=candidate,
-                instances=scoped,
-                split_role="internal_eval",
-                transport=rollout_transport,
-                execution_policy=execution_policy,
-                repeats=repeats,
-                store=backing,
-                execution_mode=execution_mode,
-                fanout=fanout,
-                apply_reward=needs_reward,
-                render_guard=True,
-            )
+            try:
+                evaluation = evaluate_split(
+                    experiment,
+                    candidate=candidate,
+                    instances=scoped,
+                    split_role="internal_eval",
+                    transport=rollout_transport,
+                    execution_policy=execution_policy,
+                    repeats=repeats,
+                    store=backing,
+                    execution_mode=execution_mode,
+                    fanout=fanout,
+                    apply_reward=needs_reward,
+                    render_guard=True,
+                )
+            except CandidateEvaluationFailure as exc:
+                # This PROPOSAL candidate's internal aggregate came back
+                # missing/incomplete (a transient internal-rollout wipeout
+                # under the FAIL Reward policy). Isolate the failure to this
+                # candidate: record it as a failed step (never selected as
+                # best) and keep scoring the rest. Pre-fix this exception
+                # aborted the whole optimize run, DISCARDING every
+                # already-scored step, so the cell finalized incomplete-arm
+                # with optimizer_steps=0 -- a silent loss of all prior work.
+                # Only the BASELINE anchor eval (outside this loop) may
+                # legitimately make the internal arm incomplete.
+                steps.append(
+                    ProposalStep(
+                        step_index=ordinal,
+                        candidate_id=candidate_id,
+                        template=template,
+                        internal_score=None,
+                        evaluation=None,
+                        rejected_reason=UNSCORABLE_CANDIDATE,
+                        rejected_detail=str(exc),
+                    )
+                )
+                continue
             steps.append(
                 ProposalStep(
                     step_index=ordinal,
