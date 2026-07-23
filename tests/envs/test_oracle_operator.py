@@ -55,6 +55,40 @@ def _fixtures(env_name: str) -> tuple[str, str, str]:
         correct = '"blue [1] and green [2] together"'
         wrong = "blue, green"
         return gold, correct, wrong
+    if env_name == "c22h":
+        # c22h reuses the c22 oracle (same serialized-constraint-stack gold),
+        # but a pure-hard stack: >= 5 words, no 'z', forbid 'quarnex'.
+        import json
+
+        gold = json.dumps(
+            {
+                "base_task": "Name a fruit.",
+                "constraint_descriptions": [
+                    ">=5 words",
+                    "no z",
+                    "forbid quarnex",
+                ],
+                "instruction_id_list": [
+                    "length_constraints:number_words",
+                    "keywords:letter_frequency",
+                    "keywords:forbidden_words",
+                ],
+                "kwargs_list": [
+                    {"num_words": 5, "relation": "at least"},
+                    {
+                        "letter": "z",
+                        "let_frequency": 1,
+                        "let_relation": "less than",
+                    },
+                    {"forbidden_words": ["quarnex"]},
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        correct = "apple banana cherry mango melon"
+        wrong = "apple banana cherry mango quarnex"
+        return gold, correct, wrong
     if env_name == "c11":
         # Canonical JSON gold; a matching response scores 1.
         gold = '{"a":1,"b":2}'

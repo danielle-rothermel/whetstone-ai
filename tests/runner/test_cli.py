@@ -40,6 +40,31 @@ def test_cell_optimizer_choices_are_the_five() -> None:
     assert set(OPTIMIZERS) == {"eval", "copro", "miprov2", "gepa", "codex"}
 
 
+def test_pilot_accepts_task_model_override() -> None:
+    # The pilot subcommand exposes --task-model (parity with the cell path)
+    # so a headroom pilot can be run under a specific task model.
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "pilot",
+            "--env",
+            "c22h",
+            "--task-model",
+            "openai/gpt-5-nano",
+        ]
+    )
+    assert args.env == "c22h"
+    assert args.task_model == "openai/gpt-5-nano"
+
+
+def test_pilot_task_model_defaults_to_none() -> None:
+    # Absent --task-model, the flag is None and the per-env matrix default
+    # (task_model_for_env) applies at run time.
+    parser = build_parser()
+    args = parser.parse_args(["pilot", "--env", "c22h"])
+    assert args.task_model is None
+
+
 def test_lane_choices_include_openrouter_and_plan_lanes() -> None:
     parser = build_parser()
     for lane in ("openrouter", "kimi", "glm", "minimax", "stepfun"):

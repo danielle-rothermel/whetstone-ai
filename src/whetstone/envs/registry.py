@@ -30,14 +30,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import import_module
 from types import ModuleType
+from typing import Protocol
 
 from whetstone_envs.core import ProbePair, TaskPool
 
 from whetstone.envs.probes import ProbeSurface, probe_surface
 
-#: The five task families this adapter binds, in build/validation order
+
+class PoolPreset(Protocol):
+    """The generation-preset interface a variant env's pool is built from.
+
+    Matches ``whetstone_envs.<env>.generate.Preset``: a named config bundling
+    the generation axes + a disjoint seed range, with a ``generate`` that
+    yields a :class:`~whetstone_envs.core.TaskPool`. Kept structural so the
+    registry does not import any single env's concrete ``Preset`` type.
+    """
+
+    name: str
+
+    def generate(self, *, n_per_stratum: int | None = None) -> TaskPool: ...
+
+#: The task families this adapter binds, in build/validation order
 #: (cheapest/most robust first, matching the validation plan's spend order).
-ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
+#: ``c22h`` is the c22 hard-mode variant: it maps to the SAME c22 modules
+#: (:data:`_ENV_MODULE_NAME`) but generates its pool from that env's
+#: ``HARD_PRESET`` (:data:`_ENV_POOL_PRESET`) -- the hardest configuration of
+#: the original IFEval suite, with no hidden-information design change. A
+#: distinct env id keeps its ledger rows / cells / eval-config identities
+#: separate from base c22's.
+ENV_NAMES: tuple[str, ...] = ("c22", "c22h", "c11", "c19", "c18", "c23")
+
+#: The underlying ``whetstone_envs`` package a bound env id loads its
+#: generate/oracle/prompts surfaces from. Defaults to the env id itself; only
+#: ``c22h`` differs (it reuses the c22 modules with a different pool preset).
+_ENV_MODULE_NAME: dict[str, str] = {"c22h": "c22"}
+
+#: The named generation preset a bound env id generates its pool from, when it
+#: is a *variant* of another env's default pool. The value is the attribute
+#: name of a ``Preset`` on the env's generate module. Only ``c22h`` uses one
+#: (``HARD_PRESET``); every other env generates its committed default pool.
+_ENV_POOL_PRESET: dict[str, str] = {"c22h": "HARD_PRESET"}
 
 
 #: The two provenance markers a :class:`TokenEstimate` may carry. A
@@ -49,6 +81,10 @@ ENV_NAMES: tuple[str, ...] = ("c22", "c11", "c19", "c18", "c23")
 #: default provenance for any newly added, not-yet-measured env.
 ESTIMATE_LIVE_MEASURED = "live-measured"
 ESTIMATE_SCALED_PENDING = "scaled-pending-measurement"
+#: A third provenance: an estimate INHERITED verbatim from another env's
+#: measured means (c22h seeds from c22's live-measured naive/ceiling), pending
+#: its own pilot measurement which will overwrite it.
+ESTIMATE_INHERITED_PENDING = "inherited-pending-measurement"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +120,13 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
     "c22": TokenEstimate(
         naive=2526, ceiling=3046, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
+    "c22h": TokenEstimate(
+        # Inherited from c22's live-measured means; overwritten by c22h's
+        # own pilot once it records a measured per-call mean.
+        naive=2526,
+        ceiling=3046,
+        estimate_source=ESTIMATE_INHERITED_PENDING,
+    ),
     "c11": TokenEstimate(
         naive=1735, ceiling=1831, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
@@ -106,9 +149,10 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
 DEFAULT_REPEATS = 3
 
 #: Envs whose oracle ``score_gold`` is ``(gold, response)`` rather than the
-#: usual ``(prediction, gold)``. Only c22 (its oracle re-runs the constraint
-#: checkers against the response, reading the constraint stack from the gold).
-_GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22"})
+#: usual ``(prediction, gold)``. c22 and its hard variant c22h (same c22
+#: oracle: it re-runs the constraint checkers against the response, reading the
+#: constraint stack from the gold).
+_GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22", "c22h"})
 
 #: Envs whose generated pool is **blocked** by stratum (all of one stratum's
 #: instances contiguous, then the next), so ``TaskPool.split``'s contiguous
@@ -117,8 +161,10 @@ _GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22"})
 #: atom-mix) cell in a fixed cell order). The other four envs interleave their
 #: strata (verified), so a contiguous split is already balanced for them.
 #: Blocked-pool envs are sampled per-stratum instead (see
-#: :func:`whetstone.envs.sampling.stratified_split`).
-_STRATIFIED_SPLIT_ENVS: frozenset[str] = frozenset({"c22"})
+#: :func:`whetstone.envs.sampling.stratified_split`). c22h shares c22's blocked
+#: layout (its HARD_PRESET emits n_per_stratum instances per stratum in cell
+#: order), so it is stratified too.
+_STRATIFIED_SPLIT_ENVS: frozenset[str] = frozenset({"c22", "c22h"})
 
 #: c22 commits no ``default_split_sizes`` (unlike the other four). Its spec
 #: (Section 1) proposes N=20/stratum; this adapter uses the same
@@ -126,6 +172,15 @@ _STRATIFIED_SPLIT_ENVS: frozenset[str] = frozenset({"c22"})
 #: other envs commit, kept well inside c22's 20/stratum pool. Recorded as a
 #: judgment call in the build report.
 _C22_SPLIT_PER_STRATUM = (2, 6, 6)  # (internal_eval, official, held_out)
+
+#: Per-env per-stratum split overrides (``(internal, official, held_out)``).
+#: c22h keeps base c22's 2:6 internal:official proportion but takes the full
+#: remaining stratum depth as held_out, so its 3 x 20 pool splits to totals
+#: (internal 6, official 18, held_out 36) with no unused instances. Any env
+#: not listed falls back to :data:`_C22_SPLIT_PER_STRATUM`.
+_SPLIT_PER_STRATUM_BY_ENV: dict[str, tuple[int, int, int]] = {
+    "c22h": (2, 6, 12),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,9 +243,26 @@ class EnvSpec:
     token_estimate: TokenEstimate
     gold_first: bool = False
     stratified_split: bool = False
+    #: When set, the named ``Preset`` on :attr:`generate` this env generates
+    #: its pool from (e.g. c22h -> the c22 module's ``HARD_PRESET``), instead
+    #: of the module's default ``generate_pool``. ``None`` -> default pool.
+    pool_preset: PoolPreset | None = None
+    #: The dataset revision folded into this env's Task Set identity. Defaults
+    #: to the generate module's ``GENERATOR_VERSION``; a preset env overrides
+    #: it with the preset's own version so a variant's Task Sets are a DISTINCT
+    #: identity from the base env's (even though both load the same module).
+    generator_version: str = ""
 
     def generate_pool(self, *, n_per_stratum: int | None = None) -> TaskPool:
-        """Generate the env pool at its spec-default (or given) size."""
+        """Generate the env pool at its spec-default (or given) size.
+
+        A preset env (:attr:`pool_preset` set) generates from that preset --
+        its own axes and disjoint seed range -- rather than the module's
+        default pool, so the same c22 module can back both the base pool and
+        the hard-mode variant with no fork.
+        """
+        if self.pool_preset is not None:
+            return self.pool_preset.generate(n_per_stratum=n_per_stratum)
         if n_per_stratum is None:
             return self.generate.generate_pool()
         return self.generate.generate_pool(n_per_stratum=n_per_stratum)
@@ -205,10 +277,12 @@ class EnvSpec:
         convention the other envs rely on.
         """
         split_fn = getattr(self.generate, "default_split_sizes", None)
-        if split_fn is not None:
+        if split_fn is not None and self.pool_preset is None:
             return split_fn(pool)
         n_strata = len(pool.strata)
-        internal, official, held_out = _C22_SPLIT_PER_STRATUM
+        internal, official, held_out = _SPLIT_PER_STRATUM_BY_ENV.get(
+            self.name, _C22_SPLIT_PER_STRATUM
+        )
         return (
             internal * n_strata,
             official * n_strata,
@@ -235,19 +309,33 @@ class EnvSpec:
 
 
 def _load_env_spec(name: str) -> EnvSpec:
-    generate = import_module(f"whetstone_envs.{name}.generate")
-    oracle = import_module(f"whetstone_envs.{name}.oracle")
-    prompts = import_module(f"whetstone_envs.{name}.prompts")
+    # A variant env id (c22h) loads its surfaces from another module (c22).
+    module = _ENV_MODULE_NAME.get(name, name)
+    generate = import_module(f"whetstone_envs.{module}.generate")
+    oracle = import_module(f"whetstone_envs.{module}.oracle")
+    prompts = import_module(f"whetstone_envs.{module}.prompts")
+    # A preset env generates from a named Preset on its generate module and
+    # takes that preset's version as its dataset revision, so its Task Set
+    # identity is distinct from the base env's.
+    preset_attr = _ENV_POOL_PRESET.get(name)
+    preset = getattr(generate, preset_attr) if preset_attr else None
+    generator_version = (
+        f"{generate.GENERATOR_VERSION}+{preset.name}"
+        if preset is not None
+        else str(generate.GENERATOR_VERSION)
+    )
     return EnvSpec(
         name=name,
         generate=generate,
         oracle=oracle,
         probes=prompts.PROBES,
         surface=probe_surface(name, prompts.PROBES),
-        oracle_qualname=f"whetstone_envs.{name}.oracle.score_gold",
+        oracle_qualname=f"whetstone_envs.{module}.oracle.score_gold",
         token_estimate=_ENV_TOKEN_ESTIMATES[name],
         gold_first=name in _GOLD_FIRST_ENVS,
         stratified_split=name in _STRATIFIED_SPLIT_ENVS,
+        pool_preset=preset,
+        generator_version=generator_version,
     )
 
 
