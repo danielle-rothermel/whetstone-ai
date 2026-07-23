@@ -183,6 +183,16 @@ def test_ed1_cell_end_to_end_records_both_scores(tmp_path: Path) -> None:
     assert rows
     assert any("compression_ratio" in row for row in rows)
     assert any("ENCODER:" in (row["output_text"] or "") for row in rows)
+    # Task 26 item 6: EVERY driven ed1 rollout row carries the per-task
+    # MAX_BUDGET + over_budget flag, so the viewer never re-derives the
+    # round(budget_ratio * len) formula off-row.
+    budget_rows = [row for row in rows if "max_budget" in row]
+    assert budget_rows
+    assert all(isinstance(row["max_budget"], int) for row in budget_rows)
+    assert all("over_budget" in row for row in budget_rows)
+    # Task 26 items 8-9: structured id components + a schema stamp on each row.
+    assert all(row["env"] == ED1_ENV_NAME for row in rows)
+    assert all(row["schema"] for row in rows)
 
 
 # --- Budget derivation + guidance-not-enforcement ---------------------------

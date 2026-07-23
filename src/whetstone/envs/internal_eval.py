@@ -60,6 +60,7 @@ from whetstone.envs.reward import reward_from_internal_aggregate
 from whetstone.envs.rollout_definition import render_prompt
 from whetstone.envs.task import EnvTask
 from whetstone.execution.call_support import (
+    call_telemetry,
     guard_deadline_seconds,
     is_rate_limit_failure,
     is_transient_transport_failure,
@@ -103,6 +104,21 @@ class RolloutOutput:
     output_text: str | None
     score: float | None
     failure_code: str = ""
+    #: Task-26 per-call provenance (coverage-honest -- ``None`` when unknown):
+    #: ``finish_reason`` is the provider stop reason of the accepted Generation
+    #: (a truncated ``length`` is distinguishable from a clean ``stop``);
+    #: ``provider_error`` is the FULL typed provider-failure diagnostic for a
+    #: FAILED row (not just the short ``failure_code``). Both ``None`` on a
+    #: restored (resumed) row (not re-driven).
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
+    #: ed1 enc-dec budget diagnostics on EVERY rollout row (task 26 item 6):
+    #: the per-task ``max_budget`` (chars) the encoder was told to respect and
+    #: the derived ``over_budget`` flag, so a consumer never re-derives
+    #: ``round(budget_ratio * len)`` off-row. ``None`` for QA/d1 (no budget)
+    #: and for a no-budget ed1 frame.
+    max_budget: int | None = None
+    over_budget: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,6 +357,7 @@ def run_internal_eval(
     fanout: FanoutConfig | None = None,
     partial_log: PartialLog | None = None,
     partial_phase: str = "cell",
+    partial_split_role: str | None = None,
     apply_reward: bool = True,
     render_guard: bool = False,
 ) -> InternalEvalResult:
@@ -414,6 +431,7 @@ def run_internal_eval(
                 # batch). Both the first drive AND a re-drive append a record.
                 partial_log=partial_log,
                 partial_phase=partial_phase,
+                partial_split_role=partial_split_role,
                 partial_instance_id=str(instance.id),
                 partial_unit=unit,
                 repeat_id=index,
@@ -516,6 +534,7 @@ def run_internal_eval(
             else:
                 outcome = driven[key]
                 rows.append(outcome.row)
+                tel = call_telemetry(outcome.result)
                 outputs.append(
                     RolloutOutput(
                         candidate_id=unit,
@@ -524,6 +543,8 @@ def run_internal_eval(
                         output_text=_output_text_of(outcome.result),
                         score=outcome.score,
                         failure_code=outcome.failure_code,
+                        finish_reason=tel.finish_reason,
+                        provider_error=tel.provider_error,
                     )
                 )
         task_rows.append(
@@ -581,6 +602,7 @@ def _row_thunk(
     partial_instance_id: str,
     partial_unit: str,
     repeat_id: int,
+    partial_split_role: str | None = None,
     render_guard: bool = False,
 ) -> Callable[[], _RowOutcome]:
     """A zero-arg thunk running one repeat (the fan-out unit of work).
@@ -604,7 +626,6 @@ def _row_thunk(
             render_guard=render_guard,
         )
         if partial_log is not None:
-            from whetstone.execution.call_support import call_telemetry
             tel = call_telemetry(outcome.result)
             partial_log.append(
                 PartialCallRecord(
@@ -615,18 +636,22 @@ def _row_thunk(
                     score=outcome.score,
                     failed=outcome.row.failed,
                     failure_code=outcome.failure_code,
+                    split_role=partial_split_role,
                     # FIX 6: retain the measured token counts on the cell path
                     # (they were null before) so spend reconciliation can sum
                     # them. Task 20: also the reasoning tokens + per-call
-                    # latency. The raw_response is intentionally NOT persisted
-                    # on the cell path (Rollout Results hold that evidence)
-                    # so a
-                    # cell's partial stays small.
+                    # latency. Task 26: persist the output text (previously
+                    # dropped on the cell path -- 100% empty on disk) so a
+                    # resumed row keeps its evidence, plus the per-call
+                    # finish_reason + full provider-error diagnostic.
                     prompt_tokens=tel.prompt_tokens,
                     completion_tokens=tel.completion_tokens,
                     total_tokens=tel.total_tokens,
                     reasoning_tokens=tel.reasoning_tokens,
                     latency_s=tel.latency_s,
+                    output_text=_output_text_of(outcome.result),
+                    finish_reason=tel.finish_reason,
+                    provider_error=tel.provider_error,
                 )
             )
         return outcome

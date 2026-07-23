@@ -597,12 +597,12 @@ def test_cell_power_stage_off_is_byte_identical(tmp_path: Path) -> None:
 
     off_dump = off_record.model_dump(mode="json")
     off2_dump = off2_record.model_dump(mode="json")
-    # Wall time + per-call latency telemetry are the nondeterministic fields
-    # (real monotonic clock); drop them before the byte-identity comparison.
-    off_dump.pop("wall_s")
-    off2_dump.pop("wall_s")
-    off_dump.pop("telemetry")
-    off2_dump.pop("telemetry")
+    # Wall time + per-call latency telemetry + the ISO wall-clock started_at/
+    # finished_at (task 26) are the nondeterministic fields (real clock); drop
+    # them before the byte-identity comparison.
+    for key in ("wall_s", "telemetry", "started_at", "finished_at"):
+        off_dump.pop(key)
+        off2_dump.pop(key)
     assert off_dump == off2_dump
     # Power fields are inert (null) and NO artifact directory was created.
     assert off_record.power_sizing is None
@@ -731,11 +731,16 @@ def test_cell_writes_rollout_output_sidecar_with_full_coverage(
     assert sidecar.exists(), "the rollout-output sidecar must be written"
     rows = [json.loads(line) for line in sidecar.read_text().splitlines()]
     assert rows
-    # Every row carries the required fields (full text, never truncated).
+    # Every row carries the required fields (full text, never truncated) plus
+    # the task-26 provenance superset: a schema stamp, structured id components
+    # (cell_id/env/optimizer/attempt/lane/model), and per-call finish_reason +
+    # provider_error. (QA rows carry no ed1 budget, so max_budget is absent.)
     for row in rows:
         assert set(row) == {
-            "split_role", "candidate_id", "instance_id", "repeat",
+            "schema", "cell_id", "env", "optimizer", "attempt", "lane",
+            "model", "split_role", "candidate_id", "instance_id", "repeat",
             "output_text", "score", "failure_code",
+            "finish_reason", "provider_error",
         }
     roles = {row["split_role"] for row in rows}
     # Official arms AND internal candidate evals are ALL covered.

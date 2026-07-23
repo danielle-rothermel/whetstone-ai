@@ -29,13 +29,20 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class CallTelemetry:
-    """Per-call usage + latency telemetry (task 20).
+    """Per-call usage + latency telemetry (task 20) + provenance (task 26).
 
     Every field is ``None`` when the provider did not expose it -- NEVER
     conflated with 0 (a reasoning-free model reports ``reasoning_tokens=None``,
     not 0, so an aggregate can compute over rows-with-field and report
     coverage). ``latency_s`` is the accepted attempt's wall-clock (request
     start -> completion), one number, no streaming decomposition.
+
+    Task-26 provenance (per-call, coverage-honest -- ``None`` when unknown):
+    ``finish_reason`` is the accepted Generation's provider stop reason (so a
+    truncated ``length`` completion is distinguishable from a clean ``stop``);
+    ``provider_error`` is the FULL typed provider-failure diagnostic
+    (``provider_failure.model_dump``) for a FAILED call, so a non-fatal failed
+    row keeps the whole provider body, not just a short code.
     """
 
     prompt_tokens: int | None = None
@@ -43,30 +50,75 @@ class CallTelemetry:
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
     latency_s: float | None = None
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
 
 
 def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
-    """Extract usage (incl. reasoning tokens) + latency from a call Result.
+    """Extract usage (incl. reasoning tokens) + latency + provenance.
 
     Reads the accepted Generation's response usage (prompt/completion/total AND
     ``reasoning_tokens`` where the provider exposes
-    ``completion_tokens_details.reasoning_tokens``) and the accepted attempt's
-    wall-clock latency. Returns all-``None`` for a failed/absent call; a
-    present call with no usage block or no reasoning detail leaves those None
-    (coverage-honest, never 0-conflated).
+    ``completion_tokens_details.reasoning_tokens``), the accepted attempt's
+    wall-clock latency, the accepted Generation's ``finish_reason``, and -- for
+    a FAILED call -- the full typed provider-failure diagnostic. Returns
+    all-``None`` for an absent call; a present call with no usage block or no
+    reasoning detail leaves those None (coverage-honest, never 0-conflated).
     """
-    if result is None or not result.succeeded or result.generation is None:
-        return CallTelemetry(latency_s=_accepted_latency(result))
+    if result is None:
+        return CallTelemetry()
+    if not result.succeeded or result.generation is None:
+        return CallTelemetry(
+            latency_s=_accepted_latency(result),
+            provider_error=_provider_error_of(result),
+        )
     usage = result.generation.response.usage
+    finish_reason = result.generation.response.finish_reason
     if usage is None:
-        return CallTelemetry(latency_s=_accepted_latency(result))
+        return CallTelemetry(
+            latency_s=_accepted_latency(result),
+            finish_reason=finish_reason,
+        )
     return CallTelemetry(
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         total_tokens=usage.total_tokens,
         reasoning_tokens=getattr(usage, "reasoning_tokens", None),
         latency_s=_accepted_latency(result),
+        finish_reason=finish_reason,
     )
+
+
+def _provider_error_of(
+    result: ProviderCallResult | None,
+) -> dict[str, object] | None:
+    """The FULL typed provider-failure diagnostic for a failed call, else None.
+
+    Persists the whole ``provider_failure`` body (the model_dump the boundary
+    already rides in exception metadata "so persisted failure rows keep the
+    full provider diagnostics") rather than the short ``failure_code`` alone --
+    so a week-later reader can tell a 400 malformed-request from a content
+    filter from a provider 5xx. Secrets are already excluded upstream. ``None``
+    when the call succeeded or carried no classified transport failure.
+    """
+    if result is None or result.succeeded or result.semantic_failure is None:
+        return None
+    failure = result.semantic_failure
+    body: dict[str, object] = {
+        "failure_class": failure.failure_class.value,
+        "message": failure.message,
+    }
+    if failure.transport_failure is not None:
+        body["transport_failure"] = failure.transport_failure.model_dump(
+            mode="json"
+        )
+    if failure.rejected_response is not None:
+        # A blank/whitespace or text-missing acceptance rejection: the provider
+        # DID return a body -- keep it so the reader sees what came back.
+        body["rejected_response"] = failure.rejected_response.model_dump(
+            mode="json"
+        )
+    return body
 
 
 def _accepted_latency(result: ProviderCallResult | None) -> float | None:

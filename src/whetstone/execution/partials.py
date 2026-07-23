@@ -26,24 +26,45 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 __all__ = [
+    "PARTIAL_SCHEMA",
     "PartialCallRecord",
     "PartialLog",
     "partial_key",
 ]
+
+#: Versioned schema stamp on every partial row written GOING FORWARD (the
+#: ``power_analysis/v1`` / ``events/v1`` precedent). A reader keys off it
+#: rather than sniffing which fields happen to be present. Old rows (no stamp)
+#: read back as ``schema=None`` -- coverage-honest, not an error.
+PARTIAL_SCHEMA = "whetstone.execution.partial_call/v1"
 
 
 @dataclass(frozen=True, slots=True)
 class PartialCallRecord:
     """One completed provider call, appended as it finishes.
 
-    ``phase`` is ``"pilot"`` or ``"cell"``; ``unit`` is the probe name (pilot)
-    or the candidate id (cell). ``score`` is the 0/1 oracle score for a
-    succeeded call (``None`` when it failed or produced no score). ``failed``
-    and ``failure_code`` carry the typed failure for a failed call.
+    The RESUME key is ``(phase, instance_id, unit, repeat_id)`` -- ``phase`` is
+    ``"pilot"`` or ``"cell"`` and ``unit`` is the probe name (pilot) or the
+    candidate id (cell). These key fields are UNCHANGED (resume must stay
+    byte-identical across vintages). ``score`` is the 0/1 oracle score for a
+    succeeded call (``None`` when it failed or produced no score); ``failed`` +
+    ``failure_code`` carry the typed failure.
+
+    Task 26 writes each row in the FINALIZED-row superset going forward: the
+    finalized-row field NAMES are emitted as first-class fields
+    (``candidate_id`` = ``unit``, ``repeat`` = ``repeat_id``, plus
+    ``split_role``) so a consumer never has to remap the partial schema onto
+    the ``rollout_outputs`` shape; the model ``output_text`` is persisted (it
+    was 100% empty before); ``finish_reason`` / ``provider_error`` land the
+    same per-call provenance the finalized rows carry; ``at`` is the ISO-8601
+    UTC wall-clock the row was recorded; and ``schema`` version-stamps the row.
+    Every added field is null/absent when unknown (never a populated-but-empty
+    value). ``raw_response`` stays the ed1 resume-payload slot.
     """
 
     phase: str
@@ -61,7 +82,30 @@ class PartialCallRecord:
     #: record leaves these ``None`` -- coverage-honest, never 0-conflated).
     reasoning_tokens: int | None = None
     latency_s: float | None = None
+    #: The FULL model output text of the driven call (task 26: persisted going
+    #: forward -- previously always empty on the cell path). ``None`` when the
+    #: call produced no text (a failure) or was restored (not re-driven).
+    output_text: str | None = None
+    #: Resume-payload slot. On the ed1 enc-dec path this carries a compact JSON
+    #: blob of the dual extras (compression + encoder/decoder text) the reducer
+    #: needs to reconstruct a row WITHOUT re-driving; the QA/d1 paths leave it
+    #: empty and persist the model text on ``output_text`` instead. Retained as
+    #: a stored field (distinct from ``output_text``) so ed1 resume is
+    #: byte-identical.
     raw_response: str = ""
+    #: Task-26 per-call provenance (``None`` when unknown, never 0-conflated).
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
+    #: Finalized-row split role (``official`` / ``official_naive`` /
+    #: ``official_ceiling`` / internal), so a consumer reads it directly rather
+    #: than inferring an arm from the ``unit`` suffix. ``None`` when the writer
+    #: did not supply one (old rows).
+    split_role: str | None = None
+    #: ISO-8601 UTC wall-clock the row was recorded (task 26). ``None`` on old
+    #: rows (never captured) -- distinct from a populated-but-empty string.
+    at: str | None = None
+    #: Versioned schema stamp (:data:`PARTIAL_SCHEMA`); ``None`` on old rows.
+    schema: str | None = None
 
     def key(self) -> tuple[str, str, str, int]:
         return partial_key(
@@ -69,11 +113,20 @@ class PartialCallRecord:
         )
 
     def as_dict(self) -> dict[str, object]:
+        # The finalized-row superset. ``candidate_id`` / ``repeat`` mirror the
+        # resume-key ``unit`` / ``repeat_id`` under the finalized field names
+        # so a consumer never remaps the partial schema. ``raw_response`` stays
+        # the verbatim resume-payload slot (the ed1 dual blob); ``output_text``
+        # is the model text a QA/d1 row now persists.
         return {
+            "schema": self.schema,
             "phase": self.phase,
             "instance_id": self.instance_id,
             "unit": self.unit,
+            "candidate_id": self.unit,
             "repeat_id": self.repeat_id,
+            "repeat": self.repeat_id,
+            "split_role": self.split_role,
             "score": self.score,
             "failed": self.failed,
             "failure_code": self.failure_code,
@@ -82,11 +135,19 @@ class PartialCallRecord:
             "total_tokens": self.total_tokens,
             "reasoning_tokens": self.reasoning_tokens,
             "latency_s": self.latency_s,
+            "output_text": self.output_text,
             "raw_response": self.raw_response,
+            "finish_reason": self.finish_reason,
+            "provider_error": self.provider_error,
+            "at": self.at,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> PartialCallRecord:
+        # ``output_text`` reads as ``None`` when absent (the honest "not
+        # recorded" state), never a populated-but-empty value. ``raw_response``
+        # stays verbatim (ed1 resume decodes its JSON blob from it).
+        out = data.get("output_text")
         return cls(
             phase=str(data["phase"]),
             instance_id=str(data["instance_id"]),
@@ -100,7 +161,13 @@ class PartialCallRecord:
             total_tokens=_opt_int(data.get("total_tokens")),
             reasoning_tokens=_opt_int(data.get("reasoning_tokens")),
             latency_s=_opt_float(data.get("latency_s")),
+            output_text=None if out is None else str(out),
             raw_response=str(data.get("raw_response", "")),
+            finish_reason=_opt_str(data.get("finish_reason")),
+            provider_error=_opt_mapping(data.get("provider_error")),
+            split_role=_opt_str(data.get("split_role")),
+            at=_opt_str(data.get("at")),
+            schema=_opt_str(data.get("schema")),
         )
 
 
@@ -118,6 +185,17 @@ def _opt_float(value: object) -> float | None:
         return None
     assert isinstance(value, int | float | str)
     return float(value)
+
+
+def _opt_str(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _opt_mapping(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    assert isinstance(value, dict)
+    return {str(k): v for k, v in value.items()}
 
 
 def partial_key(
@@ -149,9 +227,18 @@ class PartialLog:
     def append(self, record: PartialCallRecord) -> None:
         """Append one per-call record, flushing so a crash keeps it.
 
-        Thread-safe: serialized under a lock so concurrent workers' appends
-        never interleave a half-written line.
+        Stamps the wall-clock ``at`` (ISO-8601 UTC) + the versioned ``schema``
+        on the row at write time when the caller left them unset, so every
+        going-forward row is timestamped and version-stamped without each call
+        site repeating it. Thread-safe: serialized under a lock so concurrent
+        workers' appends never interleave a half-written line.
         """
+        if record.at is None or record.schema is None:
+            record = replace(
+                record,
+                at=record.at or datetime.now(UTC).isoformat(),
+                schema=record.schema or PARTIAL_SCHEMA,
+            )
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a") as handle:

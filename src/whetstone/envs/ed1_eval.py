@@ -183,6 +183,13 @@ class _Ed1RowOutcome:
     #: clipped or failed (the budget only steers), so this is diagnostic only.
     max_budget: int | None = None
     encoder_len: int | None = None
+    #: Task-26 per-call provenance. ``finish_reason`` is the DECODER call's
+    #: provider stop reason (the terminal output-bearing call -- a truncated
+    #: ``length`` decode is distinguishable from a clean ``stop``);
+    #: ``provider_error`` is the FULL typed diagnostic of whichever call failed
+    #: (encoder or decoder). Both ``None`` when unknown.
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
     #: True when this row failed on a TRANSIENT transport fault (timeout /
     #: stalled response / transport error / rate limit) whose driver-level
     #: semantic retries were exhausted -- eligible for ONE bounded re-drive.
@@ -310,6 +317,7 @@ def _drive_row(
             encoder_text=None, decoder_text=None,
             failed=True, failure_code=failure_code_of(enc),
             max_budget=max_budget, encoder_len=None,
+            provider_error=call_telemetry(enc).provider_error,
             redrivable=is_transient_transport_failure(enc),
         )
     encoder_text = enc.generation.text
@@ -330,10 +338,12 @@ def _drive_row(
             encoder_text=encoder_text, decoder_text=None,
             failed=True, failure_code=failure_code_of(dec),
             max_budget=max_budget, encoder_len=encoder_len,
+            provider_error=call_telemetry(dec).provider_error,
             redrivable=is_transient_transport_failure(dec),
         )
     decoder_text = dec.generation.text
-    tel = _sum_telemetry(call_telemetry(enc), call_telemetry(dec))
+    dec_tel = call_telemetry(dec)
+    tel = _sum_telemetry(call_telemetry(enc), dec_tel)
 
     # Correctness (decoder output) -- may be an infrastructure-unknown, which
     # fails the row (never scored 0). ed1 scores the HumanEval test suite; ed1m
@@ -350,6 +360,7 @@ def _drive_row(
             total_tokens=tel.total_tokens,
             reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
             max_budget=max_budget, encoder_len=encoder_len,
+            finish_reason=dec_tel.finish_reason,
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
@@ -363,6 +374,7 @@ def _drive_row(
         total_tokens=tel.total_tokens,
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         max_budget=max_budget, encoder_len=encoder_len,
+        finish_reason=dec_tel.finish_reason,
     )
 
 
@@ -429,12 +441,18 @@ def _drive_and_persist(
                 score=outcome.pass_value,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
+                split_role=split_role,
                 prompt_tokens=outcome.prompt_tokens,
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
                 # ed1 dual payload (compression + texts) the reducer needs on
-                # resume; QA leaves raw_response empty on the cell path.
+                # resume rides in raw_response; task 26 ALSO persists the
+                # decoder text as the human-readable output_text + the per-call
+                # finish_reason / provider-error diagnostic.
                 raw_response=_encode_ed1_payload(outcome),
+                output_text=outcome.decoder_text,
+                finish_reason=outcome.finish_reason,
+                provider_error=outcome.provider_error,
             )
         )
     return outcome
@@ -772,6 +790,10 @@ def run_ed1_eval(
                         else float(outcome.pass_value)
                     ),
                     failure_code=outcome.failure_code,
+                    finish_reason=outcome.finish_reason,
+                    provider_error=outcome.provider_error,
+                    max_budget=outcome.max_budget,
+                    over_budget=outcome.over_budget,
                 )
             )
         pass_rows.append((task_id, p_rows))

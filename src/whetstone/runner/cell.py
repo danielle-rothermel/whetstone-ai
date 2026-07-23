@@ -26,8 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from dr_store import MemoryBackend, ObjectStore
 
@@ -62,7 +64,9 @@ from whetstone.runner.events import (
 )
 from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import (
+    ROLLOUT_OUTPUTS_SCHEMA,
     CellArtifacts,
+    CellControls,
     CellDualScores,
     CellModels,
     CellRecord,
@@ -204,6 +208,16 @@ class CellConfig:
     #: Identity-bearing -- folds into the d1 graph + split identity. Ignored by
     #: non-d1 envs.
     d1_input_arm: str = "original"
+    #: The LITERAL task-role sampling controls this cell ran under, recorded on
+    #: the ledger line (task 26 item 5) so a reader answers "temp 0 or temp 1?"
+    #: without re-deriving from a hash. These are RECORDING-only mirrors of the
+    #: values already baked into ``rollout_transport``'s route config; they do
+    #: NOT re-participate in identity. ``None`` = control unset (provider
+    #: default), never conflated with an explicit 0. ``recorded_temperature``
+    #: mirrors ``--temperature`` (task role default 0.0) and
+    #: ``recorded_reasoning_effort`` the ``--reasoning-effort`` value string.
+    recorded_temperature: float | None = None
+    recorded_reasoning_effort: str | None = None
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -445,6 +459,18 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
         max_skip_fraction=config.max_skip_fraction,
         split_sizes=config.split_sizes,
         overrides=config.sampling_overrides,
+    )
+
+
+def _cell_controls(config: CellConfig) -> CellControls:
+    """The literal sampling-control values this cell ran under (task 26).
+
+    RECORDING-only mirror of the ``rollout_transport`` route controls, so the
+    ledger line answers "temp 0 or temp 1?" without re-deriving from a hash.
+    """
+    return CellControls(
+        temperature=config.recorded_temperature,
+        reasoning_effort=config.recorded_reasoning_effort,
     )
 
 
@@ -741,6 +767,34 @@ def _spend_between(
     return max(0.0, b - a)
 
 
+def _spend_record(
+    *,
+    cell_id: str,
+    phase: str,
+    lane: str,
+    snapshot: CreditsSnapshot | None,
+) -> SpendRecord:
+    """One ``spend.jsonl`` record with a REAL timestamp + per-event id.
+
+    Task 26 item 1: ``at`` was the empty string on every historical spend row,
+    making a spend timeline unreconstructable. Populate it with the snapshot's
+    own ``at`` when the credits API supplied one, else the wall-clock at append
+    time; a per-record ``event_id`` lets a timeline address individual
+    snapshots. Null-honest: ``at`` is never a populated-but-empty string.
+    """
+    snap_at = snapshot.at if snapshot is not None else ""
+    return SpendRecord(
+        event_id=uuid.uuid4().hex,
+        cell_id=cell_id,
+        phase=phase,
+        lane=lane,
+        total_credits=snapshot.total_credits if snapshot else None,
+        total_usage=snapshot.total_usage if snapshot else None,
+        remaining_usd=snapshot.remaining_usd if snapshot else None,
+        at=snap_at or datetime.now(UTC).isoformat(),
+    )
+
+
 def _rate_limit_rows_in(evaluation: object) -> int:
     """Count driven rows in this split evaluation that hit a rate limit.
 
@@ -831,6 +885,9 @@ def _halted_before_optimize(
     wall_s: float,
     resumed: bool,
     restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
 ) -> CellOutcome:
     """Record a cell halted by the wall deadline before it could optimize.
 
@@ -843,18 +900,9 @@ def _halted_before_optimize(
     if is_openrouter and credits_fetcher is not None:
         spend_after = credits_fetcher()
         ledger.append_spend(
-            SpendRecord(
+            _spend_record(
                 cell_id=cell_id, phase="after", lane=config.lane,
-                total_credits=(
-                    spend_after.total_credits if spend_after else None
-                ),
-                total_usage=(
-                    spend_after.total_usage if spend_after else None
-                ),
-                remaining_usd=(
-                    spend_after.remaining_usd if spend_after else None
-                ),
-                at=spend_after.at if spend_after else "",
+                snapshot=spend_after,
             )
         )
     notes = [f"halted: {halt_reason}"]
@@ -887,6 +935,11 @@ def _halted_before_optimize(
             official_record_before=baseline_before_ref,
         ),
         sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
     )
     ledger.append_cell(record)
     return CellOutcome(
@@ -911,6 +964,9 @@ def _incomplete_internal_arm(
     wall_s: float,
     resumed: bool,
     restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
 ) -> CellOutcome:
     """Finalize a cell whose INTERNAL (optimize) arm never resolved.
 
@@ -932,18 +988,9 @@ def _incomplete_internal_arm(
     if is_openrouter and credits_fetcher is not None:
         spend_after = credits_fetcher()
         ledger.append_spend(
-            SpendRecord(
+            _spend_record(
                 cell_id=cell_id, phase="after", lane=config.lane,
-                total_credits=(
-                    spend_after.total_credits if spend_after else None
-                ),
-                total_usage=(
-                    spend_after.total_usage if spend_after else None
-                ),
-                remaining_usd=(
-                    spend_after.remaining_usd if spend_after else None
-                ),
-                at=spend_after.at if spend_after else "",
+                snapshot=spend_after,
             )
         )
     if is_openrouter and credits_fetcher is not None:
@@ -988,6 +1035,11 @@ def _incomplete_internal_arm(
             official_record_before=baseline_before_ref,
         ),
         sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
     )
     ledger.append_cell(record)
     # KEEP the partial log (an incomplete-arm cell is resumable): the caller
@@ -1014,6 +1066,9 @@ def _proposer_failure_arm(
     wall_s: float,
     resumed: bool,
     restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
 ) -> CellOutcome:
     """Finalize a cell where EVERY proposer draft failed (proposer outage).
 
@@ -1032,18 +1087,9 @@ def _proposer_failure_arm(
     if is_openrouter and credits_fetcher is not None:
         spend_after = credits_fetcher()
         ledger.append_spend(
-            SpendRecord(
+            _spend_record(
                 cell_id=cell_id, phase="after", lane=config.lane,
-                total_credits=(
-                    spend_after.total_credits if spend_after else None
-                ),
-                total_usage=(
-                    spend_after.total_usage if spend_after else None
-                ),
-                remaining_usd=(
-                    spend_after.remaining_usd if spend_after else None
-                ),
-                at=spend_after.at if spend_after else "",
+                snapshot=spend_after,
             )
         )
     if is_openrouter and credits_fetcher is not None:
@@ -1091,6 +1137,11 @@ def _proposer_failure_arm(
             official_record_before=baseline_before_ref,
         ),
         sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
     )
     ledger.append_cell(record)
     # KEEP the partial log (a proposer-failure cell is resumable): the caller
@@ -1150,6 +1201,10 @@ def run_cell(
 
     # --- Whole-cell wall deadline: shared across every fan-out phase. ---
     cell_start = clock()
+    # Wall-clock (ISO-8601 UTC) the cell started -- recorded on the ledger line
+    # so concurrency interleaving is reconstructable (the line carries a
+    # ``wall_s`` DURATION but had no absolute timestamps). Task 26 item 1.
+    started_at_iso = datetime.now(UTC).isoformat()
 
     def _fanout() -> FanoutConfig:
         """A FanoutConfig carrying the REMAINING whole-cell wall budget.
@@ -1183,6 +1238,17 @@ def run_cell(
         per_task_comp = getattr(evaluation, "per_task_compression", ()) or ()
         for i, out in enumerate(getattr(evaluation, "outputs", ()) or ()):
             row: dict[str, object] = {
+                # Versioned schema stamp (task 26 item 9) so a reader branches
+                # on version instead of sniffing present keys.
+                "schema": ROLLOUT_OUTPUTS_SCHEMA,
+                # Structured id components (task 26 item 8): a consumer joins
+                # on these directly, never parsing the composite cell_id.
+                "cell_id": cell_id,
+                "env": config.env,
+                "optimizer": config.optimizer,
+                "attempt": config.attempt,
+                "lane": config.lane,
+                "model": config.task_model,
                 "split_role": split_role,
                 "candidate_id": out.candidate_id,
                 "instance_id": out.instance_id,
@@ -1190,7 +1256,20 @@ def run_cell(
                 "output_text": out.output_text,
                 "score": out.score,
                 "failure_code": out.failure_code,
+                # Per-call provenance (task 26 items 2-3): truncation is
+                # distinguishable from a clean stop, and a failed row keeps the
+                # full provider diagnostic (not just the short code). Null when
+                # unknown.
+                "finish_reason": getattr(out, "finish_reason", None),
+                "provider_error": getattr(out, "provider_error", None),
             }
+            # ed1: emit MAX_BUDGET + over_budget on EVERY row (task 26 item 6)
+            # so the viewer stops re-deriving round(budget_ratio * len). Null
+            # for QA/d1 and no-budget ed1 frames.
+            budget = getattr(out, "max_budget", None)
+            if budget is not None:
+                row["max_budget"] = budget
+                row["over_budget"] = getattr(out, "over_budget", None)
             # ed1: attach the per-task compression alongside the per-row
             # output.
             task_idx = i // max(1, config.repeats)
@@ -1266,20 +1345,9 @@ def run_cell(
     if is_openrouter and credits_fetcher is not None:
         spend_before = credits_fetcher()
         ledger.append_spend(
-            SpendRecord(
-                cell_id=cell_id,
-                phase="before",
-                lane=config.lane,
-                total_credits=(
-                    spend_before.total_credits if spend_before else None
-                ),
-                total_usage=(
-                    spend_before.total_usage if spend_before else None
-                ),
-                remaining_usd=(
-                    spend_before.remaining_usd if spend_before else None
-                ),
-                at=spend_before.at if spend_before else "",
+            _spend_record(
+                cell_id=cell_id, phase="before", lane=config.lane,
+                snapshot=spend_before,
             )
         )
 
@@ -1308,6 +1376,11 @@ def run_cell(
     eval_config_hash = (
         experiment.eval_configs.official.eval_config.config_identity_hash
     )
+    # The content-addressed identity of the resolved official-arm graph --
+    # recorded on EVERY cell line including anchors (task 26 item 4), which
+    # previously persisted no graph identity at all. RECORDING-only: the hash
+    # the experiment already computes, now written out.
+    graph_hash = experiment.rollout_definition.graph_hash
     default_config = config.sampling_overrides.is_noop()
 
     # --- 1. Baseline naive + ceiling official arms (per-task vectors too). ---
@@ -1437,6 +1510,8 @@ def run_cell(
             spend_before=spend_before, credits_fetcher=credits_fetcher,
             is_openrouter=is_openrouter, wall_s=clock() - start,
             resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
         )
 
     # --- 1b. OPT-IN pre-run statistical-power stage (after anchors). ---
@@ -1506,6 +1581,8 @@ def run_cell(
             spend_before=spend_before, credits_fetcher=credits_fetcher,
             is_openrouter=is_openrouter, wall_s=clock() - start,
             resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
         )
 
     # --- Proposer-failure guard (before ANY best-candidate determination). ---
@@ -1523,6 +1600,8 @@ def run_cell(
             spend_before=spend_before, credits_fetcher=credits_fetcher,
             is_openrouter=is_openrouter, wall_s=clock() - start,
             resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
         )
 
     # Collect the INTERNAL candidate eval outputs (the internal naive base +
@@ -1691,20 +1770,9 @@ def run_cell(
     if is_openrouter and credits_fetcher is not None:
         spend_after = credits_fetcher()
         ledger.append_spend(
-            SpendRecord(
-                cell_id=cell_id,
-                phase="after",
-                lane=config.lane,
-                total_credits=(
-                    spend_after.total_credits if spend_after else None
-                ),
-                total_usage=(
-                    spend_after.total_usage if spend_after else None
-                ),
-                remaining_usd=(
-                    spend_after.remaining_usd if spend_after else None
-                ),
-                at=spend_after.at if spend_after else "",
+            _spend_record(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                snapshot=spend_after,
             )
         )
     # FIX 8: the cell's final spend_usd sums the credits deltas across ALL
@@ -1853,6 +1921,11 @@ def run_cell(
         power_sizing=power_sizing,
         dual_scores=dual_scores,
         telemetry=_cell_telemetry(partial_log),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at_iso,
+        finished_at=datetime.now(UTC).isoformat(),
     )
     ledger.append_cell(record)
     # --- Push the terminal event: incomplete-arm vs a finalized cell. ---

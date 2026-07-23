@@ -229,6 +229,11 @@ class _ScreenRowOutcome:
     #: reasoning detail -- never 0-conflated.
     reasoning_tokens: int | None = None
     latency_s: float | None = None
+    #: Task-26 per-call provenance (``None`` when unknown): the provider stop
+    #: reason of the accepted Generation (encdec = the decoder call) + the FULL
+    #: typed diagnostic of a failed call.
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
 
 
 def _direct_body(arm: str, parts: PromptParts, *, rename_token: str) -> str:
@@ -328,10 +333,14 @@ def _run_direct_row(
         logical_call_id=logical_call_id,
     )
     if not result.succeeded or result.generation is None:
-        from whetstone.execution.call_support import failure_code_of
+        from whetstone.execution.call_support import (
+            call_telemetry,
+            failure_code_of,
+        )
         return _ScreenRowOutcome(
             passed=None, failed=True,
             failure_code=failure_code_of(result), output_text=None,
+            provider_error=call_telemetry(result).provider_error,
         )
     code = result.generation.text
     from whetstone.execution.call_support import call_telemetry
@@ -346,6 +355,7 @@ def _run_direct_row(
             completion_tokens=tel.completion_tokens,
             total_tokens=tel.total_tokens,
             reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+            finish_reason=tel.finish_reason,
         )
     return _ScreenRowOutcome(
         passed=score.passed, failed=False, failure_code="",
@@ -354,6 +364,7 @@ def _run_direct_row(
         completion_tokens=tel.completion_tokens,
         total_tokens=tel.total_tokens,
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+        finish_reason=tel.finish_reason,
     )
 
 
@@ -443,6 +454,8 @@ def _run_encdec_row(
         total_tokens=outcome.total_tokens,
         reasoning_tokens=outcome.reasoning_tokens,
         latency_s=outcome.latency_s,
+        finish_reason=outcome.finish_reason,
+        provider_error=outcome.provider_error,
     )
 
 
@@ -634,6 +647,7 @@ def run_task_screen(
     execution_policy: ProviderExecutionPolicy,
     budget_ratio: float = 0.25,
     reasoning_effort: str | None = None,
+    temperature: float | None = None,
     repeats: int = 5,
     variants: Sequence[str] | None = None,
     rename_token: str = DEFAULT_RENAME_TOKEN,
@@ -718,8 +732,8 @@ def run_task_screen(
             _persist_row(
                 partial_log, sidecar_path, model=model,
                 budget_ratio=budget_ratio,
-                reasoning_effort=reasoning_effort, task_id=task_id,
-                arm=arm, index=index, outcome=out,
+                reasoning_effort=reasoning_effort, temperature=temperature,
+                task_id=task_id, arm=arm, index=index, outcome=out,
             )
             return out
 
@@ -856,6 +870,7 @@ def _persist_row(
     model: str,
     budget_ratio: float,
     reasoning_effort: str | None,
+    temperature: float | None = None,
     task_id: str,
     arm: str,
     index: int,
@@ -868,17 +883,26 @@ def _persist_row(
             instance_id=task_id, unit=arm, repeat_id=index,
             score=(None if outcome.passed is None else float(outcome.passed)),
             failed=outcome.failed, failure_code=outcome.failure_code,
+            split_role=arm,
             prompt_tokens=outcome.prompt_tokens,
             completion_tokens=outcome.completion_tokens,
             total_tokens=outcome.total_tokens,
             reasoning_tokens=outcome.reasoning_tokens,
             latency_s=outcome.latency_s,
+            output_text=outcome.output_text,
+            finish_reason=outcome.finish_reason,
+            provider_error=outcome.provider_error,
         ))
     if sidecar_path is not None:
         with sidecar_path.open("a") as handle:
             handle.write(json.dumps({
+                # Versioned schema stamp + structured id components (task 26):
+                # a consumer branches on the version and joins on the id fields
+                # (model / arm / budget_ratio / reasoning_effort) directly.
+                "schema": SCREEN_SCHEMA,
                 "model": model, "budget_ratio": budget_ratio,
                 "reasoning_effort": reasoning_effort,
+                "temperature": temperature,
                 "task_id": task_id, "arm": arm,
                 "repeat": index, "passed": outcome.passed,
                 "failure_code": outcome.failure_code,
@@ -888,6 +912,10 @@ def _persist_row(
                 "reasoning_tokens": outcome.reasoning_tokens,
                 "latency_s": outcome.latency_s,
                 "output_text": outcome.output_text,
+                # Per-call provenance (task 26): truncation vs clean stop, and
+                # the full provider diagnostic on a failed row.
+                "finish_reason": outcome.finish_reason,
+                "provider_error": outcome.provider_error,
             }) + "\n")
 
 

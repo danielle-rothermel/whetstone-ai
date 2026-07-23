@@ -1266,6 +1266,12 @@ def _build_cell_config(
         ed1_exclude_task_ids=ed1_exclude,
         ed1_blend_config=ed1_blend_config,
         d1_input_arm=getattr(args, "input_arm", "original"),
+        recorded_temperature=_temperature_arg(args),
+        recorded_reasoning_effort=(
+            _reasoning_arg(args).value
+            if _reasoning_arg(args) is not None
+            else None
+        ),
     )
     return config, task_route
 
@@ -1477,6 +1483,7 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         execution_policy=route.execution_policy,
         budget_ratio=args.budget_ratio,
         reasoning_effort=effort,
+        temperature=_temperature_arg(args),
         repeats=args.repeats,
         variants=variants,
         rename_token=rename_token,

@@ -101,6 +101,11 @@ class _D1RowOutcome:
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
     latency_s: float | None = None
+    #: Task-26 per-call provenance (``None`` when unknown): the provider stop
+    #: reason of the accepted Generation + the FULL typed diagnostic of a
+    #: failed call.
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
     #: True when a TRANSIENT transport fault (timeout/stall/transport-error/
     #: rate-limit) exhausted its semantic retries -- eligible for ONE re-drive.
     redrivable: bool = False
@@ -165,6 +170,7 @@ def _drive_row(
         return _D1RowOutcome(
             pass_value=None, output_text=None,
             failed=True, failure_code=failure_code_of(result),
+            provider_error=call_telemetry(result).provider_error,
             redrivable=is_transient_transport_failure(result),
         )
     output_text = result.generation.text
@@ -178,6 +184,7 @@ def _drive_row(
             completion_tokens=tel.completion_tokens,
             total_tokens=tel.total_tokens,
             reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+            finish_reason=tel.finish_reason,
         )
     return _D1RowOutcome(
         pass_value=code_score.row_value,
@@ -187,6 +194,7 @@ def _drive_row(
         completion_tokens=tel.completion_tokens,
         total_tokens=tel.total_tokens,
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+        finish_reason=tel.finish_reason,
     )
 
 
@@ -225,11 +233,15 @@ def _drive_and_persist(
                 score=outcome.pass_value,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
+                split_role=split_role,
                 prompt_tokens=outcome.prompt_tokens,
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
                 reasoning_tokens=outcome.reasoning_tokens,
                 latency_s=outcome.latency_s,
+                output_text=outcome.output_text,
+                finish_reason=outcome.finish_reason,
+                provider_error=outcome.provider_error,
             )
         )
     return outcome
@@ -394,6 +406,8 @@ def run_d1_eval(
                         else float(outcome.pass_value)
                     ),
                     failure_code=outcome.failure_code,
+                    finish_reason=outcome.finish_reason,
+                    provider_error=outcome.provider_error,
                 )
             )
         pass_rows.append((task_id, p_rows))

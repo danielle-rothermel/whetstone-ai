@@ -31,9 +31,13 @@ from pydantic import (
 )
 
 __all__ = [
+    "CELLS_SCHEMA",
     "CELL_STATUSES",
     "FULL_CONFIG_EVAL_HASH",
+    "ROLLOUT_OUTPUTS_SCHEMA",
+    "SPEND_SCHEMA",
     "CellArtifacts",
+    "CellControls",
     "CellModels",
     "CellRecord",
     "CellSamplingOverrides",
@@ -43,6 +47,13 @@ __all__ = [
     "SpendRecord",
     "cell_key",
 ]
+
+#: Versioned schema stamps on each ledger artifact type's rows (task 26 item 9;
+#: the ``power_analysis/v1`` + ``events/v1`` precedent). A structured reader
+#: branches on the stamp instead of sniffing which keys happen to be present.
+CELLS_SCHEMA = "whetstone.runner.cells/v1"
+SPEND_SCHEMA = "whetstone.runner.spend/v1"
+ROLLOUT_OUTPUTS_SCHEMA = "whetstone.runner.rollout_outputs/v1"
 
 #: The migration sentinel for :attr:`EnvOfficialCache.eval_config_hash`. Old
 #: cache lines predate the eval-config-hash key field; they resolve to this
@@ -126,6 +137,24 @@ class CellTelemetry(BaseModel):
     token_coverage: int = 0
     reasoning_coverage: int = 0
     latency_coverage: int = 0
+
+
+class CellControls(BaseModel):
+    """The literal sampling-control VALUES a cell ran under (task 26 item 5).
+
+    ``temperature`` / ``reasoning_effort`` fold into the Provider Call Config
+    identity (graph_hash), so today two cells at different temperatures produce
+    identical-looking ledger lines and you must re-derive the value from a hash
+    that (for anchors) is not even stored. Recording the literal values here
+    makes "did this anchor run at temp 0 or temp 1?" answerable by reading the
+    line. ``None`` means the control was UNSET (provider default) -- never
+    conflated with an explicit 0.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    temperature: float | None = None
+    reasoning_effort: StrictStr | None = None
 
 
 class CellArtifacts(BaseModel):
@@ -218,8 +247,14 @@ class CellRecord(BaseModel):
     a back-compatible mirror of ``delta_ci95``.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, populate_by_name=True
+    )
 
+    #: Versioned schema stamp (:data:`CELLS_SCHEMA`); serialized as ``schema``
+    #: (aliased -- ``schema`` shadows a BaseModel method). Absent on old lines
+    #: -> ``None`` (a reader branches on it; task 26).
+    schema_: StrictStr | None = Field(default=CELLS_SCHEMA, alias="schema")
     cell_id: StrictStr
     optimizer: StrictStr
     env: StrictStr
@@ -264,6 +299,25 @@ class CellRecord(BaseModel):
     #: The ed1 enc-dec SECOND objective (Mean Compression Ratio per arm) +
     #: budget/dataset provenance; ``None`` for QA envs (single objective).
     dual_scores: CellDualScores | None = None
+    #: The content-addressed identity of the exact resolved graph the OFFICIAL
+    #: arm ran under (task 26 item 4): recorded on EVERY cell including anchors
+    #: (eval rows), which previously persisted no graph/eval-config identity at
+    #: all. RECORDING-only -- this is the hash the runner already computes, now
+    #: written to the line. ``None`` on old lines.
+    graph_hash: StrictStr | None = None
+    #: The composite Eval Config Identity Hash of the official split (task 26
+    #: item 4), recorded on every cell incl. anchors. ``None`` on old lines.
+    eval_config_hash: StrictStr | None = None
+    #: The literal sampling-control values (temperature / reasoning_effort) the
+    #: cell ran under (task 26 item 5); defaults to all-``None`` (controls
+    #: unset -> provider default).
+    controls: CellControls = Field(default_factory=CellControls)
+    #: ISO-8601 UTC wall-clock the cell started / finished (task 26 item 1).
+    #: The line already carries ``wall_s`` (a duration) but no absolute
+    #: timestamps, so concurrency interleaving was unreconstructable. ``None``
+    #: on old lines (never captured) -- never a populated-but-empty string.
+    started_at: StrictStr | None = None
+    finished_at: StrictStr | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> CellRecord:
@@ -292,7 +346,13 @@ class CellRecord(BaseModel):
         }
 
     def to_line(self) -> str:
-        return json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        return json.dumps(
+            self.model_dump(mode="json", by_alias=True), sort_keys=True
+        )
+
+    @classmethod
+    def from_line(cls, line: str) -> CellRecord:
+        return cls.model_validate_json(line)
 
 
 class EnvOfficialCache(BaseModel):
@@ -355,20 +415,38 @@ class EnvOfficialCache(BaseModel):
 
 
 class SpendRecord(BaseModel):
-    """One ``spend.jsonl`` line: an OpenRouter credits snapshot pair."""
+    """One ``spend.jsonl`` line: an OpenRouter credits snapshot pair.
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    Task 26: ``at`` is a REAL ISO-8601 UTC wall-clock (it was the empty string
+    on every historical row -- a populated-but-empty field that read as
+    "recorded but blank"); it is ``None`` when genuinely never captured
+    (null-honesty), never ``""``. ``event_id`` is a per-row unique id so a
+    spend timeline can address individual snapshots. ``schema`` version-stamps
+    the row.
+    """
 
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, populate_by_name=True
+    )
+
+    schema_: StrictStr | None = Field(default=SPEND_SCHEMA, alias="schema")
+    event_id: StrictStr | None = None
     cell_id: StrictStr
     phase: StrictStr  # "before" | "after"
     lane: StrictStr
     total_credits: float | None = None
     total_usage: float | None = None
     remaining_usd: float | None = None
-    at: StrictStr = ""
+    at: StrictStr | None = None
 
     def to_line(self) -> str:
-        return json.dumps(self.model_dump(mode="json"), sort_keys=True)
+        return json.dumps(
+            self.model_dump(mode="json", by_alias=True), sort_keys=True
+        )
+
+    @classmethod
+    def from_line(cls, line: str) -> SpendRecord:
+        return cls.model_validate_json(line)
 
 
 def cell_key(optimizer: str, env: str, attempt: int) -> tuple[str, str, int]:
@@ -496,9 +574,7 @@ class Ledger:
                 line = raw.strip()
                 if not line:
                     continue
-                self._cells.append(
-                    CellRecord.model_validate_json(line)
-                )
+                self._cells.append(CellRecord.from_line(line))
         self._loaded = True
         return list(self._cells)
 
@@ -627,7 +703,7 @@ class Ledger:
         for raw in self.spend_path.read_text().splitlines():
             line = raw.strip()
             if line:
-                records.append(SpendRecord.model_validate_json(line))
+                records.append(SpendRecord.from_line(line))
         return records
 
     def total_spend_usd(self) -> float:

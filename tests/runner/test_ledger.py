@@ -8,8 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from whetstone.runner.ledger import (
+    CELLS_SCHEMA,
     FULL_CONFIG_EVAL_HASH,
+    SPEND_SCHEMA,
     CellArtifacts,
+    CellControls,
     CellModels,
     CellRecord,
     EnvOfficialCache,
@@ -52,7 +55,7 @@ def _record(**overrides: object) -> CellRecord:
 
 def test_cell_record_exact_schema_fields() -> None:
     record = _record()
-    dumped = record.model_dump(mode="json")
+    dumped = record.model_dump(mode="json", by_alias=True)
     assert set(dumped) == {
         "cell_id", "optimizer", "env", "attempt", "canonical", "models",
         "baseline_official", "ceiling_official", "best_official", "delta",
@@ -70,6 +73,11 @@ def test_cell_record_exact_schema_fields() -> None:
         "dual_scores",
         # Per-cell task-side usage + latency totals (task 20).
         "telemetry",
+        # Per-call provenance (task 26): schema stamp, graph/eval-config
+        # identity (recorded on every cell incl. anchors), literal sampling
+        # controls, and wall-clock start/finish timestamps.
+        "schema", "graph_hash", "eval_config_hash", "controls",
+        "started_at", "finished_at",
     }
     assert set(dumped["models"]) == {"task", "proposer"}
     assert set(dumped["artifacts"]) == {
@@ -141,6 +149,71 @@ def test_round_trip_preserves_stats_upgrade_fields() -> None:
     assert restored.escalated is True
     assert restored.official_repeats_used == 10
     assert restored.pooled_observation_counts == {"naive": 60, "best": 60}
+
+
+def test_cell_record_schema_stamped_on_wire_and_round_trips() -> None:
+    # Task 26 item 9: the versioned schema is serialized as ``schema`` (not the
+    # reserved-word attribute) and reads back through both to_line and
+    # model_validate_json.
+    record = _record()
+    assert record.schema_ == CELLS_SCHEMA
+    line = record.to_line()
+    assert '"schema": "whetstone.runner.cells/v1"' in line
+    assert "schema_" not in line
+    assert CellRecord.from_line(line) == record
+
+
+def test_cell_record_provenance_fields_round_trip() -> None:
+    # Task 26: graph/eval-config identity + literal controls + wall-clock
+    # timestamps round-trip on the cell line.
+    record = _record(
+        graph_hash="a" * 64,
+        eval_config_hash="b" * 64,
+        controls=CellControls(temperature=0.0, reasoning_effort="low"),
+        started_at="2026-07-23T00:00:00+00:00",
+        finished_at="2026-07-23T00:01:00+00:00",
+    )
+    restored = CellRecord.from_line(record.to_line())
+    assert restored.graph_hash == "a" * 64
+    assert restored.eval_config_hash == "b" * 64
+    assert restored.controls.temperature == 0.0
+    assert restored.controls.reasoning_effort == "low"
+    assert restored.started_at == "2026-07-23T00:00:00+00:00"
+    assert restored.finished_at == "2026-07-23T00:01:00+00:00"
+
+
+def test_cell_record_provenance_defaults_are_null_not_empty() -> None:
+    # Null-honesty (item 10): unset provenance is None, never a
+    # populated-but-empty value; controls default to all-None (unset).
+    record = _record()
+    assert record.graph_hash is None
+    assert record.eval_config_hash is None
+    assert record.started_at is None
+    assert record.finished_at is None
+    assert record.controls.temperature is None
+    assert record.controls.reasoning_effort is None
+
+
+def test_spend_record_real_at_event_id_and_schema() -> None:
+    # Task 26 item 1: ``at`` is a real string (or null), ``event_id`` is a
+    # per-row id, and the schema stamp serializes as ``schema``.
+    rec = SpendRecord(
+        cell_id="eval:c11:a0", phase="before", lane="openrouter",
+        remaining_usd=100.0, at="2026-07-23T00:00:00+00:00", event_id="ev1",
+    )
+    assert rec.schema_ == SPEND_SCHEMA
+    line = rec.to_line()
+    assert '"schema": "whetstone.runner.spend/v1"' in line
+    restored = SpendRecord.from_line(line)
+    assert restored.at == "2026-07-23T00:00:00+00:00"
+    assert restored.event_id == "ev1"
+
+
+def test_spend_record_at_defaults_null_not_empty() -> None:
+    # The historical ``at: ""`` populated-but-empty field is gone: an unset
+    # timestamp is null (item 10).
+    rec = SpendRecord(cell_id="c", phase="after", lane="openrouter")
+    assert rec.at is None
 
 
 def test_ledger_append_and_completed_keys(tmp_path: Path) -> None:

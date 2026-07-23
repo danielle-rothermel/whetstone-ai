@@ -228,6 +228,7 @@ def evaluate_split(
         fanout=fanout,
         partial_log=partial_log,
         partial_phase="cell",
+        partial_split_role=split_role,
         apply_reward=apply_reward_resolved,
         render_guard=render_guard,
     )

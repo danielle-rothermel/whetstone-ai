@@ -11,6 +11,7 @@ from dr_providers import FailureClass, policy_for
 
 from tests.provider import support as s
 from whetstone.execution.call_support import (
+    call_telemetry,
     guard_deadline_seconds,
     is_transient_transport_failure,
 )
@@ -109,3 +110,45 @@ def test_transient_transport_failure_false_for_clean_rejection() -> None:
     # request will not change a deterministic "no", so it must not re-drive.
     result = _clean_rejection()
     assert not is_transient_transport_failure(result)
+
+
+def _success() -> ProviderCallResult:
+    request = s.build_request()
+    transport_policy = s.build_transport_policy()
+    policy = s.build_execution_policy(
+        transport_policy=transport_policy, max_attempts=1,
+        backoff=BackoffSchedule(base_seconds=0.0, max_seconds=0.0),
+    )
+    transport = s.RecordingTransport(
+        request=request,
+        transport_policy=transport_policy,
+        outcomes=[s.response_outcome(text="hi")],
+    )
+    return run_provider_call(
+        request=request, policy=policy, transport=transport,
+        logical_call_id="lc-ok", clock=s.FakeClock(), sleep=s.SleepRecorder(),
+    )
+
+
+def test_call_telemetry_carries_finish_reason_on_success() -> None:
+    # Task 26 item 3: the accepted Generation's finish_reason is surfaced so a
+    # truncated ``length`` is distinguishable from a clean ``stop``.
+    tel = call_telemetry(_success())
+    assert tel.finish_reason == "stop"
+    assert tel.provider_error is None
+
+
+def test_call_telemetry_persists_full_provider_error_on_failure() -> None:
+    # Task 26 item 2: a failed call carries the FULL typed provider diagnostic,
+    # not just a short code -- so a 400 malformed-request is reconstructable.
+    tel = call_telemetry(_clean_rejection())
+    assert tel.provider_error is not None
+    assert tel.provider_error["failure_class"]
+    assert "400 bad request" in str(tel.provider_error["message"])
+
+
+def test_call_telemetry_all_none_for_absent_result() -> None:
+    tel = call_telemetry(None)
+    assert tel.finish_reason is None
+    assert tel.provider_error is None
+    assert tel.latency_s is None
