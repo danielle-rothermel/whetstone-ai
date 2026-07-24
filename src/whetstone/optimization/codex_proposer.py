@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from whetstone.optimization.proposal_prompts import copro_proposal_prompt
 from whetstone.optimization.proposer import (
     ProposalDraft,
     ProposalRequest,
@@ -190,7 +191,7 @@ class CodexProposerTransport:
         self._invoker: CodexCliInvoker = invoker or SubprocessCodexInvoker(
             timeout_s=timeout_s
         )
-        self._prompt_builder = prompt_builder or _default_proposal_prompt
+        self._prompt_builder = prompt_builder or copro_proposal_prompt
         #: Cumulative accounting the cell heartbeat reads (calls exact, tokens
         #: best-effort). Proposer spend is $0 (plan-billed).
         self.proposer_calls = 0
@@ -261,22 +262,9 @@ class CodexProposerTransport:
         return text
 
 
-def _default_proposal_prompt(request: ProposalRequest) -> str:
-    """The drafting instruction handed to ``codex exec`` for one template.
-
-    Mirrors the HTTP proposer's instruction: rewrite the base
-    ``user_prompt_template`` into a single improved variant that keeps every
-    ``{placeholder}`` token, differs from the base, and is returned verbatim
-    (no preamble/quotes) so the CLI's final message IS the drafted template.
-    """
-    base = request.base_template
-    return (
-        "You are optimizing the instruction template of a prompt-based "
-        "task solver. Rewrite the template below into a SINGLE improved "
-        "variant that is clearer and more likely to elicit a correct answer. "
-        "Rules: keep every {placeholder} token exactly as written; change the "
-        "wording so the result is NOT identical to the original; output ONLY "
-        "the rewritten template text with no preamble, quotes, or "
-        "commentary.\n"
-        f"\nORIGINAL TEMPLATE:\n{base}\n\nREWRITTEN TEMPLATE:"
-    )
+#: Deprecated alias. The drafting instruction is now built by the single seam
+#: :func:`whetstone.optimization.proposal_prompts.copro_proposal_prompt`, which
+#: ALSO threads ``request.context`` (the Reward-ranked history) into the prompt
+#: -- the old builder here dropped it. Retained only so existing imports keep
+#: working; new code calls the seam directly.
+_default_proposal_prompt = copro_proposal_prompt

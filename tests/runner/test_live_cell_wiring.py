@@ -33,6 +33,7 @@ from whetstone.optimization.codex_proposer import (
     CODEX_CLI_LANE,
     CodexProposerTransport,
 )
+from whetstone.optimization.proposal_prompts import PROMPT_SCHEMA_TAG
 from whetstone.optimization.proposer import ProposalRequest
 from whetstone.runner.cli import (
     CODEX_OPTIMIZER_AGENT_MODEL,
@@ -168,10 +169,15 @@ def test_codex_optimizer_wires_codex_cli_proposer_not_placeholder() -> None:
     # Recorded distinctly as codex-cli/<agent model>. The brief pins gpt-5.6
     # but that is rejected by ChatGPT-account Codex, so the default deviates to
     # CODEX_OPTIMIZER_AGENT_MODEL (gpt-5.6-sol).
+    # The recorded proposer id folds the prompt-schema tag (pp2): the codex-CLI
+    # proposer drafts through the context-carrying prompt seam.
     assert config.proposer_model == (
-        f"{CODEX_CLI_LANE}/{CODEX_OPTIMIZER_AGENT_MODEL}"
+        f"{CODEX_CLI_LANE}/{CODEX_OPTIMIZER_AGENT_MODEL}#{PROMPT_SCHEMA_TAG}"
     )
     assert CODEX_CLI_LANE in config.proposer_config.provider_call_config_ref
+    assert config.proposer_config.provider_call_config_ref.endswith(
+        f"#{PROMPT_SCHEMA_TAG}"
+    )
     assert len(config.proposer_config.provider_call_config_hash) == 64
     # The task route is still the openrouter lane (proposer is independent).
     assert task_route.lane == "openrouter"
@@ -184,7 +190,9 @@ def test_codex_optimizer_honors_proposer_model_override() -> None:
     override_cfg, _ = _build_cell_config(
         _cell_args("codex", proposer_model="gpt-5.3-codex")
     )
-    assert override_cfg.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.3-codex"
+    assert override_cfg.proposer_model == (
+        f"{CODEX_CLI_LANE}/gpt-5.3-codex#{PROMPT_SCHEMA_TAG}"
+    )
     assert (
         default_cfg.proposer_config.identity_hash()
         != override_cfg.proposer_config.identity_hash()
@@ -241,7 +249,9 @@ def test_codex_cli_proposer_constructs_for_every_proposal_optimizer(
     assert task_route.lane == "openrouter"
     # The codex-CLI proposer model + lane fold into the recorded proposer id
     # and the proposer Config identity (never a graph identity).
-    assert config.proposer_model == f"{CODEX_CLI_LANE}/gpt-5.4-mini"
+    assert config.proposer_model == (
+        f"{CODEX_CLI_LANE}/gpt-5.4-mini#{PROMPT_SCHEMA_TAG}"
+    )
     assert CODEX_CLI_LANE in config.proposer_config.provider_call_config_ref
     assert len(config.proposer_config.provider_call_config_hash) == 64
 
@@ -258,7 +268,7 @@ def test_codex_cli_proposer_model_override_folds_into_identity() -> None:
         )
     )
     assert override_cfg.proposer_model == (
-        f"{CODEX_CLI_LANE}/gpt-5.3-codex-spark"
+        f"{CODEX_CLI_LANE}/gpt-5.3-codex-spark#{PROMPT_SCHEMA_TAG}"
     )
     assert (
         default_cfg.proposer_config.identity_hash()

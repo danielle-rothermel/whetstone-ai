@@ -44,6 +44,10 @@ from whetstone.optimization.codex_proposer import (
     CodexProposerTransport,
     codex_proposer_ref,
 )
+from whetstone.optimization.proposal_prompts import (
+    copro_proposal_prompt,
+    fold_prompt_schema_tag,
+)
 from whetstone.optimization.proposer import (
     ProposalDraft,
     ProposalRequest,
@@ -692,27 +696,12 @@ def _live_transport(
     return provider.invoke
 
 
-def _proposal_prompt(request: ProposalRequest) -> str:  # pragma: no cover
-    """The instruction prompt a live proposer LM drafts one template from.
-
-    COPRO's proposer rewrites the base ``user_prompt_template`` into an
-    improved variant. The prompt hands the LM the current template and asks for
-    a single rewritten template that (a) preserves every ``{placeholder}`` and
-    (b) differs from the base (the Mutation-Surface diff check rejects a draft
-    identical to the base). Only the template text is requested back, so the
-    completion is used verbatim as the drafted template.
-    """
-    base = request.base_template
-    return (
-        "You are optimizing the instruction template of a prompt-based "
-        "task solver. Rewrite the template below into a SINGLE improved "
-        "variant that is clearer and more likely to elicit a correct answer. "
-        "Rules: keep every {placeholder} token exactly as written; change the "
-        "wording so the result is NOT identical to the original; output ONLY "
-        "the rewritten template text with no preamble, quotes, or "
-        "commentary.\n"
-        f"\nORIGINAL TEMPLATE:\n{base}\n\nREWRITTEN TEMPLATE:"
-    )
+#: The live-HTTP proposer drafts one template from the SAME seam the codex-CLI
+#: proposer uses (:func:`copro_proposal_prompt`) -- previously this was a
+#: duplicated builder that, like the codex one, dropped ``request.context``
+#: (the Reward-ranked history) and drafted score-blind. There is now exactly
+#: one prompt builder in the codebase.
+_proposal_prompt = copro_proposal_prompt
 
 
 class _HttpProposerTransport:
@@ -851,7 +840,13 @@ def _proposer_config(
     canonical OpenRouter proposer model when the codex CLI is not selected.
     """
     if codex_cli_model is not None:
-        ref = f"pcc://{codex_proposer_ref(codex_cli_model)}"
+        # The codex-CLI proposer drafts through the context-carrying prompt
+        # seam, so the prompt-schema tag folds into the proposer Config
+        # identity here (same place the lane+model folds). An old score-blind
+        # cell (untagged / pp1) is distinguishable from a new pp2 cell.
+        ref = fold_prompt_schema_tag(
+            f"pcc://{codex_proposer_ref(codex_cli_model)}"
+        )
         return ProposerConfig(
             provider_call_config_ref=ref,
             provider_call_config_hash=_deterministic_hash(ref),
@@ -1261,7 +1256,11 @@ def _build_cell_config(
         args, proposer_model=proposer_model_override
     )
     if codex_cli_model is not None:
-        recorded_proposer_model = codex_proposer_ref(codex_cli_model)
+        # Record the tagged proposer id (codex-cli/<model>#pp2) so the ledger
+        # distinguishes context-carrying cells from old score-blind (pp1) ones.
+        recorded_proposer_model = fold_prompt_schema_tag(
+            codex_proposer_ref(codex_cli_model)
+        )
     else:
         recorded_proposer_model = (
             proposer_model_override or CANONICAL_PROPOSER_MODEL

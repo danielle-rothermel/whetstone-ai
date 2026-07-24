@@ -265,6 +265,36 @@ def test_codex_proposer_ref_format() -> None:
     assert codex_proposer_ref("gpt-5.4-mini") == "codex-cli/gpt-5.4-mini"
 
 
+# --- Transport threads ranked history into the drafting prompt (task 30a) --
+
+
+def test_drafted_request_prompt_contains_ranked_history_block() -> None:
+    # The transport-level regression for the score-blind defect: a request that
+    # carries COPRO's Reward-ranked history must produce a codex prompt that
+    # INCLUDES that history (previously it was dropped, drafting score-blind).
+    invoker = _FakeInvoker([CodexInvocation(text="Z {input}", returncode=0)])
+    transport = CodexProposerTransport(model=MODEL, invoker=invoker)
+    request = ProposalRequest(
+        proposal_mode="history_proposal",
+        request_ordinal=1,
+        base_ref="base",
+        base_template="Answer: {input}",
+        context={
+            "ranked_history": [
+                {"candidate_id": "best", "template": "STRONG", "reward": 0.8},
+                {"candidate_id": "weak", "template": "WEAK", "reward": 0.2},
+            ]
+        },
+    )
+    transport.draft(_config(), request, count=1)
+    prompt, _model = invoker.calls[0]
+    assert "PRIOR ATTEMPTS" in prompt
+    assert "[score=0.8000] STRONG" in prompt
+    assert "[score=0.2000] WEAK" in prompt
+    # Ascending order: the weaker exemplar precedes the stronger one.
+    assert prompt.index("WEAK") < prompt.index("STRONG")
+
+
 def test_stub_uses_read_only_sandbox_flag(
     tmp_path: Path, monkeypatch
 ) -> None:
