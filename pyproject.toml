@@ -14,9 +14,13 @@ dependencies = [
     "dr-serialize>=0.1.0,<0.2",
     "dr-store>=0.1.0,<0.2",
     "numpy>=2.5.1",
+    "typer>=0.26.8",
     "whetstone-envs",
     "zstandard>=0.25.0",
 ]
+
+[project.scripts]
+whetstone-validate = "whetstone.runner.cli:main"
 
 [dependency-groups]
 # dbos and psycopg are test-only: the failure-policy tests verify

@@ -2144,6 +2144,7 @@ dependencies = [
     { name = "dr-serialize" },
     { name = "dr-store" },
     { name = "numpy" },
+    { name = "typer" },
     { name = "whetstone-envs" },
     { name = "zstandard" },
 ]
@@ -2168,6 +2169,7 @@ requires-dist = [
     { name = "dr-serialize", specifier = ">=0.1.0,<0.2" },
     { name = "dr-store", specifier = ">=0.1.0,<0.2" },
     { name = "numpy", specifier = ">=2.5.1" },
+    { name = "typer", specifier = ">=0.26.8" },
     { name = "whetstone-envs", git = "https://github.com/danielle-rothermel/whetstone-envs?rev=90729bda2b207a845b1b7e499754f9b913201a40" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]
