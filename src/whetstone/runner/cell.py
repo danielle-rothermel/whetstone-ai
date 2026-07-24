@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -66,6 +66,7 @@ from whetstone.runner.execution_mode import ExecutionMode
 from whetstone.runner.ledger import (
     ROLLOUT_OUTPUTS_SCHEMA,
     CellArtifacts,
+    CellAttractor,
     CellControls,
     CellDualScores,
     CellModels,
@@ -496,6 +497,35 @@ def _ed1_dual_scores(
         best_compression=dual_compression.get("official_best"),
         budget_ratio=config.budget_ratio,
         dataset_revision=revision,
+    )
+
+
+def _ed1m_attractor(
+    config: CellConfig,
+    attractor_by_role: Mapping[
+        str, tuple[float | None, tuple[float | None, ...]]
+    ],
+) -> CellAttractor | None:
+    """The ed1m REPORTED attractor-pull sub-record (task 28 item 1), or None.
+
+    ``None`` for every env except ed1m (only ed1m's dual oracle measures
+    attractor pull). For ed1m, carries the BEST official arm's reported mean +
+    per-task attractor vector -- durable on the cell line so the contamination
+    measurement no longer evaporates with a non-persistent ObjectStore. The
+    mean is recomputed here from the per-task vector (the same non-null mean
+    the aggregate reported) so a null per-task entry is never folded in as a
+    zero. ``sampled_task_count`` is the mean's denominator (tasks with a
+    discriminating sample).
+    """
+    if config.env != "ed1m":
+        return None
+    mean, per_task = attractor_by_role.get("official_best", (None, ()))
+    sampled = [a for a in per_task if a is not None]
+    computed_mean = (sum(sampled) / len(sampled)) if sampled else mean
+    return CellAttractor(
+        mean=computed_mean,
+        per_task=tuple(per_task),
+        sampled_task_count=len(sampled),
     )
 
 
@@ -1230,17 +1260,37 @@ def run_cell(
     # alongside the primary pass-rate score; None for QA envs). Captured as the
     # arms are observed so the cell line records both objectives.
     dual_compression: dict[str, float | None] = {}
+    # ed1m attractor pull per official arm (task 28 item 1): the reported mean
+    # + per-task vector, captured as the arms are observed so the cell line
+    # records the contamination measurement WITHOUT depending on a persistent
+    # ObjectStore. ``None`` values for ed1/QA/d1 (no attractor is measured).
+    attractor_by_role: dict[str, tuple[float | None, tuple[float | None, ...]]]
+    attractor_by_role = {}
 
     def _collect_outputs(split_role: str, evaluation: object) -> None:
         comp = getattr(evaluation, "compression_score", None)
         if comp is not None or getattr(evaluation, "per_task_compression", ()):
             dual_compression[split_role] = comp
+        per_task_attr = tuple(
+            getattr(evaluation, "per_task_attractor", ()) or ()
+        )
+        attr_mean = getattr(evaluation, "attractor_pull", None)
+        if attr_mean is not None or per_task_attr:
+            attractor_by_role[split_role] = (attr_mean, per_task_attr)
         per_task_comp = getattr(evaluation, "per_task_compression", ()) or ()
+        # ISO-8601 UTC wall-clock stamped on EVERY emitted row -- success AND
+        # provider_error rows alike (task 28 item 3): the rollout-output
+        # sidecar previously carried no ``at``, blocking failure-timing
+        # forensics on error rows. Stamped once per emit batch (rows are
+        # written at finalize, not per-call; per-call time is on the partial).
+        emitted_at = datetime.now(UTC).isoformat()
         for i, out in enumerate(getattr(evaluation, "outputs", ()) or ()):
             row: dict[str, object] = {
                 # Versioned schema stamp (task 26 item 9) so a reader branches
                 # on version instead of sniffing present keys.
                 "schema": ROLLOUT_OUTPUTS_SCHEMA,
+                # Recording wall-clock (task 28 item 3); on every row.
+                "at": emitted_at,
                 # Structured id components (task 26 item 8): a consumer joins
                 # on these directly, never parsing the composite cell_id.
                 "cell_id": cell_id,
@@ -1876,6 +1926,9 @@ def run_cell(
     # ed1: record the SECOND objective (Mean Compression Ratio per arm) +
     # budget/dataset provenance alongside the primary pass-rate scores.
     dual_scores = _ed1_dual_scores(config, experiment, dual_compression)
+    # ed1m: record the REPORTED attractor pull (task 28 item 1) on the line so
+    # it survives without a persistent ObjectStore; None for ed1/QA/d1.
+    attractor = _ed1m_attractor(config, attractor_by_role)
 
     record = CellRecord(
         cell_id=cell_id,
@@ -1920,6 +1973,7 @@ def run_cell(
         sampling_overrides=config.record_overrides(),
         power_sizing=power_sizing,
         dual_scores=dual_scores,
+        attractor=attractor,
         telemetry=_cell_telemetry(partial_log),
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,

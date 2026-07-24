@@ -37,7 +37,9 @@ __all__ = [
     "ROLLOUT_OUTPUTS_SCHEMA",
     "SPEND_SCHEMA",
     "CellArtifacts",
+    "CellAttractor",
     "CellControls",
+    "CellDualScores",
     "CellModels",
     "CellRecord",
     "CellSamplingOverrides",
@@ -226,6 +228,35 @@ class CellDualScores(BaseModel):
     dataset_revision: StrictStr | None = None
 
 
+class CellAttractor(BaseModel):
+    """The ed1m REPORTED attractor-pull measurement, carried on the cell line.
+
+    ed1m's dual oracle reports ``mean_attractor_pull`` -- the fraction of the
+    DISCRIMINATING inputs whose reconstruction snapped to the CANONICAL
+    behavior (the contamination signal, NEVER a reward objective). Task 28
+    item 1: this was previously written ONLY to an ed1 aggregate artifact that
+    evaporated when no persistent store was wired, so it vanished from the
+    ledger even though ``dual_scores`` (compression) survived. Recording it
+    here alongside ``dual_scores`` makes the measurement durable per cell.
+    RECORDING-only -- it does NOT enter any identity hash.
+
+    Present ONLY for ed1m cells (``None`` for ed1 / QA / d1). ``mean`` is the
+    reported scalar (mean over the tasks that had a discriminating sample);
+    ``per_task`` is the aligned per-official-task vector (``None`` for a task
+    whose mutant had no discriminating inputs, or an unscored task);
+    ``sampled_task_count`` is how many official tasks contributed a non-null
+    attractor value (the mean's denominator). A ``mean`` of ``None`` on a
+    non-null record means ed1m ran but no task produced a discriminating
+    sample.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mean: float | None = None
+    per_task: tuple[float | None, ...] = ()
+    sampled_task_count: int = 0
+
+
 class CellRecord(BaseModel):
     """One ``cells.jsonl`` line -- the validation-plan schema + stats upgrade.
 
@@ -299,6 +330,10 @@ class CellRecord(BaseModel):
     #: The ed1 enc-dec SECOND objective (Mean Compression Ratio per arm) +
     #: budget/dataset provenance; ``None`` for QA envs (single objective).
     dual_scores: CellDualScores | None = None
+    #: The ed1m REPORTED attractor-pull measurement (task 28 item 1), carried
+    #: on the line so it no longer depends on a persistent ObjectStore being
+    #: wired. ``None`` for ed1 / QA / d1 (only ed1m measures attractor pull).
+    attractor: CellAttractor | None = None
     #: The content-addressed identity of the exact resolved graph the OFFICIAL
     #: arm ran under (task 26 item 4): recorded on EVERY cell including anchors
     #: (eval rows), which previously persisted no graph/eval-config identity at
