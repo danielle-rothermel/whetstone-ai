@@ -14,6 +14,7 @@ dependencies = [
     "dr-store>=0.1.0,<0.2",
     "numpy>=2.5.1",
     "psycopg[binary]>=3.3.4",
+    "whetstone-envs",
     "zstandard>=0.25.0",
 ]
 
@@ -31,6 +32,8 @@ dev = [
 # Unreleased dr-* packages use exact reviewed revisions.
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "5810f30dede14094fcf1b8f1cce95d73a1055c84" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "3f175698c6e15e807dac4a9721d52e92d273edce" }
+whetstone-envs = { git = "https://github.com/danielle-rothermel/whetstone-envs", rev = "90729bda2b207a845b1b7e499754f9b913201a40" }
 
 [build-system]
 requires = ["hatchling"]
