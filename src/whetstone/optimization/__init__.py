@@ -8,6 +8,7 @@ from whetstone.optimization.adapters import (
     IdentityOptimizerAdapter,
     MappingAdapterRegistry,
     OptimizerAdapter,
+    compose_adapter_registry,
 )
 from whetstone.optimization.effect_authority import (
     AcquireOutcome,
@@ -64,13 +65,17 @@ from whetstone.optimization.mutation import (
     validate_candidate_template,
 )
 from whetstone.optimization.proposer import (
+    PROPOSAL_PROMPT_SCHEMA_TAG,
+    PROPOSAL_PROMPT_SCHEMA_VERSION,
     PROPOSER_CONFIG_SCHEMA,
     PROPOSER_CONFIG_SCHEMA_VERSION,
     FakeProposerTransport,
     ProposalDraft,
+    ProposalPromptBuilder,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
+    fold_prompt_schema_tag,
 )
 from whetstone.optimization.reward import (
     REWARD_POLICY_SCHEMA,
@@ -206,6 +211,8 @@ __all__ = [
     "OPTIMIZATION_RESULT_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA_VERSION",
+    "PROPOSAL_PROMPT_SCHEMA_TAG",
+    "PROPOSAL_PROMPT_SCHEMA_VERSION",
     "PROPOSER_CONFIG_SCHEMA",
     "PROPOSER_CONFIG_SCHEMA_VERSION",
     "REWARD_POLICY_SCHEMA",
@@ -280,6 +287,7 @@ __all__ = [
     "OptimizerAdapter",
     "OutputContract",
     "ProposalDraft",
+    "ProposalPromptBuilder",
     "ProposalRequest",
     "ProposalValidationError",
     "ProposerConfig",
@@ -336,9 +344,11 @@ __all__ = [
     "candidate_from_draft",
     "candidate_reference",
     "canonical_json_equal",
+    "compose_adapter_registry",
     "compute_identity_hash",
     "diff_check",
     "eval_config_reference",
+    "fold_prompt_schema_tag",
     "freeze_json_object",
     "optimization_result_reference",
     "optimization_run_reference",
