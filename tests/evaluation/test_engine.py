@@ -31,6 +31,7 @@ from whetstone.optimization import (
     ToolCapacity,
     ToolConfig,
     ToolDefinition,
+    ToolValidationError,
     TypedRef,
     candidate_reference,
 )
@@ -570,3 +571,28 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
         projected.extra_output["output_artifact_ref"]
     )
     assert store.get(artifact.reference)
+
+    mismatched = call.model_copy(
+        update={
+            "call_id": "wrong-task",
+            "args": {**call.args, "task_ids": ["not-the-bound-task"]},
+        }
+    )
+    served = len(transport.served)
+    with pytest.raises(ToolValidationError, match="unknown task IDs"):
+        EngineToolEvaluator(engine).evaluate(mismatched, config)
+    duplicate = call.model_copy(
+        update={
+            "call_id": "duplicate-task",
+            "args": {
+                **call.args,
+                "task_ids": [
+                    engine.sampling.task_set.task_identities[0],
+                    engine.sampling.task_set.task_identities[0],
+                ],
+            },
+        }
+    )
+    with pytest.raises(ToolValidationError, match="must be unique"):
+        EngineToolEvaluator(engine).evaluate(duplicate, config)
+    assert len(transport.served) == served

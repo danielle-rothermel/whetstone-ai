@@ -35,6 +35,15 @@ from whetstone.optimization.copro_control import (
     CoproInjectedDefaults,
     configure_copro,
 )
+from whetstone.optimization.gepa import (
+    ACCEPTANCE_POLICY,
+    GEPA_ADAPTER_KEY,
+    GEPA_VARIANT,
+    TOOL_EVALUATE_MINIBATCH,
+    TOOL_EVALUATE_SUBSET,
+    GepaAdapter,
+    strict_pareto_accepts,
+)
 from whetstone.optimization.harness import (
     ADAPTER_CHECKPOINT_SCHEMA,
     EvaluationService,
@@ -176,6 +185,7 @@ from whetstone.optimization.tools import (
 )
 
 __all__ = [
+    "ACCEPTANCE_POLICY",
     "ADAPTER_CHECKPOINT_SCHEMA",
     "BASELINE_FULL",
     "BOOTSTRAP",
@@ -189,6 +199,8 @@ __all__ = [
     "COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION",
     "COPRO_REFERENCE_COMMIT",
     "EVAL_CONFIG_RECORD_SCHEMA",
+    "GEPA_ADAPTER_KEY",
+    "GEPA_VARIANT",
     "HISTORY_PROPOSAL",
     "MINIBATCH",
     "MIPROV2_ADAPTER_KEY",
@@ -213,6 +225,8 @@ __all__ = [
     "STEP_RESULT_SCHEMA",
     "TOOL_CONFIG_SCHEMA",
     "TOOL_DEFINITION_SCHEMA",
+    "TOOL_EVALUATE_MINIBATCH",
+    "TOOL_EVALUATE_SUBSET",
     "TOOL_RESULT_SCHEMA",
     "AdapterCheckpoint",
     "AdapterOutput",
@@ -242,6 +256,7 @@ __all__ = [
     "EvaluationIntent",
     "EvaluationService",
     "FakeProposerTransport",
+    "GepaAdapter",
     "IdentityOptimizerAdapter",
     "InstructionIdentity",
     "IntentOutcome",
@@ -317,6 +332,7 @@ __all__ = [
     "require_full_hash",
     "step_request_reference",
     "step_result_reference",
+    "strict_pareto_accepts",
     "template_placeholder_fields",
     "tool_result_reference",
     "typed_ref_for_record",

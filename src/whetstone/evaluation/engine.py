@@ -14,7 +14,7 @@ from whetstone.envs.rollout_definition import (
     render_prompt,
     validate_candidate_prompt,
 )
-from whetstone.envs.sampling import EnvSplitSampling
+from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.schema import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
@@ -95,9 +95,20 @@ class EvaluationEngine:
         self._prompt_cache = prompt_cache
         expected = experiment.eval_configs.eval_config_for(sampling.split_role)
         if expected != sampling.eval_config:
-            raise ValueError(
-                "engine sampling must be the exact experiment split binding"
+            canonical = (
+                experiment.eval_configs.internal
+                if sampling.split_role
+                == experiment.eval_configs.internal.split_role
+                else experiment.eval_configs.official
             )
+            expected_subset = self._derive_sampling(
+                canonical, sampling.task_set.task_identities
+            )
+            if expected_subset != sampling:
+                raise ValueError(
+                    "engine sampling must be an exact experiment split "
+                    "binding or exact derived subset"
+                )
 
     @property
     def eval_config_ref(self) -> EvalConfigRef:
@@ -106,6 +117,73 @@ class EvaluationEngine:
     @property
     def prompt_cache(self) -> PromptResultCache | None:
         return self._prompt_cache
+
+    @staticmethod
+    def _derive_sampling(
+        source: EnvSplitSampling,
+        task_ids: tuple[str, ...],
+    ) -> EnvSplitSampling:
+        if not task_ids:
+            raise ValueError("derived sampling requires at least one task")
+        if len(set(task_ids)) != len(task_ids):
+            raise ValueError("derived sampling task IDs must be unique")
+        source_by_id = dict(
+            zip(
+                source.task_set.task_identities,
+                source.instances,
+                strict=True,
+            )
+        )
+        unknown = tuple(
+            task_id for task_id in task_ids if task_id not in source_by_id
+        )
+        if unknown:
+            raise ValueError(
+                f"derived sampling contains unknown task IDs: {unknown!r}"
+            )
+        selected = tuple(source_by_id[task_id] for task_id in task_ids)
+        identity_by_instance = {
+            id(instance): task_id
+            for task_id, instance in zip(task_ids, selected, strict=True)
+        }
+        namespace, separator, role = source.task_set.manifest_id.rpartition(
+            "."
+        )
+        if not separator or role != source.split_role:
+            raise ValueError(
+                "source sampling manifest does not match its split role"
+            )
+        return derive_split_sampling(
+            namespace=namespace,
+            dataset_revision=source.task_set.dataset_revision,
+            split_role=source.split_role,
+            instances=selected,
+            task_identity_of=lambda instance: identity_by_instance[
+                id(instance)
+            ],
+            procedure=source.procedure_config,
+            aggregation=source.aggregation_config,
+            repeats=source.repeat_plan.repeat_count,
+        )
+
+    def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
+        """Return an engine bound to one exact ordered task subset.
+
+        The view derives from this engine's complete sampling contract;
+        callers cannot override repeats, role, procedure, aggregation, or
+        dataset identity independently.
+        """
+        derived = self._derive_sampling(self.sampling, task_ids)
+        return EvaluationEngine(
+            store=self._store,
+            experiment=self.experiment,
+            sampling=derived,
+            execution_policy=self._execution_policy,
+            transport=self._transport,
+            fanout=self._fanout,
+            partial_log=self._partial_log,
+            prompt_cache=self._prompt_cache,
+        )
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""

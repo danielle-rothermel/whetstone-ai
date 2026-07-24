@@ -36,6 +36,7 @@ class CountingEvaluator:
             rollout_refs=(typed_ref_for_record("test.rollout", {"value": 1}),),
             aggregates={"score": 1.0},
             eval_config_hash=FULL_B,
+            source_eval_config_hash=FULL_B,
         )
 
 

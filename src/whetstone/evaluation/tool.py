@@ -23,6 +23,20 @@ class EngineToolEvaluator:
             raise ToolValidationError(
                 "tool config is not bound to the engine's exact Eval Config"
             )
+        engine = self._engine
+        task_ids = call.args.get("task_ids")
+        if task_ids is not None:
+            if not isinstance(task_ids, list) or not all(
+                isinstance(task_id, str) for task_id in task_ids
+            ):
+                raise ToolValidationError(
+                    "tool task_ids must be an ordered list of strings"
+                )
+            if task_ids:
+                try:
+                    engine = self._engine.for_task_ids(tuple(task_ids))
+                except ValueError as exc:
+                    raise ToolValidationError(str(exc)) from exc
         candidate = Candidate(
             candidate_id=call.call_id,
             base_ref=str(call.args.get("base_ref", call.call_id)),
@@ -35,7 +49,7 @@ class EngineToolEvaluator:
                 ),
             },
         )
-        evaluated = self._engine.evaluate(
+        evaluated = engine.evaluate(
             EvaluationRequest(
                 candidate=candidate,
                 evaluation_role=EvaluationRole.INTERNAL,
@@ -55,6 +69,9 @@ class EngineToolEvaluator:
             rollout_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
             eval_config_hash=evidence.eval_config.identity_hash,
+            source_eval_config_hash=(
+                self._engine.eval_config_ref.identity_hash
+            ),
             objective_values=objectives,
             extra_output={
                 "evaluation_evidence_ref": (

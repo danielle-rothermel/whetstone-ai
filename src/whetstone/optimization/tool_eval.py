@@ -75,8 +75,10 @@ class ToolEvaluation:
       missing-data rule.
     * ``objective_values`` -- the per-objective values GEPA compares/frontiers
       on (a subset of/derived from ``aggregates``); carried for the caller.
-    * ``eval_config_hash`` -- the internal Eval Config identity the evaluation
-      bound; recorded as tool evidence.
+    * ``eval_config_hash`` -- the exact internal Eval Config identity the
+      evaluation bound; recorded as tool evidence.
+    * ``source_eval_config_hash`` -- the Tool Config's source Eval Config
+      identity from which an exact task subset may be derived.
     * ``extra_output`` -- any additional typed output the tool exposes to the
       caller (e.g. a GEPA bounded Rollout Trace projection ref).
     """
@@ -84,6 +86,7 @@ class ToolEvaluation:
     rollout_refs: tuple[TypedRef, ...]
     aggregates: dict[str, float | None]
     eval_config_hash: str
+    source_eval_config_hash: str
     objective_values: dict[str, float] = field(default_factory=dict)
     extra_output: dict[str, object] = field(default_factory=dict)
 
@@ -178,10 +181,13 @@ class EvaluatingToolExecutor(ToolExecutor):
                 )
 
             evaluation = self._evaluator.evaluate(call, config)
-            if evaluation.eval_config_hash != config.eval_config_identity_hash:
+            if (
+                evaluation.source_eval_config_hash
+                != config.eval_config_identity_hash
+            ):
                 raise ValueError(
-                    "the tool's internal evaluation bound a different Eval "
-                    "Config than the Tool Config's internal-role Eval Config"
+                    "the tool's internal evaluation was not derived from "
+                    "the Tool Config's internal-role Eval Config"
                 )
             reward = apply_reward_policy(
                 self._reward_policy,
@@ -196,6 +202,9 @@ class EvaluatingToolExecutor(ToolExecutor):
                 "rollout_ref_count": len(evaluation.rollout_refs),
                 "objective_values": evaluation.objective_values,
                 "eval_config_hash": evaluation.eval_config_hash,
+                "source_eval_config_hash": (
+                    evaluation.source_eval_config_hash
+                ),
                 "internal_role": EvaluationRole.INTERNAL.value,
                 **evaluation.extra_output,
             }
