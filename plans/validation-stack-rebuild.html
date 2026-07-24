@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="doc.css">
+<title>Whetstone rebuild · One optimization path across eight PRs</title>
+</head>
+<body>
+<main>
+  <h1>The rebuilt stack carries one canonical optimization path across eight PRs</h1>
+  <p class="dek">Reorder foundations, remove divergence, and validate every review boundary.</p>
+  <div class="byline">whetstone-ai · 2026-07-24</div>
+
+  <div class="section-head">
+    <h2>What outcome does this rebuild guarantee?</h2>
+    <span class="tag">contract</span>
+  </div>
+  <p>
+    The existing <code>impl/00</code>–<code>impl/11</code> stack remains an
+    immutable source. A new stack starts from <code>main@8f95b4b</code> and
+    ends with the current behavior rerouted through
+    <span class="key">OptimizationHarness</span> and the canonical adapter
+    classes. The runner-owned <code>run_optimize</code> path does not survive.
+  </p>
+  <div class="callout">
+    Every commit runs <span class="key">ruff format --check</span>,
+    <span class="key">ruff check</span>, and <span class="key">ty check</span>.
+    Every PR has a deterministic test command that completes in under 60 seconds.
+  </div>
+
+  <div class="section-head">
+    <h2>Which responsibility belongs to each PR?</h2>
+    <span class="tag">stack</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>PR</th><th>Ownership</th><th>Required boundary</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Released dependencies, graph, result, provider, orchestration</td><td>No temporary editable source or removed API name</td></tr>
+        <tr><td>2</td><td>Code evaluation, aggregation, bootstrap confidence, power analysis</td><td>No runner import</td></tr>
+        <tr><td>3</td><td>Fanout, deadlines, failure handling, partials, provenance, prompt cache</td><td>Execution remains domain-neutral</td></tr>
+        <tr><td>4</td><td>Optimization schemas, identity, reward, mutation, proposer protocol, tools, durable harness</td><td>No concrete optimizer algorithm</td></tr>
+        <tr><td>5</td><td>Objectives and evaluation authority</td><td>Immutable official records and ordered mapping</td></tr>
+        <tr><td>6</td><td>Sampling, task splits, base environments, ED1, ED1m, D1</td><td>No environment-to-runner dependency</td></tr>
+        <tr><td>7</td><td>COPRO, MIPROv2, GEPA, Codex, MCP, algorithm prompts</td><td>All algorithms execute through the durable harness</td></tr>
+        <tr><td>8</td><td>Runner cutover, CLI, ledger, screens, events, reports, docs, CI</td><td>Delete the divergent optimization implementation</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-head">
+    <h2>How will agents change the stack without overlapping ownership?</h2>
+    <span class="tag">waves</span>
+  </div>
+  <div class="grid-3">
+    <section class="card">
+      <h3>Wave A · inventory</h3>
+      <p>
+        Read-only agents produce the old-commit allocation ledger and dependency
+        boundary audit. No implementation begins until every old commit is
+        assigned, split, or dropped.
+      </p>
+    </section>
+    <section class="card">
+      <h3>Wave B · foundations</h3>
+      <p>
+        PRs 1–3 may use separate agents only when their working directories and
+        file ownership are disjoint. Each works from the freshly validated parent.
+      </p>
+    </section>
+    <section class="card">
+      <h3>Wave C · canonical path</h3>
+      <p>
+        PRs 4–8 run sequentially because optimization, environments, adapters,
+        and runner integration overlap. One agent owns each branch and commit.
+      </p>
+    </section>
+  </div>
+  <span class="aside">
+    The requested Opus/Sonnet tier labels are unavailable in the Codex agent
+    interface; default frontier agents handle architecture and implementation,
+    followed by an independent reviewer.
+  </span>
+
+  <div class="section-head">
+    <h2>What must pass before a branch can become a PR?</h2>
+    <span class="tag">gates</span>
+  </div>
+  <div class="grid-2">
+    <section class="card">
+      <h3><span class="status required">required</span> Static checks</h3>
+      <ul>
+        <li><code>uv run ruff format --check .</code></li>
+        <li><code>uv run ruff check</code></li>
+        <li><code>uv run ty check</code></li>
+        <li>The installed pre-commit and pre-push hooks invoke the same script.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status gate">gate</span> Tests and time</h3>
+      <ul>
+        <li>Focused tests prove the PR’s public contract.</li>
+        <li>The recorded wall time is strictly below 60 seconds.</li>
+        <li>PR 8 also runs fake-transport cells for every optimizer.</li>
+        <li>Slow tests remain a separately declared validation obligation.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status review">review</span> Architecture</h3>
+      <ul>
+        <li>Parent-to-branch diff contains only the declared responsibility.</li>
+        <li>Lower layers do not import runner modules.</li>
+        <li>Only canonical adapters make optimization decisions.</li>
+        <li>No old implementation name remains in code, tests, or docs.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status review">review</span> PR record</h3>
+      <ul>
+        <li>Title states the delivered behavior.</li>
+        <li>Description explains why, ownership, evidence, and stack position.</li>
+        <li>Validation todo identifies any check the owner must still witness.</li>
+        <li>Removed tests appear in a named ledger with replacement coverage.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="section-head">
+    <h2>How is the final cutover proven complete?</h2>
+    <span class="tag">acceptance</span>
+  </div>
+  <p>
+    The final audit compares the rebuilt tip with source
+    <code>0be9a8f</code>. Every difference must be explained by the hard
+    cutover, a package move, or removal of temporary dependency state. Searches
+    for <code>run_optimize</code>, <code>_proposal_rounds</code>,
+    <code>ProposalStep</code>, and <code>OptimizeResult</code> must be empty.
+  </p>
+  <p>
+    Supporting design references:
+    <a href="../design/concrete-changes.html">concrete changes</a>,
+    <a href="../design/copro-run.html">COPRO run</a>,
+    <a href="../design/miprov2-run.html">MIPROv2 run</a>,
+    <a href="../design/gepa-run.html">GEPA run</a>, and
+    <a href="../design/codex-agent-run.html">Codex agent run</a>.
+    Enforcement lives in
+    <a href="../scripts/ci/lint.sh">the shared lint script</a> and
+    <a href="../.pre-commit-config.yaml">the hook configuration</a>.
+  </p>
+
+  <div class="colophon">
+    Provenance: source stack tip <code>0be9a8f9b42edd0ffb170f0c54f876ab70e1e2f8</code>;
+    rebuild base <code>8f95b4b93a5989b9f49307b543b801667d6ee9b5</code>.
+    This plan authorizes no destructive rewrite of the existing stack. New
+    branches use one committer and Graphite parent tracking; submission occurs
+    only after the local eight-branch stack passes all recorded gates.
+  </div>
+</main>
+</body>
+</html>

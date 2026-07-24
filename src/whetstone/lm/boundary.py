@@ -3,9 +3,10 @@
 The wire mechanics (config records, payload building, transport,
 parsing, failure classification) live in dr-providers. This module keeps
 only whetstone's domain shapes: ``ProviderResult`` (the provider outcome
-surface), the ``LlmRequest`` construction from caller parameters, the
-``LlmResponse`` → ``ProviderResult`` conversion, and translation of
-kernel failure carriers into whetstone eval-failure exceptions.
+surface), the ``ProviderCallRequest`` construction from caller parameters,
+the ``ProviderTransportResponse`` -> ``ProviderResult`` conversion, and
+translation of kernel failure carriers into whetstone eval-failure
+exceptions.
 """
 
 from __future__ import annotations
@@ -14,13 +15,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from dr_providers import (
-    LlmRequest,
-    LlmResponse,
     MessageRole,
     PromptMessage,
-    ProviderConfig,
+    ProviderBodyExtensions,
+    ProviderCallConfig,
+    ProviderCallRequest,
     ProviderFailureError,
+    ProviderTransportResponse,
     ReasoningEffort,
+    Transcript,
 )
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
@@ -41,7 +44,8 @@ __all__ = [
     "OUTPUT_FIELD_TEXT",
     "PlainPromptAdapter",
     "ProviderResult",
-    "llm_request_from_parameters",
+    "provider_call_config_with_parameters",
+    "provider_call_request_from_parameters",
     "provider_result_from_response",
     "reasoning_effort_from_parameter",
     "translate_provider_failure",
@@ -109,52 +113,101 @@ def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
     except ValueError as exc:
         valid = ", ".join(level.value for level in ReasoningEffort)
         raise ValueError(
-            f"invalid reasoning effort {value!r}; "
-            f"expected one of: {valid}"
+            f"invalid reasoning effort {value!r}; expected one of: {valid}"
         ) from exc
 
 
-def llm_request_from_parameters(
+def provider_call_config_with_parameters(
+    config: ProviderCallConfig,
+    parameters: Mapping[str, Any],
+) -> ProviderCallConfig:
+    """Fold caller generation parameters into the Config's controls.
+
+    Under the released dr-providers contract, output-affecting controls
+    (temperature/token-limit/reasoning) and body extensions are part of the
+    Provider Call Config identity, not loose request fields. This projects a
+    caller's merged parameters onto a base Config, re-materializing it
+    through its owning Definition so the assignment stays validated. Only set
+    parameters override the base control; absent ones leave it unchanged.
+    """
+    controls = config.controls
+    updates: dict[str, Any] = {}
+    if TEMPERATURE_PARAMETER in parameters:
+        updates["temperature"] = parameters.get(TEMPERATURE_PARAMETER)
+    if TOKEN_LIMIT_PARAMETER in parameters:
+        updates["token_limit"] = parameters.get(TOKEN_LIMIT_PARAMETER)
+    if REASONING_PARAMETER in parameters:
+        updates["reasoning"] = reasoning_effort_from_parameter(
+            parameters.get(REASONING_PARAMETER)
+        )
+    new_controls = controls.model_copy(update=updates) if updates else controls
+    extra_body = dict(parameters.get(EXTRA_BODY_PARAMETER) or {})
+    if extra_body:
+        extensions = ProviderBodyExtensions(extra_body=extra_body)
+        # Extension body keys are Definition-declared Variables; declare any
+        # caller-supplied keys so the re-materialized Config stays validated.
+        definition = config.definition.model_copy(
+            update={
+                "extension_keys": (
+                    config.definition.extension_keys | frozenset(extra_body)
+                )
+            }
+        )
+    else:
+        extensions = config.extensions
+        definition = config.definition
+    return definition.materialize(
+        controls=new_controls,
+        extensions=extensions,
+    )
+
+
+def provider_call_request_from_parameters(
     *,
-    config: ProviderConfig,
+    config: ProviderCallConfig,
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
-    idempotency_key: str | None = None,
-) -> LlmRequest:
-    """Build the kernel request from a caller's merged parameters."""
-    return LlmRequest(
-        provider_config=config,
-        messages=messages,
-        temperature=parameters.get(TEMPERATURE_PARAMETER),
-        token_limit=parameters.get(TOKEN_LIMIT_PARAMETER),
-        reasoning=reasoning_effort_from_parameter(
-            parameters.get(REASONING_PARAMETER)
-        ),
-        extra_body=dict(parameters.get(EXTRA_BODY_PARAMETER) or {}),
-        idempotency_key=idempotency_key,
+) -> ProviderCallRequest:
+    """Build the native Provider Call Request from caller parameters.
+
+    The request references exactly one Provider Call Config (with the
+    caller's generation parameters folded into its controls) plus one
+    Transcript. It carries no copied controls and no transport policy.
+    """
+    return ProviderCallRequest(
+        config=provider_call_config_with_parameters(config, parameters),
+        transcript=Transcript(messages=messages),
     )
 
 
 def provider_result_from_response(
-    response: LlmResponse,
+    response: ProviderTransportResponse,
     *,
     output_field: str = OUTPUT_FIELD_TEXT,
 ) -> ProviderResult:
-    metadata = dict(response.provider_metadata)
+    """Project a native Provider Transport Response onto the whetstone
+    ``ProviderResult`` surface.
+
+    The transport response's least-processed ``raw_body`` becomes the base
+    of ``response_metadata``; conformance warnings and Responses diagnostics
+    ride alongside it. Usage and cost are read from the native typed fields.
+    """
+    metadata: dict[str, Any] = dict(response.raw_body)
     if response.diagnostics is not None:
         metadata["diagnostics"] = response.diagnostics.model_dump(mode="json")
     if response.warnings:
         metadata["conformance_warnings"] = [
-            warning.model_dump(mode="json")
-            for warning in response.warnings
+            warning.model_dump(mode="json") for warning in response.warnings
         ]
-    usage = metadata.get("usage")
+    usage_metadata: dict[str, Any] = (
+        response.usage.model_dump(mode="json", exclude_none=True)
+        if response.usage is not None
+        else {}
+    )
     return ProviderResult(
-        text=require_generation_text(
-            response.text, output_field=output_field
-        ),
+        text=require_generation_text(response.text, output_field=output_field),
         response_metadata=metadata,
-        usage_metadata=dict(usage) if isinstance(usage, Mapping) else {},
+        usage_metadata=usage_metadata,
         provider_cost=(
             response.cost.total_cost if response.cost is not None else None
         ),
