@@ -21,6 +21,7 @@ canned template drafts with no network. It never participates in identity.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import (
@@ -38,17 +39,23 @@ from whetstone.optimization.identity import (
 )
 
 __all__ = [
+    "PROPOSAL_PROMPT_SCHEMA_TAG",
+    "PROPOSAL_PROMPT_SCHEMA_VERSION",
     "PROPOSER_CONFIG_SCHEMA",
     "PROPOSER_CONFIG_SCHEMA_VERSION",
     "FakeProposerTransport",
     "ProposalDraft",
+    "ProposalPromptBuilder",
     "ProposalRequest",
     "ProposerConfig",
     "ProposerTransport",
+    "fold_prompt_schema_tag",
 ]
 
 PROPOSER_CONFIG_SCHEMA = "whetstone.proposer_config"
 PROPOSER_CONFIG_SCHEMA_VERSION = 1
+PROPOSAL_PROMPT_SCHEMA_VERSION = 2
+PROPOSAL_PROMPT_SCHEMA_TAG = "pp2"
 
 
 class ProposerConfig(BaseModel):
@@ -122,6 +129,15 @@ class ProposalRequest(BaseModel):
         if self.request_ordinal < 0:
             raise ValueError("request_ordinal cannot be negative")
         return self
+
+
+ProposalPromptBuilder = Callable[[ProposalRequest], str]
+
+
+def fold_prompt_schema_tag(route: str) -> str:
+    """Fold the reconciled proposal-prompt protocol into route identity."""
+    suffix = f"#{PROPOSAL_PROMPT_SCHEMA_TAG}"
+    return route if route.endswith(suffix) else f"{route}{suffix}"
 
 
 class ProposalDraft(BaseModel):
