@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from dr_code.eval import (
     EvalDefinition,
@@ -84,6 +85,9 @@ from whetstone.optimization.reward import (
     apply_reward_policy,
 )
 from whetstone.optimization.schema import Candidate
+
+if TYPE_CHECKING:
+    from whetstone.runner.task_split_manifest import TaskSplitRoles
 
 #: The ed1 env id.
 ED1_ENV_NAME = "ed1"
@@ -398,9 +402,17 @@ def build_ed1_procedure_config(
     )
 
 
-def _ed1_task_set(split_role: str, task_ids: tuple[str, ...]) -> TaskSet:
+def _ed1_task_set(
+    split_role: str,
+    task_ids: tuple[str, ...],
+    *,
+    manifest_tag: str | None = None,
+) -> TaskSet:
+    manifest_role = (
+        split_role if manifest_tag is None else f"{split_role}.{manifest_tag}"
+    )
     return TaskSet(
-        manifest_id=f"whetstone.ed1.{split_role}",
+        manifest_id=f"whetstone.ed1.{manifest_role}",
         version=_DEFINITION_VERSION,
         dataset_revision=ED1_DATASET_REVISION,
         task_identities=task_ids,
@@ -415,17 +427,25 @@ def _ed1_split(
     completeness: Completeness,
     max_skip_fraction: float,
     repeats: int,
+    manifest_tag: str | None = None,
 ) -> EnvSplitSampling:
+    # ``manifest_tag`` (a task-split-manifest's content-hash + pool) folds into
+    # the Task Set / Repeat Plan / Sampling ids so a manifest-driven split is a
+    # DISTINCT eval_config_hash. ``None`` (the default) leaves the ids
+    # byte-identical to a first-N slice cell.
+    manifest_role = (
+        split_role if manifest_tag is None else f"{split_role}.{manifest_tag}"
+    )
     task_ids = tuple(str(inst.id) for inst in instances)
-    task_set = _ed1_task_set(split_role, task_ids)
+    task_set = _ed1_task_set(split_role, task_ids, manifest_tag=manifest_tag)
     repeat_plan = RepeatPlan(
-        plan_id=f"whetstone.ed1.{split_role}",
+        plan_id=f"whetstone.ed1.{manifest_role}",
         version=_DEFINITION_VERSION,
         task_identities=task_ids,
         repeat_count=repeats,
     )
     sampling = SamplingDefinition(
-        definition_id=f"whetstone.ed1.{split_role}.sampling",
+        definition_id=f"whetstone.ed1.{manifest_role}.sampling",
         version=_DEFINITION_VERSION,
     ).materialize(
         {
@@ -637,6 +657,7 @@ def build_ed1_experiment(
     tasks: tuple[Ed1Instance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
+    split_manifest: TaskSplitRoles | None = None,
 ) -> Ed1Experiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
 
@@ -656,6 +677,16 @@ def build_ed1_experiment(
     DISTINCT ``eval_config_hash`` per split -- the exclusion folds into the id
     by construction. The list is per-model (built from that model's screen), so
     the caller passes the exclusion list for the model the cell actually runs.
+
+    ``split_manifest`` (task 29) OVERRIDES the first-N slice with role-true
+    train/val/test semantics: the internal split = the manifest's
+    ``train + val`` ids (by MEMBERSHIP, in manifest order -- the internal
+    machinery has no val sub-split, so val folds into internal alongside
+    train); the official split = the manifest's ``test`` ids EXACTLY
+    (membership, NOT a first-N slice).
+    ``official_n`` then caps WITHIN the test set. Mutually exclusive with
+    ``exclude_task_ids`` (the caller enforces the CLI refusal). The manifest's
+    content hash + pool folds into each split's Task Set identity.
     """
     pool = tasks if tasks is not None else load_ed1_tasks(
         prefer_snapshot=prefer_snapshot, limit=limit
@@ -673,26 +704,45 @@ def build_ed1_experiment(
         procedure_config_hash=procedure.config_identity_hash,
         budget_ratio=budget_ratio,
     )
-    all_instances = tuple(t.instance for t in pool)
-    n = len(all_instances)
-    # First-N ordered split: internal then official (disjoint, contiguous). A
-    # tiny pilot pool may put all tasks in the official split.
-    i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
-    internal_instances = all_instances[:i_n]
-    rest = all_instances[i_n:]
-    o_n = official_n if official_n is not None else len(rest)
-    official_instances = rest[:o_n] if rest else internal_instances[:o_n or n]
-    if not official_instances:
-        official_instances = internal_instances
+    manifest_tag: str | None = None
+    if split_manifest is not None:
+        from whetstone.runner.task_split_manifest import resolve_manifest_split
+        resolved = resolve_manifest_split(
+            roles=split_manifest,
+            items=pool,
+            id_of=lambda t: str(t.instance.id),
+            official_n=official_n,
+        )
+        internal_instances = tuple(t.instance for t in resolved.internal)
+        official_instances = tuple(t.instance for t in resolved.official)
+        manifest_tag = resolved.manifest_tag
+        if resolved.official_capped:
+            print(f"[ed1] {resolved.official_capped}")
+    else:
+        all_instances = tuple(t.instance for t in pool)
+        n = len(all_instances)
+        # First-N ordered split: internal then official (disjoint, contiguous).
+        # A tiny pilot pool may put all tasks in the official split.
+        i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
+        internal_instances = all_instances[:i_n]
+        rest = all_instances[i_n:]
+        o_n = official_n if official_n is not None else len(rest)
+        official_instances = (
+            rest[:o_n] if rest else internal_instances[:o_n or n]
+        )
+        if not official_instances:
+            official_instances = internal_instances
     internal_split = _ed1_split(
         split_role="internal_eval", instances=internal_instances,
         procedure=procedure, completeness=completeness,
         max_skip_fraction=max_skip_fraction, repeats=repeats,
+        manifest_tag=manifest_tag,
     )
     official_split = _ed1_split(
         split_role="official", instances=official_instances,
         procedure=procedure, completeness=completeness,
         max_skip_fraction=max_skip_fraction, repeats=repeats,
+        manifest_tag=manifest_tag,
     )
     eval_configs = EnvEvalConfigs(
         env_name=ED1_ENV_NAME,

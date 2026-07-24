@@ -30,6 +30,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from dr_store import MemoryBackend, ObjectStore
 
@@ -90,6 +91,9 @@ from whetstone.runner.statistics import (
     bootstrap_mean_ci,
     bootstrap_paired_delta_ci,
 )
+
+if TYPE_CHECKING:
+    from whetstone.runner.task_split_manifest import TaskSplitRoles
 
 __all__ = [
     "DEFAULT_CELL_MAX_WALL_SECONDS",
@@ -200,6 +204,14 @@ class CellConfig:
     #: exclusion list). Folds into each split's Task Set identity by removing
     #: those tasks from the ordered pool before the split.
     ed1_exclude_task_ids: frozenset[str] | None = None
+    #: ed1/d1 task-split manifest roles (task 29): the run's task-selection
+    #: manifest resolved for THIS env's pool (train/val/test). When set, the
+    #: env builder uses role-true MEMBERSHIP splits (internal = train+val,
+    #: official = test EXACTLY) instead of the first-N slice, and folds the
+    #: manifest's content hash + pool into each split's identity. Mutually
+    #: exclusive with ``ed1_exclude_task_ids`` (the CLI refuses both). ``None``
+    #: = first-N slice.
+    task_split_roles: TaskSplitRoles | None = None
     #: ed1 weighted-blend reward config (task 22), OR ``None`` for pass-only.
     #: Optimizer cells (copro/miprov2/gepa/codex) REQUIRE it (the guard rail);
     #: eval anchors set it so anchors pair on the same metric.
@@ -413,6 +425,7 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
             max_skip_fraction=config.max_skip_fraction,
             repeats=config.repeats,
             exclude_task_ids=config.ed1_exclude_task_ids,
+            split_manifest=config.task_split_roles,
         )
     if config.env == "ed1m":
         # ed1m: the behavioral-mutant enc-dec (task 18). Reuses ed1's pipeline
@@ -451,6 +464,7 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
             repeats=config.repeats,
             exclude_task_ids=config.ed1_exclude_task_ids,
             blend_config=config.ed1_blend_config,
+            split_manifest=config.task_split_roles,
         )
     return build_env_experiment(
         config.env,

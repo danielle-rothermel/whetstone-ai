@@ -46,6 +46,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from dr_code.eval import (
     EvalDefinition,
@@ -86,6 +87,9 @@ from whetstone.graph.nodes import (
 )
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.schema import Candidate
+
+if TYPE_CHECKING:
+    from whetstone.runner.task_split_manifest import TaskSplitRoles
 
 #: The d1 env id.
 D1_ENV_NAME = "d1"
@@ -298,15 +302,23 @@ def _d1_split(
     max_skip_fraction: float,
     repeats: int,
     input_arm: str,
+    manifest_tag: str | None = None,
 ) -> EnvSplitSampling:
     """A d1 split whose Task Set + sampling fold in the FROZEN input arm.
 
     Mirrors ``ed1._ed1_split`` but adds the input arm to the manifest id so a
     ``renamed`` cell and an ``original`` cell over the SAME task ids have
     DISTINCT ``eval_config_hash`` values (the arm is identity-bearing).
+
+    ``manifest_tag`` (a task-split-manifest's content-hash + pool, task 29)
+    folds in ALONGSIDE the input arm so a manifest-driven split is a DISTINCT
+    eval_config_hash from both a first-N slice and a same-arm non-manifest
+    cell. ``None`` leaves the ids byte-identical to a first-N slice cell.
     """
     task_ids = tuple(str(inst.id) for inst in instances)
     manifest_role = f"{split_role}.{input_arm}"
+    if manifest_tag is not None:
+        manifest_role = f"{manifest_role}.{manifest_tag}"
     task_set = _ed1_task_set(manifest_role, task_ids)
     repeat_plan = RepeatPlan(
         plan_id=f"whetstone.d1.{manifest_role}",
@@ -396,6 +408,7 @@ def build_d1_experiment(
     repeats: int = 3,
     tasks: tuple[Ed1Instance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
+    split_manifest: TaskSplitRoles | None = None,
 ) -> D1Experiment:
     """Build the d1 direct-generation experiment the runner cell consumes.
 
@@ -408,6 +421,14 @@ def build_d1_experiment(
 
     ``exclude_task_ids`` DROPS those ids from the ordered pool before the split
     (the per-model screen's always-pass exclusion list), exactly as ed1 does.
+
+    ``split_manifest`` (task 29) OVERRIDES the first-N slice with role-true
+    train/val/test semantics: internal = the manifest's ``train + val`` ids (by
+    MEMBERSHIP, manifest order -- no val sub-split exists, so val folds into
+    internal alongside train), official = the manifest's ``test`` ids EXACTLY
+    (membership, NOT first-N). ``official_n`` then caps WITHIN the test set.
+    The manifest's content hash + pool folds into each split's Task Set
+    identity ALONGSIDE the input arm.
     """
     if input_arm not in D1_INPUT_ARMS:
         raise ValueError(
@@ -431,29 +452,46 @@ def build_d1_experiment(
         procedure_config_hash=procedure.config_identity_hash,
         input_arm=input_arm,
     )
-    all_instances = tuple(t.instance for t in pool)
     humaneval_by_id = {
         str(t.instance.id): t.humaneval_task for t in pool
     }
-    n = len(all_instances)
-    i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
-    internal_instances = all_instances[:i_n]
-    rest = all_instances[i_n:]
-    o_n = official_n if official_n is not None else len(rest)
-    official_instances = rest[:o_n] if rest else internal_instances[:o_n or n]
-    if not official_instances:
-        official_instances = internal_instances
+    manifest_tag: str | None = None
+    if split_manifest is not None:
+        from whetstone.runner.task_split_manifest import resolve_manifest_split
+        resolved = resolve_manifest_split(
+            roles=split_manifest,
+            items=pool,
+            id_of=lambda t: str(t.instance.id),
+            official_n=official_n,
+        )
+        internal_instances = tuple(t.instance for t in resolved.internal)
+        official_instances = tuple(t.instance for t in resolved.official)
+        manifest_tag = resolved.manifest_tag
+        if resolved.official_capped:
+            print(f"[d1] {resolved.official_capped}")
+    else:
+        all_instances = tuple(t.instance for t in pool)
+        n = len(all_instances)
+        i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
+        internal_instances = all_instances[:i_n]
+        rest = all_instances[i_n:]
+        o_n = official_n if official_n is not None else len(rest)
+        official_instances = (
+            rest[:o_n] if rest else internal_instances[:o_n or n]
+        )
+        if not official_instances:
+            official_instances = internal_instances
     internal_split = _d1_split(
         split_role="internal_eval", instances=internal_instances,
         procedure=procedure, completeness=completeness,
         max_skip_fraction=max_skip_fraction, repeats=repeats,
-        input_arm=input_arm,
+        input_arm=input_arm, manifest_tag=manifest_tag,
     )
     official_split = _d1_split(
         split_role="official", instances=official_instances,
         procedure=procedure, completeness=completeness,
         max_skip_fraction=max_skip_fraction, repeats=repeats,
-        input_arm=input_arm,
+        input_arm=input_arm, manifest_tag=manifest_tag,
     )
     eval_configs = EnvEvalConfigs(
         env_name=D1_ENV_NAME,

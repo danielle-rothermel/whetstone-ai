@@ -464,6 +464,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     cell.add_argument(
+        "--task-split-manifest",
+        default=None,
+        metavar="MANIFEST_JSON",
+        help=(
+            "ed1 + d1 ONLY: a whetstone.run.task_selection/v1 manifest whose "
+            "per-env pool (ed1 -> pools.ed1, d1 -> pools.d1) carries TRUE "
+            "train/val/test role arrays. The INTERNAL split "
+            "(optimizer-facing) = train + val by MEMBERSHIP; the OFFICIAL "
+            "split (certification) = test EXACTLY (membership, NOT a first-N "
+            "slice). --official-n caps within the test set. The manifest's "
+            "content hash + pool folds into each split's eval_config_hash (a "
+            "manifest cell is a DISTINCT variant). MUTUALLY EXCLUSIVE with "
+            "--task-filter; REFUSED for ed1m (mutant ids, not HumanEval task "
+            "ids). Unknown manifest ids = a typed error naming them."
+        ),
+    )
+    cell.add_argument(
         "--input-arm",
         choices=list(D1_INPUT_ARMS),
         default="original",
@@ -1249,13 +1266,38 @@ def _build_cell_config(
         recorded_proposer_model = (
             proposer_model_override or CANONICAL_PROPOSER_MODEL
         )
+    # Task 29: --task-split-manifest and --task-filter are mutually exclusive.
+    # --task-filter is EXCLUSION-only (a flat excluded_task_ids list) while
+    # --task-split-manifest carries TRUE train/val/test roles. Refuse BEFORE
+    # loading either artifact so the refusal is not masked by a read error.
+    task_filter = getattr(args, "task_filter", None)
+    task_split_manifest = getattr(args, "task_split_manifest", None)
+    if task_filter and task_split_manifest:
+        raise ValueError(
+            "--task-split-manifest and --task-filter are mutually exclusive: "
+            "--task-filter is EXCLUSION-only (a flat excluded_task_ids list) "
+            "while --task-split-manifest carries TRUE train/val/test roles. "
+            "Pass exactly one."
+        )
+
     # ed1 pool filter: --task-filter names a screen artifact whose always-pass
     # task ids are excluded from the pool (folds into each split's identity).
     ed1_exclude = None
-    task_filter = getattr(args, "task_filter", None)
     if task_filter:
         from whetstone.runner.task_screen import load_exclusion_ids
         ed1_exclude = load_exclusion_ids(Path(task_filter))
+
+    # Task 29: --task-split-manifest applies the run's task-selection manifest
+    # with role-true train/val/test semantics for ed1 + d1.
+    task_split_roles = None
+    if task_split_manifest:
+        from whetstone.runner.task_split_manifest import (
+            load_task_split_manifest,
+        )
+        manifest = load_task_split_manifest(Path(task_split_manifest))
+        # ``for_env`` REFUSES ed1m (mutant ids) and non-ed1/d1 envs with a
+        # typed TaskSplitManifestError -- no silent misfilter.
+        task_split_roles = manifest.for_env(args.env)
 
     # Task 22: resolve the ed1 blended reward + budget frame.
     ed1_blend_config, ed1_budget_ratio = _resolve_ed1_reward_and_budget(args)
@@ -1291,6 +1333,7 @@ def _build_cell_config(
         power_config=_power_config_for(args),
         budget_ratio=ed1_budget_ratio,
         ed1_exclude_task_ids=ed1_exclude,
+        task_split_roles=task_split_roles,
         ed1_blend_config=ed1_blend_config,
         d1_input_arm=getattr(args, "input_arm", "original"),
         recorded_temperature=_temperature_arg(args),
