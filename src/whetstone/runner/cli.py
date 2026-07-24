@@ -40,6 +40,7 @@ from whetstone.envs.ed1_blended import (
 from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
+from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.optimization.codex_proposer import (
     CodexProposerTransport,
     codex_proposer_ref,
@@ -134,6 +135,28 @@ def _add_temperature_arg(parser: argparse.ArgumentParser) -> None:
             "task-model sampling temperature (OUTPUT-AFFECTING, folds into "
             "config identity). Default 0.0 (the legacy task-role value); a "
             "distinct value is a distinct config variant."
+        ),
+    )
+
+
+def _add_prompt_cache_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the shared opt-in ``--prompt-cache`` flag (task 31; default OFF).
+
+    RECORDING-only: it never changes any identity/graph/eval hash. When set,
+    the phase reuses a stored provider result for a byte-identical (resolved
+    prompt, model settings, repeat ordinal) instead of re-driving the transport
+    -- the run-scoped store lives at ``<root>/prompt_cache/``. A cache-served
+    row is marked ``cache_hit`` with the original entry's provenance, null
+    latency, and 0 spend.
+    """
+    parser.add_argument(
+        "--prompt-cache",
+        action="store_true",
+        help=(
+            "OPT-IN (default OFF): reuse a stored provider result for a "
+            "byte-identical (resolved prompt, model settings, repeat ordinal) "
+            "instead of re-driving the transport (task 31). Run-scoped store "
+            "at <root>/prompt_cache/. Recording-only: no identity change."
         ),
     )
 
@@ -316,6 +339,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_reasoning_effort_arg(pilot)
     _add_temperature_arg(pilot)
+    _add_prompt_cache_arg(pilot)
     pilot.add_argument(
         "--budget-ratio",
         type=float,
@@ -561,6 +585,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="mark this cell non-canonical (a debug/iteration cell)",
     )
+    _add_prompt_cache_arg(cell)
     cell.add_argument(
         "--dry-run-fake",
         action="store_true",
@@ -647,6 +672,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PILOT_MAX_WALL_SECONDS,
         help="whole-run wall deadline for the screen",
     )
+    _add_prompt_cache_arg(screen)
 
     recompute = sub.add_parser(
         "recompute-attractor",
@@ -950,6 +976,11 @@ def _run_pilot(args: argparse.Namespace) -> int:  # pragma: no cover - live
         max_wall_seconds=args.max_wall_seconds,
         partial_log=partial_log,
         events=EventStream(root=args.root),
+        cache=(
+            PromptResultCache(root=args.root)
+            if getattr(args, "prompt_cache", False)
+            else None
+        ),
     )
     path = report.write(args.root)
     # --- Whole-run deadline: a partial run exits non-zero with a summary. ---
@@ -1341,6 +1372,7 @@ def _build_cell_config(
             if _reasoning_arg(args) is not None
             else None
         ),
+        prompt_cache_enabled=getattr(args, "prompt_cache", False),
     )
     return config, task_route
 
@@ -1563,6 +1595,11 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
             partial_log=partials,
             sidecar_path=sidecar,
             events=EventStream(root=root),
+            cache=(
+                PromptResultCache(root=root)
+                if getattr(args, "prompt_cache", False)
+                else None
+            ),
         )
     except ScreenKeyLocked as exc:
         # One writer per (model, effort) sidecar: another live screen holds the

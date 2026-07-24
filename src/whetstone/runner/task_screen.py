@@ -51,7 +51,13 @@ from whetstone.envs.ed1 import (
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
 from whetstone.execution.partials import PartialCallRecord, PartialLog
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.execution.prompt_cache import (
+    CacheProvenance,
+    PromptResultCache,
+    execute_call,
+    partial_cache_marks,
+)
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.events import (
     EventStream,
@@ -350,6 +356,12 @@ class _ScreenRowOutcome:
     #: typed diagnostic of a failed call.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
+    #: Task-31 prompt-cache honesty. ``cache_hit`` is True when this row's
+    #: provider Result(s) were served from cache (direct = the single call;
+    #: encdec = BOTH legs) -- then latency is nulled and ``cache_provenance``
+    #: refs the ORIGINAL entry (direct = the call; encdec = the encoder leg).
+    cache_hit: bool = False
+    cache_provenance: CacheProvenance | None = None
 
 
 def _direct_body(arm: str, parts: PromptParts, *, rename_token: str) -> str:
@@ -420,6 +432,10 @@ def _run_direct_row(
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
     rename_token: str,
+    repeat_index: int,
+    cache: PromptResultCache | None = None,
+    cache_phase: str = "screen",
+    cache_unit: str = "",
 ) -> _ScreenRowOutcome:
     """Drive one DIRECT-arm rollout: prompt -> generation -> code score."""
     from dr_providers import (
@@ -444,10 +460,14 @@ def _run_direct_row(
             messages=(PromptMessage(role=MessageRole.USER, content=prompt),)
         ),
     )
-    result = run_provider_call(
+    execution = execute_call(
         request=request, policy=execution_policy, transport=transport,
-        logical_call_id=logical_call_id,
+        logical_call_id=logical_call_id, repeat_index=repeat_index,
+        cache=cache, phase=cache_phase, unit=cache_unit or arm,
     )
+    result = execution.result
+    cache_hit = execution.cache_hit
+    cache_prov = execution.provenance
     if not result.succeeded or result.generation is None:
         from whetstone.execution.call_support import (
             call_telemetry,
@@ -457,10 +477,14 @@ def _run_direct_row(
             passed=None, failed=True,
             failure_code=failure_code_of(result), output_text=None,
             provider_error=call_telemetry(result).provider_error,
+            cache_hit=cache_hit, cache_provenance=cache_prov,
         )
     code = result.generation.text
     from whetstone.execution.call_support import call_telemetry
     tel = call_telemetry(result)
+    # Cache-served: no wire call this time -> null the latency (never a
+    # fabricated 0) and carry the cache marker + original-entry provenance.
+    row_latency = None if cache_hit else tel.latency_s
     score = _score(scorer, code=code, ht=score_task)
     if score.infrastructure_unknown:
         return _ScreenRowOutcome(
@@ -470,8 +494,9 @@ def _run_direct_row(
             prompt_tokens=tel.prompt_tokens,
             completion_tokens=tel.completion_tokens,
             total_tokens=tel.total_tokens,
-            reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+            reasoning_tokens=tel.reasoning_tokens, latency_s=row_latency,
             finish_reason=tel.finish_reason,
+            cache_hit=cache_hit, cache_provenance=cache_prov,
         )
     return _ScreenRowOutcome(
         passed=score.passed, failed=False, failure_code="",
@@ -479,8 +504,9 @@ def _run_direct_row(
         prompt_tokens=tel.prompt_tokens,
         completion_tokens=tel.completion_tokens,
         total_tokens=tel.total_tokens,
-        reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
+        reasoning_tokens=tel.reasoning_tokens, latency_s=row_latency,
         finish_reason=tel.finish_reason,
+        cache_hit=cache_hit, cache_provenance=cache_prov,
     )
 
 
@@ -526,6 +552,10 @@ def _run_encdec_row(
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
     rename_token: str | None = None,
+    repeat_index: int = 0,
+    cache: PromptResultCache | None = None,
+    cache_phase: str = "screen",
+    cache_unit: str = "",
 ) -> _ScreenRowOutcome:
     """Drive one ENCDEC rollout via the shared ed1 row driver.
 
@@ -552,6 +582,10 @@ def _run_encdec_row(
         transport=transport,
         scorer=scorer,
         logical_call_id=logical_call_id,
+        repeat_index=repeat_index,
+        cache=cache,
+        cache_phase=cache_phase,
+        cache_unit=cache_unit or "encdec",
     )
     text = None
     if outcome.encoder_text is not None or outcome.decoder_text is not None:
@@ -559,6 +593,8 @@ def _run_encdec_row(
             f"ENCODER:\n{outcome.encoder_text or ''}\n\n"
             f"DECODER:\n{outcome.decoder_text or ''}"
         )
+    # A full DUAL cache hit had no wire call this time -> null the row latency.
+    row_latency = None if outcome.cache_hit else outcome.latency_s
     return _ScreenRowOutcome(
         passed=(None if outcome.pass_value is None
                 else bool(outcome.pass_value)),
@@ -569,9 +605,11 @@ def _run_encdec_row(
         completion_tokens=outcome.completion_tokens,
         total_tokens=outcome.total_tokens,
         reasoning_tokens=outcome.reasoning_tokens,
-        latency_s=outcome.latency_s,
+        latency_s=row_latency,
         finish_reason=outcome.finish_reason,
         provider_error=outcome.provider_error,
+        cache_hit=outcome.cache_hit,
+        cache_provenance=outcome.cache_provenance,
     )
 
 
@@ -849,6 +887,7 @@ def run_task_screen(
     sidecar_path: Path | None = None,
     lock_path: Path | None = None,
     events: EventStream | None = None,
+    cache: PromptResultCache | None = None,
 ) -> TaskScreenReport:
     """Screen the HumanEval+ pool for one task model -> a per-model report.
 
@@ -907,6 +946,7 @@ def run_task_screen(
             partial_log=partial_log,
             sidecar_path=sidecar_path,
             events=events,
+            cache=cache,
             _load_ed1_tasks=load_ed1_tasks,
             _dataset_revision=ED1_DATASET_REVISION,
         )
@@ -933,6 +973,7 @@ def _run_task_screen_locked(
     events: EventStream | None,
     _load_ed1_tasks: Callable[..., Sequence[Ed1Instance]],
     _dataset_revision: str,
+    cache: PromptResultCache | None = None,
 ) -> TaskScreenReport:
     """The screen body, run under the held per-(model, effort) lock.
 
@@ -990,6 +1031,11 @@ def _run_task_screen_locked(
                     rename_token=(
                         rename_token if arm == "encdec_renamed" else None
                     ),
+                    repeat_index=index, cache=cache,
+                    cache_phase=_screen_phase(
+                        model, budget_ratio, arm, reasoning_effort
+                    ),
+                    cache_unit=arm,
                 )
             else:
                 out = _run_direct_row(
@@ -997,6 +1043,11 @@ def _run_task_screen_locked(
                     execution_policy=execution_policy, transport=transport,
                     scorer=scorer, logical_call_id=cid,
                     rename_token=rename_token,
+                    repeat_index=index, cache=cache,
+                    cache_phase=_screen_phase(
+                        model, budget_ratio, arm, reasoning_effort
+                    ),
+                    cache_unit=arm,
                 )
             _persist_row(
                 partial_log, sidecar_path, model=model,
@@ -1155,6 +1206,9 @@ def _persist_row(
 ) -> None:
     """Append one completed screen row to the partial log + output sidecar."""
     if partial_log is not None:
+        marks = partial_cache_marks(
+            outcome.cache_hit, outcome.cache_provenance
+        )
         partial_log.append(PartialCallRecord(
             phase=_screen_phase(model, budget_ratio, arm, reasoning_effort),
             instance_id=task_id, unit=arm, repeat_id=index,
@@ -1169,6 +1223,11 @@ def _persist_row(
             output_text=outcome.output_text,
             finish_reason=outcome.finish_reason,
             provider_error=outcome.provider_error,
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
         ))
     if sidecar_path is not None:
         with sidecar_path.open("a") as handle:

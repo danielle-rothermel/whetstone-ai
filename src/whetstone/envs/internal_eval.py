@@ -72,10 +72,16 @@ from whetstone.execution.fanout import (
     run_call_pool,
 )
 from whetstone.execution.partials import PartialCallRecord, PartialLog
+from whetstone.execution.prompt_cache import (
+    CallExecution,
+    PartialCacheMarks,
+    PromptResultCache,
+    execute_call,
+)
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import Candidate
 from whetstone.provider.attempt import ProviderCallResult
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 #: The typed failure code for a candidate row whose NON-canonical template
@@ -222,6 +228,11 @@ class _RowOutcome:
     result: ProviderCallResult | None
     score: float | None
     failure_code: str = ""
+    #: The prompt-cache execution marker for this row (task 31). ``None`` on a
+    #: RESTORED (partial-log) row; otherwise the :class:`CallExecution` telling
+    #: the row writer whether the Result was served from cache (mark the row +
+    #: null its latency) or freshly driven.
+    execution: CallExecution | None = None
 
 
 def _generation_row(
@@ -234,6 +245,10 @@ def _generation_row(
     transport: TransportCall,
     procedure_config_hash: str,
     logical_call_id: str,
+    repeat_index: int,
+    cache: PromptResultCache | None,
+    cache_phase: str,
+    cache_unit: str,
     render_guard: bool = False,
 ) -> _RowOutcome:
     """Run one repeat: render, call the transport, score via the env oracle.
@@ -258,18 +273,24 @@ def _generation_row(
             )
     else:
         prompt = render_prompt(env, candidate, instance)
-    result = run_provider_call(
+    execution = execute_call(
         request=_request(provider_call_config, prompt),
         policy=execution_policy,
         transport=transport,
         logical_call_id=logical_call_id,
+        repeat_index=repeat_index,
+        cache=cache,
+        phase=cache_phase,
+        unit=cache_unit,
     )
+    result = execution.result
     if not result.succeeded or result.generation is None:
         return _RowOutcome(
             row=RowValue(failed=True),
             result=result,
             score=None,
             failure_code=failure_code_of(result),
+            execution=execution,
         )
     score = env_exact_match_score(
         env=env,
@@ -281,6 +302,7 @@ def _generation_row(
         row=RowValue(value=float(score.value)),
         result=result,
         score=float(score.value),
+        execution=execution,
     )
 
 
@@ -360,6 +382,7 @@ def run_internal_eval(
     partial_split_role: str | None = None,
     apply_reward: bool = True,
     render_guard: bool = False,
+    cache: PromptResultCache | None = None,
 ) -> InternalEvalResult:
     """Evaluate ``candidate`` over ``instances`` (internal or official split).
 
@@ -435,6 +458,7 @@ def run_internal_eval(
                 partial_instance_id=str(instance.id),
                 partial_unit=unit,
                 repeat_id=index,
+                cache=cache,
                 render_guard=render_guard,
             ),
             deadline_seconds=guard_deadline_seconds(execution_policy),
@@ -602,6 +626,7 @@ def _row_thunk(
     partial_instance_id: str,
     partial_unit: str,
     repeat_id: int,
+    cache: PromptResultCache | None = None,
     partial_split_role: str | None = None,
     render_guard: bool = False,
 ) -> Callable[[], _RowOutcome]:
@@ -623,10 +648,22 @@ def _row_thunk(
             transport=transport,
             procedure_config_hash=procedure_config_hash,
             logical_call_id=logical_call_id,
+            repeat_index=repeat_id,
+            cache=cache,
+            cache_phase=partial_phase,
+            cache_unit=partial_unit,
             render_guard=render_guard,
         )
         if partial_log is not None:
             tel = call_telemetry(outcome.result)
+            # Task 31 honesty: a cache-served row had NO wire call this time,
+            # so its latency is None (never a fabricated 0) and it carries the
+            # cache marker + a ref to the ORIGINAL entry's provenance.
+            marks = (
+                outcome.execution.cache_marks()
+                if outcome.execution is not None
+                else PartialCacheMarks()
+            )
             partial_log.append(
                 PartialCallRecord(
                     phase=partial_phase,
@@ -648,10 +685,15 @@ def _row_thunk(
                     completion_tokens=tel.completion_tokens,
                     total_tokens=tel.total_tokens,
                     reasoning_tokens=tel.reasoning_tokens,
-                    latency_s=tel.latency_s,
+                    latency_s=None if marks.cache_hit else tel.latency_s,
                     output_text=_output_text_of(outcome.result),
                     finish_reason=tel.finish_reason,
                     provider_error=tel.provider_error,
+                    cache_hit=marks.cache_hit,
+                    cache_source_phase=marks.cache_source_phase,
+                    cache_source_unit=marks.cache_source_unit,
+                    cache_source_call_id=marks.cache_source_call_id,
+                    cache_source_at=marks.cache_source_at,
                 )
             )
         return outcome

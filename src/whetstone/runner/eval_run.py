@@ -34,6 +34,7 @@ from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import RolloutOutput, run_internal_eval
 from whetstone.execution.fanout import FanoutConfig
 from whetstone.execution.partials import PartialLog
+from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.optimization.identity import TypedRef, typed_ref_for_record
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.schema import Candidate
@@ -140,6 +141,7 @@ def evaluate_split(
     partial_log: PartialLog | None = None,
     apply_reward: bool | None = None,
     render_guard: bool = False,
+    cache: PromptResultCache | None = None,
 ) -> SplitEvaluation:
     """Evaluate ``candidate`` over ``instances`` and persist the aggregate.
 
@@ -200,6 +202,7 @@ def evaluate_split(
             fanout=fanout,
             partial_log=partial_log,
             apply_reward=apply_reward_resolved,
+            cache=cache,
         )
     if isinstance(experiment, Ed1Experiment):
         return _evaluate_ed1_split(
@@ -216,6 +219,7 @@ def evaluate_split(
             fanout=fanout,
             partial_log=partial_log,
             apply_reward=apply_reward_resolved,
+            cache=cache,
         )
     result = run_internal_eval(
         experiment,
@@ -231,6 +235,7 @@ def evaluate_split(
         partial_split_role=split_role,
         apply_reward=apply_reward_resolved,
         render_guard=render_guard,
+        cache=cache,
     )
     aggregate = result.aggregate
     backing = store or ObjectStore(MemoryBackend())
@@ -289,6 +294,7 @@ def _evaluate_d1_split(
     fanout: FanoutConfig | None,
     partial_log: PartialLog | None,
     apply_reward: bool,
+    cache: PromptResultCache | None = None,
 ) -> SplitEvaluation:
     """Evaluate one d1 candidate over a split via the DIRECT single-call drive.
 
@@ -316,6 +322,7 @@ def _evaluate_d1_split(
         store=store,
         partial_log=partial_log,
         split_role=split_role,
+        cache=cache,
     )
     pass_agg = d1.pass_aggregate
     pass_rate = pass_agg.aggregation_output.value
@@ -372,6 +379,7 @@ def _evaluate_ed1_split(
     fanout: FanoutConfig | None,
     partial_log: PartialLog | None,
     apply_reward: bool,
+    cache: PromptResultCache | None = None,
 ) -> SplitEvaluation:
     """Evaluate one ed1 candidate over a split via the enc-dec DUAL drive.
 
@@ -402,6 +410,7 @@ def _evaluate_ed1_split(
         store=store,
         partial_log=partial_log,
         split_role=split_role,
+        cache=cache,
     )
     pass_agg = ed.pass_aggregate
     comp_agg = ed.compression_aggregate

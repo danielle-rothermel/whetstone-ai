@@ -106,6 +106,20 @@ class PartialCallRecord:
     at: str | None = None
     #: Versioned schema stamp (:data:`PARTIAL_SCHEMA`); ``None`` on old rows.
     schema: str | None = None
+    #: Task-31 prompt-cache honesty. ``cache_hit`` is True when this row's
+    #: Result was SERVED from the run-level prompt cache (not re-driven), so a
+    #: reader never mistakes reuse for a fresh paid call. A cached row keeps
+    #: ``latency_s=None`` (never a fabricated 0 -- there was no wire call this
+    #: time) and records spend as 0 via this marker (distinct from a genuinely
+    #: free call, which has ``cache_hit=False``). ``cache_source_*`` reference
+    #: the ORIGINAL entry (the cell/attempt + logical call id that first paid
+    #: for it) and ``cache_source_at`` its original store timestamp -- ``None``
+    #: on every non-cached row.
+    cache_hit: bool = False
+    cache_source_phase: str | None = None
+    cache_source_unit: str | None = None
+    cache_source_call_id: str | None = None
+    cache_source_at: str | None = None
 
     def key(self) -> tuple[str, str, str, int]:
         return partial_key(
@@ -140,6 +154,11 @@ class PartialCallRecord:
             "finish_reason": self.finish_reason,
             "provider_error": self.provider_error,
             "at": self.at,
+            "cache_hit": self.cache_hit,
+            "cache_source_phase": self.cache_source_phase,
+            "cache_source_unit": self.cache_source_unit,
+            "cache_source_call_id": self.cache_source_call_id,
+            "cache_source_at": self.cache_source_at,
         }
 
     @classmethod
@@ -168,6 +187,11 @@ class PartialCallRecord:
             split_role=_opt_str(data.get("split_role")),
             at=_opt_str(data.get("at")),
             schema=_opt_str(data.get("schema")),
+            cache_hit=bool(data.get("cache_hit", False)),
+            cache_source_phase=_opt_str(data.get("cache_source_phase")),
+            cache_source_unit=_opt_str(data.get("cache_source_unit")),
+            cache_source_call_id=_opt_str(data.get("cache_source_call_id")),
+            cache_source_at=_opt_str(data.get("cache_source_at")),
         )
 
 
