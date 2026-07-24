@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="../design/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="doc.css">
+<title>Whetstone runner · Durable identity and restart-safe validation</title>
+</head>
+<body>
+<main>
+  <h1>The canonical runner binds every paid decision before execution</h1>
+  <p class="dek">Exact identities, durable evidence, and active budget gates define acceptance.</p>
+  <div class="byline">whetstone-ai · 2026-07-24</div>
+
+  <div class="section-head">
+    <h2>What must be true when this branch is accepted?</h2>
+    <span class="tag">contract</span>
+  </div>
+  <p>
+    A cell resumes only its exact <span class="key">optimizer, environment,
+    and attempt</span>. Its serialized optimization control is bound before
+    any step or terminal result can be reused. Every paid official arm and
+    optimization step has durable evidence, and each new paid boundary checks
+    a fresh credits snapshot before proceeding.
+  </p>
+  <div class="callout">
+    Acceptance requires one coherent path through
+    <a href="../src/whetstone/runner/cell.py">cell orchestration</a>,
+    <a href="../src/whetstone/runner/optimization_run.py">optimization control</a>,
+    and the <a href="../src/whetstone/optimization/harness.py">durable harness</a>.
+  </div>
+
+  <div class="section-head">
+    <h2>Which identities prevent cross-run reuse?</h2>
+    <span class="tag">identity</span>
+  </div>
+  <div class="grid-3">
+    <section class="card">
+      <h3>Cell identity</h3>
+      <p>
+        The run id equals <span class="key">optimizer:environment:attempt</span>.
+        Ledger lookup names the same three fields, so a later attempt cannot
+        satisfy an earlier resume.
+      </p>
+    </section>
+    <section class="card">
+      <h3>Run-control identity</h3>
+      <p>
+        Candidate records, budget, algorithm parameters, evaluation configs,
+        tools, and proposer or reflection config compose one persisted control.
+        Every step request carries that control’s content hash.
+      </p>
+    </section>
+    <section class="card">
+      <h3>Adapter identity</h3>
+      <p>
+        COPRO, MIPROv2, and GEPA expose their configured proposer boundary.
+        The controller validates it against the serialized control before
+        binding or replaying a run.
+      </p>
+    </section>
+  </div>
+
+  <div class="section-head">
+    <h2>How does restart safety cover each paid phase?</h2>
+    <span class="tag">durability</span>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Phase</th><th>Durable key</th><th>Restart assertion</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Official baseline, ceiling, best</td>
+          <td>Cell id + arm + exact candidate and Eval Config</td>
+          <td>Completed intent resolution reloads canonical evidence without transport redrive.</td>
+        </tr>
+        <tr>
+          <td>COPRO seed round</td>
+          <td>Canonical step zero and its breadth-sized Intent batch</td>
+          <td>The generated slots followed by the original prompt fold into typed occurrence history exactly once; there is no baseline-only step.</td>
+        </tr>
+        <tr>
+          <td>Optimization steps</td>
+          <td>Run id + ordered step index + control hash</td>
+          <td>Only a matching unresolved step crosses the adapter boundary.</td>
+        </tr>
+        <tr>
+          <td>Terminal selection</td>
+          <td>Ordered bound Step Result references</td>
+          <td>COPRO projects its complete unique best-first ranking; downstream official selection owns any truncation.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section-head">
+    <h2>Where does the budget gate stop additional spend?</h2>
+    <span class="tag">budget</span>
+  </div>
+  <p>
+    The cell records a fresh checkpoint before each official arm and before
+    every unresolved non-pure optimization step. Cumulative spend is measured
+    from the cell’s initial snapshot. Crossing the configured stop-loss raises
+    before the next transport, proposer, evaluation, tool, or opaque-agent
+    boundary.
+  </p>
+  <span class="aside">
+    Durable replays and pure identity steps do not create paid-step checkpoints.
+  </span>
+
+  <div class="section-head">
+    <h2>Which evidence must remain visible to reviewers?</h2>
+    <span class="tag">artifacts</span>
+  </div>
+  <div class="grid-2">
+    <section class="card">
+      <h3>Canonical records</h3>
+      <ul>
+        <li>Optimization Run Control and ordered Step Results</li>
+        <li>Official-arm bindings and Evaluation Evidence</li>
+        <li>Full typed references for official before and after artifacts</li>
+        <li>Credits checkpoints for every paid boundary</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3>Reporting projections</h3>
+      <ul>
+        <li>Human-readable optimization trace with evidence references</li>
+        <li>Cell ledger scores, confidence intervals, counts, and status</li>
+        <li>Exact best-candidate id and canonical optimization result reference</li>
+        <li>Append-only spend history with phase labels</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="section-head">
+    <h2>What validation remains before submission?</h2>
+    <span class="tag">gates</span>
+  </div>
+  <div class="grid-2">
+    <section class="card">
+      <h3><span class="status required">required</span> Local suite</h3>
+      <ul>
+        <li><code>uv run ruff format --check .</code></li>
+        <li><code>uv run ruff check</code></li>
+        <li><code>uv run ty check</code></li>
+        <li><code>uv run pytest tests/runner -q</code></li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status gate">required</span> CI durability lane</h3>
+      <ul>
+        <li>The <a href="../.github/workflows/whetstone_tests.yml">DBOS job</a> runs serially.</li>
+        <li>Postgres 17 is healthy before tests begin.</li>
+        <li><a href="../scripts/ci/dbos.sh">The DBOS script</a> requires an explicit Postgres DSN.</li>
+        <li>Required database failures fail the job rather than skipping tests.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status review">review</span> Restart probes</h3>
+      <ul>
+        <li>Resume attempt zero after an attempt-one ledger append.</li>
+        <li>Refuse a changed control under an already bound run id.</li>
+        <li>Crash before cell ledger append and reuse all official arms.</li>
+        <li>Stop before the next paid arm when the checkpoint exceeds budget.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3><span class="status review">review</span> Cardinality and provenance</h3>
+      <ul>
+        <li>Return the complete unique COPRO ranking regardless of downstream output count.</li>
+        <li>Refuse any incomplete or non-measured breadth occurrence.</li>
+        <li>Reload typed Reward and Evaluation Evidence references from every durable COPRO round.</li>
+        <li>Reject bare official artifact hashes at the ledger boundary.</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="section-head">
+    <h2>Where can a reviewer inspect the proof?</h2>
+    <span class="tag">links</span>
+  </div>
+  <p>
+    Focused regressions live in
+    <a href="../tests/runner/test_optimization_run.py">optimization controller tests</a>,
+    <a href="../tests/runner/test_cell.py">cell restart and budget tests</a>, and
+    <a href="../tests/runner/test_ledger.py">ledger schema tests</a>.
+    Algorithm context remains available in
+    <a href="../design/copro-run.html">COPRO</a>,
+    <a href="../design/miprov2-run.html">MIPROv2</a>,
+    <a href="../design/gepa-run.html">GEPA</a>, and
+    <a href="../design/codex-agent-run.html">Codex</a>.
+  </p>
+
+  <div class="colophon">
+    Scope: runner acceptance for branch <code>rebuild/12-runner-cutover</code>.
+    Provenance: canonical schemas and executable regressions linked above.
+    The validation owner must witness the full static, runner, and serial
+    Postgres gates before submission.
+  </div>
+</main>
+</body>
+</html>

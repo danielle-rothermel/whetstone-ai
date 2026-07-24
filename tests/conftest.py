@@ -19,6 +19,9 @@ TEST_DATABASE_URL = os.environ.get(
     "DR_PLATFORM_TEST_DATABASE_URL",
     "postgresql+psycopg:///dr_platform_test",
 )
+REQUIRE_POSTGRES_TESTS = (
+    os.environ.get("WHETSTONE_REQUIRE_POSTGRES_TESTS") == "1"
+)
 
 
 def engine_dsn(engine: Engine) -> str:
@@ -28,12 +31,23 @@ def engine_dsn(engine: Engine) -> str:
 
 @pytest.fixture(scope="session")
 def pg_url() -> str:
+    if REQUIRE_POSTGRES_TESTS and not TEST_DATABASE_URL.startswith(
+        ("postgresql://", "postgresql+psycopg://")
+    ):
+        pytest.fail(
+            "DBOS CI requires DR_PLATFORM_TEST_DATABASE_URL to use Postgres"
+        )
     try:
         engine = create_engine(TEST_DATABASE_URL)
         with engine.connect():
             pass
         engine.dispose()
-    except Exception:  # any connect failure means skip
+    except Exception as exc:  # any connect failure means skip outside CI
+        if REQUIRE_POSTGRES_TESTS:
+            pytest.fail(
+                "required DBOS Postgres service is unavailable: "
+                f"{type(exc).__name__}: {exc}"
+            )
         pytest.skip(
             "postgres unavailable (set DR_PLATFORM_TEST_DATABASE_URL "
             "or create dr_platform_test)"
