@@ -104,7 +104,11 @@ def test_proposer_config_schema_constants() -> None:
 
 def test_fake_transport_is_scripted_and_records_calls() -> None:
     transport = FakeProposerTransport(
-        {("seed_proposal", 0): ("t1", "t2")}, default=("d",)
+        {("seed_proposal", 0): ("t1", "t2")},
+        default=("d",),
+        execution_policy_hash="a" * 64,
+        prompt_adapter_identity_hash="b" * 64,
+        strict=False,
     )
     pc = _pc("pcc://proposer")
     request = ProposalRequest(

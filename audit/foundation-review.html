@@ -131,7 +131,7 @@
   <div class="card">
     <h3>COPRO — hill-climb the instruction</h3>
     <ul>
-      <li>Meta-prompt proposes <code>breadth</code> instruction rewrites; best is kept; for <code>depth</code> rounds the score-ranked attempt history is fed back OPRO-style to propose the next batch.</li>
+      <li>The seed meta-prompt proposes <code>breadth−1</code> rewrites and evaluates the original last; each later depth proposes <code>breadth</code> rewrites from score-ranked unique history.</li>
       <li>Greedy coordinate ascent per predictor; fixed iterations, no convergence check.</li>
       <li>Consumes <span class="key">score only</span>. Defaults: breadth 10, depth 3, temperature 1.4.</li>
       <li><strong>Weakness:</strong> every candidate costs a <em>full trainset eval</em> — no minibatching, no budget cap; no backtracking; deepcopy-per-candidate memory.</li>

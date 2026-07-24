@@ -47,3 +47,24 @@ def test_unrenderable_placeholders_fail_before_candidate_creation() -> None:
     assert invalid_template_placeholders("{} {query}", {"query"}) == (
         POSITIONAL_FIELD_TOKEN,
     )
+
+
+def test_malformed_placeholders_are_typed_validation_failures() -> None:
+    with pytest.raises(ProposalValidationError, match="malformed"):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template="{query"),
+            valid_template_keys={"query"},
+        )
+
+
+def test_required_placeholder_removal_is_rejected() -> None:
+    with pytest.raises(ProposalValidationError, match="removes"):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template="No template variables"),
+            valid_template_keys={"query"},
+            required_template_keys={"query"},
+        )
