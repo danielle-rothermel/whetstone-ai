@@ -9,6 +9,21 @@ from whetstone.optimization.adapters import (
     MappingAdapterRegistry,
     OptimizerAdapter,
 )
+from whetstone.optimization.copro import (
+    CoproAdapter,
+    CoproAttempt,
+    CoproConfig,
+    CoproDriver,
+    CoproFinalization,
+    CoproState,
+)
+from whetstone.optimization.copro_control import (
+    COPRO_ALGORITHM_VERSION,
+    COPRO_REFERENCE_COMMIT,
+    CoproControl,
+    CoproInjectedDefaults,
+    configure_copro,
+)
 from whetstone.optimization.effect_authority import (
     AcquireOutcome,
     AcquireResult,
@@ -63,6 +78,9 @@ from whetstone.optimization.mutation import (
     diff_check,
     validate_candidate_template,
 )
+from whetstone.optimization.proposal_prompts import (
+    COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
+)
 from whetstone.optimization.proposer import (
     PROPOSER_CONFIG_SCHEMA,
     PROPOSER_CONFIG_SCHEMA_VERSION,
@@ -71,6 +89,8 @@ from whetstone.optimization.proposer import (
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
+    ProviderProposerTransport,
+    prompt_adapter_identity_hash,
 )
 from whetstone.optimization.reward import (
     REWARD_POLICY_SCHEMA,
@@ -193,6 +213,9 @@ __all__ = [
     "CANDIDATE_IDENTITY_SCHEMA",
     "CANDIDATE_IDENTITY_SCHEMA_VERSION",
     "CANDIDATE_RECORD_SCHEMA",
+    "COPRO_ALGORITHM_VERSION",
+    "COPRO_PROPOSAL_PROMPT_SCHEMA_TAG",
+    "COPRO_REFERENCE_COMMIT",
     "EVALUATION_BINDING_SCHEMA",
     "EVALUATION_BINDING_SCHEMA_VERSION",
     "EVALUATION_EVIDENCE_SCHEMA",
@@ -233,6 +256,14 @@ __all__ = [
     "Candidate",
     "CandidateRef",
     "ContentHash",
+    "CoproAdapter",
+    "CoproAttempt",
+    "CoproConfig",
+    "CoproControl",
+    "CoproDriver",
+    "CoproFinalization",
+    "CoproInjectedDefaults",
+    "CoproState",
     "DiffCheckError",
     "EffectAuthority",
     "EffectAuthorityError",
@@ -284,6 +315,7 @@ __all__ = [
     "ProposalValidationError",
     "ProposerConfig",
     "ProposerTransport",
+    "ProviderProposerTransport",
     "RefusalClass",
     "ReplayPolicy",
     "ResolutionClass",
@@ -337,11 +369,13 @@ __all__ = [
     "candidate_reference",
     "canonical_json_equal",
     "compute_identity_hash",
+    "configure_copro",
     "diff_check",
     "eval_config_reference",
     "freeze_json_object",
     "optimization_result_reference",
     "optimization_run_reference",
+    "prompt_adapter_identity_hash",
     "require_full_hash",
     "reward_reference",
     "step_request_reference",
