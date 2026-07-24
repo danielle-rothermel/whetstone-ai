@@ -14,6 +14,7 @@ dependencies = [
     "dr-serialize>=0.1.0,<0.2",
     "dr-store>=0.1.0,<0.2",
     "numpy>=2.5.1",
+    "whetstone-envs",
     "zstandard>=0.25.0",
 ]
 
@@ -33,6 +34,7 @@ dev = [
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "be6c53e5e99bf5f007160b3a3603727dc2cd464d" }
 dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "3f175698c6e15e807dac4a9721d52e92d273edce" }
+whetstone-envs = { git = "https://github.com/danielle-rothermel/whetstone-envs", rev = "90729bda2b207a845b1b7e499754f9b913201a40" }
 
 [build-system]
 requires = ["hatchling"]
