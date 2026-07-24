@@ -67,10 +67,12 @@ from whetstone.optimization.tools import (
 # Durable record + binding-key schemas for the authoritative Tool Call Store.
 TOOL_CALL_ENTRY_SCHEMA = "whetstone.tool_call_store_entry"
 TOOL_CAPACITY_CLAIM_SCHEMA = "whetstone.tool_capacity_claim"
+TOOL_NAMESPACE_CALL_SCHEMA = "whetstone.tool_namespace_call"
 
 __all__ = [
     "TOOL_CALL_ENTRY_SCHEMA",
     "TOOL_CAPACITY_CLAIM_SCHEMA",
+    "TOOL_NAMESPACE_CALL_SCHEMA",
     "ToolCallState",
     "ToolCallStore",
     "ToolCallStoreConflictError",
@@ -226,6 +228,73 @@ class ToolCallStore:
     def __init__(self, store: ObjectStore) -> None:
         self._lock = threading.Lock()
         self._store = store
+
+    @property
+    def store(self) -> ObjectStore:
+        """Underlying durable store for process-boundary composition."""
+        return self._store
+
+    @staticmethod
+    def _namespace_key(namespace: str, ordinal: int) -> str:
+        return f"whetstone.tool_namespace_call:{namespace}#{ordinal}"
+
+    def record_namespace_call(self, call: ToolCall) -> None:
+        """Append a call to its durable namespace exactly once."""
+        with self._lock:
+            ordinal = 1
+            while True:
+                key = self._namespace_key(call.store_namespace, ordinal)
+                existing = self._store.resolve(key)
+                if existing is not None:
+                    recorded = ToolCall.model_validate(
+                        self._store.get(existing)
+                    )
+                    if (
+                        recorded.tool_config_hash == call.tool_config_hash
+                        and recorded.call_id == call.call_id
+                    ):
+                        if recorded != call:
+                            raise ToolCallStoreConflictError(
+                                tool_config_hash=call.tool_config_hash,
+                                call_id=call.call_id,
+                                existing=self._load_entry(
+                                    call.tool_config_hash, call.call_id
+                                )
+                                or _absent_sentinel(
+                                    call.tool_config_hash, call.call_id
+                                ),
+                                attempted_state=ToolCallState.ACCEPTED,
+                                detail=(
+                                    "durable namespace log has divergent args"
+                                ),
+                            )
+                        return
+                    ordinal += 1
+                    continue
+                content = call.model_dump(mode="json")
+                reference, _ = self._store.put(
+                    TOOL_NAMESPACE_CALL_SCHEMA, content
+                )
+                try:
+                    self._store.bind(key, reference)
+                except BindingConflictError:
+                    continue
+                return
+
+    def namespace_calls(
+        self, namespace: str, tool_config_hash: str
+    ) -> tuple[ToolCall, ...]:
+        """Reconstruct ordered calls from durable namespace state."""
+        calls: list[ToolCall] = []
+        ordinal = 1
+        while reference := self._store.resolve(
+            self._namespace_key(namespace, ordinal)
+        ):
+            call = ToolCall.model_validate(self._store.get(reference))
+            if call.tool_config_hash == tool_config_hash:
+                calls.append(call)
+            ordinal += 1
+        return tuple(calls)
 
     def _put_entry(self, entry: ToolCallStoreEntry) -> ObjectReference:
         ref, _status = self._store.put(
