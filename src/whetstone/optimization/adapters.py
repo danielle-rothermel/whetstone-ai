@@ -33,6 +33,7 @@ __all__ = [
     "MappingAdapterRegistry",
     "OptimizerAdapter",
     "ToolCallRecord",
+    "compose_adapter_registry",
 ]
 
 
@@ -140,6 +141,20 @@ class MappingAdapterRegistry:
             raise KeyError(
                 f"no optimizer adapter registered for {adapter_key!r}"
             ) from exc
+
+
+def compose_adapter_registry(
+    *adapters: OptimizerAdapter,
+) -> MappingAdapterRegistry:
+    """Compose concrete adapters without a package-global mutable registry."""
+    by_key: dict[str, OptimizerAdapter] = {}
+    for adapter in adapters:
+        if adapter.key in by_key:
+            raise ValueError(
+                f"duplicate optimizer adapter key {adapter.key!r}"
+            )
+        by_key[adapter.key] = adapter
+    return MappingAdapterRegistry(by_key)
 
 
 class IdentityOptimizerAdapter:

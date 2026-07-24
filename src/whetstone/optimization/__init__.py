@@ -8,6 +8,7 @@ from whetstone.optimization.adapters import (
     MappingAdapterRegistry,
     OptimizerAdapter,
     ToolCallRecord,
+    compose_adapter_registry,
 )
 from whetstone.optimization.harness import (
     ADAPTER_CHECKPOINT_SCHEMA,
@@ -34,12 +35,16 @@ from whetstone.optimization.mutation import (
     template_placeholder_fields,
 )
 from whetstone.optimization.proposer import (
+    PROPOSAL_PROMPT_SCHEMA_TAG,
+    PROPOSAL_PROMPT_SCHEMA_VERSION,
     PROPOSER_CONFIG_SCHEMA,
     FakeProposerTransport,
     ProposalDraft,
+    ProposalPromptBuilder,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
+    fold_prompt_schema_tag,
 )
 from whetstone.optimization.reward import (
     REWARD_POLICY_SCHEMA,
@@ -120,6 +125,8 @@ __all__ = [
     "OPTIMIZATION_RESULT_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA",
     "POSITIONAL_FIELD_TOKEN",
+    "PROPOSAL_PROMPT_SCHEMA_TAG",
+    "PROPOSAL_PROMPT_SCHEMA_VERSION",
     "PROPOSER_CONFIG_SCHEMA",
     "REWARD_POLICY_SCHEMA",
     "STEP_REQUEST_SCHEMA",
@@ -156,6 +163,7 @@ __all__ = [
     "OptimizerAdapter",
     "OutputContract",
     "ProposalDraft",
+    "ProposalPromptBuilder",
     "ProposalRequest",
     "ProposalValidationError",
     "ProposerConfig",
@@ -193,9 +201,11 @@ __all__ = [
     "apply_reward_policy",
     "candidate_from_draft",
     "candidate_reference",
+    "compose_adapter_registry",
     "compute_identity_hash",
     "diff_check",
     "eval_config_reference",
+    "fold_prompt_schema_tag",
     "invalid_template_placeholders",
     "optimization_result_reference",
     "require_full_hash",
