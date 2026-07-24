@@ -492,20 +492,13 @@ wheels = [
 [[package]]
 name = "dr-store"
 version = "0.1.0"
-source = { editable = "../dr-store" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "dr-serialize", specifier = ">=0.1.0" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = ">=0.15.18" },
-    { name = "ty", specifier = ">=0.0.51" },
+sdist = { url = "https://files.pythonhosted.org/packages/14/b4/d59cbbc852d7bc778a37f20ab2fe9245000c2259f65c2fdaaac8230f4bbf/dr_store-0.1.0.tar.gz", hash = "sha256:c03c022638a03d8291fc55cba35ce2eb6cebc9187848fc8e844b0d44063de41d", size = 10646, upload-time = "2026-07-24T08:37:47.856Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/a9/4d88f0223ba1c15301f088b290df6729854ddf83f6fde325ad9854c4884a/dr_store-0.1.0-py3-none-any.whl", hash = "sha256:b8a2d778814bb118e46965cd949251e15610f5ba5b1d4229360523d67cbbf8c0", size = 14901, upload-time = "2026-07-24T08:37:46.788Z" },
 ]
 
 [[package]]
@@ -2239,7 +2232,7 @@ requires-dist = [
     { name = "dr-platform", editable = "../dr-platform" },
     { name = "dr-providers", editable = "../dr-providers" },
     { name = "dr-serialize", specifier = ">=0.1.0" },
-    { name = "dr-store", editable = "../dr-store" },
+    { name = "dr-store", specifier = ">=0.1.0" },
     { name = "whetstone-envs", editable = "../whetstone-envs" },
 ]
 
