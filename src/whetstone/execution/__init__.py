@@ -1,0 +1,73 @@
+"""Environment-neutral execution primitives."""
+
+from whetstone.execution.call_support import (
+    CallTelemetry,
+    call_telemetry,
+    failure_code_of,
+    guard_deadline_seconds,
+    is_rate_limit_failure,
+    is_transient_transport_failure,
+)
+from whetstone.execution.fanout import (
+    DEFAULT_CONCURRENCY,
+    GUARD_MARGIN_SECONDS,
+    RUNNER_TIMEOUT_CODE,
+    CallSpec,
+    FanoutConfig,
+    FanoutResult,
+    PoolOutcome,
+    RateLimitController,
+    RunnerTimeout,
+    run_call_pool,
+)
+from whetstone.execution.partials import (
+    PARTIAL_SCHEMA,
+    PartialCallRecord,
+    PartialLog,
+    partial_key,
+)
+from whetstone.execution.prompt_cache import (
+    PROMPT_CACHE_ENTRY_SCHEMA,
+    PROMPT_CACHE_KEY_SCHEMA,
+    CacheProvenance,
+    CallExecution,
+    PartialCacheMarks,
+    PromptCacheError,
+    PromptResultCache,
+    execute_call,
+    partial_cache_marks,
+    prompt_cache_key,
+)
+
+__all__ = [
+    "DEFAULT_CONCURRENCY",
+    "GUARD_MARGIN_SECONDS",
+    "PARTIAL_SCHEMA",
+    "PROMPT_CACHE_ENTRY_SCHEMA",
+    "PROMPT_CACHE_KEY_SCHEMA",
+    "RUNNER_TIMEOUT_CODE",
+    "CacheProvenance",
+    "CallExecution",
+    "CallSpec",
+    "CallTelemetry",
+    "FanoutConfig",
+    "FanoutResult",
+    "PartialCacheMarks",
+    "PartialCallRecord",
+    "PartialLog",
+    "PoolOutcome",
+    "PromptCacheError",
+    "PromptResultCache",
+    "RateLimitController",
+    "RunnerTimeout",
+    "call_telemetry",
+    "execute_call",
+    "failure_code_of",
+    "guard_deadline_seconds",
+    "is_rate_limit_failure",
+    "is_transient_transport_failure",
+    "partial_cache_marks",
+    "partial_key",
+    "prompt_cache_key",
+    "run_call_pool",
+]
