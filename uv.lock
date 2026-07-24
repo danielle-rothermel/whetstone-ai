@@ -1870,6 +1870,8 @@ dependencies = [
     { name = "dr-providers" },
     { name = "dr-serialize" },
     { name = "dr-store" },
+    { name = "numpy" },
+    { name = "zstandard" },
 ]
 
 [package.dev-dependencies]
@@ -1890,6 +1892,8 @@ requires-dist = [
     { name = "dr-providers", specifier = ">=0.2.0,<0.3" },
     { name = "dr-serialize", specifier = ">=0.1.0,<0.2" },
     { name = "dr-store", specifier = ">=0.1.0,<0.2" },
+    { name = "numpy", specifier = ">=2.5.1" },
+    { name = "zstandard", specifier = ">=0.25.0" },
 ]
 
 [package.metadata.requires-dev]
