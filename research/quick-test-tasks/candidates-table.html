@@ -142,9 +142,10 @@ table.atlas {
 <title>whetstone-ai · Candidate Atlas — quick-test task selection</title>
 </head>
 <body>
-<main>
-<h1>Candidate Atlas: all 24 quick-test candidates, compared</h1>
-<div class="byline">whetstone-ai · 2026-07-21 · master comparative table</div>
+<main class="wide">
+<h1>All 24 quick-test candidates, ranked and compared in one table</h1>
+<p class="dek">The master comparative atlas: standing, scores, rationale, and links per candidate.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
   <a href="recommendations.html">Round 1</a>
@@ -154,10 +155,7 @@ table.atlas {
   <a href="landscape.html">Landscape</a>
 </div>
 
-<div class="intro">
-  <p>One table, every candidate, with the <span class="key">reasons</span> in the cells. Rows follow the <a href="recommendations-round2.html">round-2 implementation-aware ranking</a> (ranks 1&ndash;20), then a <span class="key">gated band</span> — c01, c05, c07, c15, ineligible at any implementation score because <a href="recommendations.html">round 1</a> refuted them without a concrete rescue. Each candidate links to its deep-dive page in <code>candidates/</code> and to the repo deep reads in <code>repos/</code>.</p>
-  <p><strong>Amendment (2026-07-21):</strong> the round-1 tie-breaker=1 exclusion is dropped; c10, c04, and c02 are folded into the official <a href="recommendations-round2.html">round-2 ranking</a> on equal terms, inserting at ranks 5, 7, and 12 (marked <span class="dagger">&dagger;</span>). Their I1&ndash;I6 scores came from the same pipeline; reasoning-gym run-verification carries over from c24 for c10 and c04, while c02 never met the run-verification bar. No previously published relative order changes — the table now holds 20 ranked + 4 gated = 24.</p>
-</div>
+<p>One table, every candidate, with the <span class="key">reasons</span> in the cells. Rows follow the <a href="recommendations-round2.html">round-2 implementation-aware ranking</a> (ranks 1&ndash;20), then a <span class="key">gated band</span> — c01, c05, c07, c15, ineligible at any implementation score because <a href="recommendations.html">round 1</a> refuted them without a concrete rescue. Three rows (c10, c04, c02) fold into the official ranking at ranks 5, 7, and 12, marked <span class="dagger">&dagger;</span>; the table holds 20 ranked + 4 gated = 24. Each candidate links to its deep-dive page and repo review.</p>
 
 <div class="atlas-wrap">
 <table class="atlas">
@@ -522,7 +520,7 @@ table.atlas {
 </table>
 </div>
 
-<div class="section-head legend" id="legend"><h2>Legend</h2></div>
+<div class="section-head legend" id="legend"><h2>How do you read the badges, chips, and tags?</h2><span class="tag">legend</span></div>
 <div class="grid-3">
   <div class="card">
     <h3>Badges follow the candidate pages</h3>
@@ -538,7 +536,9 @@ table.atlas {
   </div>
 </div>
 
-<p class="small muted space-top">Built 2026-07-21 from <a href="recommendations.html">round 1</a>, the <a href="recommendations-round2.html">round-2 rescore</a>, the per-candidate pages in <a href="candidates/c19.html">candidates/</a>, and the repo deep reads in <code>repos/</code>. Row order, scores, and movement match the round-2 table cell-for-cell. Amended 2026-07-21: c10, c04, and c02 folded into the official ranking at ranks 5, 7, and 12 (marked <span class="dagger">&dagger;</span>); the tie-breaker=1 exclusion and the below-cut band are dropped, giving 20 ranked + 4 gated = 24.</p>
+<div class="colophon">
+  Built 2026-07-21 from <a href="recommendations.html">round 1</a>, the <a href="recommendations-round2.html">round-2 rescore</a>, the per-candidate pages in <a href="candidates/c19.html">candidates/</a>, and the repo deep reads in <code>repos/</code>. Row order, scores, and movement match the round-2 table cell-for-cell. Amendment (2026-07-21): the round-1 tie-breaker=1 exclusion and the below-cut band are dropped; c10, c04, and c02 fold into the official ranking at ranks 5, 7, and 12 (marked <span class="dagger">&dagger;</span>) on equal terms, scored via the same I1&ndash;I6 pipeline post-hoc. Reasoning-gym run-verification carries over from c24 for c10 and c04; c02 never met the run-verification bar. No previously published relative order changed — the table now holds 20 ranked + 4 gated = 24.
+</div>
 
 </main>
 </body>

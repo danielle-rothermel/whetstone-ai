@@ -30,8 +30,9 @@
 .cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.anchor-sub { display: block; margin: 2px 0 12px; color: var(--muted); font-size: 13px; }
+.anchor-sub .key { font-weight: 600; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 7px; margin: 6px 0 20px; }
 
 /* (2) Score chips — numbers as secondary metadata, never as prose. */
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
@@ -53,8 +54,8 @@
 }
 .lens h3 { margin-bottom: 10px; }
 .lens .pros, .lens .cons { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
-.lens .pros li::marker { color: var(--green); font-weight: 800; }
-.lens .cons li::marker { color: var(--red);   font-weight: 800; }
+.lens .pros li::marker { color: var(--green); font-weight: 700; }
+.lens .cons li::marker { color: var(--red);   font-weight: 700; }
 .lens .rowlabel {
   display: block; margin-top: 10px;
   font: 700 10.5px/1.4 var(--font-system);
@@ -105,12 +106,14 @@
   <h1><span class="cand-id">c03</span>Keyed Custom-Operator Expression Evaluation</h1>
   <span class="badge ranked">RANKED #10</span>
 </div>
+<p class="dek">Clean round-1 co-winner design, demoted mid-pack once its oracle proved not reusable.</p>
+<div class="byline">whetstone-ai · 2026-07-21</div>
 <div class="anchor-sub">You know this as: <span class="key">a BIG-bench multistep-arithmetic generator with invented infix operators and a hidden precedence/wrap convention</span> — apply a per-instance operator table, not PEMDAS, and output one integer.</div>
 
-<!-- (2) VERDICT BOX -->
-<div class="verdict"><!-- plain tone = ranked -->
-  <p><strong>Round-1 backup, demoted to the middle of the round-2 rescore.</strong> This was the round-1 co-recommendation with the adopted winner — the only other candidate both adversarial skeptics left unrefuted — and its design is genuinely clean: a per-instance symbol table, a tiny reference evaluator, and per-instance random parameters that make it the most straightforwardly contamination-proof candidate in the pool. What sank it in the implementation-aware rescore is the codebase. The BIG-bench multistep-arithmetic generator that would seed it computes its ground truth by running <code>eval()</code> on the generator's own string, which is a fine oracle for standard <code>+ - *</code> but is tautological for invented operators Python does not know. The load-bearing oracle is therefore new code we must write, not config, and the round-1-mandated foil-bank plus per-rung effect-size machinery keeps the moving-part count and calibration burden up — so its total lands mid-pack rather than near the top. Its weakest round-1 criterion (a legible-flag one-shot exposure) survived attack only on the strength of fixes that are cheap but load-bearing, and the wrap rule as first framed was measured to be nearly invisible.</p>
-  <div class="chips">
+<!-- (2) VERDICT -->
+<p><strong>Round-1 backup, demoted to the middle of the round-2 rescore.</strong> This was the round-1 co-recommendation with the adopted winner — the only other candidate both adversarial skeptics left unrefuted — and its design is genuinely clean: a per-instance symbol table, a tiny reference evaluator, and per-instance random parameters that make it the most straightforwardly contamination-proof candidate in the pool. What sank it in the implementation-aware rescore is the codebase. The BIG-bench multistep-arithmetic generator that would seed it computes its ground truth by running <code>eval()</code> on the generator's own string, which is a fine oracle for standard <code>+ - *</code> but is tautological for invented operators Python does not know.</p>
+<p>The load-bearing oracle is therefore new code we must write, not config, and the round-1-mandated foil-bank plus per-rung effect-size machinery keeps the moving-part count and calibration burden up — so its total lands mid-pack rather than near the top. Its weakest round-1 criterion (a legible-flag one-shot exposure) survived attack only on the strength of fixes that are cheap but load-bearing, and the wrap rule as first framed was measured to be nearly invisible.</p>
+  <div class="chips-row">
     <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
     <span class="chip"><span class="k">R1 TB</span><span class="v">2</span></span>
     <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
@@ -121,10 +124,9 @@
     <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
     <span class="chip total"><span class="k">Impl total</span><span class="v">10 / 16</span></span>
   </div>
-</div>
 
 <!-- (3) WHAT IT PROPOSES -->
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does the task ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Apply an invented operator table under a hidden house precedence, output one integer</h3>
@@ -148,7 +150,7 @@ Naive PEMDAS / left-to-right:
 </div>
 
 <!-- (4) ACADEMIC ANCHOR & LINEAGE -->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does this task come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -179,7 +181,7 @@ Naive PEMDAS / left-to-right:
 </div>
 
 <!-- (5) RELATED ACTIVE RESEARCH (2025-2026) -->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What live 2025-2026 research backs it?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2410.05229">GSM-Symbolic</a> (Mirzadeh et al., ICLR 2025)</span> — per-instance symbolic templating that yields contamination-proof arithmetic; the parameterization method c03 uses to manufacture known-ceiling instances.</li>
@@ -190,7 +192,7 @@ Naive PEMDAS / left-to-right:
 </div>
 
 <!-- (6) PERSPECTIVES -->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the task survive adversarial scrutiny?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -251,7 +253,7 @@ Naive PEMDAS / left-to-right:
 </div>
 
 <!-- (7) IMPLEMENTATION: STEPS & RISKS -->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What does it take to build, and what can go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
   <div class="step"><h3>Lift the generator, write a real oracle</h3><p>Copy the roughly forty lines of seeded recursion (<code>generate_content</code>/<code>generate_subparenthesis</code>/<code>generate_string</code> plus the <code>RandomState(seed)</code> plumbing) from the BIG-bench task, swap in per-instance nonce operator symbols and a sampled symbol table, then replace the <code>eval()</code> ground truth with a new roughly forty-to-seventy-line evaluator honoring the per-instance operator semantics and the wrap/precedence conventions</p></div>
   <div class="step"><h3>Enforce the observability partition</h3><p>Print per-instance-random conventions in the instance, but carry the headroom only in family-constant latents (1..m wrap, opaque mode-token semantics, threshold, recurrence); make every rule toggle an opaque token whose meaning is never stated, and keep the <code>mod m</code> surface notation deliberately misleading versus the 1..m ground truth</p></div>
@@ -306,6 +308,10 @@ Naive PEMDAS / left-to-right:
     <a href="../candidates-merged.html#c03">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  I1&ndash;I6 implementation-difficulty rubric and scoring methodology: <a href="../recommendations-round2.html#method">Round 2 methodology</a>.
+</div>
 
 </main>
 </body>

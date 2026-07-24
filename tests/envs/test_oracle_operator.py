@@ -55,13 +55,49 @@ def _fixtures(env_name: str) -> tuple[str, str, str]:
         correct = '"blue [1] and green [2] together"'
         wrong = "blue, green"
         return gold, correct, wrong
+    if env_name == "c22h":
+        # c22h reuses the c22 oracle (same serialized-constraint-stack gold),
+        # but a pure-hard stack: >= 5 words, no 'z', forbid 'quarnex'.
+        import json
+
+        gold = json.dumps(
+            {
+                "base_task": "Name a fruit.",
+                "constraint_descriptions": [
+                    ">=5 words",
+                    "no z",
+                    "forbid quarnex",
+                ],
+                "instruction_id_list": [
+                    "length_constraints:number_words",
+                    "keywords:letter_frequency",
+                    "keywords:forbidden_words",
+                ],
+                "kwargs_list": [
+                    {"num_words": 5, "relation": "at least"},
+                    {
+                        "letter": "z",
+                        "let_frequency": 1,
+                        "let_relation": "less than",
+                    },
+                    {"forbidden_words": ["quarnex"]},
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        correct = "apple banana cherry mango melon"
+        wrong = "apple banana cherry mango quarnex"
+        return gold, correct, wrong
     if env_name == "c11":
         # Canonical JSON gold; a matching response scores 1.
         gold = '{"a":1,"b":2}'
         return gold, '{"a":1,"b":2}', '{"b":2,"a":1}'
     if env_name == "c19":
         return "2,3", "2,3", "9,9"
-    if env_name == "c18":
+    if env_name in {"c18", "c18h"}:
+        # c18h reuses the c18 oracle (True/False entailment gold); the same
+        # exact-match fixture proves its wiring.
         return "True", "True", "False"
     # c23: a transformed string gold.
     return "abcd", "abcd", "zzzz"
@@ -125,6 +161,34 @@ def test_shared_normalization_is_applied_by_the_oracle() -> None:
         env=env,
         generation="```\nTrue\n```",
         gold="True",
+        evaluation_procedure_config_hash=_PROC_HASH,
+    )
+    assert fact.value == 1
+
+
+def test_c18_verdict_extraction_flows_through_adapter() -> None:
+    # The env-side verdict extraction (final True/False token) reaches the
+    # adapter path: a chain-of-thought ceiling reply ending on the verdict
+    # scores 1, not 0. Verbatim shape of the live D5 CoT reply.
+    env = env_spec("c18")
+    cot = "...the query property is not entailed.\n\nFalse"
+    fact = env_exact_match_fact(
+        env=env,
+        generation=cot,
+        gold="False",
+        evaluation_procedure_config_hash=_PROC_HASH,
+    )
+    assert fact.value == 1
+
+
+def test_c23_output_extraction_flows_through_adapter() -> None:
+    # The env-side Output:-line extraction reaches the adapter path: an
+    # Output:-prefixed ceiling reply scores 1 against the bare-string gold.
+    env = env_spec("c23")
+    fact = env_exact_match_fact(
+        env=env,
+        generation="Output: abcd",
+        gold="abcd",
         evaluation_procedure_config_hash=_PROC_HASH,
     )
     assert fact.value == 1

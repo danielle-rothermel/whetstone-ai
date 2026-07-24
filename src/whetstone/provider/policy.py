@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from dr_providers import ProviderTransportPolicy
-from dr_serialize import build_identity_document, identity_hash
+from dr_serialize import build_identity_document, identity_document_hash
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -192,4 +192,4 @@ class ProviderExecutionPolicy(BaseModel):
             schema_version=PROVIDER_EXECUTION_POLICY_SCHEMA_VERSION,
             payload=self.identity_payload(),
         )
-        return identity_hash(document)
+        return identity_document_hash(document)

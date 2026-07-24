@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,11 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +40,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,25 +54,30 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
-.unverified::after {
-  content: "unverified";
-  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-  border: 1px dashed var(--amber); background: var(--amber-soft);
-  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
-  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
-}
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -98,6 +93,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c19 Grid-World State Prediction</title>
@@ -105,43 +101,41 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c19</span>Grid-World State Prediction</h1>
   <span class="badge adopt">ADOPT</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">grid-world state tracking</span> — the bAbI/BabyAI "predict the final state after a move sequence" task, reframed to one derived fact.</div>
+<p class="dek">Predict one derived fact after a seeded move sequence on a small grid.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict good"><!-- .good = adopt/backup · .bad = gated/below-cut · plain = ranked -->
-  <p><strong>Adopt — ranked first after the implementation-aware rescore.</strong> c19 wins on the
-  single fact that dominated round 2: it is the only candidate that pairs a genuinely reusable,
-  <span class="key">run-verified</span> codebase with skeptic debt that is verification-only rather than
-  structural. Farama-Foundation's Minigrid is Apache-2.0, actively maintained, and — confirmed by a
-  fresh run — properly seed-threaded, so the same seed reproduces byte-identical grids and different
-  seeds vary. The entire adaptation is roughly a hundred-and-a-half lines of configuration, an
-  independent derived-fact oracle, and strict all-or-nothing scoring glue that lives
-  <span class="key">outside</span> the repo; nothing inside <code>minigrid/</code> is edited. Round 1
-  scored the design in the strong middle of the pool and flagged only one soft spot — grid navigation is
-  a familiar enough skill that a naive prompt might not floor low — which the invented-command and
-  wrap-versus-clamp convention strata are designed to counter. Because those nonstandard dynamics are
-  net-new logic we write on top of Minigrid rather than something the repo supplies, the build is real
-  but bounded, and the standing reflects that: a mid-pack round-1 task that rose two tiers to the top on
-  implementation strength.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">14</span></span>
-  </div>
+<p><strong>Adopt — ranked first after the implementation-aware rescore.</strong> c19 wins on the
+single fact that dominated round 2: it is the only candidate that pairs a genuinely reusable,
+<span class="key">run-verified</span> codebase with skeptic debt that is verification-only rather than
+structural. Farama-Foundation's Minigrid is Apache-2.0, actively maintained, and — confirmed by a
+fresh run — properly seed-threaded, so the same seed reproduces byte-identical grids and different
+seeds vary. The entire adaptation is roughly a hundred-and-a-half lines of configuration, an
+independent derived-fact oracle, and strict all-or-nothing scoring glue that lives
+<span class="key">outside</span> the repo; nothing inside <code>minigrid/</code> is edited. Round 1
+scored the design in the strong middle of the pool and flagged only one soft spot — grid navigation is
+a familiar enough skill that a naive prompt might not floor low — which the invented-command and
+wrap-versus-clamp convention strata are designed to counter. Because those nonstandard dynamics are
+net-new logic written on top of Minigrid rather than something the repo supplies, the build is real
+but bounded, and the standing reflects that: a mid-pack round-1 task that rose two tiers to the top on
+implementation strength.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+  <span class="chip"><span class="k">TB</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">3</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">14/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Predict one derived fact from a small seeded grid, exact-match</h3>
@@ -151,15 +145,16 @@
     = jump-two, <code>W</code> = wrap). The model predicts exactly one derived fact — a final coordinate,
     a heading, or a carrying-flag — never a path, which removes the many-valid-answers ambiguity that
     plagues plan-generation grid tasks. Output is a single token (<code>3,5</code> or <code>E</code>),
-    scored by exact match against a tiny independent simulator. The latent rules that vary across strata
-    are relative-turn semantics, wall-blocking versus edge wrap or clamp, the invented-command semantics
-    (including jump-through-wall behavior), and the origin/indexing convention — varied so that no single
-    fixed convention statement can cover the whole pool. Randomized grids are contamination-proof, and an
-    off-by-one-at-a-wall failure is cleanly diagnostic of which rule the prompt missed.</p>
+    scored by exact match against a tiny independent simulator.</p>
+    <p>The latent rules that vary across strata are relative-turn semantics, wall-blocking versus edge wrap
+    or clamp, the invented-command semantics (including jump-through-wall behavior), and the origin/indexing
+    convention — varied so that no single fixed convention statement can cover the whole pool. Randomized
+    grids are contamination-proof, and an off-by-one-at-a-wall failure is cleanly diagnostic of which rule
+    the prompt missed.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative — constructed faithfully from the merged summary. Seeded conditions: a five-by-five grid, robot at (1,1) facing east, edge behavior = clamp, one wall column, invented <code>J</code> = jump-two-in-facing-direction (passes through walls).</p>
+    <p class="aside">Illustrative — constructed faithfully from the merged summary. Seeded conditions: a five-by-five grid, robot at (1,1) facing east, edge behavior = clamp, one wall column, invented <code>J</code> = jump-two-in-facing-direction (passes through walls).</p>
 <pre><code>Grid (row,col; origin top-left):
 . . # . .
 . R . . .
@@ -180,8 +175,7 @@ wrong-rule signature is legible.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -210,8 +204,7 @@ wrong-rule signature is legible.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2507.20395">MazeEval</a> (Einarsson et al., arXiv 2025)</span> — coordinate-based maze navigation with distance-to-wall feedback; models fail beyond nine-by-nine via looping, directly probing the grid state-prediction floor c19 depends on.</li>
@@ -221,8 +214,7 @@ wrong-rule signature is legible.</code></pre>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -250,7 +242,7 @@ wrong-rule signature is legible.</code></pre>
     <span class="rowlabel">Supports</span>
     <ul class="pros"><li>The only run-verified I1=3 codebase in the pool with verification-only skeptic debt — properly threaded seeding, byte-identical reproduction, roughly a hundred-and-a-half lines of glue, and zero edits inside <code>minigrid/</code>.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>Minigrid supplies generation, serialization, and determinism but not the nonstandard dynamics — the invented-command and wrap-versus-clamp convention layer is net-new simulation logic we write, which is where the real build effort sits.</li></ul>
+    <ul class="cons"><li>Minigrid supplies generation, serialization, and determinism but not the nonstandard dynamics — the invented-command and wrap-versus-clamp convention layer is net-new simulation logic to write, which is where the real build effort sits.</li></ul>
   </div>
   <div class="lens">
     <h3>Research currency</h3>
@@ -261,8 +253,7 @@ wrong-rule signature is legible.</code></pre>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
   <div class="step"><h3>Day 1-2 — build the harness</h3><p>Vendor nothing; add Minigrid as a dependency. Write the roughly-hundred-and-a-half-line glue package: a seeded instance generator over stochastic-layout envs (Fetch, Crossing, FourRooms, Empty-Random), text render via <code>pprint_grid</code>, the invented-command and convention layer (wrap versus clamp, indexing, two or three invented commands) as a tiny stepper over <code>grid.encode</code> state, an independent derived-fact oracle, and a strict all-or-nothing scorer.</p></div>
   <div class="step"><h3>Day 2-3 — freeze gates</h3><p>Run a reference "state-all-rules" ceiling prompt at temperature zero; measure per-stratum floors; run a red-team check that no single fixed convention statement covers the pool. Pin seeds and a manifest.</p></div>
@@ -273,7 +264,7 @@ wrong-rule signature is legible.</code></pre>
   <div class="card">
     <h3>Risks</h3>
     <ul>
-      <li>The invented-command and wrap-versus-clamp convention strata that defeat one-shot guessing are our net-new simulation-layer logic; Minigrid does not supply nonstandard dynamics, so a bug there is a bug in the part that makes the task hard.</li>
+      <li>The invented-command and wrap-versus-clamp convention strata that defeat one-shot guessing are net-new simulation-layer logic; Minigrid does not supply nonstandard dynamics, so a bug there is a bug in the part that makes the task hard.</li>
       <li>Fixed-layout envs do not vary by seed (<code>Empty-8x8</code> is identical for seeds 7 and 8) — strata must use the stochastic-layout envs, and the off-path unseeded spots (<code>wrappers.py:800</code>, the WFC subpackage) must be avoided.</li>
       <li>Roughly two to three pre-freeze gates remain (measured ceiling, per-stratum floors, single-fixed-convention red-team) — real calibration, not zero.</li>
       <li>Minor license-metadata mismatch: the LICENSE file says Apache-2.0 while <code>pyproject</code> says MIT; cite the LICENSE file.</li>
@@ -283,14 +274,12 @@ wrong-rule signature is legible.</code></pre>
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/Farama-Foundation/Minigrid">Farama-Foundation/Minigrid</a> (Apache-2.0, v3.1.0) — deep-read notes at <a href="../repos/farama-foundation-minigrid.md">repos/farama-foundation-minigrid.md</a>.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status pass">verified</span>
-        seed 42 byte-identical across runs on five envs; seed 42 vs 43 differs; three of three ground-truth spot checks matched an independent object-model walk. Seeding threaded through <code>reset(seed)</code> &rarr; <code>self.np_random</code> with no module-global seeding.</li>
+      <li><span class="key">Run verification:</span> <span class="status pass">pass</span>
+        — seed 42 byte-identical across runs on five envs; seed 42 vs 43 differs; three of three ground-truth spot checks matched an independent object-model walk. Seeding threaded through <code>reset(seed)</code> &rarr; <code>self.np_random</code> with no module-global seeding.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -318,6 +307,12 @@ wrong-rule signature is legible.</code></pre>
     <a href="../related-work/c19-baseline-spec.html">Baseline spec</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 27 · TB 2 · I1 3 · I2 2 · I3 1 · I4 1 · I5 2 · I6 2 · Impl total 14/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations.html">recommendations.md (round 1)</a> · <a href="../recommendations-round2.html#table">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c19">candidates-merged.md</a> · <a href="../related-work/c19-related-work.html">related work</a> · <a href="../related-work/c19-baseline-spec.html">baseline spec</a>.
+  Regenerated from <code>c19.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

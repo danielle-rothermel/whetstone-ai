@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — only what doc.css lacks.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
-   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+   --surface, --muted, and their -soft variants). */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,10 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
-.cand-head h1 { margin: 0; }
-.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.cand-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 22px; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +39,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,25 +53,24 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
-.unverified::after {
-  content: "unverified";
-  margin-left: 6px; padding: 1px 7px; border-radius: 999px;
-  border: 1px dashed var(--amber); background: var(--amber-soft);
-  color: var(--amber); font: 700 9.5px/1.4 var(--font-system);
-  letter-spacing: .05em; text-transform: uppercase; vertical-align: middle;
-}
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { display: grid; gap: 10px; margin: 4px 0 18px; }
+.step { padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.step h3 { margin-bottom: 4px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; margin: 4px 0 4px; padding: 2px 9px; border-radius: 999px; font: 600 11.5px/1.5 var(--font-system); }
+.status.pass    { color: var(--green); background: var(--green-soft); }
+.status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.open    { color: var(--muted); background: var(--code-bg); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 20px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -105,38 +93,36 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
-  <h1><span class="cand-id">c15</span>Opaque-Codebook Remapped-Label Classification</h1>
+  <span class="cand-id">c15</span>
+  <h1>Opaque-Codebook Classification is gated — its own rule family one-shots it</h1>
   <span class="badge gated">GATED</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">flipped-label / semantically-unrelated-label ICL (SUL-ICL)</span> — short texts classified into opaque codes by a hidden feature-to-code rulebook, so a default sentiment prompt scores near floor.</div>
+<p class="dek">Flipped-label ICL: short texts classified into opaque codes by a hidden feature-to-code rulebook.</p>
+<div class="byline">whetstone-ai · quick-test-tasks · round-2 rescore</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict bad">
-  <p><strong>Gated out in the round-2 rescore.</strong> This was a round-1 finalist on the raw rubric — one of the seven top-tier scorers — and its implementation story is middling but not disqualifying on its own. What removes it from contention is a health gate, not a score: both adversarial skeptic lenses refuted its measurement story at major severity in round 1, and the only fixes on offer were structural redesigns that change what the task is. The specific refutation is that its rule <em>family</em> — base polarity map, sarcasm inversion, grudging-praise trigger, neutral-fact carve-out, precedence order — is the famous flipped-label literature, so a single meta-prompt that says "here are the rule types, induce the bindings from the demonstrations" one-shots the whole ladder, failing the not-one-shot-guessable criterion. Under the round-2 rule that a refuted-without-rescue candidate cannot be recommended whatever its build cost, it appears in the table for completeness, unranked. Its implementation total is shown in parentheses to signal it was computed but does not rank; the round-2 gate zeroes the skeptic-debt axis (the refutation is unpriceable without a redesign), which is what pins the total low.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">(7)/16</span></span>
-  </div>
+<p><strong>Gated out in the round-2 rescore</strong> — refuted in round 1 without a concrete rescue, ineligible regardless of implementation score. This was a round-1 finalist on the raw rubric — one of the seven top-tier scorers — and its implementation story is middling but not disqualifying on its own. What removes it from contention is a health gate, not a score: both adversarial skeptic lenses refuted its measurement story at major severity in round 1, and the only fixes on offer were structural redesigns that change what the task is. The specific refutation is that its rule <em>family</em> — base polarity map, sarcasm inversion, grudging-praise trigger, neutral-fact carve-out, precedence order — is the famous flipped-label literature, so a single meta-prompt that says "here are the rule types, induce the bindings from the demonstrations" one-shots the whole ladder, failing the not-one-shot-guessable criterion. Under the round-2 rule that a refuted-without-rescue candidate cannot be recommended whatever its build cost, it appears here for completeness, unranked. Its implementation total is shown in parentheses to signal it was computed but does not rank; the round-2 gate zeroes the skeptic-debt axis (the refutation is unpriceable without a redesign), which is what pins the total low.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">28</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">0</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">(7)/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it actually ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
-    <h3>Task: classify short texts into opaque codes under a hidden multi-rule feature-to-code function</h3>
+    <h3>Classify short texts into opaque codes under a hidden multi-rule feature-to-code function</h3>
     <p>A pinned generator produces short template-filled texts (reviews or event sentences) and labels each with an <span class="key">opaque code</span> (<code>ALPHA</code>..<code>DELTA</code>, or compositional tags like <code>#mix.cal</code>) assigned by a deterministic <span class="key">feature-to-code function</span> with four or more interacting rules: a base <span class="key">polarity map</span>, a <span class="key">sarcasm-inversion</span> trigger, a <span class="key">grudging-praise</span> trigger (cued by "finally" or "after N tries"), a <span class="key">neutral-fact carve-out</span>, an optional weekday suffix, and a fixed <span class="key">precedence order</span> among them. The model must emit exactly one code token, scored 0/1 by exact match. The point is mechanistic: a default prompt following the pretrained sentiment prior scores near floor — the documented flipped-label behavior — and each latent rule the prompt captures lifts its own stratum, so the score ladder is meant to be incremental. Seeded slot-filling generation keeps the pool contamination-proof.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative, constructed faithfully from the merged summary (the corpus has no run-verified seeded instance for c15). One seed's conventions: base positive maps to <code>ALPHA</code>; sarcasm inverts; grudging-praise outranks sarcasm; codes are opaque so no prior helps.</p>
+    <p class="aside">Illustrative, constructed faithfully from the merged summary (the corpus has no run-verified seeded instance for c15). One seed's conventions: base positive maps to <code>ALPHA</code>; sarcasm inverts; grudging-praise outranks sarcasm; codes are opaque so no prior helps.</p>
 <pre><code>Text: "Finally, after three broken replacements, this one actually works."
 
 Latent features: grudging-praise trigger fires ("finally", "after N tries");
@@ -149,15 +135,14 @@ A one-mapping prompt that only knows base polarity answers ALPHA -> 0.</code></p
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does the design come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
     <ul>
       <li><span class="cite"><a href="https://arxiv.org/abs/2303.03846">Larger language models do in-context learning differently</a> (Wei et al., arXiv 2023)</span> — the canonical flipped-label / SUL-ICL finding; overriding semantic priors is emergent with scale, and this is the mechanism that makes the default prompt score near floor with a known ceiling. c15's core citation.</li>
       <li><span class="cite"><a href="https://arxiv.org/abs/2305.08298">Symbol tuning improves in-context learning</a> (Wei et al., EMNLP 2023)</span> — the arbitrary-symbol (foo/bar, ALPHA/BETA) label convention; this is the opaque-codebook label space c15 borrows.</li>
-      <li><span class="cite"><a href="https://arxiv.org/abs/2403.09488">Rectifying Demonstration Shortcut in In-Context Learning</a> (Jang et al., NAACL 2024)</span> — the demonstration-shortcut / label-bias evaluation; the template for instances where the prior-driven answer is wrong and only the stated mapping is right. The c15 corpus attributes this to "Kang et al." (research file line 150); the verified first author is Joonwon Jang — corrected here. The corpus itself flagged its author list as uncertain.</li>
+      <li><span class="cite"><a href="https://arxiv.org/abs/2403.09488">Rectifying Demonstration Shortcut in In-Context Learning</a> (Jang et al., NAACL 2024)</span> — the demonstration-shortcut / label-bias evaluation; the template for instances where the prior-driven answer is wrong and only the stated mapping is right. The c15 corpus attributes this to "Kang et al."; the verified first author is Joonwon Jang — corrected here. The corpus itself flagged its author list as uncertain.</li>
     </ul>
   </div>
   <div class="card">
@@ -168,7 +153,7 @@ A one-mapping prompt that only knows base polarity answers ALPHA -> 0.</code></p
     </ul>
   </div>
 </div>
-<div class="card full space-top">
+<div class="card full">
   <h3>Dead branches: dropped near-relatives</h3>
   <ul class="dead-branch">
     <li>D1 · Inverted multiple-choice convention — <span class="why">both the brainstorm and the literature flag HIGH one-shot risk; a single sentence ("answer the alphabetically-first incorrect option") closes the gap and fails the not-one-shot-guessable criterion. Its remapped-label ground is already covered by c15; usable at most as a plumbing check</span>.</li>
@@ -177,8 +162,7 @@ A one-mapping prompt that only knows base polarity answers ALPHA -> 0.</code></p
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>Is the surrounding research area still active?</h2><span class="tag">Related active research (2025–2026)</span></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2511.21038">Semantic Anchors: Why Small LLMs Cannot Flip Their Labels</a> (Krishna Kumar, arXiv 2025)</span> — cautionary calibration: 1–12B models show a zero semantic-override rate under inversion, so c15's floor may be immovable on a cheap model, which would break the incremental-gap criterion for reasons unrelated to prompt quality.</li>
@@ -187,78 +171,73 @@ A one-mapping prompt that only knows base polarity answers ALPHA -> 0.</code></p
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the case hold up from every angle?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>Scored in the top tier on the raw rubric — best simultaneous alignment with the core criteria in its domain, since opaque codes defeat the prior (low floor, known ceiling), layered rules give an incremental decomposable ladder, output is one token, and trigger demonstrations measurably help</li></ul>
+    <ul class="pros"><li>Scored in the top tier on the raw rubric — best simultaneous alignment with the core criteria in its domain, since opaque codes defeat the prior (low floor, known ceiling), layered rules give an incremental decomposable ladder, output is one token, and trigger demonstrations measurably help.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>The floor and ceiling depend on the flipped-label mechanism being available on the chosen model at all; on a small model the whole ladder can sit at floor regardless of prompt</li></ul>
+    <ul class="cons"><li>The floor and ceiling depend on the flipped-label mechanism being available on the chosen model at all; on a small model the whole ladder can sit at floor regardless of prompt.</li></ul>
   </div>
   <div class="lens">
     <h3>Optimization-path skeptic</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>In principle the layered triggers plus precedence give more than a bare flip, so the score is not a single guess away</li></ul>
+    <ul class="pros"><li>In principle the layered triggers plus precedence give more than a bare flip, so the score is not a single guess away.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>Refuted at major severity — the rule <em>family</em> is famous published literature, so a "here are the rule types, induce the bindings from the demos" meta-prompt recovers the codebook in one shot; the only rescue (a per-instance key or compositional labels) is a structural redesign</li></ul>
+    <ul class="cons"><li>Refuted at major severity — the rule <em>family</em> is famous published literature, so a "here are the rule types, induce the bindings from the demos" meta-prompt recovers the codebook in one shot; the only rescue (a per-instance key or compositional labels) is a structural redesign.</li></ul>
   </div>
   <div class="lens">
     <h3>Measurement skeptic</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>Failures are diagnostic in principle — the code emitted vs the gold code separates which stratum (base map, sarcasm, grudging-praise, carve-out) the prompt missed</li></ul>
+    <ul class="pros"><li>Failures are diagnostic in principle — the code emitted vs the gold code separates which stratum (base map, sarcasm, grudging-praise, carve-out) the prompt missed.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>Refuted at major severity alongside the optimization lens; and per the Semantic Anchors / In-Context Fixation caution the ladder can be non-monotonic or collapsed on cheap models, so a flat result would not distinguish optimizer quality from model incapacity</li></ul>
+    <ul class="cons"><li>Refuted at major severity alongside the optimization lens; and per the Semantic Anchors / In-Context Fixation caution the ladder can be non-monotonic or collapsed on cheap models, so a flat result would not distinguish optimizer quality from model incapacity.</li></ul>
   </div>
   <div class="lens">
     <h3>Implementation lens (round 2)</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>The oracle is trivial and genuinely independent — ground truth is the code the feature-to-code function assigns, checked by exact string match; a permissive MIT repo exists with a reusable ~5-line remap idiom</li></ul>
+    <ul class="pros"><li>The oracle is trivial and genuinely independent — ground truth is the code the feature-to-code function assigns, checked by exact string match; a permissive MIT repo exists with a reusable ~5-line remap idiom.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>The gate zeroes the skeptic-debt axis, which alone caps the total; the one candidate repo is a frozen-dataset pipeline (samples real HF datasets, no single-LLM-call scoring, seeds set at four-plus sites, codebook regenerated at eval time), so serving c15 is a rewrite of sampling, oracle-serialization, and scoring — the reuse axis is held to its floor</li></ul>
+    <ul class="cons"><li>The gate zeroes the skeptic-debt axis, which alone caps the total; the one candidate repo is a frozen-dataset pipeline (samples real HF datasets, no single-LLM-call scoring, seeds set at four-plus sites, codebook regenerated at eval time), so serving c15 is a rewrite of sampling, oracle-serialization, and scoring — the reuse axis is held to its floor.</li></ul>
   </div>
   <div class="lens">
     <h3>Research currency</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>Sits directly on an active 2025-2026 line — flipped-label / symbol-tuning ICL, with fresh work (Semantic Anchors, In-Context Fixation, Belief Dynamics) still probing exactly the override behavior it exploits</li></ul>
+    <ul class="pros"><li>Sits directly on an active 2025–2026 line — flipped-label / symbol-tuning ICL, with fresh work (Semantic Anchors, In-Context Fixation, Belief Dynamics) still probing exactly the override behavior it exploits.</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>That same currency is the refutation — the rule family is <em>so</em> well-known that inducing it from demos is a solved meta-prompt, which is what one-shots the task</li></ul>
+    <ul class="cons"><li>That same currency is the refutation — the rule family is <em>so</em> well-known that inducing it from demos is a solved meta-prompt, which is what one-shots the task.</li></ul>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
-<p class="small muted">c15 is gated and not on the adoption path; these steps describe what a from-scratch build would require, distilled from the round-2 material. The candidate was never run-verified.</p>
+<div class="section-head"><h2>What would it take to build, and what could go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
+<p class="aside">c15 is gated and not on the adoption path; these steps describe what a from-scratch build would require, distilled from the round-2 material. The candidate was never run-verified.</p>
 <div class="steps">
-  <div class="step"><h3>Confirm the model can flip labels at all</h3><p>Before any generator work, pilot the chosen cheap model on a bare inversion to confirm a nonzero override rate; per Semantic Anchors a 1–12B model may sit at floor for every prompt, making the ladder unmeasurable</p></div>
-  <div class="step"><h3>Reimplement the generator (do not adapt the repo)</h3><p>Write a self-contained input source (drop the HF <code>load_dataset</code> path or pin a small local corpus), a single threaded <code>np.random.Generator(seed)</code> driving text fill, codebook draw, and strata, an invented/nonce code vocabulary, and per-instance latent-rule stratum tags</p></div>
-  <div class="step"><h3>Persist the codebook with the instances</h3><p>The reuse repo regenerates the remap at eval time, decoupling generation from scoring; the ground-truth code and the mapping must be serialized with each instance so scoring is deterministic</p></div>
-  <div class="step"><h3>Write single-call scoring glue</h3><p>Replace the repo's per-option LM-loss argmin (GPT2/GPT-J, Macro-F1) with one LLM call and a strict 0/1 exact-match scorer over the code token; unparseable or off-vocabulary outputs are decisive zeros</p></div>
-  <div class="step"><h3>Redesign to survive the round-1 refutation, or do not ship</h3><p>Add four-plus interacting rules with precedence <em>and</em> a per-instance key or compositional labels so no single paragraph (and no "induce the rules from demos" meta-prompt) can capture the full mapping — the structural change the gate demands, which converts c15 into a different candidate</p></div>
+  <div class="step"><h3>Confirm the model can flip labels at all</h3><p>Before any generator work, pilot the chosen cheap model on a bare inversion to confirm a nonzero override rate; per Semantic Anchors a 1–12B model may sit at floor for every prompt, making the ladder unmeasurable.</p></div>
+  <div class="step"><h3>Reimplement the generator (do not adapt the repo)</h3><p>Write a self-contained input source (drop the HF <code>load_dataset</code> path or pin a small local corpus), a single threaded <code>np.random.Generator(seed)</code> driving text fill, codebook draw, and strata, an invented/nonce code vocabulary, and per-instance latent-rule stratum tags.</p></div>
+  <div class="step"><h3>Persist the codebook with the instances</h3><p>The reuse repo regenerates the remap at eval time, decoupling generation from scoring; the ground-truth code and the mapping must be serialized with each instance so scoring is deterministic.</p></div>
+  <div class="step"><h3>Write single-call scoring glue</h3><p>Replace the repo's per-option LM-loss argmin (GPT2/GPT-J, Macro-F1) with one LLM call and a strict 0/1 exact-match scorer over the code token; unparseable or off-vocabulary outputs are decisive zeros.</p></div>
+  <div class="step"><h3>Redesign to survive the round-1 refutation, or do not ship</h3><p>Add four-plus interacting rules with precedence <em>and</em> a per-instance key or compositional labels so no single paragraph (and no "induce the rules from demos" meta-prompt) can capture the full mapping — the structural change the gate demands, which converts c15 into a different candidate.</p></div>
 </div>
 
-<div class="grid-2 space-top">
+<div class="grid-2">
   <div class="card">
     <h3>Risks</h3>
     <ul>
-      <li>Floor immovability on cheap models — Semantic Anchors and In-Context Fixation both show ≤~12B models with a zero override rate or pathological collapse under label inversion, which kills the incremental-gap criterion regardless of prompt quality</li>
-      <li>One-shot guessability of the rule family — the load-bearing refutation; the codebook is famous flipped-label literature, so a meta-prompt inducing bindings from demonstrations closes the gap without a genuine ladder unless a per-instance key or compositional labels are added</li>
-      <li>Frozen-dataset repo dependency — the only candidate codebase synthesizes nothing; instances come from downloaded real HF datasets, so it is not cleanly re-seedable and the remap is regenerated at eval time, coupling generation and scoring nondeterministically</li>
+      <li>Floor immovability on cheap models — Semantic Anchors and In-Context Fixation both show ≤~12B models with a zero override rate or pathological collapse under label inversion, which kills the incremental-gap criterion regardless of prompt quality.</li>
+      <li>One-shot guessability of the rule family — the load-bearing refutation; the codebook is famous flipped-label literature, so a meta-prompt inducing bindings from demonstrations closes the gap without a genuine ladder unless a per-instance key or compositional labels are added.</li>
+      <li>Frozen-dataset repo dependency — the only candidate codebase synthesizes nothing; instances come from downloaded real HF datasets, so it is not cleanly re-seedable and the remap is regenerated at eval time, coupling generation and scoring nondeterministically.</li>
     </ul>
   </div>
   <div class="card">
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/xdwang0726/ICL_LL">xdwang0726/ICL_LL</a> (MIT, Copyright 2022 Vector Institute) — deep-read notes at <a href="../repos/xdwang0726-icl-ll.md">repos/xdwang0726-icl-ll.md</a>.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status open">never run-verified</span>
-        the repo ships no unit tests for the generator or oracle (its <code>test.py</code> is an evaluation driver), seeds are set at four-plus independent sites with a bare unseeded <code>random.randint</code> on the module surface, and the codebook is regenerated at eval time rather than persisted — nothing runnable exists to confirm same-seed determinism. c15's own adapted design was never built or run.</li>
+      <li><span class="key">Run verification:</span> <span class="status open">never run-verified</span><br>the repo ships no unit tests for the generator or oracle (its <code>test.py</code> is an evaluation driver), seeds are set at four-plus independent sites with a bare unseeded <code>random.randint</code> on the module surface, and the codebook is regenerated at eval time rather than persisted — nothing runnable exists to confirm same-seed determinism. c15's own adapted design was never built or run.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -283,6 +262,11 @@ A one-mapping prompt that only knows base polarity answers ALPHA -> 0.</code></p
     <a href="../candidates-merged.html#c15">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 28 · I1 1 · I2 2 · I3 1 · I4 1 · I5 1 · I6 0 · Impl total (7)/16 — parenthesized because the candidate is gated and the total does not rank (round-2 rescore).
+  Sources: <a href="../recommendations.html">round-1 recommendations</a>, <a href="../recommendations-round2.html#table">round-2 rescore</a>, <a href="../candidates-merged.html#c15">candidates-merged c15</a>, repo deep-read <a href="../repos/xdwang0726-icl-ll.md">repos/xdwang0726-icl-ll.md</a>.
+</div>
 
 </main>
 </body>

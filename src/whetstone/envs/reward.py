@@ -33,6 +33,20 @@ from whetstone.optimization.reward import (
 ENV_EXACT_MATCH_AGGREGATE_NAME = ENV_EXACT_MATCH_NAME
 
 
+class CandidateEvaluationFailure(RuntimeError):
+    """An internal-path candidate could not be scored into a Reward.
+
+    Raised when the internal ``env_exact_match`` aggregate is
+    missing/incomplete (e.g. every internal observation timed out) and the
+    Reward Policy's ``missing_data`` rule is ``FAIL``: the candidate has no
+    computable internal Reward. This is a TYPED, optimizer-handleable failure
+    (the candidate is marked failed per the optimizer loop's policy), never a
+    bare ``ValueError`` surfacing as an unhandled crash. Official evaluations
+    never reach this path: they compute aggregates + per-task vectors only and
+    derive NO Reward.
+    """
+
+
 def build_reward_policy(env: EnvSpec) -> RewardPolicy:
     """The env Reward Policy: maximize the internal ``env_exact_match`` mean.
 
@@ -68,19 +82,33 @@ def reward_from_internal_aggregate(
     single internal aggregate the policy consumes and pins the evidence role
     to ``internal`` so the refusal-of-official invariant holds by
     construction.
+
+    A missing required term under ``missing_data=FAIL`` surfaces as a typed
+    :class:`CandidateEvaluationFailure` (the internal-path candidate is not
+    scorable), never a bare ``ValueError``: the optimizer loop marks the
+    candidate failed per policy and continues.
     """
-    return apply_reward_policy(
-        policy,
-        aggregates={
-            ENV_EXACT_MATCH_AGGREGATE_NAME: env_exact_match_value,
-        },
-        evidence_role=EvaluationRole.INTERNAL,
-        evidence_ref_content_hash=evidence_ref_content_hash,
-    )
+    try:
+        return apply_reward_policy(
+            policy,
+            aggregates={
+                ENV_EXACT_MATCH_AGGREGATE_NAME: env_exact_match_value,
+            },
+            evidence_role=EvaluationRole.INTERNAL,
+            evidence_ref_content_hash=evidence_ref_content_hash,
+        )
+    except ValueError as exc:
+        raise CandidateEvaluationFailure(
+            "internal candidate has no computable Reward: the "
+            f"{ENV_EXACT_MATCH_AGGREGATE_NAME!r} aggregate is missing/"
+            "incomplete under the FAIL missing-data policy "
+            f"(env_exact_match_value={env_exact_match_value!r})"
+        ) from exc
 
 
 __all__ = [
     "ENV_EXACT_MATCH_AGGREGATE_NAME",
+    "CandidateEvaluationFailure",
     "build_reward_policy",
     "reward_from_internal_aggregate",
 ]

@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Constructed-Notation Arithmetic and Nonstandard Number Systems — Quick-Test Candidate Survey</title>
+<title>whetstone-ai · Constructed-notation arithmetic is an unusually good quick-test fit</title>
 </head>
 <body>
 <main>
-<h1>Constructed-Notation Arithmetic and Nonstandard Number Systems — Quick-Test Candidate Survey</h1>
+<h1>Constructed-notation arithmetic is an unusually good structural fit for the quick-test rubric</h1>
+<p class="dek">Twelve candidates surveyed, unranked, for nonstandard-base and invented-operator arithmetic tasks.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,23 +21,19 @@
   <span class="here">Notation arithmetic</span>
 </div>
 
-<div class="intro">
-  <p>Twelve candidates surveyed (breadth-focused, unranked) for the whetstone-ai quick-test task selection, feeding the prompt-optimization harness (COPRO / MIPROv2 / GEPA / Codex agent). Domain: Theme A — Glyphscript, mixed-radix units, nonstandard positional bases, custom operators, keyed-DSL arithmetic. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
-</div>
+<p>Twelve candidates surveyed (breadth-focused, unranked) for the whetstone-ai quick-test task selection, feeding the prompt-optimization harness (COPRO / MIPROv2 / GEPA / Codex agent). Domain: Theme A — Glyphscript, mixed-radix units, nonstandard positional bases, custom operators, keyed-DSL arithmetic. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
 
-<div class="verdict good">
-  <p><strong>Constructed-notation arithmetic is an unusually good structural fit for the rubric.</strong> Ground truth is computed by a trivial reference function (base convert / apply operator table), output is a <span class="key">single integer</span>, and per-instance randomization of the glyph/base/operator map buys both <span class="key">contamination resistance</span> and a <span class="key">known ceiling</span> (a prompt that fully states the map should hit ~100%). The two synthetic-family designs — <span class="key">keyed novel-operator (#11)</span> and <span class="key">balanced ternary (#10)</span> — plus the <span class="key">Wu base-arithmetic (#1)</span> and <span class="key">InductionBench (#5)</span> shapes are the strongest because per-instance randomization directly buys the known-ceiling + contamination-resistance + low-floor combination.</p>
-</div>
+<p><b>Ground truth is computed by a trivial reference function</b> (base convert / apply operator table), output is a <span class="key">single integer</span>, and per-instance randomization of the glyph/base/operator map buys both <span class="key">contamination resistance</span> and a <span class="key">known ceiling</span> (a prompt that fully states the map should hit ~100%). The two synthetic-family designs — <span class="key">keyed novel-operator (#11)</span> and <span class="key">balanced ternary (#10)</span> — plus the <span class="key">Wu base-arithmetic (#1)</span> and <span class="key">InductionBench (#5)</span> shapes are the strongest because per-instance randomization directly buys the known-ceiling + contamination-resistance + low-floor combination.</p>
 
-<div class="section-head" id="rubric"><h2>How to read this against the rubric</h2></div>
+<div class="section-head" id="rubric"><h2>How does this domain read against the rubric?</h2></div>
 
 <p>The <a href="../../design/quick-test-rubric.html">quick-test rubric</a> wants: single LLM call + exact deterministic scoring (no sandbox); output bounded to MC or a few words (here: a single integer / short token); default prompt scores <span class="key">well below a known ceiling</span>; the gap closes <span class="key">incrementally</span> through prompt improvement (not one-shot guessable); difficulty <span class="key">decomposes into independent latent rules</span>; a synthetic/generatable pool with exact ground truth, hundreds of instances, contamination-resistant; <span class="key">diagnostic failures</span> (expected X, got Y reveals which rule was missed); few-shot demos measurably help; prompt differences resolve on <span class="key">10-20 evals at temperature 0</span>.</p>
 
-<div class="callout warn">
-  <strong>Recurring caveat across all candidates.</strong> Modern reasoning-capable models with chain-of-thought can partly solve base-conversion by "translate to base-10, compute, translate back." To keep a low floor + incremental gap you generally must (a) use an <em>invented</em> glyph alphabet and/or <em>invented</em> operator semantics not reducible to a known base, and/or (b) bound output to a bare integer with little room for scratch work at temperature 0, and/or (c) compose multiple latent rules so single-rule prompts leave points on the table.
+<div class="callout">
+  <b>Recurring caveat across all candidates.</b> Modern reasoning-capable models with chain-of-thought can partly solve base-conversion by "translate to base-10, compute, translate back." To keep a low floor + incremental gap you generally must (a) use an <i>invented</i> glyph alphabet and/or <i>invented</i> operator semantics not reducible to a known base, and/or (b) bound output to a bare integer with little room for scratch work at temperature 0, and/or (c) compose multiple latent rules so single-rule prompts leave points on the table.
 </div>
 
-<div class="section-head" id="ready"><h2>Candidates already the right shape</h2></div>
+<div class="section-head" id="ready"><h2>Which candidates are already the right shape?</h2></div>
 
 <p class="small muted">Per-instance randomization gives these the known-ceiling + contamination-resistance + low-floor combination directly, with minimal adaptation.</p>
 
@@ -74,7 +71,7 @@
   </div>
 </div>
 
-<div class="section-head" id="donors"><h2>Generator / difficulty-dial donors</h2></div>
+<div class="section-head" id="donors"><h2>Which sources are generator / difficulty-dial donors?</h2></div>
 
 <p class="small muted">Strong "use the generator" sources. None is a drop-in — each needs a notation/output-bounding layer supplied on top.</p>
 
@@ -112,7 +109,7 @@
   </div>
 </div>
 
-<div class="section-head" id="method"><h2>Prompt-sensitivity and induction anchors</h2></div>
+<div class="section-head" id="method"><h2>Which sources anchor prompt-sensitivity and induction?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -132,7 +129,7 @@
   </div>
 </div>
 
-<div class="section-head" id="tail"><h2>Overlapping and hard-tail candidates</h2></div>
+<div class="section-head" id="tail"><h2>Which candidates overlap or sit in the hard tail?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -152,7 +149,7 @@
   </div>
 </div>
 
-<div class="section-head" id="crosscut"><h2>Cross-cutting observations for selection (not a ranking)</h2></div>
+<div class="section-head" id="crosscut"><h2>What cross-cutting observations bear on selection?</h2><span class="tag">not a ranking</span></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>Strongest "use the generator" donors:</strong> GSM-Symbolic templating (#2), length-generalization generators (#4), NUMCoT unit systems (#7), NumericBench (#8). None is a drop-in — each needs a notation/output-bounding layer.</li>
@@ -161,7 +158,7 @@
   <li><strong>2025-2026 research momentum (tie-breaker):</strong> counterfactual/non-standard arithmetic and inductive rule-learning are actively studied (GSM-Symbolic ICLR 2025 and its 2026 re-evaluations, InductionBench ACL 2025, MIR-Bench 2025, In-Context Algebra 2025, length-generalization ICLR 2025). A keyed novel-operator / nonstandard-base quick test could plausibly grow into a prompt-optimization-for-notation-induction research direction.</li>
 </ul>
 
-<div class="section-head" id="sources"><h2>Selected sources</h2></div>
+<div class="section-head" id="sources"><h2>Where do these candidates come from?</h2></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li>Wu et al., Reasoning or Reciting? — <a href="https://arxiv.org/abs/2307.02477">arxiv.org/abs/2307.02477</a></li>

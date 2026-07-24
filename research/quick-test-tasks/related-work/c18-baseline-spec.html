@@ -100,22 +100,14 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c18.html">&larr; Back to c18 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c18.html">&larr; c18 candidate page</a></nav>
 
 <div class="hdr-row">
-  <h1>c18 Baseline Spec: Headroom Before Complexity</h1>
+  <h1>Measure the existing PrOntoQA shape's headroom before building c18's complexity</h1>
   <span class="badge draft">Draft</span>
 </div>
+<p class="dek">A cheap go/no-go probe: does the naive prompt already answer perfectly without distractors?</p>
 <div class="byline">whetstone-ai &middot; 2026-07-22</div>
-
-<div class="callout warn">
-  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
-  frozen parameter. The model set (&sect;4), the numeric thresholds (&sect;3), and seven other open items
-  (&sect;7) are explicitly owner-gated. The <strong>top open decision is O1</strong> &mdash; whether the
-  codebase's native distractor setting (<code>--distractors</code>) runs <strong>ON or OFF</strong> for this
-  baseline &mdash; because it is the single biggest swing factor on whether any headroom exists to measure.
-  See the <a href="#open">open decisions</a> list before treating anything here as final.
-</div>
 
 <p>This experiment measures how much headroom exists between a naive prompt and a best-effort ceiling prompt
 on the <span class="key">existing PrOntoQA task shape</span> &mdash; before building any of c18's
@@ -125,6 +117,15 @@ not the benchmark itself: c18's biggest early-kill risk is that without distract
 answers almost perfectly by string-matching the queried property against context (PrOntoQA:
 "InstructGPT is able to predict the label almost perfectly" with no distractors). If that risk is real on the
 reseed-only task, this baseline finds it cheaply, before any added-complexity build.</p>
+
+<div class="summary">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the numeric thresholds (&sect;3), and seven other open items
+  (&sect;7) are explicitly owner-gated. The <strong>top open decision is O1</strong> &mdash; whether the
+  codebase's native distractor setting (<code>--distractors</code>) runs <strong>ON or OFF</strong> for this
+  baseline &mdash; because it is the single biggest swing factor on whether any headroom exists to measure.
+  See the <a href="#open">open decisions</a> list before treating anything here as final.
+</div>
 
 <div class="constraint">
   <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
@@ -146,7 +147,7 @@ reseed-only task, this baseline finds it cheaply, before any added-complexity bu
 </div>
 
 <!-- STRATA -->
-<div class="section-head"><h2>1. Strata design</h2></div>
+<div class="section-head"><h2>How is the instance pool stratified, and how big is it?</h2><span class="tag">§1 · Strata</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -192,7 +193,7 @@ reseed-only task, this baseline finds it cheaply, before any added-complexity bu
 </div>
 
 <!-- PROBE PROMPTS -->
-<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<div class="section-head"><h2>What exactly do the naive and ceiling prompts say?</h2><span class="tag">§2 · Probes</span></div>
 <p>Both prompts take the generator's native <code>question</code> (facts + rules) and <code>query</code>
 concatenated, and must elicit a single <code>True</code>/<code>False</code> token for exact match. These
 operationalize rubric criterion 4 (default prompts score low; better prompts close the gap) and criterion 9
@@ -250,7 +251,7 @@ natural-language surface (uncertainty "moderate"). Treat the predicted gap magni
 tests, not a known quantity.</div>
 
 <!-- DECISION RULE -->
-<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<div class="section-head"><h2>What does each measured outcome tell the project to do next?</h2><span class="tag">§3 · Decision rule</span></div>
 <p>Let <strong>N</strong> = naive-prompt aggregate accuracy, <strong>C</strong> = ceiling-prompt aggregate
 accuracy, both depth-weighted over the four strata, cheap tier, temperature 0. Thresholds are grounded in the
 capability synthesis, which predicts (cheap tier, 2-way native, distractors ON): <strong>naive floor
@@ -314,8 +315,8 @@ dossier tests this precise (cheap-2026-tier &times; 2-way-native &times; PrOntoQ
 <em>shape</em> (N&asymp;C vs N&ll;C, and where C lands), not on hitting a precise number.</div>
 
 <!-- MODEL EVIDENCE -->
-<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
-<div class="callout warn">Not finalized here. See &sect;7, O4. The owner decides which of the four proposed
+<div class="section-head"><h2>Which cheap models should the run cover, and on what evidence?</h2><span class="tag">§4 · Models (open)</span></div>
+<div class="callout">Not finalized here (see &sect;7, O4). The owner decides which of the four proposed
 models to run, how many, and whether to add a mid/frontier anchor.</div>
 
 <h3 style="margin-top:18px;">4.1 Models tested by the seven dossier papers (label/answer-accuracy rows only)</h3>
@@ -390,7 +391,7 @@ these numbers.</p>
 </div>
 
 <!-- COST -->
-<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<div class="section-head"><h2>What does one full baseline run cost in dollars and minutes?</h2><span class="tag">§5 · Cost</span></div>
 <p><span class="key">Formula:</span> instances (N) &times; probes &times; models (M) &times; repeats = LLM
 calls; calls &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: N = 600 instances (150
 &times; 4 depth strata); 2 probes (naive, ceiling); repeats = 3.</p>
@@ -440,7 +441,7 @@ committing the full run (&sect;7, O5). Provider price sheet for the chosen cheap
 (&sect;7, O6); concurrency/rate-limit headroom per provider is unverified locally (&sect;7, O7).</div>
 
 <!-- RUBRIC MAPPING -->
-<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="section-head"><h2>Which rubric criteria does each design choice satisfy?</h2><span class="tag">§6 · Rubric map</span></div>
 <div class="table-wrap">
   <table>
     <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
@@ -465,7 +466,7 @@ committing the full run (&sect;7, O5). Provider price sheet for the chosen cheap
 each served by &ge;2 independent design choices above.</p>
 
 <!-- OPEN DECISIONS -->
-<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="section-head" id="open"><h2>What must the owner decide before this spec can run?</h2><span class="tag">§7 · Open decisions</span></div>
 <div class="open-decisions">
   <h3>Nothing below is frozen &mdash; all nine items require an explicit owner call before this spec can run.</h3>
   <ol>
@@ -505,7 +506,7 @@ each served by &ge;2 independent design choices above.</p>
   </ol>
 </div>
 
-<div class="section-head" style="margin-top:32px;"><h2>Appendix: grounding notes on floor/ceiling expectations</h2></div>
+<div class="section-head" style="margin-top:32px;"><h2>Where do the predicted floor and ceiling numbers come from?</h2><span class="tag">Appendix · grounding</span></div>
 <div class="card full">
   <ul style="margin:0; padding-left:18px; font-size:14.5px;">
     <li><strong>Floor (naive), predicted ~60&ndash;78% aggregate</strong> &mdash; extrapolated from
@@ -519,6 +520,16 @@ each served by &ge;2 independent design choices above.</p>
     &times; PrOntoQA label-only) cell; the closest PrOntoQA numbers are <em>proof</em> accuracy on a 2022
     model. The decision rule (&sect;3) is deliberately shape-based to survive absolute-level error.</li>
   </ul>
+</div>
+
+<div class="colophon">
+  <p>Draft spec, whetstone-ai &middot; 2026-07-22. Every number is a proposal pending owner sign-off; the
+  decision rule (&sect;3) is deliberately shape-based to survive absolute-level error until a pilot calibrates
+  the floor/ceiling.</p>
+  <p>Instances regenerated from <code>asaparov/prontoqa</code> (<code>run_experiment.py --model-name json</code>),
+  fresh <code>--seed</code> and fresh fictional nonce ontologies per split. Oracle: independent forward-chaining
+  fixpoint re-derivation. Floor/ceiling expectations grounded in the seven-dossier related-work synthesis
+  (JustLogic, PrOntoQA, and label-accuracy rows). PrOntoQA = Proof and Ontology-Generated QA.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

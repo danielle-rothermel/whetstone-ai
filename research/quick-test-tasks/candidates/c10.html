@@ -6,13 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — only what doc.css lacks.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
-   --surface, --muted, and their -soft variants) so light+dark stay coherent. */
+   --surface, --muted, and their -soft variants). */
 
-/* (1) Status badge — one accent-tinted pill per adoption state. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -26,15 +24,10 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
-.cand-head h1 { margin: 0; }
-.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
+.cand-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 22px; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -46,7 +39,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -61,7 +53,6 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking. */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
 .unverified::after {
@@ -74,10 +65,19 @@
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { display: grid; gap: 10px; margin: 4px 0 18px; }
+.step { padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.step h3 { margin-bottom: 4px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; margin: 4px 0 4px; padding: 2px 9px; border-radius: 999px; font: 600 11.5px/1.5 var(--font-system); }
+.status.pass    { color: var(--green); background: var(--green-soft); }
+.status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.open    { color: var(--muted); background: var(--code-bg); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 20px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -100,40 +100,39 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
-  <h1><span class="cand-id">c10</span>Interlocking-Cycle Calendar &amp; Clock Arithmetic</h1>
+  <span class="cand-id">c10</span>
+  <h1>Interlocking-Cycle Calendar &amp; Clock Arithmetic ranks #5 of 20 on run-verified infra</h1>
   <span class="badge ranked">RANKED #5</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">counterfactual modular / nonstandard-base arithmetic</span>, recast as a Tzolk'in-style invented calendar of coprime named cycles where "advance N days" is per-cycle modular counting.</div>
+<p class="dek">An invented Tzolk'in-style calendar of coprime cycles, advanced by per-cycle modular counting.</p>
+<div class="byline">whetstone-ai · quick-test-tasks · round-2 rescore</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain tone = ranked -->
-  <p><strong>Strong official standing — ranked #5 of 20 in the round-2 rescore.</strong> The standing is driven by run-verified reusable infrastructure (reasoning-gym, carried over from c24) plus the pool-best diagnostic story: independent, pairwise-coprime moduli mean the cycles do not share a carry, so a wrong answer isolates which single cycle rule the model broke — exactly the diagnostic property the strong-region analysis prizes. It is tempered by two things: TB=1 means it holds the weakest research-currency case in the ranked set, and the invented interlocking-cycle semantics are authored on top of the reused infra (reuse-infra-then-write-task, not config-plus-glue).</p>
-  <p>c10 was initially excluded under the round-1 tie-breaker filter and got no adversarial skeptic pass; that exclusion was dropped by the 2026-07-21 amendment, which folds c02/c04/c10 into the official round-2 ranking on equal terms with the other 21 candidates. Its I1-I6 scores were folded into the official ranking by the 2026-07-21 amendment; scored via the same pipeline (web discovery + desk scoring with the same rubric and exercises + deep active-path code reads) post-hoc, not a separate scale. On run-verification: c10's best repo, open-thought/reasoning-gym, was run-verified during round 2 (under c24: same-seed byte-identical, 6/6 independent ground-truth checks), and that repo-level verification carries over here; the candidate-specific interlocking-cycle task logic is authored on top of the reused infra. The tie-break rule (impl total desc, then I1 desc per reuse priority, then round-1 score, then round-1 TB) inserts c10 at rank 5, giving 20 ranked + 4 gated = 24.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
-    <span class="chip"><span class="k">R1 TB</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">12/16</span></span>
-  </div>
+<p>The standing is driven by run-verified reusable infrastructure (reasoning-gym, carried over from c24) plus the pool-best diagnostic story: independent, pairwise-coprime moduli mean the cycles do not share a carry, so a wrong answer isolates which single cycle rule the model broke — exactly the diagnostic property the strong-region analysis prizes. It is tempered by two things: TB=1 means it holds the weakest research-currency case in the ranked set, and the invented interlocking-cycle semantics are authored on top of the reused infra (reuse-infra-then-write-task, not config-plus-glue).</p>
+
+<p>c10 was initially excluded under the round-1 tie-breaker filter and got no adversarial skeptic pass; that exclusion was dropped by the 2026-07-21 amendment, which folds c02/c04/c10 into the official round-2 ranking on equal terms with the other 21 candidates. Its I1-I6 scores were produced by the same pipeline (web discovery, desk scoring against the shared rubric and exercises, deep active-path code reads) and folded in post-hoc, not a separate scale. On run-verification: c10's best repo, open-thought/reasoning-gym, was run-verified during round 2 under c24 (same-seed byte-identical, 6/6 independent ground-truth checks), and that repo-level verification carries over here; the candidate-specific interlocking-cycle task logic is authored on top of the reused infra. The tie-break rule (impl total desc, then I1 desc per reuse priority, then round-1 score, then round-1 TB) inserts c10 at rank 5, giving 20 ranked + 4 gated = 24.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+  <span class="chip"><span class="k">R1 TB</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">12/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it actually ask the model to do?</h2><span class="tag">What it proposes</span></div>
 <div class="grid-2">
   <div class="card">
-    <h3>Task: advance a position in an invented calendar of coprime cycles by per-cycle modular counting</h3>
-    <p>A seeded generator builds an invented calendar of two or three <span class="key">coprime named cycles</span> (Tzolk'in-style but randomized), plus a clock variant with positions labeled one through <em>m</em>, <span class="key">forward-only subtraction</span>, and <span class="key">sticky-move</span> rules. An instance presents a current tuple or clock position and an instruction to <span class="key">advance N</span>; the model returns a canonical tuple string or a single position, scored 0/1 by exact match against per-cycle <span class="key">modular arithmetic</span>. The latent rules that make the pool a ladder are: the moduli are <span class="key">independent</span> with no shared carry, labels are 1-indexed rather than 0-indexed, one cycle carries a skip or <span class="key">leap</span> rule, some moves are sticky or ignored, and the output has a canonical format. Randomized cycle lengths and names per run make the pool contamination-proof, and — the load-bearing property — a wrong-cycle answer isolates which single modulus rule broke. Quirks are stratified so no single instruction sentence covers the whole pool.</p>
+    <h3>Advance a position in an invented calendar of coprime cycles by per-cycle modular counting</h3>
+    <p>A seeded generator builds an invented calendar of two or three <span class="key">coprime named cycles</span> (Tzolk'in-style but randomized), plus a clock variant with positions labeled one through <em>m</em>, <span class="key">forward-only subtraction</span>, and <span class="key">sticky-move</span> rules. An instance presents a current tuple or clock position and an instruction to <span class="key">advance N</span>; the model returns a canonical tuple string or a single position, scored 0/1 by exact match against per-cycle <span class="key">modular arithmetic</span>. The latent rules that make the pool a ladder: the moduli are <span class="key">independent</span> with no shared carry, labels are 1-indexed rather than 0-indexed, one cycle carries a skip or <span class="key">leap</span> rule, some moves are sticky or ignored, and the output has a canonical format. Randomized cycle lengths and names per run make the pool contamination-proof, and — the load-bearing property — a wrong-cycle answer isolates which single modulus rule broke. Quirks are stratified so no single instruction sentence covers the whole pool.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative, constructed faithfully from the merged summary (the corpus ships no run-verified seeded c10 instance — no repository implements the invented calendar). One seed's conventions: three coprime cycles, all 1-indexed, one cycle with an every-other advance.</p>
+    <p class="aside">Illustrative, constructed faithfully from the merged summary (the corpus ships no run-verified seeded c10 instance — no repository implements the invented calendar). One seed's conventions: three coprime cycles, all 1-indexed, one cycle with an every-other advance.</p>
 <pre><code>Calendar cycles (this seed): Vel = 1..13, Som = 1..7, Kir = 1..11.
 Rule: Kir only advances on even-numbered steps (skip on odd steps).
 All cycles are 1-indexed and carry independently (no shared carry).
@@ -152,12 +151,11 @@ error names exactly which modulus rule it broke.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does the design come from?</h2><span class="tag">Academic anchor &amp; lineage</span></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents (inherited from c01)</h3>
-    <p class="small muted">c10's "Merged from (literature)" list is intentionally empty — the entry states its modular-counterfactual evidence is covered under c01's sources, so its academic base is entirely inherited.</p>
+    <p class="aside">c10's "Merged from (literature)" list is intentionally empty — the entry states its modular-counterfactual evidence is covered under c01's sources, so its academic base is entirely inherited.</p>
     <ul>
       <li><span class="cite"><a href="https://arxiv.org/abs/2307.02477">Reasoning or Reciting? Counterfactual Tasks</a> (Wu et al., NAACL 2024)</span> — the core inherited evidence: counterfactual two-digit arithmetic in nonstandard bases documents the low modular-notation floor. Verified directly that it contains no clock, calendar, or cyclic-temporal task, so the interlocking-cycle framing is a novel synthetic design, not a benchmark port.</li>
       <li><span class="cite"><a href="https://arxiv.org/abs/2304.02015">How well do LLMs perform in Arithmetic tasks?</a> (Yuan et al., 2023)</span> — non-decimal base arithmetic, documenting the convert-to-decimal-then-back failure mode relevant to per-cycle modular reduction errors.</li>
@@ -167,16 +165,16 @@ error names exactly which modulus rule it broke.</code></pre>
   </div>
   <div class="card">
     <h3>Brainstorm parents</h3>
+    <p class="aside">Origin is brainstorm-only (no literature merge). Merged entry: <a href="../candidates-merged.html#c10">candidates-merged.md c10</a>.</p>
     <ul>
       <li><a href="../candidates-merged.html#c10">Constructed Calendar / Cycle Date Arithmetic</a> — the seed idea: date arithmetic over an invented multi-cycle calendar.</li>
       <li><a href="../candidates-merged.html#c10">Nonstandard modular clock arithmetic</a> — supplies the clock variant (positions 1..m, forward-only subtraction, sticky moves).</li>
       <li><a href="../candidates-merged.html#c10">Invented congruence classification</a> — the congruence-class framing behind the independent-moduli strata.</li>
       <li><a href="../candidates-merged.html#c10">Modular Digit Oracle</a> — folded in as a sanity-stratum only, not a standalone rung.</li>
     </ul>
-    <p class="small muted">Origin is brainstorm-only (no literature merge). Merged entry: <a href="../candidates-merged.html#c10">candidates-merged.md c10</a>.</p>
   </div>
 </div>
-<div class="card full space-top">
+<div class="card full">
   <h3>Dead branches: dropped near-relatives</h3>
   <ul class="dead-branch">
     <li>Modular Digit Oracle as a standalone task — <span class="why">absorbed into c10 as a sanity stratum only; a bare single-digit modular residue is too thin to carry its own rung and is one-shot guessable</span>.</li>
@@ -185,86 +183,83 @@ error names exactly which modulus rule it broke.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>Is the surrounding research area still active?</h2><span class="tag">Related active research (2025–2026)</span></div>
 <div class="card full">
   <ul>
-    <li><span class="cite"><a href="https://arxiv.org/abs/2406.09170">Test of Time: A Benchmark for Evaluating LLMs on Temporal Reasoning</a> (Fatemi et al., 2024)</span> — a synthetic, contamination-resistant temporal-reasoning benchmark that validates c10's constructed-cyclic-systems premise; its <code>tot_arithmetic</code> split is the closest published task in spirit (synthetic date/time/duration arithmetic with programmatic ground truth). The corpus missed it because it lands just outside the 2025-2026 currency window, which is itself part of why c10 carries the low tie-breaker. Note it ships frozen JSON only, with no re-seedable generator or oracle, so it is a design reference rather than a reusable codebase.</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2406.09170">Test of Time: A Benchmark for Evaluating LLMs on Temporal Reasoning</a> (Fatemi et al., 2024)</span> — a synthetic, contamination-resistant temporal-reasoning benchmark that validates c10's constructed-cyclic-systems premise; its <code>tot_arithmetic</code> split is the closest published task in spirit (synthetic date/time/duration arithmetic with programmatic ground truth). The corpus missed it because it lands just outside the 2025–2026 currency window, which is itself part of why c10 carries the low tie-breaker. Note it ships frozen JSON only, with no re-seedable generator or oracle, so it is a design reference rather than a reusable codebase.</li>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>Does the case hold up from every angle?</h2><span class="tag">Perspectives</span></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
     <span class="rowlabel">Supports</span>
     <ul class="pros">
-      <li>Independent coprime moduli decompose difficulty into clean per-cycle rules and localize each failure to one modulus — strong on the criteria that matter most</li>
-      <li>Randomized cycle lengths and names per run are contamination-proof by construction</li>
+      <li>Independent coprime moduli decompose difficulty into clean per-cycle rules and localize each failure to one modulus — strong on the criteria that matter most.</li>
+      <li>Randomized cycle lengths and names per run are contamination-proof by construction.</li>
     </ul>
     <span class="rowlabel">Against</span>
     <ul class="cons">
-      <li>Scored one point under the top rubric tier and, crucially, carried the low research-currency tie-breaker, which initially excluded it (folded back into the ranking by the 2026-07-21 amendment)</li>
-      <li>Modular arithmetic is a pretraining-common skill, so without arbitrary secret conventions a competent one-shot prompt can approach the ceiling</li>
+      <li>Scored one point under the top rubric tier and carried the low research-currency tie-breaker, which initially excluded it (folded back into the ranking by the 2026-07-21 amendment).</li>
+      <li>Modular arithmetic is a pretraining-common skill, so without arbitrary secret conventions a competent one-shot prompt can approach the ceiling.</li>
     </ul>
   </div>
   <div class="lens">
     <h3>Optimization-path skeptic</h3>
     <span class="rowlabel">Supports</span>
     <ul class="pros">
-      <li>Stratified interacting quirks (offset cycle, every-other advance, sticky moves) are meant to keep the modular-arithmetic prior from collapsing the gap in one shot</li>
+      <li>Stratified interacting quirks (offset cycle, every-other advance, sticky moves) are meant to keep the modular-arithmetic prior from collapsing the gap in one shot.</li>
     </ul>
     <span class="rowlabel">Against</span>
     <ul class="cons">
-      <li>No skeptic pass was ever run — c10 was initially excluded under the round-1 tie-breaker filter (folded into the ranking by the 2026-07-21 amendment), so this lens never adversarially examined it; the one-shot-collapse risk is asserted by the adaptation note, not stress-tested</li>
+      <li>No skeptic pass was ever run — c10 was initially excluded under the round-1 tie-breaker filter (folded into the ranking by the 2026-07-21 amendment), so this lens never adversarially examined it; the one-shot-collapse risk is asserted by the adaptation note, not stress-tested.</li>
     </ul>
   </div>
   <div class="lens">
     <h3>Measurement skeptic</h3>
     <span class="rowlabel">Supports</span>
     <ul class="pros">
-      <li>Single-token canonical output is trivially 0/1 exact-match scorable, and the oracle is a five-line non-generator recompute hand-checkable in under a minute</li>
+      <li>Single-token canonical output is trivially 0/1 exact-match scorable, and the oracle is a five-line non-generator recompute hand-checkable in under a minute.</li>
     </ul>
     <span class="rowlabel">Against</span>
     <ul class="cons">
-      <li>Never examined by the measurement skeptic while it was excluded under the tie-breaker filter (before the 2026-07-21 amendment folded it in); the landscape logs only a general cluster-wide caution to make conventions arbitrary and secret, not a c10-specific repair</li>
+      <li>Never examined by the measurement skeptic while it was excluded under the tie-breaker filter (before the 2026-07-21 amendment folded it in); the landscape logs only a general cluster-wide caution to make conventions arbitrary and secret, not a c10-specific repair.</li>
     </ul>
   </div>
   <div class="lens">
     <h3>Implementation lens (round 2)</h3>
     <span class="rowlabel">Supports</span>
     <ul class="pros">
-      <li>Ranked #5 of 20 on run-verified reusable infra: reasoning-gym's re-seedable ProceduralDataset infra, factory, and curriculum are reused as-is (repo run-verified under c24, carried over here); the coprime moduli mean adding a quirk touches only one modulus's stratum, so blast radius is contained (I5)</li>
+      <li>Ranked #5 of 20 on run-verified reusable infra: reasoning-gym's re-seedable ProceduralDataset infra, factory, and curriculum are reused as-is (repo run-verified under c24, carried over here); the coprime moduli mean adding a quirk touches only one modulus's stratum, so blast radius is contained (I5).</li>
     </ul>
     <span class="rowlabel">Against</span>
     <ul class="cons">
-      <li>The invented interlocking-cycle generator and modular oracle are net-new authoring (~180-300 LOC) and default scoring is partial-credit and must be overridden — reuse-infra-write-task, not config plus glue, which caps I1</li>
+      <li>The invented interlocking-cycle generator and modular oracle are net-new authoring (~180–300 LOC) and default scoring is partial-credit and must be overridden — reuse-infra-write-task, not config plus glue, which caps I1.</li>
     </ul>
   </div>
   <div class="lens">
     <h3>Research currency</h3>
     <span class="rowlabel">Supports</span>
     <ul class="pros">
-      <li>Test of Time (2024) shows constructed-cyclic temporal reasoning is a live, contamination-resistant direction the framing plugs into</li>
+      <li>Test of Time (2024) shows constructed-cyclic temporal reasoning is a live, contamination-resistant direction the framing plugs into.</li>
     </ul>
     <span class="rowlabel">Against</span>
     <ul class="cons">
-      <li>Carries the low tie-breaker: the design descends from counterfactual base arithmetic and its nearest published relatives sit just outside the 2025-2026 window, so it reads as less research-current than its siblings</li>
+      <li>Carries the low tie-breaker: the design descends from counterfactual base arithmetic and its nearest published relatives sit just outside the 2025–2026 window, so it reads as less research-current than its siblings.</li>
     </ul>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>What would it take to build, and what could go wrong?</h2><span class="tag">Implementation: steps &amp; risks</span></div>
 <div class="steps">
-  <div class="step"><h3>Vendor reasoning-gym, author a new generator</h3><p>Consume reasoning-gym as a dependency (no repo edits) and subclass <code>ProceduralDataset</code> in our tree; config carries sampled pairwise-coprime cycle lengths (gcd == 1), an offset/naming convention, and the latent-rule stratum id</p></div>
-  <div class="step"><h3>Copy the seed idiom, write an independent modular oracle</h3><p>In <code>__getitem__</code> reuse the <code>rng = Random(seed + idx)</code> pattern from <code>calendar_arithmetic.py:129</code>; sample a start tuple and an advance N; compute the answer by fresh per-cycle modular arithmetic with 1-indexing and leap/skip adjustment — never stdlib <code>datetime</code></p></div>
-  <div class="step"><h3>Override scoring to strict 0/1 and add strata</h3><p>Override <code>score_answer</code> for single-token exact match (~5-10 LOC), bypassing the shipped partial-credit calendar/time scorers; optionally add a <code>BaseCurriculum</code> subclass exposing cycle-length ranges and convention families as strata</p></div>
-  <div class="step"><h3>Gate before freeze</h3><p>Clear the two-to-three pre-freeze gates: verify the interacting quirks stop the modular-arithmetic prior from collapsing the gap one-shot, and stratify the arbitrary/secret conventions so no single prompt covers the pool</p></div>
+  <div class="step"><h3>Vendor reasoning-gym, author a new generator</h3><p>Consume reasoning-gym as a dependency (no repo edits) and subclass <code>ProceduralDataset</code> in our tree; config carries sampled pairwise-coprime cycle lengths (gcd == 1), an offset/naming convention, and the latent-rule stratum id.</p></div>
+  <div class="step"><h3>Copy the seed idiom, write an independent modular oracle</h3><p>In <code>__getitem__</code> reuse the <code>rng = Random(seed + idx)</code> pattern from <code>calendar_arithmetic.py:129</code>; sample a start tuple and an advance N; compute the answer by fresh per-cycle modular arithmetic with 1-indexing and leap/skip adjustment — never stdlib <code>datetime</code>.</p></div>
+  <div class="step"><h3>Override scoring to strict 0/1 and add strata</h3><p>Override <code>score_answer</code> for single-token exact match (~5–10 LOC), bypassing the shipped partial-credit calendar/time scorers; optionally add a <code>BaseCurriculum</code> subclass exposing cycle-length ranges and convention families as strata.</p></div>
+  <div class="step"><h3>Gate before freeze</h3><p>Clear the two-to-three pre-freeze gates: verify the interacting quirks stop the modular-arithmetic prior from collapsing the gap one-shot, and stratify the arbitrary/secret conventions so no single prompt covers the pool.</p></div>
 </div>
 
-<div class="grid-2 space-top">
+<div class="grid-2">
   <div class="card">
     <h3>Risks</h3>
     <ul>
@@ -278,14 +273,11 @@ error names exactly which modulus rule it broke.</code></pre>
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/open-thought/reasoning-gym">open-thought/reasoning-gym</a> (Apache-2.0) — deep-read notes at <a href="../repos/reasoning-gym.md">repos/reasoning-gym.md</a>. Strongest architectural match: deterministic re-seedable ProceduralDataset generators, an exact-match oracle, curriculum/strata support, and register-and-go plumbing, with existing (real-Gregorian) calendar and time-interval tasks.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status pass">repo run-verified (carried over from c24)</span>
-        the reasoning-gym infrastructure was run-verified during round 2 under c24 (same-seed byte-identical, 6/6 independent ground-truth checks; also verified deterministic per seed over five items, different seed varies, Gregorian ground truth hand-checked, 15/15 tests pass), and that repo-level verification carries over here. The invented interlocking-cycle / coprime-modulus task c10 demands does not exist in-repo and its candidate-specific logic is authored on top of the reused infra, so I1 is held at 2 for this reason.</li>
+      <li><span class="key">Run verification:</span> <span class="status pass">repo run-verified (carried over from c24)</span><br>The reasoning-gym infrastructure was run-verified during round 2 under c24 (same-seed byte-identical, 6/6 independent ground-truth checks; also verified deterministic per seed over five items, different seed varies, Gregorian ground truth hand-checked, 15/15 tests pass), and that repo-level verification carries over here. The invented interlocking-cycle / coprime-modulus task c10 demands does not exist in-repo and its candidate-specific logic is authored on top of the reused infra, so I1 is held at 2 for this reason.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -310,6 +302,12 @@ error names exactly which modulus rule it broke.</code></pre>
     <a href="../candidates-merged.html#c10">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 27 · R1 TB 1 · I1 2 · I2 2 · I3 1 · I4 1 · I5 2 · I6 2 · Impl total 12/16 (round-2 rescore).
+  Sources: <a href="../candidates-merged.html#c10">candidates-merged c10</a> (round-1 merged entry — c10 has no standalone round-1 recommendations page), <a href="../recommendations-round2.html#table">round-2 rescore</a>, repo deep-read <a href="../repos/reasoning-gym.md">repos/reasoning-gym.md</a>.
+  Process note: c10 was excluded by the original round-1 tie-breaker filter and reinstated by the 2026-07-21 amendment (with c02 and c04) on equal terms with the other 21 candidates; its I1–I6 scores were produced by the same pipeline and folded in post-hoc.
+</div>
 
 </main>
 </body>

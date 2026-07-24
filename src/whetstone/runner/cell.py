@@ -1,0 +1,2101 @@
+"""One validation cell: baseline -> optimize -> best-official -> ledger.
+
+A **cell** is ``Cell(optimizer, env)`` per ``reports/validation-plan.md``:
+
+1. **Baseline**: official eval of the naive Initial Candidate (+ the ceiling
+   probe once per env, cached in the ledger via ``ceiling_official``).
+2. **Optimize**: run the optimizer on the internal split with brief-documented
+   hyperparameters scaled to the pool sizes; the optimizer sees ONLY
+   internal-split evaluation (Reward).
+3. **After**: official eval of the best accepted candidate on the SAME
+   official-split Eval Config identity. ``delta = official(best) -
+   official(naive)``; report delta + a paired bootstrap CI over tasks (cheap,
+   no extra LLM calls).
+4. **Persist**: append the ``cells.jsonl`` line in the EXACT schema, and append
+   the OpenRouter ``spend.jsonl`` before/after snapshots when lane=openrouter.
+
+Resumability: ``cells.jsonl`` is the ledger; a completed ``(optimizer, env,
+attempt)`` cell is skipped. Budget guards refuse to start a canonical cell
+below the reserve and halt a cell above the stop-loss (``status=halted``).
+
+Every measurement runs through injected transports; nothing here makes a live
+paid call by itself.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+from dr_store import MemoryBackend, ObjectStore
+
+from whetstone.envs.ed1 import ED1_ENV_NAME, build_ed1_experiment
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.reward import CandidateEvaluationFailure
+from whetstone.envs.sampling import Completeness, SamplingOverrides
+from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
+from whetstone.execution.partials import PartialLog
+from whetstone.execution.prompt_cache import PromptResultCache
+from whetstone.optimization.proposer import ProposerConfig, ProposerTransport
+from whetstone.provider.driver import TransportCall
+from whetstone.provider.policy import ProviderExecutionPolicy
+from whetstone.runner.budget import BudgetGuard, CreditsSnapshot
+from whetstone.runner.eval_run import (
+    SplitEvaluation,
+    evaluate_split,
+    official_instances,
+)
+from whetstone.runner.events import (
+    EventStream,
+    EventUnit,
+    RunEvent,
+    arm_incomplete_event,
+    attempt_skipped_event,
+    cell_failed_event,
+    cell_finalized_event,
+    is_rate_limit_code,
+    latency_snapshot_event,
+    rate_limit_pressure_event,
+)
+from whetstone.runner.execution_mode import ExecutionMode
+from whetstone.runner.ledger import (
+    ROLLOUT_OUTPUTS_SCHEMA,
+    CellArtifacts,
+    CellAttractor,
+    CellControls,
+    CellDualScores,
+    CellModels,
+    CellRecord,
+    CellSamplingOverrides,
+    CellTelemetry,
+    EnvOfficialCache,
+    Ledger,
+    PowerSizing,
+    PromptCacheControls,
+    SpendRecord,
+)
+from whetstone.runner.optimizers import (
+    OPTIMIZATION_TRACE_SCHEMA,
+    OptimizeResult,
+    run_optimize,
+    scaled_hyperparameters,
+)
+from whetstone.runner.power import PowerConfig, PowerResult, analyze_power
+from whetstone.runner.statistics import (
+    BootstrapCI,
+    bootstrap_mean_ci,
+    bootstrap_paired_delta_ci,
+)
+
+if TYPE_CHECKING:
+    from whetstone.runner.task_split_manifest import TaskSplitRoles
+
+__all__ = [
+    "DEFAULT_CELL_MAX_WALL_SECONDS",
+    "CellBaselineFailure",
+    "CellConfig",
+    "CellOutcome",
+    "run_cell",
+]
+
+#: The default whole-cell wall deadline (seconds; ``--max-wall-seconds``). On
+#: breach a cell finishes in-flight, persists partials, and records
+#: ``status=halted`` with a halt reason. Raised 3600 -> 7200s: with the 600s
+#: transport cap accommodating reasoning-model streams, a canonical cell's
+#: full official + optimize matrix legitimately needs more than one hour.
+DEFAULT_CELL_MAX_WALL_SECONDS = 7200.0
+
+
+class CellBaselineFailure(RuntimeError):
+    """The baseline official eval produced zero successful rollouts.
+
+    A cell whose baseline naive candidate never once reaches the provider (or
+    is rejected on every rollout) is a hard plumbing failure, not a valid
+    ``baseline_official=null`` cell. Raising here stops the runner from
+    appending a null-scores cell line that would silently mask the blocker;
+    the CLI surfaces it as a loud non-zero exit.
+    """
+
+#: A callable returning the OpenRouter credits snapshot (injected; no network
+#: in tests). ``None`` means credits are unavailable (a non-openrouter lane).
+CreditsFetcher = Callable[[], CreditsSnapshot | None]
+
+
+@dataclass(frozen=True, slots=True)
+class CellConfig:
+    """Everything one cell needs; transports are injected (no live call)."""
+
+    optimizer: str
+    env: str
+    lane: str
+    attempt: int
+    task_model: str
+    proposer_model: str
+    canonical: bool
+    proposer_config: ProposerConfig
+    proposer_transport: ProposerTransport
+    rollout_transport: TransportCall
+    execution_policy: ProviderExecutionPolicy
+    #: Internal-split repeats per task. ``run_optimize`` passes this verbatim
+    #: to every internal ``evaluate_split`` (baseline + each proposal
+    #: candidate), so the as-run internal repeat count is 3 by default -- NOT
+    #: the ``..._repeat_count = 1`` documented in
+    #: ``reports/optimizer-briefs.md`` (see the "as-run: r=3" correction
+    #: there). The internal-signal analysis depends on r=3; the per-cell
+    #: optimizer-search trace records the concrete value as
+    #: ``internal_repeat_count_as_run``.
+    repeats: int = 3
+    #: Official-split repeats (baseline/ceiling/best). The statistical-
+    #: confidence directive raises the default 3 -> 5 for statistical power;
+    #: the config surface stays overridable (pilots/dry-runs pass their own).
+    official_repeats: int = 5
+    pool_n_per_stratum: int | None = None
+    split_sizes: tuple[int, int, int] | None = None
+    execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS
+    window_notes: str = ""
+    #: Max concurrent provider calls per fan-out phase (halved once on a
+    #: rate-limit failure; ``--concurrency``).
+    concurrency: int = DEFAULT_CONCURRENCY
+    #: Whole-cell wall deadline (seconds). On breach: finish in-flight, persist
+    #: partials, exit with ``status=halted`` and a recorded halt reason.
+    max_wall_seconds: float = DEFAULT_CELL_MAX_WALL_SECONDS
+    #: Reduced-sampling overrides for the OFFICIAL split (``--official-n`` /
+    #: ``--official-repeats``). Both fold into the composite Eval Config
+    #: Identity Hash (a reduced cell is a DISTINCT Eval Config identity, so it
+    #: gets a cache MISS against the full-config entry). ``official_repeats``,
+    #: when set, is ALSO the count the official arms are driven at (overriding
+    #: :attr:`official_repeats`). A no-op default keeps the spec-default
+    #: sampling and full-config cache identity.
+    sampling_overrides: SamplingOverrides = field(
+        default_factory=SamplingOverrides
+    )
+    #: The declared missing-data completeness policy for this cell's official
+    #: aggregation (the matrix default, resolved by the CLI). PROPAGATE is the
+    #: strict default; a SKIP policy with ``max_skip_fraction`` tolerates that
+    #: fraction of skipped rows as an explicit-count SKIP before the arm is
+    #: forced incomplete. Both fold into the official Eval Config identity.
+    completeness: Completeness = Completeness.PROPAGATE
+    #: The declared completeness tolerance (fraction). Inert under PROPAGATE.
+    max_skip_fraction: float = 0.0
+    #: OPT-IN pre-run statistical-power stage (``--power-stage``). ``None``
+    #: (the strict default) the power stage is OFF and behavior + internal-eval
+    #: sizes are byte-identical to a run without it. When set, the power stage
+    #: runs after the anchor arms, persists a per-cell ``power_analysis``
+    #: artifact, and SETS the optimizer's internal-eval sizes from the
+    #: recommendation (clamped to pool), recording recommended-vs-used.
+    power_config: PowerConfig | None = None
+    #: ed1 (enc-dec) budget ratio, OR ``None`` for the NO-BUDGET frame (task
+    #: 22.4: no "Use at most N characters." line). Folds into the enc-dec
+    #: ``graph_hash``. Default for ed1 OPTIMIZER cells = None (no-budget). QA
+    #: envs ignore.
+    budget_ratio: float | None = 0.5
+    #: ed1 injectable code scorer (tests/dry-runs may inject a fast scorer;
+    #: ``None`` uses the default dr-code local subprocess scorer).
+    ed1_scorer: Callable[..., CodeScore] | None = None
+    #: ed1 pool controls: prefer the offline snapshot + a first-N task slice.
+    ed1_prefer_snapshot: bool = True
+    ed1_task_limit: int | None = None
+    #: ed1 pool filter: always-pass task ids to EXCLUDE (the per-model screen's
+    #: exclusion list). Folds into each split's Task Set identity by removing
+    #: those tasks from the ordered pool before the split.
+    ed1_exclude_task_ids: frozenset[str] | None = None
+    #: ed1/d1 task-split manifest roles (task 29): the run's task-selection
+    #: manifest resolved for THIS env's pool (train/val/test). When set, the
+    #: env builder uses role-true MEMBERSHIP splits (internal = train+val,
+    #: official = test EXACTLY) instead of the first-N slice, and folds the
+    #: manifest's content hash + pool into each split's identity. Mutually
+    #: exclusive with ``ed1_exclude_task_ids`` (the CLI refuses both). ``None``
+    #: = first-N slice.
+    task_split_roles: TaskSplitRoles | None = None
+    #: ed1 weighted-blend reward config (task 22), OR ``None`` for pass-only.
+    #: Optimizer cells (copro/miprov2/gepa/codex) REQUIRE it (the guard rail);
+    #: eval anchors set it so anchors pair on the same metric.
+    ed1_blend_config: BoundedCompressionMetricConfig | None = None
+    #: d1 (direct-generation) FROZEN input arm (task 23): one of the five
+    #: screen DIRECT arms (original/docstring/signature/name/renamed).
+    #: Identity-bearing -- folds into the d1 graph + split identity. Ignored by
+    #: non-d1 envs.
+    d1_input_arm: str = "original"
+    #: The LITERAL task-role sampling controls this cell ran under, recorded on
+    #: the ledger line (task 26 item 5) so a reader answers "temp 0 or temp 1?"
+    #: without re-deriving from a hash. These are RECORDING-only mirrors of the
+    #: values already baked into ``rollout_transport``'s route config; they do
+    #: NOT re-participate in identity. ``None`` = control unset (provider
+    #: default), never conflated with an explicit 0. ``recorded_temperature``
+    #: mirrors ``--temperature`` (task role default 0.0) and
+    #: ``recorded_reasoning_effort`` the ``--reasoning-effort`` value string.
+    recorded_temperature: float | None = None
+    recorded_reasoning_effort: str | None = None
+    #: OPT-IN run-level prompt result cache (task 31, ``--prompt-cache``).
+    #: ``False`` (the strict default) leaves the call seam byte-identical to a
+    #: run without it -- no store is created and every provider call is driven.
+    #: When ``True`` the cell builds a :class:`PromptResultCache` rooted at the
+    #: ledger root and threads it to every task-role split eval, so a byte-
+    #: identical (resolved prompt, model settings, repeat ordinal) reuses the
+    #: stored provider Result across rounds/cells. RECORDING-only: this flag
+    #: does NOT participate in any identity computation (the pinned-hash tests
+    #: stay unchanged), it is mirrored onto the cell record like the task-26
+    #: recorded controls.
+    prompt_cache_enabled: bool = False
+
+    def official_repeats_effective(self) -> int:
+        """Official repeats actually driven: the override, else the default."""
+        if self.sampling_overrides.official_repeats is not None:
+            return self.sampling_overrides.official_repeats
+        return self.official_repeats
+
+    def record_overrides(self) -> CellSamplingOverrides:
+        """The ``sampling_overrides`` sub-object for this cell's line."""
+        return CellSamplingOverrides(
+            official_n=self.sampling_overrides.official_n,
+            official_repeats=self.sampling_overrides.official_repeats,
+        )
+
+
+@dataclass(slots=True)
+class CellOutcome:
+    """The cell's terminal result (also the appended ledger record)."""
+
+    record: CellRecord
+    skipped: bool = False
+    resumed: bool = False
+    restarted: bool = False
+    reason: str = ""
+
+
+def _pool_per_task(
+    scores_a: tuple[float, ...],
+    counts_a: tuple[int, ...],
+    scores_b: tuple[float, ...],
+    counts_b: tuple[int, ...],
+) -> tuple[tuple[float, ...], tuple[int, ...]]:
+    """Pool two per-task passes into a count-weighted per-task mean vector.
+
+    Each pass reports per-task means over its own repeats plus the repeat
+    counts behind them; pooling is the count-weighted mean so NO observation is
+    discarded (escalation adds repeats to the existing pool). Aligned by task
+    index; a task with zero total observations pools to 0.0.
+    """
+    lengths = {len(scores_a), len(counts_a), len(scores_b), len(counts_b)}
+    if len(lengths) != 1:
+        raise ValueError(
+            "pooling requires aligned per-task score/count vectors"
+        )
+    pooled_scores: list[float] = []
+    pooled_counts: list[int] = []
+    for sa, ca, sb, cb in zip(
+        scores_a, counts_a, scores_b, counts_b, strict=True
+    ):
+        total = ca + cb
+        if total == 0:
+            pooled_scores.append(0.0)
+        else:
+            pooled_scores.append((sa * ca + sb * cb) / total)
+        pooled_counts.append(total)
+    return tuple(pooled_scores), tuple(pooled_counts)
+
+
+def _cell_seed(cell_id: str) -> int:
+    """A deterministic per-cell bootstrap seed (reproducible intervals).
+
+    The seed is fixed per cell so re-running the same cell's bootstrap yields
+    identical intervals, and every interval within a cell (naive, ceiling,
+    paired delta, paired headroom) shares the same seed -- so paired variants
+    reuse the SAME resample indices across their two arms.
+    """
+    return int(hashlib.sha256(cell_id.encode()).hexdigest()[:8], 16)
+
+
+def _paired_or_none(
+    a_per_task: tuple[float, ...],
+    b_per_task: tuple[float, ...],
+    seed: int,
+) -> BootstrapCI | None:
+    """A paired ``b - a`` CI, or None when either arm has no tasks."""
+    if not a_per_task or not b_per_task:
+        return None
+    if len(a_per_task) != len(b_per_task):
+        return None
+    return bootstrap_paired_delta_ci(a_per_task, b_per_task, seed=seed)
+
+
+def _official_intervals(
+    naive_per_task: tuple[float, ...],
+    best_per_task: tuple[float, ...],
+    baseline_score: float | None,
+    best_score: float | None,
+    seed: int,
+) -> tuple[BootstrapCI | None, BootstrapCI | None, float | None]:
+    """(naive marginal CI, paired delta CI, point delta) for an official pass.
+
+    All three share the per-cell ``seed``; the delta CI is the paired
+    best-naive bootstrap over the SAME resampled task indices as the naive
+    marginal CI. Returns ``None`` intervals + delta when a score is missing.
+    """
+    if baseline_score is None or best_score is None:
+        return None, None, None
+    naive_ci = bootstrap_mean_ci(naive_per_task, seed=seed)
+    delta_ci = bootstrap_paired_delta_ci(
+        naive_per_task, best_per_task, seed=seed
+    )
+    return naive_ci, delta_ci, best_score - baseline_score
+
+
+def _status_from(
+    delta: float | None, delta_ci: BootstrapCI | None
+) -> str:
+    """The sharpened cell status from the paired delta + its CI.
+
+    Per the "Cell statuses sharpen" directive: ``improved`` REQUIRES
+    ``delta > 0`` AND the paired delta CI excluding 0; ``delta > 0`` with a CI
+    spanning 0 is ``inconclusive``; ``delta <= 0`` is ``no-improvement``.
+    """
+    if delta is None or delta <= 0:
+        return "no-improvement"
+    if delta_ci is not None and delta_ci.excludes_zero():
+        return "improved"
+    return "inconclusive"
+
+
+def _arm_incomplete_detail(
+    label: str, evaluation: SplitEvaluation | None
+) -> str:
+    """A ``arm=rows_failed=.. rows_missing=.. ..`` detail for a failed arm.
+
+    Uses the driven evaluation's row accounting when available (the naive arm
+    may have come from cache, so its evaluation is None -- then only the label
+    is reported).
+    """
+    if evaluation is None:
+        return label
+    agg = evaluation.aggregate
+    return (
+        f"{label}(rows_present={agg.rows_present} "
+        f"rows_failed={agg.rows_failed} rows_missing={agg.rows_missing} "
+        f"rows_invalid={agg.rows_invalid})"
+    )
+
+
+#: The ed1-family env ids the blended-reward guard rail governs (task 22.3).
+#: ed1m (task 18's behavioral-mutant variant) inherits the same standing rule.
+_ED1_FAMILY_ENVS = frozenset({ED1_ENV_NAME, "ed1m"})
+
+#: The searching optimizers whose ed1/ed1m cells MUST use the blended reward.
+_SEARCHING_OPTIMIZERS = frozenset({"copro", "miprov2", "gepa", "codex"})
+
+
+def _guard_ed1_blended_reward(config: CellConfig) -> None:
+    """Standing rule (task 22.3): ed1/ed1m OPTIMIZER cells REFUSE pass-only.
+
+    A searching-optimizer cell (copro/miprov2/gepa/codex) on an ed1-family env
+    MUST carry a blend config (the weighted blend is mandatory). The eval
+    /identity anchor is exempt (it derives no search Reward, but still records
+    the blend for both probes so anchors pair with optimizer cells). Refusing
+    here -- before any build/spend -- makes the rule true by construction.
+    """
+    if (
+        config.env in _ED1_FAMILY_ENVS
+        and config.optimizer in _SEARCHING_OPTIMIZERS
+        and config.ed1_blend_config is None
+    ):
+        raise ValueError(
+            f"ed1/ed1m optimizer cell ({config.optimizer}:{config.env}) "
+            "REFUSES pass-only reward: the weighted-blend reward is mandatory "
+            "(user standing rule, task 22). Pass a --compression-weight "
+            "(default 0.10) so the cell carries a blend config."
+        )
+
+
+def _build_experiment(config: CellConfig) -> EnvExperiment:
+    """Build the cell's experiment: the ed1 enc-dec binding or a QA env.
+
+    ``ed1`` builds the encoder->decoder->code-eval experiment (dual-score,
+    ``budget_ratio`` folded into ``graph_hash``); every other env is the QA
+    ``build_env_experiment`` path, UNCHANGED (byte-identical). Enforces the
+    task-22 guard rail before building an ed1/ed1m optimizer experiment.
+    """
+    _guard_ed1_blended_reward(config)
+    if config.env == "d1":
+        # d1: direct-generation precursor (task 23). A single-call rollout over
+        # a FROZEN input arm with a mutable wrapper Mutation Surface; PLAIN
+        # pass-rate reward (NOT blended). --official-n slices the pool.
+        from whetstone.envs.d1 import build_d1_experiment
+        return build_d1_experiment(
+            model=config.task_model,
+            input_arm=config.d1_input_arm,
+            scorer=config.ed1_scorer,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+            exclude_task_ids=config.ed1_exclude_task_ids,
+            split_manifest=config.task_split_roles,
+        )
+    if config.env == "ed1m":
+        # ed1m: the behavioral-mutant enc-dec (task 18). Reuses ed1's pipeline
+        # with the mutant per-input oracle (fidelity reward + attractor
+        # pull). --official-n slices the mutant pool; no-budget frame default.
+        from whetstone.envs.ed1m import build_ed1m_experiment
+        return build_ed1m_experiment(
+            model=config.task_model,
+            budget_ratio=config.budget_ratio,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+            exclude_mutant_ids=config.ed1_exclude_task_ids,
+            blend_config=config.ed1_blend_config,
+            scorer=config.ed1_scorer,
+        )
+    if config.env == ED1_ENV_NAME:
+        # Fold the OFFICIAL-split sampling override into the ed1 pool slice so
+        # a reduced-anchor cell (``--official-n``) drives only N official tasks
+        # -- not the full 164-task HumanEval pool. ``official_repeats`` is
+        # applied downstream via ``official_repeats_effective()`` (the shared
+        # eval-driver repeat budget), so only the task-count override folds in
+        # here. ``None`` keeps the full official split (spec default).
+        return build_ed1_experiment(
+            model=config.task_model,
+            budget_ratio=config.budget_ratio,
+            scorer=config.ed1_scorer,
+            prefer_snapshot=config.ed1_prefer_snapshot,
+            limit=config.ed1_task_limit,
+            official_n=config.sampling_overrides.official_n,
+            completeness=config.completeness,
+            max_skip_fraction=config.max_skip_fraction,
+            repeats=config.repeats,
+            exclude_task_ids=config.ed1_exclude_task_ids,
+            blend_config=config.ed1_blend_config,
+            split_manifest=config.task_split_roles,
+        )
+    return build_env_experiment(
+        config.env,
+        model=config.task_model,
+        pool_n_per_stratum=config.pool_n_per_stratum,
+        completeness=config.completeness,
+        max_skip_fraction=config.max_skip_fraction,
+        split_sizes=config.split_sizes,
+        overrides=config.sampling_overrides,
+    )
+
+
+def _cell_controls(
+    config: CellConfig, cache: PromptResultCache | None = None
+) -> CellControls:
+    """The literal sampling-control values this cell ran under (task 26).
+
+    RECORDING-only mirror of the ``rollout_transport`` route controls, so the
+    ledger line answers "temp 0 or temp 1?" without re-deriving from a hash.
+    Task 31: when a prompt cache ran, its enabled marker + hit/miss/store
+    counters are recorded here too (recording-only, never identity-bearing).
+    """
+    prompt_cache_controls = None
+    if cache is not None:
+        counters = cache.counters()
+        prompt_cache_controls = PromptCacheControls(
+            enabled=True,
+            hits=counters["hits"],
+            misses=counters["misses"],
+            stores=counters["stores"],
+        )
+    return CellControls(
+        temperature=config.recorded_temperature,
+        reasoning_effort=config.recorded_reasoning_effort,
+        prompt_cache=prompt_cache_controls,
+    )
+
+
+def _ed1_dual_scores(
+    config: CellConfig,
+    experiment: EnvExperiment,
+    dual_compression: dict[str, float | None],
+) -> CellDualScores | None:
+    """The ed1 SECOND-objective sub-record (compression per arm), or ``None``.
+
+    ``None`` for QA envs. For ed1, carries the Mean Compression Ratio the naive
+    /
+    ceiling / best official arms measured (reported alongside the pass rate),
+    the
+    ``budget_ratio``, and the pinned dataset revision.
+    """
+    if config.env not in _ED1_FAMILY_ENVS:
+        return None
+    revision = getattr(experiment, "dataset_revision", None)
+    return CellDualScores(
+        naive_compression=dual_compression.get("official_naive"),
+        ceiling_compression=dual_compression.get("official_ceiling"),
+        best_compression=dual_compression.get("official_best"),
+        budget_ratio=config.budget_ratio,
+        dataset_revision=revision,
+    )
+
+
+def _ed1m_attractor(
+    config: CellConfig,
+    attractor_by_role: Mapping[
+        str, tuple[float | None, tuple[float | None, ...]]
+    ],
+) -> CellAttractor | None:
+    """The ed1m REPORTED attractor-pull sub-record (task 28 item 1), or None.
+
+    ``None`` for every env except ed1m (only ed1m's dual oracle measures
+    attractor pull). For ed1m, carries the BEST official arm's reported mean +
+    per-task attractor vector -- durable on the cell line so the contamination
+    measurement no longer evaporates with a non-persistent ObjectStore. The
+    mean is recomputed here from the per-task vector (the same non-null mean
+    the aggregate reported) so a null per-task entry is never folded in as a
+    zero. ``sampled_task_count`` is the mean's denominator (tasks with a
+    discriminating sample).
+    """
+    if config.env != "ed1m":
+        return None
+    mean, per_task = attractor_by_role.get("official_best", (None, ()))
+    sampled = [a for a in per_task if a is not None]
+    computed_mean = (sum(sampled) / len(sampled)) if sampled else mean
+    return CellAttractor(
+        mean=computed_mean,
+        per_task=tuple(per_task),
+        sampled_task_count=len(sampled),
+    )
+
+
+def _tolerated_skip_note(
+    *evaluations: tuple[str, SplitEvaluation | None],
+) -> str | None:
+    """A visible-counts note for arms that CERTIFIED with some rows skipped.
+
+    Under a bounded SKIP tolerance a certified arm (``score is not None``) may
+    still have skipped (missing/failed/invalid) rows within the declared
+    bound. Those skipped rows are NEVER silently dropped: this records their
+    explicit counts on the cell line so a tolerant anchor honestly shows what
+    it skipped. Returns ``None`` when every arm was fully complete.
+    """
+    parts: list[str] = []
+    for label, evaluation in evaluations:
+        if evaluation is None or evaluation.score is None:
+            continue
+        agg = evaluation.aggregate
+        skipped = agg.rows_missing + agg.rows_failed + agg.rows_invalid
+        if skipped == 0:
+            continue
+        planned = agg.task_count * agg.repeat_count
+        parts.append(
+            f"{label}(rows_present={agg.rows_present} "
+            f"rows_missing={agg.rows_missing} rows_failed={agg.rows_failed} "
+            f"rows_invalid={agg.rows_invalid} skipped={skipped}/{planned})"
+        )
+    if not parts:
+        return None
+    return "skipped rows tolerated within declared bound: " + ", ".join(parts)
+
+
+def _write_optimization_trace(
+    ledger: Ledger,
+    *,
+    cell_id: str,
+    config: CellConfig,
+    status: str,
+    opt: OptimizeResult | None,
+    failure_detail: str | None = None,
+    outputs_ref: str | None = None,
+    internal_repeats: int | None = None,
+) -> str:
+    """Persist the per-cell optimizer-search trace; return its ledger ref.
+
+    Serializes the FULL per-round candidate evidence (each candidate's id +
+    prompt text, internal score, accept/reject disposition + typed reason, and
+    per-task per-repeat scoring vectors) plus the accepted-candidate prompt
+    text -- the search trace the in-memory ``OptimizeResult`` would otherwise
+    drop at process exit. Written for EVERY terminal cell, including
+    incomplete-arm / halted cells (which pass ``opt=None`` + a
+    ``failure_detail``) so a failed cell still leaves its search evidence on
+    disk. The returned ref is the trace path relative to the ledger root,
+    recorded on the cell line's ``artifacts.optimization_result_ref`` so the
+    trace is discoverable.
+    """
+    header: dict[str, object] = {
+        "cell_id": cell_id,
+        "optimizer": config.optimizer,
+        "env": config.env,
+        "attempt": config.attempt,
+        "status": status,
+        "task_model": config.task_model,
+        "proposer_model": config.proposer_model,
+        # The as-run internal repeat count actually driven: the power stage's
+        # applied ``used_repeats`` when it ran, else ``config.repeats`` (dflt
+        # 3). The briefs' documented internal repeat_count=1 is NOT what the
+        # runner drives, so the trace records the value analysis must use.
+        "internal_repeat_count_as_run": (
+            internal_repeats
+            if internal_repeats is not None
+            else config.repeats
+        ),
+        # The per-cell rollout-output sidecar (FULL prompt->output text +
+        # scores), referenced so the qualitative outputs are discoverable from
+        # the trace. ``None`` when no rows were driven (fully resumed cell).
+        "rollout_outputs_ref": outputs_ref,
+    }
+    if opt is not None:
+        trace = opt.to_trace(header=header)
+    else:
+        # Baseline anchor failure (incomplete-arm) or a pre-optimize halt: no
+        # OptimizeResult exists, but we still write a stub so the failed cell
+        # leaves typed evidence (why the search never produced steps).
+        trace = {
+            **header,
+            "schema": OPTIMIZATION_TRACE_SCHEMA,
+            "best_candidate_id": None,
+            "best_candidate_template": None,
+            "baseline_internal_score": None,
+            "best_internal_score": None,
+            "optimizer_steps": 0,
+            "internal_evals_count": 0,
+            "rejected_candidate_count": 0,
+            "internal_task_count_scaled": 0,
+            "failure_detail": failure_detail,
+            "steps": [],
+        }
+    ledger.write_optimization_trace(cell_id, trace)
+    return str(
+        ledger.optimization_trace_path(cell_id).relative_to(ledger.root)
+    )
+
+
+def _run_power_stage(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    naive_per_task: tuple[float, ...],
+    ceiling_per_task: tuple[float, ...],
+    pool_ceiling: int,
+    brief_n_tasks: int,
+    brief_repeats: int,
+) -> tuple[str | None, PowerSizing | None, int | None]:
+    """Run the opt-in power stage: persist the artifact + return the sizing.
+
+    Uses the anchor arms' per-task vectors (naive + ceiling) to compute the
+    internal sample-size recommendation, writes the per-cell ``power_analysis``
+    artifact, and returns ``(power_ref, power_sizing, task_override)``.
+    When the ceiling arm has no per-task vector (never measured), the stage is
+    skipped (returns all ``None``) -- it needs both anchors.
+
+    SAFE SEMANTIC (opt-in flag = "at least as powered as before"): the used
+    sizes are FLOORED at the as-run brief (n = ``brief_n_tasks``, the
+    optimizer's brief internal task scope clamped to the pool; r =
+    ``brief_repeats``) and clamped to the pool ceiling. The power stage can
+    therefore only ADD power vs the briefs, never subtract below them. This
+    guards the degenerate case where a base-rate-0 (or -1) anchor makes the
+    variance decomposition tiny -- unrepresentative of the far larger
+    candidate-comparison Bernoulli variance when candidates move off the naive
+    base rate -- and would otherwise recommend a 2-task internal eval that
+    collapses delta to 0. The raw (unfloored) recommendation is still recorded
+    on ``recommended_*`` so the analysis output stays visible.
+    """
+    power_cfg = config.power_config
+    if (
+        power_cfg is None
+        or not naive_per_task
+        or not ceiling_per_task
+        or len(naive_per_task) != len(ceiling_per_task)
+    ):
+        return (None, None, None)
+    result: PowerResult = analyze_power(
+        naive_per_task=naive_per_task,
+        ceiling_per_task=ceiling_per_task,
+        pool_ceiling=pool_ceiling,
+        anchor_repeats=config.official_repeats_effective(),
+        config=power_cfg,
+    )
+    header = {
+        "cell_id": cell_id,
+        "optimizer": config.optimizer,
+        "env": config.env,
+        "attempt": config.attempt,
+        "task_model": config.task_model,
+    }
+    ledger.write_power_analysis(cell_id, result.to_artifact(header=header))
+    power_ref = str(
+        ledger.power_analysis_path(cell_id).relative_to(ledger.root)
+    )
+    rec = result.recommendation
+    # Floor at the as-run brief, then clamp n to the pool. The stage can only
+    # ADD power vs the brief, never subtract below it. ``brief_n_tasks`` is the
+    # optimizer's brief internal task scope (already clamped to the pool by the
+    # caller); ``brief_repeats`` is the brief internal repeat count.
+    used_n = min(pool_ceiling, max(rec.recommended_n_tasks, brief_n_tasks))
+    used_r = max(rec.recommended_repeats, brief_repeats)
+    sizing = PowerSizing(
+        recommended_n_tasks=rec.recommended_n_tasks,
+        recommended_repeats=rec.recommended_repeats,
+        used_n_tasks=used_n,
+        used_repeats=used_r,
+        pool_ceiling=pool_ceiling,
+        achievable=rec.achievable,
+        pool_limited=rec.pool_limited,
+        target_gap=rec.target_gap,
+        achieved_mdd=rec.achieved_mdd,
+    )
+    return (power_ref, sizing, used_n)
+
+
+def _rejected_candidates_note(opt: OptimizeResult) -> str | None:
+    """A visible note for proposal candidates the optimizer did not score.
+
+    A proposal candidate is dropped for exactly one of two TYPED reasons: an
+    invalid-placeholder template (rejected at intake, no eval spend) or an
+    unscorable internal eval (a transient rollout wipeout left the aggregate
+    missing under the FAIL Reward policy). Each is isolated to its candidate --
+    the optimizer keeps its best-so-far and continues -- but the drop is shown
+    here so a completed cell is never silent about drafts that did not count.
+    Returns ``None`` when every drafted candidate scored.
+    """
+    rejected = [step for step in opt.steps if step.rejected]
+    if not rejected:
+        return None
+    by_reason: dict[str, int] = {}
+    for step in rejected:
+        reason = step.rejected_reason or "unknown"
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+    counts = ", ".join(
+        f"{reason}={count}" for reason, count in sorted(by_reason.items())
+    )
+    return (
+        f"{len(rejected)} proposal candidate(s) not scored (isolated, "
+        f"best-so-far kept): {counts}"
+    )
+
+
+def _incomplete_arm_note(
+    *,
+    baseline_score: float | None,
+    best_score: float | None,
+    baseline_eval: SplitEvaluation | None,
+    best_eval: SplitEvaluation | None,
+) -> str | None:
+    """A note naming which official arm(s) never resolved, or None if complete.
+
+    An official arm is INCOMPLETE when its aggregate scalar is ``None`` (under
+    PROPAGATE, some planned rollout rows never landed as a present score even
+    after FIX 2's bounded re-drive). A per-task vector still has one entry per
+    task (absent repeats count 0), so the vector cannot be trusted to stand in
+    for the arm: the cell must not emit a headroom / no-headroom determination
+    or a terminal statistical status off it. Returns a human-readable note
+    naming the failed arm(s) + their row accounting for the ledger, or ``None``
+    when both arms resolved cleanly.
+    """
+    failed: list[str] = []
+    if baseline_score is None:
+        failed.append(_arm_incomplete_detail("naive", baseline_eval))
+    if best_score is None:
+        failed.append(_arm_incomplete_detail("best", best_eval))
+    if not failed:
+        return None
+    return (
+        "incomplete official arm(s) -- aggregate never resolved after the "
+        "bounded re-drive; no headroom/no-improvement determination emitted "
+        "(certified output requires a complete official vector): "
+        + ", ".join(failed)
+    )
+
+
+def _escalation_allowed(
+    budget: BudgetGuard, remaining_usd: float | None
+) -> tuple[bool, str]:
+    """Whether an inconclusive cell may auto-escalate under the budget guard.
+
+    Escalation runs additional paid official repeats, so it is gated behind the
+    reserve check: below the reserve, escalation is skipped with a note.
+    """
+    if remaining_usd is not None and remaining_usd < budget.reserve_usd:
+        return False, (
+            f"remaining ${remaining_usd:.2f} < reserve "
+            f"${budget.reserve_usd:.2f}"
+        )
+    return True, ""
+
+
+def _spend_between(
+    before: CreditsSnapshot | None, after: CreditsSnapshot | None
+) -> float:
+    if before is None or after is None:
+        return 0.0
+    b = before.remaining_usd
+    a = after.remaining_usd
+    if b is None or a is None:
+        return 0.0
+    return max(0.0, b - a)
+
+
+def _spend_record(
+    *,
+    cell_id: str,
+    phase: str,
+    lane: str,
+    snapshot: CreditsSnapshot | None,
+) -> SpendRecord:
+    """One ``spend.jsonl`` record with a REAL timestamp + per-event id.
+
+    Task 26 item 1: ``at`` was the empty string on every historical spend row,
+    making a spend timeline unreconstructable. Populate it with the snapshot's
+    own ``at`` when the credits API supplied one, else the wall-clock at append
+    time; a per-record ``event_id`` lets a timeline address individual
+    snapshots. Null-honest: ``at`` is never a populated-but-empty string.
+    """
+    snap_at = snapshot.at if snapshot is not None else ""
+    return SpendRecord(
+        event_id=uuid.uuid4().hex,
+        cell_id=cell_id,
+        phase=phase,
+        lane=lane,
+        total_credits=snapshot.total_credits if snapshot else None,
+        total_usage=snapshot.total_usage if snapshot else None,
+        remaining_usd=snapshot.remaining_usd if snapshot else None,
+        at=snap_at or datetime.now(UTC).isoformat(),
+    )
+
+
+def _rate_limit_rows_in(evaluation: object) -> int:
+    """Count driven rows in this split evaluation that hit a rate limit.
+
+    Reads the per-row ``failure_code`` on the evaluation's ``outputs`` (the
+    rows actually driven THIS pass; a resumed pass restores rows and drives
+    none, so it reports 0 -- honest for the window). A window's pressure is the
+    rate-limited-row count PLUS the halving/guard flags carried separately.
+    """
+    return sum(
+        1
+        for out in getattr(evaluation, "outputs", ()) or ()
+        if is_rate_limit_code(getattr(out, "failure_code", "") or "")
+    )
+
+
+def _median_latency(partial_log: PartialLog) -> tuple[float | None, int]:
+    """The rolling median task-side call latency + its coverage (task 20).
+
+    Reads every recorded ``latency_s`` from the cell's partial log and returns
+    the median plus the count of rows it was computed over. Returns
+    ``(None, 0)`` when NO row reported a latency -- null-not-zero, never a fake
+    0.0 median. The cell has ONE task model (``config.task_model``), so this is
+    that model's rolling median; the caller stamps the model on the event.
+    """
+    latencies = sorted(
+        rec.latency_s
+        for rec in partial_log.load()
+        if rec.latency_s is not None
+    )
+    n = len(latencies)
+    if n == 0:
+        return None, 0
+    mid = n // 2
+    if n % 2 == 1:
+        return latencies[mid], n
+    return (latencies[mid - 1] + latencies[mid]) / 2.0, n
+
+
+def _cell_telemetry(partial_log: PartialLog) -> CellTelemetry:
+    """Sum per-cell task-side usage + latency from the partial log (task 20).
+
+    Coverage-honest: each total sums ONLY the rows that reported the field, and
+    the ``*_coverage`` counts those rows -- a total is ``None`` when NO row
+    carried it (never a fake 0), so a partial-coverage cell (mixed pre/post-
+    telemetry rows) is visible as such.
+    """
+    prompt = comp = total = reason = 0
+    latency = 0.0
+    tok_cov = reason_cov = lat_cov = 0
+    for rec in partial_log.load():
+        if rec.total_tokens is not None or rec.prompt_tokens is not None:
+            prompt += rec.prompt_tokens or 0
+            comp += rec.completion_tokens or 0
+            total += rec.total_tokens or 0
+            tok_cov += 1
+        if rec.reasoning_tokens is not None:
+            reason += rec.reasoning_tokens
+            reason_cov += 1
+        if rec.latency_s is not None:
+            latency += rec.latency_s
+            lat_cov += 1
+    return CellTelemetry(
+        total_prompt_tokens=prompt if tok_cov else None,
+        total_completion_tokens=comp if tok_cov else None,
+        total_tokens=total if tok_cov else None,
+        total_reasoning_tokens=reason if reason_cov else None,
+        total_latency_s=latency if lat_cov else None,
+        mean_latency_s=(latency / lat_cov) if lat_cov else None,
+        token_coverage=tok_cov,
+        reasoning_coverage=reason_cov,
+        latency_coverage=lat_cov,
+    )
+
+
+def _halted_before_optimize(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    halt_reason: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
+) -> CellOutcome:
+    """Record a cell halted by the wall deadline before it could optimize.
+
+    The baseline (and ceiling) were measured; the optimize/best phases never
+    ran, so ``best_official``/``delta`` are ``None`` and the status is
+    ``halted``. The after-spend snapshot is still taken and the partial log is
+    KEPT (not deleted) so a later resume can pick up from the recorded calls.
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            _spend_record(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                snapshot=spend_after,
+            )
+        )
+    notes = [f"halted: {halt_reason}"]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    # A cell halted before the optimize phase produced no proposal steps; the
+    # stub trace records the halt so even a halted cell leaves search evidence.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="halted",
+        opt=None, failure_detail=f"halted before optimize: {halt_reason}",
+    )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=0, optimizer_steps=0,
+        spend_usd=_spend_between(spend_before, spend_after), wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes, status="halted",
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            official_record_before=baseline_before_ref,
+        ),
+        sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
+    )
+    ledger.append_cell(record)
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"halted before optimize: {halt_reason}",
+    )
+
+
+def _incomplete_internal_arm(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    failure_detail: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
+) -> CellOutcome:
+    """Finalize a cell whose INTERNAL (optimize) arm never resolved.
+
+    A ``CandidateEvaluationFailure`` escaping the optimize phase means some
+    internal-split rollouts failed and the env's FAIL missing-data policy left
+    the candidate with no computable internal Reward. During a cell's optimize
+    (anchor) phase this must NOT surface as a raw process exit 1: it finalizes
+    as ``incomplete-arm`` carrying ``arm=internal`` and the reward-failure
+    reason, records the real spend attributed to the attempt (openrouter: the
+    summed credits deltas across the cell's before/after snapshots), and KEEPS
+    the partial log so a resume can re-drive only the failed internal rows. The
+    baseline/ceiling arms that DID measure are preserved on the line; the
+    best/delta phases never ran so they stay ``None`` and NO headroom /
+    statistical determination is emitted (the same guarantee as an incomplete
+    OFFICIAL arm). The per-env official cache is NOT written (an incomplete
+    cell must never poison downstream optimizer cells).
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            _spend_record(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                snapshot=spend_after,
+            )
+        )
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
+    notes = [
+        "incomplete internal arm -- the optimize phase could not score the "
+        "candidate into a Reward (some internal-split rollouts failed under "
+        "the FAIL missing-data policy); no best/delta/headroom determination "
+        "emitted (certified output requires a resolved internal arm): "
+        f"internal({failure_detail})"
+    ]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    # A failed cell still leaves its (stub) search evidence on disk: the anchor
+    # baseline eval failed before any proposal step, so there is no
+    # OptimizeResult -- the trace records WHY the search produced no steps.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="incomplete-arm",
+        opt=None, failure_detail=failure_detail,
+    )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=0, optimizer_steps=0,
+        spend_usd=spend_usd, wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes,
+        status="incomplete-arm",
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            official_record_before=baseline_before_ref,
+        ),
+        sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
+    )
+    ledger.append_cell(record)
+    # KEEP the partial log (an incomplete-arm cell is resumable): the caller
+    # must not delete it. The per-env official cache is NOT written here.
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"incomplete internal arm: {failure_detail}",
+    )
+
+
+def _proposer_failure_arm(
+    *,
+    config: CellConfig,
+    cell_id: str,
+    ledger: Ledger,
+    opt: OptimizeResult,
+    baseline_score: float | None,
+    ceiling_official: float | None,
+    baseline_before_ref: str,
+    concurrency_halved: bool,
+    spend_before: CreditsSnapshot | None,
+    credits_fetcher: CreditsFetcher | None,
+    is_openrouter: bool,
+    wall_s: float,
+    resumed: bool,
+    restarted: bool,
+    graph_hash: str | None = None,
+    eval_config_hash: str | None = None,
+    started_at: str | None = None,
+) -> CellOutcome:
+    """Finalize a cell where EVERY proposer draft failed (proposer outage).
+
+    ``opt.all_drafts_failed`` -- the optimizer drafted proposal slots but NOT
+    ONE yielded a real candidate (every slot was a typed proposer-draft
+    failure: timeout / nonzero exit / empty / model-rejected). This is NOT an
+    honest no-improvement (where real candidates WERE scored but none beat the
+    baseline): no candidate was ever explored, so no best/delta/headroom
+    determination is emitted. The cell finalizes with the loud typed
+    ``proposer-failure`` status carrying the per-draft failure reasons, records
+    real spend, and writes the FULL trace (its steps are the failed-draft
+    slots). Not a completed terminal status -- a re-run supersedes it. The per-
+    env official cache is NOT written.
+    """
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            _spend_record(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                snapshot=spend_after,
+            )
+        )
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
+    details = [
+        f"{step.candidate_id}({step.rejected_detail})"
+        for step in opt.steps
+    ]
+    notes = [
+        "proposer failure -- EVERY proposal draft failed to produce a "
+        f"template ({opt.failed_draft_count} failed draft slot(s), 0 real "
+        "candidates); no best/delta/headroom determination emitted (this is a "
+        "proposer outage, NOT an honest no-improvement): "
+        f"{'; '.join(details)}"
+    ]
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status="proposer-failure",
+        opt=opt,
+    )
+    record = CellRecord(
+        cell_id=cell_id, optimizer=config.optimizer, env=config.env,
+        attempt=config.attempt, canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score, ceiling_official=ceiling_official,
+        best_official=None, delta=None, ci95=None,
+        official_repeats_used=config.official_repeats_effective(),
+        escalated=False,
+        escalation_note="; ".join(notes), pooled_observation_counts={},
+        internal_evals_count=opt.internal_evals_count,
+        optimizer_steps=opt.optimizer_steps,
+        spend_usd=spend_usd, wall_s=wall_s,
+        lane=config.lane, window_notes=config.window_notes,
+        status="proposer-failure",
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            best_candidate_id=opt.best_candidate.candidate_id,
+            official_record_before=baseline_before_ref,
+        ),
+        sampling_overrides=config.record_overrides(),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config),
+        started_at=started_at,
+        finished_at=datetime.now(UTC).isoformat(),
+    )
+    ledger.append_cell(record)
+    # KEEP the partial log (a proposer-failure cell is resumable): the caller
+    # must not delete it. The per-env official cache is NOT written here.
+    return CellOutcome(
+        record=record, resumed=resumed, restarted=restarted,
+        reason=f"proposer failure: {opt.failed_draft_count} failed drafts",
+    )
+
+
+def run_cell(
+    config: CellConfig,
+    *,
+    ledger: Ledger,
+    budget: BudgetGuard | None = None,
+    credits_fetcher: CreditsFetcher | None = None,
+    store: ObjectStore | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    events: EventStream | None = None,
+) -> CellOutcome:
+    """Run one full validation cell, appending its ledger + spend lines.
+
+    Honors resumability (skip a completed cell), the budget guards (reserve at
+    start, stop-loss mid-cell), the ceiling-once-per-env cache, and the
+    whole-cell wall deadline (``config.max_wall_seconds``, measured on the
+    injectable ``clock``).
+    """
+    budget = budget or BudgetGuard()
+    backing = store or ObjectStore(MemoryBackend())
+    cell_id = f"{config.optimizer}:{config.env}:a{config.attempt}"
+    is_openrouter = config.lane == "openrouter"
+
+    # The structured identity every event about this cell carries (separate
+    # env/optimizer/attempt/lane/model fields, so a reader never parses the
+    # composite id). ``_emit`` is a null-safe push: events are best-effort
+    # telemetry and never affect the cell's result.
+    event_unit = EventUnit.for_cell(
+        cell_id=cell_id,
+        env=config.env,
+        optimizer=config.optimizer,
+        attempt=config.attempt,
+        lane=config.lane,
+        model=config.task_model,
+    )
+
+    def _emit(event: RunEvent) -> None:
+        if events is not None:
+            events.emit(event)
+
+    # Per-cell incremental persistence: each provider call is appended to this
+    # partial log as it completes, so a crash/interrupt leaves a resumable
+    # record. A resumed cell restores already-recorded (instance, candidate,
+    # repeat) observations instead of re-driving them.
+    partial_log = PartialLog(
+        path=ledger.root / "partials" / f"{cell_id}.partial.jsonl"
+    )
+
+    # OPT-IN run-level prompt result cache (task 31). OFF by default -> None ->
+    # the call seam is byte-identical to a run without it (no store created).
+    # When on, the store is rooted at the ledger root so every cell in the run
+    # shares one <root>/prompt_cache/, and a byte-identical (resolved prompt,
+    # settings, repeat ordinal) reuses the stored provider Result across cells.
+    prompt_cache = (
+        PromptResultCache(root=ledger.root)
+        if config.prompt_cache_enabled
+        else None
+    )
+
+    # --- Whole-cell wall deadline: shared across every fan-out phase. ---
+    cell_start = clock()
+    # Wall-clock (ISO-8601 UTC) the cell started -- recorded on the ledger line
+    # so concurrency interleaving is reconstructable (the line carries a
+    # ``wall_s`` DURATION but had no absolute timestamps). Task 26 item 1.
+    started_at_iso = datetime.now(UTC).isoformat()
+
+    def _fanout() -> FanoutConfig:
+        """A FanoutConfig carrying the REMAINING whole-cell wall budget.
+
+        Computed fresh per phase so the shared deadline decrements as the cell
+        proceeds; once exhausted, dispatch stops (in-flight calls finish) and
+        the phase reports ``deadline_reached``.
+        """
+        remaining = config.max_wall_seconds - (clock() - cell_start)
+        return FanoutConfig(
+            concurrency=config.concurrency,
+            max_wall_seconds=max(0.0, remaining),
+        )
+
+    halt_reason = ""
+    concurrency_halved = False
+
+    # Additive rollout-output logging: every driven row's FULL output text +
+    # score across the official arms AND the internal candidate evals is
+    # accumulated here and written to a per-cell sidecar at finalize.
+    output_rows: list[dict[str, object]] = []
+    # ed1 dual scores: the Mean Compression Ratio per official arm (reported
+    # alongside the primary pass-rate score; None for QA envs). Captured as the
+    # arms are observed so the cell line records both objectives.
+    dual_compression: dict[str, float | None] = {}
+    # ed1m attractor pull per official arm (task 28 item 1): the reported mean
+    # + per-task vector, captured as the arms are observed so the cell line
+    # records the contamination measurement WITHOUT depending on a persistent
+    # ObjectStore. ``None`` values for ed1/QA/d1 (no attractor is measured).
+    attractor_by_role: dict[str, tuple[float | None, tuple[float | None, ...]]]
+    attractor_by_role = {}
+
+    def _collect_outputs(split_role: str, evaluation: object) -> None:
+        comp = getattr(evaluation, "compression_score", None)
+        if comp is not None or getattr(evaluation, "per_task_compression", ()):
+            dual_compression[split_role] = comp
+        per_task_attr = tuple(
+            getattr(evaluation, "per_task_attractor", ()) or ()
+        )
+        attr_mean = getattr(evaluation, "attractor_pull", None)
+        if attr_mean is not None or per_task_attr:
+            attractor_by_role[split_role] = (attr_mean, per_task_attr)
+        per_task_comp = getattr(evaluation, "per_task_compression", ()) or ()
+        # ISO-8601 UTC wall-clock stamped on EVERY emitted row -- success AND
+        # provider_error rows alike (task 28 item 3): the rollout-output
+        # sidecar previously carried no ``at``, blocking failure-timing
+        # forensics on error rows. Stamped once per emit batch (rows are
+        # written at finalize, not per-call; per-call time is on the partial).
+        emitted_at = datetime.now(UTC).isoformat()
+        for i, out in enumerate(getattr(evaluation, "outputs", ()) or ()):
+            row: dict[str, object] = {
+                # Versioned schema stamp (task 26 item 9) so a reader branches
+                # on version instead of sniffing present keys.
+                "schema": ROLLOUT_OUTPUTS_SCHEMA,
+                # Recording wall-clock (task 28 item 3); on every row.
+                "at": emitted_at,
+                # Structured id components (task 26 item 8): a consumer joins
+                # on these directly, never parsing the composite cell_id.
+                "cell_id": cell_id,
+                "env": config.env,
+                "optimizer": config.optimizer,
+                "attempt": config.attempt,
+                "lane": config.lane,
+                "model": config.task_model,
+                "split_role": split_role,
+                "candidate_id": out.candidate_id,
+                "instance_id": out.instance_id,
+                "repeat": out.repeat,
+                "output_text": out.output_text,
+                "score": out.score,
+                "failure_code": out.failure_code,
+                # Per-call provenance (task 26 items 2-3): truncation is
+                # distinguishable from a clean stop, and a failed row keeps the
+                # full provider diagnostic (not just the short code). Null when
+                # unknown.
+                "finish_reason": getattr(out, "finish_reason", None),
+                "provider_error": getattr(out, "provider_error", None),
+            }
+            # ed1: emit MAX_BUDGET + over_budget on EVERY row (task 26 item 6)
+            # so the viewer stops re-deriving round(budget_ratio * len). Null
+            # for QA/d1 and no-budget ed1 frames.
+            budget = getattr(out, "max_budget", None)
+            if budget is not None:
+                row["max_budget"] = budget
+                row["over_budget"] = getattr(out, "over_budget", None)
+            # ed1: attach the per-task compression alongside the per-row
+            # output.
+            task_idx = i // max(1, config.repeats)
+            if task_idx < len(per_task_comp):
+                row["compression_ratio"] = per_task_comp[task_idx]
+            output_rows.append(row)
+
+    def _observe(evaluation: object, window_label: str = "phase") -> None:
+        """Fold a split evaluation's fan-out flags into the cell-level halt.
+
+        Each split evaluation is a natural heartbeat WINDOW: this is where the
+        push-based telemetry fires. A ``rate_limit_pressure`` event is pushed
+        only when the window observed pressure (rate-limited rows, a halving,
+        or a guard timeout -- never a quiet 0-0-0 beat); a ``latency_snapshot``
+        pushes the model's rolling median latency (``None`` when no row
+        reported one). Both mirror a loud stderr marker.
+        """
+        nonlocal halt_reason, concurrency_halved
+        window_halved = bool(getattr(evaluation, "concurrency_halved", False))
+        if window_halved:
+            concurrency_halved = True
+        if getattr(evaluation, "deadline_reached", False) and not halt_reason:
+            halt_reason = (
+                f"whole-cell wall deadline {config.max_wall_seconds:.0f}s "
+                "reached; dispatch stopped, in-flight calls finished"
+            )
+        rate_limit_rows = _rate_limit_rows_in(evaluation)
+        guard_timeouts = int(getattr(evaluation, "guard_timeouts", 0) or 0)
+        if rate_limit_rows or window_halved or guard_timeouts:
+            _emit(
+                rate_limit_pressure_event(
+                    unit=event_unit,
+                    rate_limit_rows=rate_limit_rows,
+                    concurrency_halved=window_halved,
+                    guard_timeouts=guard_timeouts,
+                    window_label=window_label,
+                )
+            )
+        median, coverage = _median_latency(partial_log)
+        _emit(
+            latency_snapshot_event(
+                unit=event_unit,
+                median_latency_s=median,
+                coverage=coverage,
+                window_label=window_label,
+            )
+        )
+
+    # --- Resumability: skip a completed (optimizer, env, attempt) cell. ---
+    # This skip is CORRECT for wave relaunches, but it was SILENT and the
+    # caller echoed the prior line's (stale) stats -- the c18 collision class.
+    # Push a loud ``attempt_skipped`` event + stderr marker so a watcher never
+    # mistakes the echoed stale stats for fresh work. The skip behavior itself
+    # is unchanged.
+    if ledger.is_completed(config.optimizer, config.env, config.attempt):
+        prior = ledger.latest_for(config.optimizer, config.env)
+        assert prior is not None
+        _emit(
+            attempt_skipped_event(
+                unit=event_unit, prior_status=prior.status
+            )
+        )
+        return CellOutcome(
+            record=prior, skipped=True, reason="already completed"
+        )
+
+    resumed = ledger.latest_for(config.optimizer, config.env) is not None
+    # This reduction restarts the cell (optimization state not resumable).
+    restarted = resumed
+
+    # --- Spend snapshot BEFORE (credits API when lane=openrouter). ---
+    spend_before: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_before = credits_fetcher()
+        ledger.append_spend(
+            _spend_record(
+                cell_id=cell_id, phase="before", lane=config.lane,
+                snapshot=spend_before,
+            )
+        )
+
+    # --- Budget reserve guard (refuse a fresh canonical cell < reserve). ---
+    # Raises ReserveError to the caller when remaining < reserve.
+    remaining = spend_before.remaining_usd if spend_before else None
+    budget.check_start(
+        canonical=config.canonical,
+        remaining_usd=remaining,
+        is_rerun=config.attempt > 0,
+    )
+
+    start = clock()
+    experiment: EnvExperiment = _build_experiment(config)
+    naive = experiment.initial_candidate
+    official = official_instances(experiment)
+
+    official_repeats = config.official_repeats_effective()
+    is_eval_row = config.optimizer == "eval"
+    # The composite Eval Config Identity Hash of the official split -- folds in
+    # the (possibly overridden) official Task Set + Repeat Plan, so a reduced-
+    # sampling cell has a DISTINCT identity from the full-config one. It is
+    # part of the env cache key: a reduced cell gets a MISS against a
+    # full-config entry for the same (env, task-model). ``default_config`` (no
+    # overrides) additionally lets a full-config read match OLD sentinel lines.
+    eval_config_hash = (
+        experiment.eval_configs.official.eval_config.config_identity_hash
+    )
+    # The content-addressed identity of the resolved official-arm graph --
+    # recorded on EVERY cell line including anchors (task 26 item 4), which
+    # previously persisted no graph identity at all. RECORDING-only: the hash
+    # the experiment already computes, now written out.
+    graph_hash = experiment.rollout_definition.graph_hash
+    default_config = config.sampling_overrides.is_noop()
+
+    # --- 1. Baseline naive + ceiling official arms (per-task vectors too). ---
+    # Point 6 of the statistical-confidence directive: the Eval row establishes
+    # the per-env official naive/ceiling scores AND their per-task score
+    # vectors in the ledger cache; every other optimizer cell REUSES that cache
+    # rather than re-driving the naive/ceiling arms -- so a later paired
+    # best-naive delta can be computed without re-driving naive. A non-eval
+    # cell only drives them itself if no Eval row has cached the env yet.
+    # Cache is keyed by (env, task-model): a cell must never pair against
+    # cached vectors measured under a DIFFERENT task model (different graph
+    # identity). A deepseek cell gets a MISS on a nano-cached env and drives
+    # its own naive/ceiling arms (FIX 7).
+    cache = (
+        None
+        if is_eval_row
+        else ledger.env_cache_for(
+            config.env,
+            task_model=config.task_model,
+            eval_config_hash=eval_config_hash,
+            default_config=default_config,
+        )
+    )
+    ceiling_official: float | None
+    # The driven baseline evaluation (None when the naive arm came from cache):
+    # carries the row-completeness accounting used by the incomplete-arm guard.
+    baseline_eval: SplitEvaluation | None = None
+    if cache is not None:
+        baseline_score = cache.naive_official
+        naive_per_task = cache.naive_per_task
+        naive_counts = tuple(cache.official_repeats_used for _ in official)
+        ceiling_official = cache.ceiling_official
+        ceiling_per_task = cache.ceiling_per_task
+        official_repeats = cache.official_repeats_used
+        baseline_before_ref = ""
+    else:
+        # A baseline with no successful rollout rows (every call failed
+        # pre-flight or was rejected) is a plumbing failure, not a valid
+        # null-scores cell. Detect it via the aggregate's row counts and raise
+        # CellBaselineFailure BEFORE recording any ledger line so the CLI exits
+        # non-zero loudly. An official eval derives NO Reward, so a merely
+        # INCOMPLETE aggregate (some observations timed out) no longer crashes
+        # here: it is visible incompleteness (score=None, per-task rows record
+        # the failures), distinct from a zero-success plumbing blocker.
+        planned = len(official) * official_repeats
+        baseline = evaluate_split(
+            experiment,
+            candidate=naive,
+            instances=official,
+            split_role="official",
+            transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            policy=experiment.completeness_policy,
+            repeats=official_repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+            fanout=_fanout(),
+            partial_log=partial_log,
+            cache=prompt_cache,
+        )
+        _observe(baseline, "official_naive")
+        _collect_outputs("official_naive", baseline)
+        if baseline.aggregate.rows_present == 0:
+            detail = (
+                f"baseline official eval produced 0/{planned} successful "
+                "rollouts (every rollout failed); plumbing failure, no cell "
+                "line recorded"
+            )
+            _emit(
+                cell_failed_event(
+                    unit=event_unit,
+                    reason_class="CellBaselineFailure",
+                    detail=detail,
+                )
+            )
+            raise CellBaselineFailure(f"cell {cell_id}: {detail}.")
+        baseline_eval = baseline
+        baseline_score = baseline.score
+        naive_per_task = baseline.per_task_scores
+        naive_counts = baseline.per_task_counts
+        baseline_before_ref = baseline.artifact_ref.content_hash
+        # Ceiling arm: reuse the scalar cache when present; else drive it.
+        ceiling_cached = ledger.ceiling_for(config.env)
+        ceiling_eval = evaluate_split(
+            experiment,
+            candidate=experiment.ceiling_candidate,
+            instances=official,
+            split_role="official",
+            transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            policy=experiment.completeness_policy,
+            repeats=official_repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+            fanout=_fanout(),
+            partial_log=partial_log,
+            cache=prompt_cache,
+        )
+        _observe(ceiling_eval, "official_ceiling")
+        _collect_outputs("official_ceiling", ceiling_eval)
+        ceiling_official = (
+            ceiling_cached
+            if ceiling_cached is not None
+            else ceiling_eval.score
+        )
+        ceiling_per_task = ceiling_eval.per_task_scores
+
+    # --- Whole-cell deadline check BEFORE the optimize/best phases. ---
+    # A deadline reached during (or by the end of) the baseline/ceiling phases
+    # must halt HERE: driving a zero-budget optimize phase would dispatch no
+    # calls and produce an uncomputable aggregate (a bare ValueError). We
+    # instead record a halted cell carrying the baseline scores we DID measure
+    # and keep the partials for a resume. best=None (never optimized).
+    deadline_before_optimize = (
+        halt_reason != ""
+        or (clock() - cell_start) >= config.max_wall_seconds
+    )
+    if deadline_before_optimize:
+        if not halt_reason:
+            halt_reason = (
+                f"whole-cell wall deadline {config.max_wall_seconds:.0f}s "
+                "reached before the optimize phase"
+            )
+        return _halted_before_optimize(
+            config=config, cell_id=cell_id, ledger=ledger,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref, halt_reason=halt_reason,
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
+        )
+
+    # --- 1b. OPT-IN pre-run statistical-power stage (after anchors). ---
+    # With ``power_config`` None (the strict default) this is a no-op and the
+    # internal-eval sizes are byte-identical to a run without it. When set, it
+    # computes the internal sample-size recommendation from the anchor per-task
+    # vectors, persists the ``power_analysis`` artifact, and SETS the
+    # optimizer's internal task count / repeats from the recommendation.
+    power_ref: str | None = None
+    power_sizing: PowerSizing | None = None
+    internal_task_count_override: int | None = None
+    internal_repeats = config.repeats
+    if config.power_config is not None:
+        _internal_pool = len(experiment.eval_configs.internal.instances)
+        # The optimizer's brief internal task scope (already clamped to the
+        # pool) is the floor for the power stage's ``used_n_tasks`` -- the
+        # stage may only ADD tasks above the brief, never subtract below it.
+        _brief_n = int(
+            scaled_hyperparameters(
+                config.optimizer, internal_pool_size=_internal_pool
+            ).get("internal_task_count_scaled", _internal_pool)
+            or _internal_pool
+        )
+        power_ref, power_sizing, internal_task_count_override = (
+            _run_power_stage(
+                config=config, cell_id=cell_id, ledger=ledger,
+                naive_per_task=naive_per_task,
+                ceiling_per_task=ceiling_per_task,
+                pool_ceiling=_internal_pool,
+                brief_n_tasks=_brief_n,
+                brief_repeats=config.repeats,
+            )
+        )
+        if power_sizing is not None:
+            internal_repeats = power_sizing.used_repeats
+
+    # --- 2. Optimize on the internal split (Reward only). ---
+    # Residual hardening: a searching optimizer's internal measurement can
+    # still raise a typed CandidateEvaluationFailure when internal rollouts
+    # fail under the env's FAIL missing-data policy (the identity optimizer no
+    # longer derives a Reward at all -- FIX 1 -- but COPRO/MIPROv2/GEPA/Codex
+    # do). During a CELL's anchor phase that failure must NEVER escape as a raw
+    # process exit 1: it finalizes the cell typed as ``incomplete-arm``
+    # (arm=internal) with real spend and retained partials, exactly as an
+    # incomplete OFFICIAL arm does.
+    try:
+        opt = run_optimize(
+            experiment,
+            optimizer=config.optimizer,
+            proposer_config=config.proposer_config,
+            proposer_transport=config.proposer_transport,
+            rollout_transport=config.rollout_transport,
+            execution_policy=config.execution_policy,
+            internal_instances=experiment.eval_configs.internal.instances,
+            repeats=internal_repeats,
+            store=backing,
+            execution_mode=config.execution_mode,
+            fanout=_fanout(),
+            internal_task_count_override=internal_task_count_override,
+            cache=prompt_cache,
+        )
+    except CandidateEvaluationFailure as exc:
+        return _incomplete_internal_arm(
+            config=config, cell_id=cell_id, ledger=ledger,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref, failure_detail=str(exc),
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
+        )
+
+    # --- Proposer-failure guard (before ANY best-candidate determination). ---
+    # If the optimizer DRAFTED proposal slots but EVERY one was a typed
+    # proposer-draft failure (timeout/nonzero/empty/model-rejected), no real
+    # candidate was ever explored. Finalize LOUD as ``proposer-failure`` --
+    # never fall through to a naive-as-best "no-improvement" that would hide a
+    # proposer outage behind an honest-looking terminal result.
+    if opt.all_drafts_failed:
+        return _proposer_failure_arm(
+            config=config, cell_id=cell_id, ledger=ledger, opt=opt,
+            baseline_score=baseline_score, ceiling_official=ceiling_official,
+            baseline_before_ref=baseline_before_ref,
+            concurrency_halved=concurrency_halved,
+            spend_before=spend_before, credits_fetcher=credits_fetcher,
+            is_openrouter=is_openrouter, wall_s=clock() - start,
+            resumed=resumed, restarted=restarted,
+            graph_hash=graph_hash, eval_config_hash=eval_config_hash,
+            started_at=started_at_iso,
+        )
+
+    # Collect the INTERNAL candidate eval outputs (the internal naive base +
+    # every scored proposal candidate) for the rollout-output sidecar.
+    if opt.baseline_evaluation is not None:
+        _collect_outputs("internal_naive", opt.baseline_evaluation)
+    for step in opt.steps:
+        if step.evaluation is not None:
+            _collect_outputs("internal_candidate", step.evaluation)
+
+    # --- 3. Best-candidate official eval on the SAME official Eval Config. ---
+    # The best candidate may be a PROPOSED template (non-canonical), so its
+    # official render is guarded (a residual render KeyError fails its rows as
+    # a typed failure, never a cell crash). Intake validation already rejected
+    # any bad-placeholder candidate, so a valid winner renders normally.
+    best = evaluate_split(
+        experiment,
+        candidate=opt.best_candidate,
+        instances=official,
+        split_role="official",
+        transport=config.rollout_transport,
+        execution_policy=config.execution_policy,
+        policy=experiment.completeness_policy,
+        repeats=official_repeats,
+        store=backing,
+        execution_mode=config.execution_mode,
+        fanout=_fanout(),
+        partial_log=partial_log,
+        render_guard=True,
+        cache=prompt_cache,
+    )
+    _observe(best, "official_best")
+    _collect_outputs("official_best", best)
+    best_score = best.score
+    best_per_task = best.per_task_scores
+    best_counts = best.per_task_counts
+
+    # --- Incomplete-official-arm guard (before ANY determination). ---
+    # An official arm whose aggregate never resolved (``score is None`` under
+    # PROPAGATE -- some rollouts failed after FIX 2's bounded re-drive) has an
+    # UNTRUSTWORTHY scalar even though its per-task vector still has one entry
+    # per task (a failed task's absent repeats count 0, so the vector LOOKS
+    # complete). Emitting headroom / no-demonstrable-headroom / a terminal
+    # statistical status off that partial vector produces certified-looking
+    # output from an incomplete measurement (the c18:a1 defect: naive=None yet
+    # headroom + no-improvement emitted). So when either official arm is
+    # incomplete we STOP here: no headroom, no gate flag, no statistical
+    # status -- the cell finalizes as ``incomplete-arm`` naming the failed
+    # arm(s)/rows, keeps its partials for a resume, and reports real spend.
+    incomplete_note = _incomplete_arm_note(
+        baseline_score=baseline_score,
+        best_score=best_score,
+        baseline_eval=baseline_eval,
+        best_eval=best,
+    )
+
+    # --- Bootstrap intervals over TASKS (seed fixed per cell). ---
+    # All intervals resample the exchangeable unit (the task) via a per-cell
+    # fixed seed; paired variants (delta, headroom) reuse the SAME resample
+    # indices across both arms. Every interval is a pure function of already-
+    # retained per-task scores -- no re-drive, no extra provider call.
+    seed = _cell_seed(cell_id)
+    naive_ci, delta_ci, delta = _official_intervals(
+        naive_per_task, best_per_task, baseline_score, best_score, seed
+    )
+    ceiling_ci = (
+        bootstrap_mean_ci(ceiling_per_task, seed=seed)
+        if ceiling_per_task
+        else None
+    )
+    # Headroom (paired ceiling - naive) is recorded on EVERY cell (computed
+    # from the cached/driven ceiling vs naive per-task vectors); the Eval row
+    # ADDITIONALLY sets the no-demonstrable-headroom gate flag it establishes
+    # once per env (other cells leave the flag None, interpreting against it).
+    # BUT an incomplete official arm must NEVER emit a headroom / no-headroom
+    # determination: those would be certified-looking verdicts from a partial
+    # measurement (the c18:a1 defect). When incomplete, they stay None.
+    if incomplete_note is None:
+        headroom_ci = _paired_or_none(naive_per_task, ceiling_per_task, seed)
+        headroom_delta = (
+            headroom_ci.point if headroom_ci is not None else None
+        )
+        no_headroom: bool | None = None
+        if is_eval_row and headroom_ci is not None:
+            no_headroom = not headroom_ci.excludes_zero()
+    else:
+        headroom_ci = None
+        headroom_delta = None
+        no_headroom = None
+
+    pooled_counts = {
+        "naive": sum(naive_counts),
+        "best": sum(best_counts),
+    }
+
+    escalated = False
+    escalation_note = ""
+    # An incomplete official arm finalizes as ``incomplete-arm`` -- NOT a
+    # terminal statistical status. ``_status_from(None, None)`` would return
+    # ``no-improvement`` (a certified-looking no-improvement verdict), so we
+    # override it here and record which arm/rows failed.
+    if incomplete_note is not None:
+        status = "incomplete-arm"
+    else:
+        status = _status_from(delta, delta_ci)
+
+    # --- 5. Escalation: inconclusive cell auto-doubles official repeats. ---
+    # Run ADDITIONAL repeats on BOTH the naive and best arms, POOL the new
+    # per-task observations with the existing ones (never discard), and
+    # recompute the delta + CIs ONCE. Guarded by the budget reserve: skip with
+    # a recorded note when remaining credits are below the reserve.
+    if status == "inconclusive":
+        can_escalate, reason = _escalation_allowed(budget, remaining)
+        if not can_escalate:
+            escalation_note = f"escalation skipped: {reason}"
+        else:
+            # Escalation ADDS repeats (pooled), so it must NOT restore/skip the
+            # already-recorded observations: pass no partial_log here. It ALSO
+            # must NOT consult the prompt cache (task 31): escalation re-draws
+            # the SAME repeat ordinals to grow the sample pool, and a cache
+            # keyed on the repeat ordinal would serve the ORIGINAL draws back
+            # verbatim -- collapsing the escalation's added variance to zero.
+            # Escalation therefore always drives fresh, uncached.
+            extra_naive = evaluate_split(
+                experiment, candidate=naive, instances=official,
+                split_role="official", transport=config.rollout_transport,
+                execution_policy=config.execution_policy,
+                policy=experiment.completeness_policy,
+                repeats=official_repeats, store=backing,
+                execution_mode=config.execution_mode, fanout=_fanout(),
+            )
+            _observe(extra_naive, "official_naive_escalation")
+            _collect_outputs("official_naive_escalation", extra_naive)
+            extra_best = evaluate_split(
+                experiment, candidate=opt.best_candidate, instances=official,
+                split_role="official", transport=config.rollout_transport,
+                execution_policy=config.execution_policy,
+                policy=experiment.completeness_policy,
+                repeats=official_repeats, store=backing,
+                execution_mode=config.execution_mode, fanout=_fanout(),
+                render_guard=True,
+            )
+            _observe(extra_best, "official_best_escalation")
+            _collect_outputs("official_best_escalation", extra_best)
+            naive_per_task, naive_counts = _pool_per_task(
+                naive_per_task, naive_counts,
+                extra_naive.per_task_scores, extra_naive.per_task_counts,
+            )
+            best_per_task, best_counts = _pool_per_task(
+                best_per_task, best_counts,
+                extra_best.per_task_scores, extra_best.per_task_counts,
+            )
+            baseline_score = sum(naive_per_task) / len(naive_per_task)
+            best_score = sum(best_per_task) / len(best_per_task)
+            naive_ci, delta_ci, delta = _official_intervals(
+                naive_per_task, best_per_task,
+                baseline_score, best_score, seed,
+            )
+            pooled_counts = {
+                "naive": sum(naive_counts),
+                "best": sum(best_counts),
+            }
+            escalated = True
+            official_repeats *= 2
+            status = _status_from(delta, delta_ci)
+            escalation_note = "escalated: doubled official repeats and pooled"
+
+    wall_s = clock() - start
+
+    # --- Spend snapshot AFTER + per-cell spend. ---
+    spend_after: CreditsSnapshot | None = None
+    if is_openrouter and credits_fetcher is not None:
+        spend_after = credits_fetcher()
+        ledger.append_spend(
+            _spend_record(
+                cell_id=cell_id, phase="after", lane=config.lane,
+                snapshot=spend_after,
+            )
+        )
+    # FIX 8: the cell's final spend_usd sums the credits deltas across ALL
+    # attempts of this cell_id (crashed attempts included) from the spend.jsonl
+    # before/after pairs -- not merely this attempt's before/after delta. A
+    # crashed prior attempt recorded a `before` with no `after`; its burned
+    # credits are captured by pairing that `before` with the next snapshot.
+    # Falls back to this attempt's own delta when no credits were recorded.
+    if is_openrouter and credits_fetcher is not None:
+        spend_usd, _spend_gaps = ledger.spend_for_cell(cell_id)
+    else:
+        spend_usd = _spend_between(spend_before, spend_after)
+
+    # --- Whole-cell wall deadline halts ONLY when work was cut short. ---
+    # A cell is ``halted`` only when a phase actually STOPPED dispatching work
+    # because the deadline was reached (``halt_reason`` was set by ``_observe``
+    # when a phase reported ``deadline_reached``: planned observations were
+    # never driven). A cell that COMPLETED every planned phase -- even if the
+    # total elapsed happens to exceed ``max_wall_seconds`` because the final
+    # phase finished just past the line -- is NOT halted: all its work landed,
+    # so its statistical status stands (this was the c11 defect: 2000/2000
+    # observations + stats done, then wrongly stamped ``halted``). The elapsed
+    # overrun is recorded in the note for transparency, without forcing halt.
+    elapsed = clock() - cell_start
+    overran = elapsed >= config.max_wall_seconds
+
+    # Stop-loss overrides the statistical status.
+    if budget.would_halt(spend_usd):
+        status = "halted"
+    if halt_reason:
+        # Work was actually cut short (dispatch stopped mid-phase).
+        status = "halted"
+
+    # Fold the halt reason + any rate-limit concurrency halving into the note.
+    notes: list[str] = []
+    if escalation_note:
+        notes.append(escalation_note)
+    if incomplete_note is not None and status == "incomplete-arm":
+        notes.append(incomplete_note)
+    # A tolerant SKIP anchor that certified with some rows skipped records the
+    # explicit skipped-row counts here so the anchor is honest about what it
+    # tolerated (never a silently-dropped row).
+    tolerated_note = _tolerated_skip_note(
+        ("naive", baseline_eval), ("best", best)
+    )
+    if tolerated_note is not None:
+        notes.append(tolerated_note)
+    # Surface any proposal candidates the optimizer rejected (bad-placeholder
+    # template) or could not score (transient internal-eval wipeout) so a
+    # completed cell is LOUD about drafts that spent calls but never counted --
+    # never a silent drop. The optimizer isolated each to its own candidate and
+    # kept the best-so-far; this line makes that visible in the ledger.
+    reject_note = _rejected_candidates_note(opt)
+    if reject_note is not None:
+        notes.append(reject_note)
+    # The power stage, when it ran, records whether its internal-size
+    # recommendation was achievable within the pool -- a pool-limited verdict
+    # surfaced LOUDLY on the line (never a silent clamp), per the c22 case.
+    if power_sizing is not None and power_sizing.pool_limited:
+        notes.append(
+            "power-stage POOL-LIMITED: no (n,r) within pool x r-cap reaches "
+            f"the target gap {power_sizing.target_gap:.3f}; best achievable "
+            f"MDD {power_sizing.achieved_mdd:.3f} at "
+            f"n={power_sizing.used_n_tasks}, r={power_sizing.used_repeats}"
+        )
+    if concurrency_halved:
+        notes.append(
+            "concurrency halved after a rate-limit failure (all lanes one key)"
+        )
+    if halt_reason:
+        notes.append(f"halted: {halt_reason}")
+    elif overran:
+        # Completed all phases but ran past the wall budget: NOT a halt, just a
+        # transparency note (no work was cut short).
+        notes.append(
+            f"completed all phases; elapsed {elapsed:.0f}s exceeded wall "
+            f"budget {config.max_wall_seconds:.0f}s (not halted -- all "
+            "planned observations landed)"
+        )
+    combined_note = "; ".join(notes)
+
+    # Persist the per-cell rollout-output sidecar (FULL output text + score for
+    # every internal candidate eval row AND every official arm row) -- additive
+    # logging for qualitative prompt->output analysis, kept separate from the
+    # trace (long streams). The trace refers to it via ``rollout_outputs_ref``.
+    outputs_ref: str | None = None
+    if output_rows:
+        ledger.write_rollout_outputs(cell_id, output_rows)
+        outputs_ref = str(
+            ledger.rollout_outputs_path(cell_id).relative_to(ledger.root)
+        )
+
+    # Persist the full optimizer-search trace (per-round candidate evidence +
+    # the accepted-candidate prompt text) and point the cell's
+    # optimization_result_ref at it so the search is auditable from disk.
+    trace_ref = _write_optimization_trace(
+        ledger, cell_id=cell_id, config=config, status=status, opt=opt,
+        outputs_ref=outputs_ref, internal_repeats=internal_repeats,
+    )
+
+    # ed1: record the SECOND objective (Mean Compression Ratio per arm) +
+    # budget/dataset provenance alongside the primary pass-rate scores.
+    dual_scores = _ed1_dual_scores(config, experiment, dual_compression)
+    # ed1m: record the REPORTED attractor pull (task 28 item 1) on the line so
+    # it survives without a persistent ObjectStore; None for ed1/QA/d1.
+    attractor = _ed1m_attractor(config, attractor_by_role)
+
+    record = CellRecord(
+        cell_id=cell_id,
+        optimizer=config.optimizer,
+        env=config.env,
+        attempt=config.attempt,
+        canonical=config.canonical,
+        models=CellModels(
+            task=config.task_model, proposer=config.proposer_model
+        ),
+        baseline_official=baseline_score,
+        ceiling_official=ceiling_official,
+        best_official=best_score,
+        delta=delta,
+        ci95=delta_ci.as_tuple() if delta_ci is not None else None,
+        naive_ci95=naive_ci.as_tuple() if naive_ci is not None else None,
+        ceiling_ci95=ceiling_ci.as_tuple() if ceiling_ci is not None else None,
+        delta_ci95=delta_ci.as_tuple() if delta_ci is not None else None,
+        headroom_delta=headroom_delta,
+        headroom_ci95=(
+            headroom_ci.as_tuple() if headroom_ci is not None else None
+        ),
+        no_demonstrable_headroom=no_headroom,
+        official_repeats_used=official_repeats,
+        escalated=escalated,
+        escalation_note=combined_note,
+        pooled_observation_counts=pooled_counts,
+        internal_evals_count=opt.internal_evals_count,
+        optimizer_steps=opt.optimizer_steps,
+        spend_usd=spend_usd,
+        wall_s=wall_s,
+        lane=config.lane,
+        window_notes=config.window_notes,
+        status=status,
+        artifacts=CellArtifacts(
+            optimization_result_ref=trace_ref,
+            best_candidate_id=opt.best_candidate.candidate_id,
+            official_record_before=baseline_before_ref,
+            official_record_after=best.artifact_ref.content_hash,
+            power_analysis_ref=power_ref,
+        ),
+        sampling_overrides=config.record_overrides(),
+        power_sizing=power_sizing,
+        dual_scores=dual_scores,
+        attractor=attractor,
+        telemetry=_cell_telemetry(partial_log),
+        graph_hash=graph_hash,
+        eval_config_hash=eval_config_hash,
+        controls=_cell_controls(config, prompt_cache),
+        started_at=started_at_iso,
+        finished_at=datetime.now(UTC).isoformat(),
+    )
+    ledger.append_cell(record)
+    # --- Push the terminal event: incomplete-arm vs a finalized cell. ---
+    # ``realized_spend_usd`` is the cell's OWN credits-delta (already paired to
+    # its own snapshots in ``spend_usd``), never a heartbeat estimate; ``None``
+    # off the openrouter lane where no credits meter exists.
+    realized_spend = record.spend_usd if is_openrouter else None
+    if status == "incomplete-arm":
+        _emit(
+            arm_incomplete_event(
+                unit=event_unit,
+                detail=incomplete_note or "an official arm is incomplete",
+            )
+        )
+    else:
+        _emit(
+            cell_finalized_event(
+                unit=event_unit,
+                status=status,
+                delta=delta,
+                delta_ci95=(
+                    delta_ci.as_tuple() if delta_ci is not None else None
+                ),
+                realized_spend_usd=realized_spend,
+                duration_s=wall_s,
+            )
+        )
+    # A cleanly-completed (non-halted) cell has its authoritative result in the
+    # ledger, so the per-call partial log is no longer needed -- drop it. A
+    # halted OR incomplete-arm cell KEEPS its partial so a resume can pick up
+    # the recorded calls (an incomplete arm re-drives only the failed rows).
+    if status not in ("halted", "incomplete-arm"):
+        partial_log.delete()
+    # The Eval row establishes the per-env official cache (naive + ceiling
+    # scalars AND per-task vectors) so later optimizer cells reuse it. NEVER
+    # cache an incomplete arm: caching None/partial vectors would poison every
+    # downstream optimizer cell for this (env, task-model).
+    if is_eval_row and cache is None and incomplete_note is None:
+        ledger.append_env_cache(
+            EnvOfficialCache(
+                env=config.env,
+                naive_official=baseline_score,
+                ceiling_official=ceiling_official,
+                naive_per_task=naive_per_task,
+                ceiling_per_task=ceiling_per_task,
+                official_repeats_used=official_repeats,
+                task_model=config.task_model,
+                eval_config_hash=eval_config_hash,
+            )
+        )
+    return CellOutcome(
+        record=record,
+        resumed=resumed,
+        restarted=restarted,
+        reason="restarted (optimization state not resumable)"
+        if restarted
+        else "",
+    )

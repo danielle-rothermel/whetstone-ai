@@ -26,10 +26,10 @@ from __future__ import annotations
 from typing import Any
 
 from dr_serialize import (
-    FiniteJsonError,
+    StrictJsonError,
     build_identity_document,
-    identity_hash,
-    validate_finite_json,
+    identity_document_hash,
+    validate_strict_json,
 )
 from dr_store import ObjectReference
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
@@ -53,8 +53,8 @@ def reject_non_json(value: Any, *, field: str) -> Any:
     rather than at a later canonicalization the caller cannot see.
     """
     try:
-        validate_finite_json(value)
-    except FiniteJsonError as exc:
+        validate_strict_json(value)
+    except StrictJsonError as exc:
         raise ValueError(
             f"{field} must be strict finite JSON (no runtime handles, "
             f"clients, connections, or closures): {exc}"
@@ -86,7 +86,7 @@ def compute_identity_hash(
     document = build_identity_document(
         schema=schema, schema_version=schema_version, payload=payload
     )
-    return identity_hash(document)
+    return identity_document_hash(document)
 
 
 class TypedRef(BaseModel):

@@ -95,20 +95,14 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c11.html">&larr; Back to c11 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c11.html">&larr; c11 candidate page</a></nav>
 
 <div class="hdr-row">
-  <h1>c11 Baseline Spec: Headroom Before Complexity</h1>
+  <h1>Measure plain-JCS headroom before building c11's house-rule layer</h1>
   <span class="badge draft">Draft</span>
 </div>
+<p class="dek">A cheap go/no-go probe: is the naive-vs-ceiling canonicalization gap prompt-closable?</p>
 <div class="byline">whetstone-ai &middot; 2026-07-22</div>
-
-<div class="callout warn">
-  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
-  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), and six other open items
-  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
-  anything here as final.
-</div>
 
 <p>This experiment measures how much headroom exists between a naive canonicalization prompt and a
 best-effort ceiling prompt on <span class="key">plain RFC 8785 (JCS) canonical JSON</span> &mdash; before any
@@ -117,6 +111,13 @@ build effort goes into c11's invented, adversarially-deviating house-rule layer.
 "public-standard-conformance" cell the related-work synthesis maps out, so a large gain there is a materially
 weaker result than a gain on the invented-rule task &mdash; but it is the cheapest, lowest-risk first
 measurement of whether the task shape has headroom at all before house rules are designed and validated.</p>
+
+<div class="summary">
+  <strong>This spec is a draft awaiting owner decisions.</strong> Every number below is a proposal, not a
+  frozen parameter. The model set (&sect;4), the decision-rule thresholds (&sect;3), and six other open items
+  (&sect;7) are explicitly owner-gated &mdash; see the <a href="#open">open decisions</a> list before treating
+  anything here as final.
+</div>
 
 <div class="constraint">
   <span class="tag">Fixed constraints &mdash; not open for this experiment</span>
@@ -138,7 +139,7 @@ measurement of whether the task shape has headroom at all before house rules are
 </div>
 
 <!-- STRATA -->
-<div class="section-head"><h2>1. Strata design</h2></div>
+<div class="section-head"><h2>How is the instance pool stratified, and how big is it?</h2><span class="tag">§1 · Strata</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -190,7 +191,7 @@ measurement of whether the task shape has headroom at all before house rules are
 </div>
 
 <!-- PROBE PROMPTS -->
-<div class="section-head"><h2>2. The two probe prompts (drafted verbatim)</h2></div>
+<div class="section-head"><h2>What exactly do the naive and ceiling prompts say?</h2><span class="tag">§2 · Probes</span></div>
 <p>Both probes are prompt-only &mdash; no constrained decoding, which is a decoding-engine intervention
 unavailable in this baseline. The model receives the messy input JSON (<code>{input}</code>) and must return
 only the canonical string. These operationalize rubric criterion 4 (default prompts score low; better
@@ -251,7 +252,7 @@ before freezing &mdash; do not trust the hand-typed forms (the &pi;/escape examp
 confirming against the oracle's literal-UTF-8-vs-\u-escape behavior). Flagged in &sect;7.5.</div>
 
 <!-- DECISION RULE -->
-<div class="section-head"><h2>3. Three-outcome decision rule</h2></div>
+<div class="section-head"><h2>What does each measured outcome tell the project to do next?</h2><span class="tag">§3 · Decision rule</span></div>
 <p>Let <strong>F</strong> = naive-probe score, <strong>C</strong> = ceiling-probe score, each official-pool
 exact-match, averaged per repeat then across strata. Thresholds are inferences from the capability synthesis
 (predicted naive floor ~5&ndash;30%, best ~15%; predicted ceiling ~40&ndash;75%, best ~55%), with an explicit
@@ -309,8 +310,8 @@ bands are DRAFT and must be re-pinned once calibration numbers land.</p>
 </div>
 
 <!-- MODEL EVIDENCE -->
-<div class="section-head"><h2>4. Model selection &mdash; open decision</h2></div>
-<div class="callout warn">Not finalized here. See &sect;7.1. The cheap tier c11 actually runs at is not
+<div class="section-head"><h2>Which cheap models should the run cover, and on what evidence?</h2><span class="tag">§4 · Models (open)</span></div>
+<div class="callout">Not finalized here (see open decision 1). The cheap tier c11 actually runs at is not
 directly tested by any related-work paper; the table below is adjacent-proxy evidence, not measurements of
 our models on our task.</div>
 
@@ -369,7 +370,7 @@ our models on our task.</div>
 </div>
 
 <!-- COST -->
-<div class="section-head"><h2>5. Cost &amp; wall-clock estimate per full baseline run</h2></div>
+<div class="section-head"><h2>What does one full baseline run cost in dollars and minutes?</h2><span class="tag">§5 · Cost</span></div>
 <p><span class="key">Formula:</span> instances &times; probes &times; models &times; repeats = LLM calls;
 calls &times; tokens/call = tokens; tokens &times; price = cost. Fixed factors: 200 official instances
 (the 200 held-out are generated once and frozen, adding no per-run token cost); 2 probes (naive, ceiling);
@@ -414,7 +415,7 @@ rule-and-example overhead; actual output length varies with schema depth and is 
 small pilot per model should replace these estimates before committing the full run (&sect;7.4).</div>
 
 <!-- RUBRIC MAPPING -->
-<div class="section-head"><h2>6. Rubric-mapping table</h2></div>
+<div class="section-head"><h2>Which rubric criteria does each design choice satisfy?</h2><span class="tag">§6 · Rubric map</span></div>
 <div class="table-wrap">
   <table>
     <thead><tr><th>Design choice (this spec)</th><th>Rubric criteria served</th></tr></thead>
@@ -439,7 +440,7 @@ small pilot per model should replace these estimates before committing the full 
 </div>
 
 <!-- OPEN DECISIONS -->
-<div class="section-head" id="open"><h2>7. Open decisions (awaiting the owner)</h2></div>
+<div class="section-head" id="open"><h2>What must the owner decide before this spec can run?</h2><span class="tag">§7 · Open decisions</span></div>
 <div class="open-decisions">
   <h3>Nothing below is frozen &mdash; all eight items require an explicit owner call before this spec can run.</h3>
   <ol>
@@ -469,7 +470,7 @@ small pilot per model should replace these estimates before committing the full 
   </ol>
 </div>
 
-<div class="callout warn" style="margin-top:18px;">
+<div class="callout" style="margin-top:18px;">
   <strong>Evidence-thinness disclosures.</strong> No paper runs c11's exact task (byte-exact canonical JSON vs
   a deterministic oracle); every floor/ceiling number above is an inference with wide error bars. The cheap
   tier c11 runs at is not directly tested by any paper (&sect;4). The serialization-convention ablation
@@ -478,6 +479,15 @@ small pilot per model should replace these estimates before committing the full 
   naive-floor prediction pulls two ways: novel-constraint evidence argues for a low floor, but plain JCS is a
   memorizable public standard, so the floor could exceed 40% &mdash; this is the uncertainty the baseline
   exists to resolve.
+</div>
+
+<div class="colophon">
+  <p>Draft spec, whetstone-ai &middot; 2026-07-22. Every number is a proposal pending owner sign-off; nothing is
+  frozen until a pilot per model calibrates the floor/ceiling numbers on real generations (&sect;7.4).</p>
+  <p>Floor/ceiling expectations and model proxies are grounded in the related-work synthesis and per-paper
+  dossiers (LLMStructBench, StructEval, PolyNorm, IFBench). Oracle: trailofbits <code>rfc8785-py</code>
+  (<code>rfc8785.dumps</code>), used unmodified. Generator: json-schema-faker (v0.6.2 reviewed). JCS = RFC 8785
+  JSON Canonicalization Scheme.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

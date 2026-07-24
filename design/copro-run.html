@@ -79,7 +79,8 @@
 </head>
 <body>
 <main>
-<h1>COPRO Optimization Run Design</h1>
+<h1>COPRO proposes instruction rewrites that Whetstone evaluates outside the optimizer</h1>
+<p class="dek">Each round is one proposal-only Step; only the finished run returns proposals for official evaluation.</p>
 <div class="byline">whetstone-ai · 2026-07-20</div>
 
 <div class="family-nav">
@@ -130,7 +131,7 @@
 </table>
 </div>
 
-<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<div class="section-head" id="target"><h2>What does the designer freeze before the run?</h2><span class="tag">example setup</span></div>
 
 <div class="grid-4">
   <div class="card">
@@ -170,7 +171,7 @@
   </div>
 </div>
 
-<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+<div class="section-head" id="specified"><h2>What does each proposal Step serialize?</h2><span class="tag">run configurations</span></div>
 
 <p>dr-graph's Graph Definition—used by Whetstone in the Rollout Definition role—and the facts-first Eval Definition are unchanged from the <a href="eval-run.html#specified">eval doc</a>: LLM Call Node → LLM Call Node → Eval Node. Graph Definition and Rollout Definition do not denote separate artifacts or identities. Each complete output-affecting assignment and axis selection materializes one concrete Graph Config plus one Materialization Record; the Graph Config is the Rollout Variant and <code>graph_hash</code> is its sole identity.</p>
 
@@ -194,7 +195,7 @@
 
 <div class="callout"><b>Measurement and Reward.</b> <code>step_eval_config_ref</code> fixes Sampling = <code>step_task_count=20</code> named tasks × <code>step_repeat_count=1</code> + Evaluation Procedure + complete task Aggregation and references the identical canonical Evaluation Procedure Config assigned statically to the Graph's Eval Node. Whetstone validates and materializes every returned candidate, runs this evaluation outside the COPRO invocation, and applies <code>step_reward_policy_ref</code> to create Reward and the next immutable Attempt History. The ordinary Eval Config bound under the <code>official</code> Evaluation Role changes Sampling/Aggregation only, so matching Graph Configs retain the same <code>graph_hash</code> while their <code>eval_config_hash</code> values differ; a Procedure Config change would change both hashes. Authority and realized-environment attestation remain in Evaluation Context; an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward.</div>
 
-<div class="section-head" id="system"><h2>Run COPRO as Externally Evaluated Proposal Steps</h2></div>
+<div class="section-head" id="system"><h2>How do proposal-only Steps and external evaluation compose?</h2><span class="tag">externally evaluated proposal steps</span></div>
 
 <div class="flow">
   <div class="plane optim">
@@ -264,7 +265,7 @@
   </div>
 </div>
 
-<div class="section-head" id="run"><h2>Full Run Walkthrough: Two Proposal Steps, Ten Externally Measured Attempts</h2></div>
+<div class="section-head" id="run"><h2>What happens across two proposal Steps and ten measured attempts?</h2><span class="tag">full run walkthrough</span></div>
 
 <div class="run">
   <div class="tick">
@@ -321,11 +322,11 @@
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What Lands on the Plot: Official Results Only</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot?</h2><span class="tag">official results only</span></div>
 
 <p>Per Model Route, <code>official_selected_proposal_count=2</code> survivors retain four separately attributable materialization slots across <code>variance_source_values</code>, while converged slots share the planned/result-key set and Rollout Aggregate for their Graph Hash. The explicit nonconvergent example has <code>D=8</code>. The Pareto Front is recomputed from official results only. The derived <code>internal_rollout_count=200</code> stays outside the plot because those Results have internal Evaluation Contexts; they remain available to study whether step Reward predicted official Objectives. Proposal LM and Rollout costs remain attributable through the two Step Results.</p>
 
-<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="section-head" id="notes"><h2>What edge cases and guarantees should you keep in mind?</h2><span class="tag">additional notes</span></div>
 
 <div class="grid-3">
   <div class="card">
@@ -375,6 +376,10 @@
       <li>Identity keeps the regimes separate, but it does not decide whether overlap is scientifically appropriate</li>
     </ul>
   </div>
+</div>
+
+<div class="colophon">
+  Whetstone design family · 2026-07-20 · one of five optimizer run designs. Terms link to <a href="vocab_and_defs.html">Vocab &amp; Defs</a>; sibling runs: <a href="eval-run.html">Eval</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="gepa-run.html">GEPA</a>, <a href="codex-agent-run.html">Codex CLI agent</a>. Purple (<span class="key">optim</span>) marks what this run changes relative to the Eval run; step and attempt counts are illustrative for one walkthrough.
 </div>
 
 </main>

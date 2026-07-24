@@ -6,15 +6,11 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state.
-   Color alone is never the only signal: each state also carries its own
-   label text, so it stays legible for color-vision differences and in dark. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -28,16 +24,11 @@
 .badge.gated     { color: var(--amber);  background: var(--amber-soft);  border-color: var(--amber); }
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
-/* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose.
-   A chip is a label + value pair; only chips carry digits on the page. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -49,7 +40,6 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -64,11 +54,8 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking.
-   Format in prose: Name (Authors, Venue Year). */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
-/* Unverified links/claims are visibly flagged — text label, not color only. */
 .unverified::after {
   content: "unverified";
   margin-left: 6px; padding: 1px 7px; border-radius: 999px;
@@ -79,10 +66,25 @@
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -98,6 +100,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c23 Hidden-Rule String-Transform Induction Ladder</title>
@@ -105,38 +108,37 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c23</span>Hidden-Rule String-Transform Induction Ladder</h1>
   <span class="badge ranked">RANKED #11</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">compositional rule induction from I/O demonstrations</span> — the InductionBench / PCFG-SET / MiniSCAN family, where a model infers K latent string-transform rules from few-shot examples and applies them to a held-out query.</div>
+<p class="dek">Infer K latent string-transform rules from few-shot demos and apply them to a held-out query.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict">
-  <p><strong>Ranked #11 of 20 after the implementation-aware rescore, up from the 26-tier in round 1.</strong> The task design is one of the cleanest in the pool: an independent oracle applies a latent rule set, the rules decompose into inspectable strata, few-shot demos are load-bearing by construction, and randomized rule subsets over invented vocabularies make it contamination-proof. What holds it back is the codebase, not the concept. The one candidate repo &mdash; InductionBench &mdash; has a genuinely independent, self-consistent oracle worth re-implementing, but it does not import or run as shipped: three import-time crashes were verified by execution, and its &ldquo;seeded&rdquo; generator is not reproducible unless <code>PYTHONHASHSEED</code> is pinned. The failed-run cap holds the reuse score at its floor, and that double-weighted penalty is the whole reason a design this clean lands mid-pack rather than on the podium.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">26/2</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">10/16</span></span>
-  </div>
+<p><strong>Ranked #11 of 20 after the implementation-aware rescore, up from the 26-tier in round 1.</strong> The task design is one of the cleanest in the pool: an independent oracle applies a latent rule set, the rules decompose into inspectable strata, few-shot demos are load-bearing by construction, and randomized rule subsets over invented vocabularies make it contamination-proof. What holds it back is the codebase, not the concept. The one candidate repo — InductionBench — has a genuinely independent, self-consistent oracle worth re-implementing, but it does not import or run as shipped: three import-time crashes were verified by execution, and its "seeded" generator is not reproducible unless <code>PYTHONHASHSEED</code> is pinned. The failed-run cap holds the reuse score at its floor, and that double-weighted penalty is the whole reason a design this clean lands mid-pack rather than on the podium.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">26</span></span>
+  <span class="chip"><span class="k">TB</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">2</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">10/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Induce K independent latent transform rules from demos, apply to one query</h3>
-    <p>The designer defines K independent <span class="key">transformation rules</span> &mdash; casing keyed to token length, positional swaps, subregular ISL/OSL string edits, per-primitive command&rarr;action mappings, or 1D-ARC-style short-array transforms. Each seeded instance applies a <span class="key">rule subset</span> to an input. The model sees a handful of few-shot <span class="key">input&rarr;output demonstrations</span> plus one <span class="key">query</span>, and must output the transformed short string &mdash; or pick from a 4-way multiple choice among candidates each wrong in exactly one rule. Scoring is <span class="key">exact match</span> against the reference transformer, 0/1 with no partial credit. Prompt quality equals how many rules the prompt states or induces, giving a smooth incremental ladder with a known ceiling (state all rules) and floor (naive prompt). Because demos are the only channel for the latent rules, the few-shot axis is alive by construction; randomized rule subsets over invented vocabularies keep it contamination-proof.</p>
+    <p>The designer defines K independent <span class="key">transformation rules</span> — casing keyed to token length, positional swaps, subregular ISL/OSL string edits, per-primitive command&rarr;action mappings, or 1D-ARC-style short-array transforms. Each seeded instance applies a <span class="key">rule subset</span> to an input. The model sees a handful of few-shot <span class="key">input&rarr;output demonstrations</span> plus one <span class="key">query</span>, and must output the transformed short string — or pick from a 4-way multiple choice among candidates each wrong in exactly one rule. Scoring is <span class="key">exact match</span> against the reference transformer, 0/1 with no partial credit.</p>
+    <p>Prompt quality equals how many rules the prompt states or induces, giving a smooth incremental ladder with a known ceiling (state all rules) and floor (naive prompt). Because demos are the only channel for the latent rules, the few-shot axis is alive by construction; randomized rule subsets over invented vocabularies keep it contamination-proof.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative &mdash; constructed faithfully from the merged summary. Seeded conditions: two latent ISL/OSL-style rules over a small invented vocabulary, applied together to each demo; the query exercises both.</p>
+    <p class="aside">Illustrative — constructed faithfully from the merged summary. Seeded conditions: two latent ISL/OSL-style rules over a small invented vocabulary, applied together to each demo; the query exercises both.</p>
 <pre><code>Demonstrations (rules: (1) double any token ending in "z";
                        (2) uppercase the first token):
   vez fam qor   -&gt;  VEZ vez fam qor
@@ -157,8 +159,7 @@ Naive-prompt miss:
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -175,7 +176,7 @@ Naive-prompt miss:
   <div class="card">
     <h3>Brainstorm parents</h3>
     <ul>
-      <li><a href="../candidates-merged.html#c23">Compositional String Decode (CSD)</a> — the brainstorm seed; the merge records c23 as &ldquo;origin: both&rdquo; (brainstorm + literature).</li>
+      <li><a href="../candidates-merged.html#c23">Compositional String Decode (CSD)</a> — the brainstorm seed; the merge records c23 as "origin: both" (brainstorm + literature).</li>
       <li><a href="../candidates-merged.html#c23">c23 merged entry</a> — folds the CSD brainstorm item together with the InductionBench / PCFG-SET / Instruction-Induction / List-Functions literature cluster into a single ladder.</li>
     </ul>
   </div>
@@ -183,27 +184,25 @@ Naive-prompt miss:
 <div class="card full space-top">
   <h3>Dead branches: dropped near-relatives</h3>
   <ul class="dead-branch">
-    <li>D4 &middot; CRUXEval-style code-output prediction — <span class="why">the published set is heavily contaminated and regeneration needs a code DSL with unconstrained return types that fight exact-match bounding; its rule-induction flavor was folded into c23</span>.</li>
-    <li>D5 &middot; Grounded grid compositional (gSCAN / ReaSCAN) — <span class="why">grid rendering plus action-sequence outputs are the most expensive to bound and the reviewer judged it &ldquo;not worth the adaptation cost&rdquo;; its compositional-splits flavor was folded into c23 (grid flavor went to c19)</span>.</li>
+    <li>D4 · CRUXEval-style code-output prediction — <span class="why">the published set is heavily contaminated and regeneration needs a code DSL with unconstrained return types that fight exact-match bounding; its rule-induction flavor was folded into c23</span>.</li>
+    <li>D5 · Grounded grid compositional (gSCAN / ReaSCAN) — <span class="why">grid rendering plus action-sequence outputs are the most expensive to bound and the reviewer judged it "not worth the adaptation cost"; its compositional-splits flavor was folded into c23 (grid flavor went to c19)</span>.</li>
     <li>HERO'S JOURNEY / WILT / ARISE — <span class="why">named in the merge as generators only, not tasks: their multi-step episodic form violates the single-call constraint and the procedural-induction family risks an unreachable ceiling</span>.</li>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
-    <li><span class="cite"><a href="https://arxiv.org/abs/2502.09933">MIR-Bench</a> (Yan et al., NeurIPS 2025 D&amp;B; arXiv:2502.09933)</span> — many-shot in-context inductive reasoning; c23's demo-count / many-shot lever. Corpus correction: the merge mis-titles it &ldquo;Benchmarking LLM's Long-Context Intelligence via Many-Shot In-Context Inductive Reasoning&rdquo;; the verified title is &ldquo;MIR-Bench: Can Your LLM Recognize Complicated Patterns via Many-Shot In-Context Reasoning?&rdquo;</li>
+    <li><span class="cite"><a href="https://arxiv.org/abs/2502.09933">MIR-Bench</a> (Yan et al., NeurIPS 2025 D&amp;B; arXiv:2502.09933)</span> — many-shot in-context inductive reasoning; c23's demo-count / many-shot lever. Corpus correction: the merge mis-titles it "Benchmarking LLM's Long-Context Intelligence via Many-Shot In-Context Inductive Reasoning"; the verified title is "MIR-Bench: Can Your LLM Recognize Complicated Patterns via Many-Shot In-Context Reasoning?"</li>
     <li><span class="cite"><a href="https://arxiv.org/abs/2606.04751">FalsifyBench</a> (Bertolazzi et al., 2026; arXiv:2606.04751)</span> — a 2026 rule-discovery-game evaluation of inductive reasoning; adjacent to c23 with a Wason / multi-turn flavor, overlapping the corpus's WILT / HERO'S JOURNEY cluster.</li>
     <li><span class="cite"><a href="https://arxiv.org/abs/2502.15823">InductionBench</a> (Hua et al., ACL 2025; arXiv:2502.15823)</span> — still actively cited in 2025-2026; doubles as the codebase source and the reachability caveat.</li>
-    <li class="unverified"><span class="cite">&ldquo;Symbolic hidden-rule mapping family&rdquo; (listed in c23's merged-literature line)</span> — a generic descriptor with no specific paper or resolvable arXiv id in the corpus, so no canonical source could be confirmed.</li>
+    <li class="unverified"><span class="cite">"Symbolic hidden-rule mapping family" (listed in c23's merged-literature line)</span> — a generic descriptor with no specific paper or resolvable arXiv id in the corpus, so no canonical source could be confirmed.</li>
     <li><a href="../related-work/c23-related-work.html">c23 related work</a> — deep-read dossiers + capability/positioning synthesis, 2026-07-22.</li>
     <li><a href="../related-work/c23-baseline-spec.html">c23 baseline spec</a> — draft baseline experiment spec — headroom before complexity.</li>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -220,12 +219,12 @@ Naive-prompt miss:
     <span class="rowlabel">Supports</span>
     <ul class="pros"><li>Demos are the only channel for the latent rules, so the few-shot / MIPROv2 axis is alive by construction rather than bolted on</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>A single-rule or overly transparent stratum is one-shot guessable &mdash; &ldquo;it's a casing rule&rdquo; can close the gap in one sentence &mdash; so the ladder only holds if rules are genuinely composed</li></ul>
+    <ul class="cons"><li>A single-rule or overly transparent stratum is one-shot guessable — "it's a casing rule" can close the gap in one sentence — so the ladder only holds if rules are genuinely composed</li></ul>
   </div>
   <div class="lens">
     <h3>Measurement skeptic</h3>
     <span class="rowlabel">Supports</span>
-    <ul class="pros"><li>The oracle is genuinely independent of the sampler &mdash; rules sampled by one function, outputs computed by a separate deterministic transducer &mdash; and verified self-consistent across configs, so ground truth is not tautological</li></ul>
+    <ul class="pros"><li>The oracle is genuinely independent of the sampler — rules sampled by one function, outputs computed by a separate deterministic transducer — and verified self-consistent across configs, so ground truth is not tautological</li></ul>
     <span class="rowlabel">Against</span>
     <ul class="cons"><li>Exact-match on short transformed strings is legitimate but per-instance binary, so a small eval needs enough query items to resolve a ten-point prompt change above noise</li></ul>
   </div>
@@ -234,7 +233,7 @@ Naive-prompt miss:
     <span class="rowlabel">Supports</span>
     <ul class="pros"><li>The generation-plus-oracle core is small and, once patched, reusable; strata are independent so a change regenerates one stratum with a local diff and the round-1 verdict left only verification-level debt</li></ul>
     <span class="rowlabel">Against</span>
-    <ul class="cons"><li>The repo does not import or run as shipped &mdash; a missing <code>config.py</code>, a <code>sys.path.add</code> crash, and an import of a nonexistent function are three verified failures &mdash; and its generator is nondeterministic unless <code>PYTHONHASHSEED</code> is pinned, capping reuse at the floor</li></ul>
+    <ul class="cons"><li>The repo does not import or run as shipped — a missing <code>config.py</code>, a <code>sys.path.add</code> crash, and an import of a nonexistent function are three verified failures — and its generator is nondeterministic unless <code>PYTHONHASHSEED</code> is pinned, capping reuse at the floor</li></ul>
   </div>
   <div class="lens">
     <h3>Research currency</h3>
@@ -244,16 +243,15 @@ Naive-prompt miss:
     <ul class="cons"><li>The freshest members of this family are also the hardest, so borrowing their difficulty framing risks importing their unreachable-ceiling problem</li></ul>
   </div>
 </div>
-<p class="small muted">Note: c23 sat in the 26-tier in round 1 and received no dedicated finalist skeptic pass &mdash; it has no <code>#c23</code> anchor in <a href="../recommendations.html">recommendations.html</a>. The skeptic column above is reconstructed from the merged summary and the round-2 desk scoring rather than from a standalone round-1 adversarial review.</p>
+<p class="aside">c23 sat in the 26-tier in round 1 and received no dedicated finalist skeptic pass — it has no <code>#c23</code> anchor in <a href="../recommendations.html">recommendations.html</a>. The lens column above is reconstructed from the merged summary and the round-2 desk scoring rather than a standalone round-1 adversarial review.</p>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
   <div class="step"><h3>Vendor the two on-path files</h3><p>Copy <code>synthetic_data_generation.py</code> (generation + oracle) and the three needed functions from <code>utils.py</code> into our repo under Apache-2.0 with the NOTICE preserved; do not vendor <code>inference.py</code>, <code>model.py</code>, or <code>standard_run.py</code>.</p></div>
-  <div class="step"><h3>Fix the three import-time blockers</h3><p>Add a real <code>config.py</code> (or refactor <code>config.vocab</code> into an explicit argument), delete the <code>translate_fewshot_input_output_pairs</code> import at <code>synthetic_data_generation.py:8</code>, and drop the entire few-shot path &mdash; roughly a five-line set of edits.</p></div>
+  <div class="step"><h3>Fix the three import-time blockers</h3><p>Add a real <code>config.py</code> (or refactor <code>config.vocab</code> into an explicit argument), delete the <code>translate_fewshot_input_output_pairs</code> import at <code>synthetic_data_generation.py:8</code>, and drop the entire few-shot path — roughly a five-line set of edits.</p></div>
   <div class="step"><h3>Thread a real seed</h3><p>Add a <code>seed</code> parameter to <code>generate_rules</code> / <code>generate_data</code>, replace the module-global <code>random.seed(0)</code>, and either pin <code>PYTHONHASHSEED=0</code> or replace every <code>list(set(...))</code> over strings with <code>sorted(...)</code> at the ~six call sites; the <code>sorted(...)</code> route kills hash-order nondeterminism at the source.</p></div>
   <div class="step"><h3>Write the glue outside the repo</h3><p>An instance loop calling <code>generate_rules</code> + <code>generate_data</code> per stratum (varying type / k / vocab-size / rule-count), a single-LLM-call driver, a 0/1 exact-match scorer against the oracle, a latent-rule strata config, and optional nonce-vocab remapping.</p></div>
-  <div class="step"><h3>Calibrate reachability before freezing</h3><p>Verify a reference prompt hits ~100% on the easiest strata so the incremental gap is real headroom and not &ldquo;nobody succeeds,&rdquo; curating rule complexity against InductionBench's simplest-class-fails warning.</p></div>
+  <div class="step"><h3>Calibrate reachability before freezing</h3><p>Verify a reference prompt hits ~100% on the easiest strata so the incremental gap is real headroom and not "nobody succeeds," curating rule complexity against InductionBench's simplest-class-fails warning.</p></div>
 </div>
 
 <div class="grid-2 space-top">
@@ -261,7 +259,7 @@ Naive-prompt miss:
     <h3>Risks</h3>
     <ul>
       <li>Ceiling unreachable: InductionBench reports even o1/o3 fail the simplest subregular class, so without deliberate curation the write-out-all-rules ceiling may sit below full accuracy and collapse the incremental-gap story.</li>
-      <li>Nondeterminism leaks past the seed: <code>list(set(...))</code> over strings makes output depend on <code>PYTHONHASHSEED</code>; an incomplete seed refactor leaves the &ldquo;seeded&rdquo; pool non-reproducible, breaking same-seed re-runs.</li>
+      <li>Nondeterminism leaks past the seed: <code>list(set(...))</code> over strings makes output depend on <code>PYTHONHASHSEED</code>; an incomplete seed refactor leaves the "seeded" pool non-reproducible, breaking same-seed re-runs.</li>
       <li>One-shot guessable strata: a transparent single-rule stratum can be solved by one sentence, so the ladder must lean on composed, wrong-in-exactly-one-rule distractors to preserve partial-credit structure.</li>
     </ul>
   </div>
@@ -269,14 +267,12 @@ Naive-prompt miss:
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> <a href="https://github.com/Wenyueh/inductive_reasoning_benchmark">Wenyueh/inductive_reasoning_benchmark (InductionBench)</a> (Apache-2.0) — deep-read notes at <a href="../repos/inductionbench-wenyueh-inductive-reasoning-benchma.md">repos/inductionbench-wenyueh-inductive-reasoning-benchma.md</a>.</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status fail">failed</span>
-        the active path does not import as shipped (three verified import-time crashes: missing <code>config.py</code>, a <code>sys.path.add</code> <code>AttributeError</code> at <code>inference.py:4</code>, and an <code>ImportError</code> for a nonexistent <code>translate_fewshot_input_output_pairs</code>), and two same-seed runs produced different instance hashes until <code>PYTHONHASHSEED=0</code> was pinned. The oracle was spot-checked as self-consistent, but the failed run caps I1 at 1.</li>
+      <li><span class="key">Run verification:</span> <span class="status fail">failed</span>
+        — the active path does not import as shipped (three verified import-time crashes: missing <code>config.py</code>, a <code>sys.path.add</code> <code>AttributeError</code> at <code>inference.py:4</code>, and an <code>ImportError</code> for a nonexistent <code>translate_fewshot_input_output_pairs</code>), and two same-seed runs produced different instance hashes until <code>PYTHONHASHSEED=0</code> was pinned. The oracle was spot-checked as self-consistent, but the failed run caps I1 at 1.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -304,6 +300,12 @@ Naive-prompt miss:
     <a href="../related-work/c23-baseline-spec.html">Baseline spec</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 26 · TB 2 · I1 1 · I2 2 · I3 1 · I4 1 · I5 2 · I6 2 · Impl total 10/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations-round2.html#table">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c23">candidates-merged.md</a> · <a href="../related-work/c23-related-work.html">related work</a> · <a href="../related-work/c23-baseline-spec.html">baseline spec</a>. No round-1 finalist anchor exists for c23 (below the 28-tier cut).
+  Regenerated from <code>c23.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

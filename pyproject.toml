@@ -10,9 +10,9 @@ dependencies = [
     "dr-code",
     "dr-graph",
     "dr-platform",
-    "dr-providers",
-    "dr-serialize",
-    "dr-store",
+    "dr-providers>=0.2.0,<0.3",
+    "dr-serialize>=0.1.0",
+    "dr-store>=0.1.0",
     "whetstone-envs",
 ]
 
@@ -24,6 +24,7 @@ dev = [
     "pre-commit>=4.6.0",
     "psycopg>=3.3.4",
     "pytest>=8.4.2",
+    "pytest-xdist>=3.6.0",
     "ruff>=0.15.10",
     "ty>=0.0.54",
 ]
@@ -33,18 +34,15 @@ dev = [
 #   dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 #   dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
 #   dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "main" }
-#   dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
-#   dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
-#   dr-store = { git = "https://github.com/danielle-rothermel/dr-store", branch = "main" }
 #   whetstone-envs = { git = "https://github.com/danielle-rothermel/whetstone-envs", branch = "main" }
 [tool.uv.sources]
 dr-code = { path = "../dr-code", editable = true }
 dr-graph = { path = "../dr-graph", editable = true }
 dr-platform = { path = "../dr-platform", editable = true }
-dr-providers = { path = "../dr-providers", editable = true }
-dr-serialize = { path = "../dr-serialize", editable = true }
-dr-store = { path = "../dr-store", editable = true }
 whetstone-envs = { path = "../whetstone-envs", editable = true }
+
+[project.scripts]
+whetstone-validate = "whetstone.runner.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -60,6 +58,24 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Two-tier suite. The default run deselects the `slow` tier so the everyday
+# `uv run pytest` stays fast (< 60s); the slow tier (full-N c18h PrOntoQA
+# pool regeneration -- the ~18s subprocess build that pins the committed pool
+# shape) runs as its own CI job via `-m slow`. Deselected-by-default does NOT
+# mean never-run: see the `slow-tests` job in
+# .github/workflows/whetstone_tests.yml and tests/README.md.
+#
+# `-n auto --dist loadgroup` runs the suite across one worker per core
+# (measured ~52s vs ~195s serial; see test-suite-speedup.md). `loadgroup`
+# keeps every test tagged `@pytest.mark.xdist_group("postgres")` (the three
+# orchestration modules that share the single `dr_platform_test` DB) on ONE
+# worker so they cannot race the shared schema, while everything else
+# parallelizes. A single-file invocation (`pytest tests/foo.py`) still runs
+# fine -- xdist just spins up workers for whatever is collected.
+addopts = "-m 'not slow' -n auto --dist loadgroup"
+markers = [
+    "slow: irreducibly >5s (full-N c18h PrOntoQA pool regeneration); deselected by default, run explicitly with -m slow",
+]
 
 [tool.pyright]
 venvPath = "."

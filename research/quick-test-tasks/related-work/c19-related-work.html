@@ -99,9 +99,10 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c19.html">&larr; Back to c19 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c19.html">&larr; c19 candidate page</a></nav>
 
-<h1>c19 Related Work: Grid-World State Prediction in 2024-2026</h1>
+<h1>c19's biggest risk is a naive-prompt floor already too high, not a collapsing task</h1>
+<p class="dek">Five 2024&ndash;2026 papers on grid/maze reasoning bound c19's design space.</p>
 <div class="byline">whetstone-ai · 2026-07-22</div>
 
 <p>Five 2024-2026 papers on grid/maze reasoning bound c19's design space. Only two —
@@ -112,7 +113,7 @@ upper-bounds rather than direct predictors. The convergent warning across all fi
 is a <span class="key">naive-prompt floor that is already too high</span>, not a task that collapses.</p>
 
 <!-- PAPER DOSSIERS -->
-<div class="section-head"><h2>Paper dossiers</h2></div>
+<div class="section-head"><h2>What does each paper claim, and does it support the corpus's use of it?</h2><span class="tag">Paper dossiers</span></div>
 
 <div class="paper-card">
   <div class="paper-head">
@@ -324,7 +325,7 @@ is a <span class="key">naive-prompt floor that is already too high</span>, not a
 </div>
 
 <!-- 2x2 POSITIONING MAP -->
-<div class="section-head"><h2>Positioning: observation &times; protocol</h2></div>
+<div class="section-head"><h2>Where does c19 sit across observation &times; protocol, and which cell is empty?</h2><span class="tag">Positioning map</span></div>
 <p>Classification is at the <span class="key">API-call level</span>: "single-shot" means one LLM call with no
 environment feedback loop, regardless of whether the output is a single fact or a full plan. Under that
 convention, four of five papers plus c19 crowd into one cell.</p>
@@ -366,7 +367,7 @@ convention, four of five papers plus c19 crowd into one cell.</p>
 </div>
 
 <!-- CAPABILITY SYNTHESIS -->
-<div class="section-head"><h2>Capability synthesis</h2></div>
+<div class="section-head"><h2>What accuracy should the c19 baseline expect, and where does it fail?</h2><span class="tag">Capability synthesis</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -408,7 +409,7 @@ convention, four of five papers plus c19 crowd into one cell.</p>
   30-50 points independent of task difficulty.</p>
 </div>
 
-<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for the c19 baseline</h2></div>
+<div class="section-head" style="margin-top:32px;"><h2>What floor and ceiling should the c19 baseline hit?</h2><span class="tag">Floor &amp; ceiling</span></div>
 <p>c19 config: vanilla Minigrid dynamics (no invented commands in the baseline), full-observation ASCII grid,
 single derived fact, exact-match, temp 0, cheap-tier models. This is the intersection of the
 <span class="key">easiest task shape</span> in the literature (single fact, ~6&times;6, no planning/memory-across-turns)
@@ -441,7 +442,7 @@ prompt-sensitive tier</span> &mdash; no paper tests this exact cell, so both ran
 </div>
 
 <!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
-<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+<div class="section-head"><h2>Is the baseline publishable, and against which neighbor?</h2><span class="tag">Positioning &amp; publishability</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -511,6 +512,15 @@ prompt-sensitive tier</span> &mdash; no paper tests this exact cell, so both ran
   evaluation-angle contribution is largely pre-empted, especially by the 2026 paper; and OpenAlex zeros cannot
   distinguish "ignored" from "too new" without a Google Scholar cross-check. <em>All OpenAlex counts undercount
   relative to Google Scholar.</em></p>
+</div>
+
+<div class="colophon">
+  <p>whetstone-ai &middot; 2026-07-22. Synthesized from the c19 related-work corpus &mdash; five 2024&ndash;2026
+  papers on grid/maze reasoning (LLM-BabyBench, MazeEval, the 2026 spatial-world-models study, and per-paper
+  dossiers). Citation counts fetched from OpenAlex on 2026-07-22. Deep lineage: bAbI, EntNet.</p>
+  <p>OpenAlex counts materially undercount relative to Google Scholar and are near-zero by construction for the
+  2025&ndash;2026 papers (indexing lag, not neglect); each is flagged inline and should be read as a coarse
+  recency floor only, not a measurement.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

@@ -19,6 +19,7 @@ from tests.envs.support import (
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.internal_eval import run_internal_eval
 from whetstone.envs.registry import ENV_NAMES, env_spec
+from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.graph.rollout import EvaluationRole
 from whetstone.optimization.reward import Reward
 
@@ -103,7 +104,10 @@ def _correct_generation(env, instance) -> str:
 def test_build_env_experiment_returns_all_five_deliverables(
     env_name: str,
 ) -> None:
-    exp = build_env_experiment(env_name, model=_MODEL)
+    # The factory contract (five deliverables + shared Procedure identity) is
+    # N-independent, so build over a tiny pool -- avoids the full-N c18/c18h
+    # PrOntoQA regeneration this parametrization would otherwise pay twice.
+    exp = _tiny_experiment(env_name)
     d = exp.as_dict()
     assert set(d) == {
         "rollout_definition",
@@ -170,6 +174,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
     assert agg.aggregation_output.value == pytest.approx(0.0)
     planned = agg.task_count * agg.repeat_count
     assert agg.rows_present == planned
+    assert isinstance(result.reward, Reward)
     assert result.reward.evidence_role is EvaluationRole.INTERNAL
     assert result.reward.value == pytest.approx(0.0)
 
@@ -188,6 +193,7 @@ def test_internal_eval_wrong_answers_score_zero() -> None:
         repeats=2,
     )
     assert result.aggregate.aggregation_output.value == pytest.approx(0.0)
+    assert isinstance(result.reward, Reward)
     assert result.reward.value == pytest.approx(0.0)
 
 
@@ -214,6 +220,8 @@ def test_internal_eval_is_deterministic() -> None:
     assert a.aggregate.aggregation_output.value == (
         b.aggregate.aggregation_output.value
     )
+    assert isinstance(a.reward, Reward)
+    assert isinstance(b.reward, Reward)
     assert a.reward.value == b.reward.value
     assert a.aggregate.graph_hash == b.aggregate.graph_hash
 
@@ -222,12 +230,13 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
     # A blank generation is not an accepted Generation (a provider semantic
     # failure); the internal-eval marks it a FAILED row. Under the default
     # PROPAGATE policy that makes the aggregate visibly incomplete (value
-    # None) -- never a silent 0 -- so the FAIL Reward Policy refuses to
-    # compute a Reward over incomplete internal evidence.
+    # None) -- never a silent 0 -- so on the internal/optimizer path (reward
+    # applied) the FAIL Reward Policy surfaces the TYPED
+    # CandidateEvaluationFailure the optimizer loop handles, not a bare crash.
     exp = _tiny_experiment("c18")
     internal_insts = exp.eval_configs.internal.instances
     transport = FakeTransport(reply=constant_reply("   "))
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(CandidateEvaluationFailure):
         run_internal_eval(
             exp,
             candidate=exp.initial_candidate,
@@ -236,6 +245,27 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
             transport=transport,
             repeats=2,
         )
+
+
+def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
+    # FIX 1: an official-role evaluation (apply_reward=False) with incomplete
+    # evidence (all-blank -> failed rows -> aggregate None, PROPAGATE) must
+    # NOT crash and must derive NO Reward -- visible incompleteness only.
+    exp = _tiny_experiment("c18")
+    official_insts = exp.eval_configs.official.instances
+    transport = FakeTransport(reply=constant_reply("   "))
+    result = run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        instances=official_insts,
+        execution_policy=execution_policy(),
+        transport=transport,
+        repeats=2,
+        apply_reward=False,
+    )
+    assert result.reward is None
+    assert result.aggregate.aggregation_output.value is None
+    assert result.aggregate.rows_failed > 0
 
 
 def test_failed_rows_under_skip_still_visible_in_provenance() -> None:

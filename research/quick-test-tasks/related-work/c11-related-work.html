@@ -80,9 +80,10 @@
 <body>
 <main>
 
-<nav class="nav-back"><a href="../candidates/c11.html">&larr; Back to c11 candidate page</a></nav>
+<nav class="nav-back"><a href="../candidates/c11.html">&larr; c11 candidate page</a></nav>
 
-<h1>c11 Related Work: House-Convention Canonicalizer</h1>
+<h1>No paper runs c11's exact task; every number here is an adjacent-task proxy</h1>
+<p class="dek">Seven papers on structured generation bound c11's house-convention canonicalizer design space.</p>
 <div class="byline">whetstone-ai · 2026-07-22</div>
 
 <p><strong>No paper in this 7-paper corpus runs c11's exact task</strong> — canonical-JSON
@@ -96,7 +97,7 @@ constraints); the field otherwise clusters in a graded-verifier, public-or-real-
 full-object-or-free-text region that c11's design deliberately sits outside of.</p>
 
 <!-- PAPER DOSSIERS -->
-<div class="section-head"><h2>Paper dossiers</h2></div>
+<div class="section-head"><h2>What does each paper claim, and does it support the corpus's use of it?</h2><span class="tag">Paper dossiers</span></div>
 
 <div class="paper-card">
   <div class="paper-head">
@@ -395,7 +396,7 @@ full-object-or-free-text region that c11's design deliberately sits outside of.<
 </div>
 
 <!-- POSITIONING MAP -->
-<div class="section-head"><h2>Positioning: three axes discriminate this family</h2></div>
+<div class="section-head"><h2>Where does c11 sit across the three axes, and which cell is empty?</h2><span class="tag">Positioning map</span></div>
 <p>Single-shot-vs-multi-turn turns out to be <span class="key">nearly degenerate</span> for
 this family — EDC's "multi-turn" is self-bootstrapped refinement and IFBench's is
 constraint-isolation across a fixed 3-turn context, neither is an oracle-in-the-loop correction
@@ -480,7 +481,7 @@ free NL text).</p>
 </div>
 
 <!-- CAPABILITY SYNTHESIS -->
-<div class="section-head"><h2>Capability synthesis</h2></div>
+<div class="section-head"><h2>What accuracy should the c11 baseline expect, and where does it fail?</h2><span class="tag">Capability synthesis</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -528,7 +529,7 @@ free NL text).</p>
   can introduce new errors.</p>
 </div>
 
-<div class="section-head" style="margin-top:32px;"><h2>Predicted floor and ceiling for c11's plain-JCS baseline</h2></div>
+<div class="section-head" style="margin-top:32px;"><h2>What floor and ceiling should c11's plain-JCS baseline hit?</h2><span class="tag">Floor &amp; ceiling</span></div>
 <p>c11's actual first run is <span class="key">plain RFC 8785 (JCS)</span> canonical-JSON — no
 invented house-rule deviations yet — inputs from pinned json-schema-faker schemas, oracle =
 trailofbits rfc8785-py, exact match, cheap tier, temp 0. No paper measures exact-match canonical
@@ -570,7 +571,7 @@ proxies</span>, with real uncertainty in both directions.</p>
 </div>
 
 <!-- POSITIONING + PUBLISHABILITY SYNTHESIS -->
-<div class="section-head"><h2>Positioning &amp; publishability synthesis</h2></div>
+<div class="section-head"><h2>Is the baseline publishable, and against which neighbor?</h2><span class="tag">Positioning &amp; publishability</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -648,6 +649,15 @@ proxies</span>, with real uncertainty in both directions.</p>
   cell, since no paper sits there to have counts. <em>All OpenAlex counts undercount relative to
   Google Scholar; near-zero counts for 2026-dated papers are near-zero-by-construction, not
   evidence of low impact.</em></p>
+</div>
+
+<div class="colophon">
+  <p>whetstone-ai &middot; 2026-07-22. Synthesized from the c11 related-work corpus &mdash; seven papers
+  (EDC, JSONSchemaBench, StructEval, IFBench, StructText, PolyNorm, LLMStructBench) and their per-paper
+  dossiers. Citation counts fetched from OpenAlex on 2026-07-22. JCS = RFC 8785 JSON Canonicalization Scheme.</p>
+  <p>OpenAlex counts materially undercount relative to Google Scholar and are near-zero by construction for the
+  2025&ndash;2026 papers (indexing lag, not neglect); each is flagged inline and should be read as a coarse
+  recency floor only, not a measurement.</p>
 </div>
 
 <nav class="cand-nav" style="margin-top:54px; padding-top:18px; border-top:2px solid var(--line); display:flex; flex-wrap:wrap; gap:8px 10px; align-items:center;">

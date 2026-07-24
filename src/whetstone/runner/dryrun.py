@@ -1,0 +1,633 @@
+"""Fake-transport dry-run harness for the validation ``cell`` CLI path.
+
+This is the *program* seam the ``--dry-run-fake`` CLI flag drives so the whole
+cell plumbing -- ``build_env_experiment`` -> baseline/ceiling/best official
+evals -> ``run_optimize`` internal-split search -> delta + bootstrap CI ->
+``cells.jsonl`` / ``spend.jsonl`` ledger append -- can be exercised end-to-end
+as a program (not only under pytest), while making **no live paid LLM call**.
+
+It builds the same scripted doubles the runner tests use, but in production
+source so the CLI can import them without reaching into ``tests/``:
+
+* a scripted *rollout* transport (a ``TransportCall``) whose reply is a pure
+  function of the rendered prompt -- no network, no DBOS;
+* the shared :class:`whetstone.optimization.proposer.FakeProposerTransport`
+  scripted proposer;
+* a scripted credits fetcher (a static OpenRouter credits snapshot pair) so the
+  ``lane=openrouter`` before/after spend accounting runs with no HTTP.
+
+Two scripts mirror the two proven cell paths:
+
+* ``eval`` (the identity optimizer, breadth/depth = 0x0): the naive probe
+  itself renders the gold answer -> baseline == best, a faithful eval cell.
+* ``copro`` (and any proposing optimizer): only the injected *winning* template
+  renders the gold answer; the naive baseline scores 0 -> the optimizer's best
+  candidate beats the baseline (``status=improved``, ``delta=1.0``).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+from dr_providers import (
+    ProviderCallRequest,
+    ProviderInvocationEvidence,
+    ProviderKind,
+    ProviderTransportPolicy,
+    ProviderTransportResponse,
+    RawHttpRequest,
+    policy_for,
+)
+from whetstone_envs.core import Instance
+
+from whetstone.envs.d1 import D1_ENV_NAME
+from whetstone.envs.ed1 import ED1_ENV_NAME
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.registry import env_spec
+from whetstone.envs.rollout_definition import (
+    ceiling_candidate,
+    initial_candidate,
+    render_prompt,
+)
+from whetstone.envs.sampling import SamplingOverrides
+from whetstone.optimization.codex_proposer import codex_proposer_ref
+from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposer import (
+    FakeProposerTransport,
+    ProposerConfig,
+)
+from whetstone.optimization.schema import Candidate
+from whetstone.provider.policy import ProviderExecutionPolicy
+from whetstone.runner.budget import CreditsSnapshot
+from whetstone.runner.cell import CellConfig, CellOutcome, run_cell
+from whetstone.runner.events import EventStream
+from whetstone.runner.execution_mode import ExecutionMode
+from whetstone.runner.ledger import Ledger
+
+__all__ = [
+    "DRYRUN_PROPOSER_MODEL",
+    "DRYRUN_TASK_MODEL",
+    "DRYRUN_WINNING_SUFFIX",
+    "ScriptedRolloutTransport",
+    "run_dry_cell",
+]
+
+#: The stand-in task/proposer model slugs recorded on a dry-run cell record.
+#: They mirror the canonical route slugs so the ledger line looks like a real
+#: cell, but every transport is a scripted fake (no live paid call).
+DRYRUN_TASK_MODEL = "openai/gpt-5-nano"
+DRYRUN_PROPOSER_MODEL = "openai/gpt-5.4-nano"
+#: The ed1 dry-run enc/dec task model (recorded on the dry cell line).
+ED1_DRY_TASK_MODEL = "deepseek/deepseek-v4-flash"
+
+#: A brace-free suffix appended to the env's own naive template to build the
+#: winning template. Appending plain text keeps every ``str.format``
+#: placeholder intact (so the template renders for EVERY env) while producing
+#: a rendered prompt distinct from the naive probe -- so only the winning
+#: candidate maps to the gold answer.
+DRYRUN_WINNING_SUFFIX = "\n(Answer precisely.)"
+
+
+def _winning_template(experiment: EnvExperiment) -> str:
+    """The winning template: the env's naive template + a brace-free suffix.
+
+    Deriving from the naive template guarantees it renders for every env
+    (all placeholders preserved) yet renders a distinct prompt.
+    """
+    naive = initial_candidate(env_spec(experiment.env_name))
+    return str(naive.payload[MUTATION_FIELD]) + DRYRUN_WINNING_SUFFIX
+
+_MISS = "definitely-not-a-label"
+
+
+def _dryrun_transport_policy() -> ProviderTransportPolicy:
+    return policy_for(
+        ProviderKind.OPENROUTER,
+        api_key_env="OPENROUTER_API_KEY",
+        base_url="https://example.test/v1",
+        native_retry_count=0,
+    )
+
+
+@dataclass
+class ScriptedRolloutTransport:
+    """A scripted rollout transport: rendered prompt -> reply text.
+
+    ``reply`` is a pure function of the request's user-message content (the
+    rendered prompt), so the fake answers the gold for the target templates
+    and a fixed miss otherwise. Records every request served. No network.
+    """
+
+    reply: Callable[[str], str]
+    policy: ProviderTransportPolicy = field(
+        default_factory=_dryrun_transport_policy
+    )
+    served: list[ProviderCallRequest] = field(default_factory=list)
+
+    def __call__(
+        self, request: ProviderCallRequest
+    ) -> ProviderInvocationEvidence:
+        self.served.append(request)
+        messages = request.transcript.messages
+        prompt = messages[-1].content if messages else ""
+        text = self.reply(prompt)
+        raw_request = RawHttpRequest.build(
+            url="https://example.test/v1/chat/completions",
+            headers={"Authorization": "Bearer k", "content-type": "json"},
+            body={"model": DRYRUN_TASK_MODEL},
+        )
+        response = ProviderTransportResponse(
+            text=text,
+            raw_body={"choices": [{"message": {"content": text}}]},
+            response_id="dryrun-resp-1",
+            model=DRYRUN_TASK_MODEL,
+            finish_reason="stop",
+        )
+        return ProviderInvocationEvidence.build(
+            request=request,
+            policy=self.policy,
+            raw_request=raw_request,
+            outcome=response,
+        )
+
+
+def _all_instances(experiment: EnvExperiment) -> tuple[Instance, ...]:
+    cfgs = experiment.eval_configs
+    return tuple(cfgs.internal.instances) + tuple(cfgs.official.instances)
+
+
+def _correct_reply(experiment: EnvExperiment) -> Callable[[str], str]:
+    """Naive AND ceiling probes render the gold answer (the eval-cell path)."""
+    env = env_spec(experiment.env_name)
+    naive = initial_candidate(env)
+    ceiling = ceiling_candidate(env)
+    by_prompt: dict[str, str] = {}
+    for inst in _all_instances(experiment):
+        by_prompt[render_prompt(env, naive, inst)] = inst.gold
+        by_prompt[render_prompt(env, ceiling, inst)] = inst.gold
+    return lambda prompt: by_prompt.get(prompt, _MISS)
+
+
+def _improvement_reply(
+    experiment: EnvExperiment, winning_template: str
+) -> Callable[[str], str]:
+    """Only the winning template renders the gold answer (the improved path).
+
+    The naive/ceiling probes and every other proposal score 0; the candidate
+    built from ``winning_template`` scores the gold -> the optimizer's best
+    candidate beats the naive baseline on the official split.
+    """
+    env = env_spec(experiment.env_name)
+    winner = Candidate(
+        candidate_id="dryrun-winner",
+        base_ref=initial_candidate(env).base_ref,
+        payload={MUTATION_FIELD: winning_template},
+    )
+    winning_prompts: dict[str, str] = {}
+    for inst in _all_instances(experiment):
+        winning_prompts[render_prompt(env, winner, inst)] = inst.gold
+    return lambda prompt: winning_prompts.get(prompt, _MISS)
+
+
+def _dryrun_proposer_config() -> ProposerConfig:
+    return ProposerConfig(
+        provider_call_config_ref=f"pcc://{DRYRUN_PROPOSER_MODEL}",
+        provider_call_config_hash="f" * 64,
+        temperature=1.0,
+    )
+
+
+def _pool_n_per_stratum(env: str) -> int:
+    """The smallest per-stratum pool size that fits a tiny (2,2,2) split.
+
+    The dry run only needs the plumbing to execute over a real (small) pool;
+    it does not need the canonical pool sizes.
+    """
+    n = 1
+    while n <= 40:
+        try:
+            build_env_experiment(
+                env, model=DRYRUN_TASK_MODEL, pool_n_per_stratum=n,
+                split_sizes=(2, 2, 2),
+            )
+        except Exception:  # probing for a fitting pool size
+            n += 1
+            continue
+        return n
+    msg = f"could not size a tiny pool for {env!r}"
+    raise RuntimeError(msg)
+
+
+def run_dry_cell(
+    *,
+    env: str,
+    optimizer: str,
+    root,
+    attempt: int = 0,
+    lane: str = "openrouter",
+    execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
+    overrides: SamplingOverrides | None = None,
+    budget_ratio: float | None = 0.5,
+    blend_config: BoundedCompressionMetricConfig | None = None,
+    input_arm: str = "original",
+    events: EventStream | None = None,
+) -> CellOutcome:
+    """Run one fake-transport cell end-to-end and append its ledger line.
+
+    Mirrors the two proven cell paths: ``eval`` drives the correct-reply script
+    (naive == best), any proposing optimizer drives the improvement script (the
+    injected winning template beats the naive baseline). Returns the
+    :class:`CellOutcome`; the ledger line lands under ``root``.
+
+    ``overrides`` (a :class:`SamplingOverrides`) exercises the reduced-sampling
+    path end-to-end (``--official-n`` / ``--official-repeats``): it folds into
+    the official Eval Config identity so the dry cell records the overrides and
+    keys the env cache by the reduced hash.
+    """
+    overrides = overrides or SamplingOverrides()
+    # ed1 (enc-dec) has a distinct fake-cell path: the 3-node
+    # encoder->decoder->
+    # code-eval graph + a local (no-Docker) sandbox scorer. The QA path below
+    # is
+    # unchanged.
+    if env == D1_ENV_NAME:
+        return _run_dry_d1_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, input_arm=input_arm, events=events,
+        )
+    if env == ED1_ENV_NAME:
+        return _run_dry_ed1_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, budget_ratio=budget_ratio,
+            blend_config=blend_config, events=events,
+        )
+    if env == "ed1m":
+        return _run_dry_ed1m_cell(
+            optimizer=optimizer, root=root, attempt=attempt, lane=lane,
+            execution_mode=execution_mode, budget_ratio=budget_ratio,
+            blend_config=blend_config, events=events,
+        )
+    pool_n = _pool_n_per_stratum(env)
+    experiment = build_env_experiment(
+        env, model=DRYRUN_TASK_MODEL, pool_n_per_stratum=pool_n,
+        split_sizes=(2, 2, 2), overrides=overrides,
+    )
+    if optimizer == "eval":
+        reply = _correct_reply(experiment)
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        winning = _winning_template(experiment)
+        reply = _improvement_reply(experiment, winning)
+        proposer = FakeProposerTransport(script={}, default=(winning,))
+    rollout = ScriptedRolloutTransport(reply=reply)
+    config = CellConfig(
+        optimizer=optimizer,
+        env=env,
+        lane=lane,
+        attempt=attempt,
+        task_model=DRYRUN_TASK_MODEL,
+        proposer_model=(
+            # Match the live path's recorded codex proposer id (task 5): the
+            # codex optimizer drafts through the local codex CLI.
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=rollout,
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=3,
+        official_repeats=5,
+        pool_n_per_stratum=pool_n,
+        split_sizes=(2, 2, 2),
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        sampling_overrides=overrides,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    # A static credits pair: identical before/after so the reserve guard clears
+    # (a non-canonical dry cell) and the recorded spend is $0 (no real spend).
+    return run_cell(
+        config,
+        ledger=ledger,
+        credits_fetcher=_static_credits(),
+        events=events,
+    )
+
+
+def _static_credits() -> Callable[[], CreditsSnapshot]:
+    def fetch() -> CreditsSnapshot:
+        return CreditsSnapshot(total_credits=710.0, total_usage=616.0)
+
+    return fetch
+
+
+#: The fixed ed1 dry-run task slice (small + offline).
+_ED1_DRY_TASK_LIMIT = 4
+
+
+def _ed1_dry_reply(tasks) -> Callable[[str], str]:
+    """A scripted enc/dec reply: encoder emits a per-task marker; the decoder
+    returns that task's canonical solution (so the sandbox scores PASS)."""
+    by_entry = {
+        t.humaneval_task.entry_point: t.humaneval_task.ground_truth_code
+        for t in tasks
+    }
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for ep in by_entry:
+                if f"def {ep}(" in prompt:
+                    return f"REBUILD:{ep}"
+            return "REBUILD:unknown"
+        for ep, gt in by_entry.items():
+            if f"REBUILD:{ep}" in prompt:
+                return gt
+        return "def _x():\n    return None\n"
+
+    return reply
+
+
+def _run_dry_ed1_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    budget_ratio: float | None = 0.5,
+    blend_config: BoundedCompressionMetricConfig | None = None,
+    events: EventStream | None = None,
+) -> CellOutcome:
+    """Run one ed1 (enc-dec) fake cell end-to-end (no network, no Docker).
+
+    Builds the 3-node encoder->decoder->code-eval experiment over a small
+    offline HumanEval+ slice, a scripted enc/dec transport (encoder marker ->
+    decoder canonical), a LOCAL subprocess sandbox scorer (no container), and
+    any
+    optimizer's proposer script (a valid improved encoder template for the
+    proposing optimizers). Records BOTH scores (pass rate + Mean Compression
+    Ratio) on the ledger line.
+    """
+    from whetstone.envs.ed1 import ENCODER_BODY_B, load_ed1_tasks
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=_ED1_DRY_TASK_LIMIT)
+    reply = _ed1_dry_reply(tasks)
+    # The default ed1 scorer runs the test suite in a LOCAL subprocess (no
+    # container) -- no Docker needed for the dry-run wiring validation.
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        # A valid alternate strategy BODY (the narrowed Mutation Surface is the
+        # strategy sentence only -- no frame/placeholders) so a proposing
+        # optimizer drafts + scores a candidate that passes body validation.
+        proposer = FakeProposerTransport(
+            script={}, default=(ENCODER_BODY_B,)
+        )
+    config = CellConfig(
+        optimizer=optimizer,
+        env=ED1_ENV_NAME,
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        budget_ratio=budget_ratio,
+        ed1_task_limit=_ED1_DRY_TASK_LIMIT,
+        ed1_blend_config=blend_config,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )
+
+
+#: The fixed d1 dry-run task slice (small + offline).
+_D1_DRY_TASK_LIMIT = 4
+
+
+def _d1_dry_reply(tasks, *, input_arm: str, rename_token: str):
+    """A scripted d1 reply: any direct prompt -> the task's canonical solution.
+
+    Matches each task on a UNIQUE per-task marker in the rendered prompt: the
+    docstring's first line (present for original/docstring/renamed), else the
+    per-task entry point (name/signature arms). The 'renamed' arm renamed
+    EVERY canonical-name occurrence to the SAME token, so matching must key off
+    a per-task marker (the docstring), NOT the shared renamed name; the reply
+    then returns the RENAMED canonical solution -> PASS against renamed name.
+    """
+    from whetstone.runner.task_screen import (
+        rename_identifier,
+        split_prompt,
+    )
+
+    def reply(prompt: str) -> str:
+        for t in tasks:
+            ht = t.humaneval_task
+            ep = ht.entry_point
+            parts = split_prompt(ht.prompt, ep)
+            marker = None
+            if parts.docstring:
+                marker = parts.docstring.splitlines()[0].strip()
+            hit = (
+                (marker and marker in prompt)
+                or (input_arm in ("name", "signature") and (
+                    f"def {ep}(" in prompt or f"named {ep}." in prompt
+                ))
+            )
+            if hit:
+                gt = ht.ground_truth_code
+                if input_arm == "renamed":
+                    return rename_identifier(gt, ep, rename_token)
+                return gt
+        return "def _x():\n    return None\n"
+
+    return reply
+
+
+def _run_dry_d1_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    input_arm: str = "original",
+    events: EventStream | None = None,
+) -> CellOutcome:
+    """Run one d1 (direct-generation) fake cell end-to-end (no network/Docker).
+
+    Builds the single-call direct experiment over a small offline HumanEval+
+    slice at the given FROZEN input arm, a scripted transport (a direct prompt
+    -> the task's canonical solution so the LOCAL sandbox scores PASS), and any
+    optimizer's proposer script (a valid alternate wrapper BODY). Records the
+    plain pass rate on the ledger line (d1 is pass-only, no blend/compression).
+    """
+    from whetstone.envs.d1 import (
+        D1_DEFAULT_RENAME_TOKEN,
+        D1_WRAPPER_BODY_CEILING,
+    )
+    from whetstone.envs.ed1 import load_ed1_tasks
+
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=_D1_DRY_TASK_LIMIT)
+    reply = _d1_dry_reply(
+        tasks, input_arm=input_arm, rename_token=D1_DEFAULT_RENAME_TOKEN
+    )
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        # A valid alternate wrapper BODY (no placeholders/fence) so a proposing
+        # optimizer drafts + scores a candidate that passes body validation.
+        proposer = FakeProposerTransport(
+            script={}, default=(D1_WRAPPER_BODY_CEILING,)
+        )
+    config = CellConfig(
+        optimizer=optimizer,
+        env=D1_ENV_NAME,
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        ed1_task_limit=_D1_DRY_TASK_LIMIT,
+        d1_input_arm=input_arm,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )
+
+
+_ED1M_DRY_MUTANT_LIMIT = 3
+
+
+def _run_dry_ed1m_cell(
+    *,
+    optimizer: str,
+    root,
+    attempt: int,
+    lane: str,
+    execution_mode: ExecutionMode,
+    budget_ratio: float | None = None,
+    blend_config: BoundedCompressionMetricConfig | None = None,
+    events: EventStream | None = None,
+) -> CellOutcome:
+    """Run one ed1m (behavioral-mutant enc-dec) fake cell (no network/Docker).
+
+    Loads a tiny mutant slice, a scripted enc/dec transport (encoder marker ->
+    decoder emits a per-mutant reconstruction), and an INJECTED fake dual
+    scorer (deterministic fidelity + attractor, no subprocess) so the wiring --
+    the mutant oracle path, the blended fidelity reward, the reported attractor
+    -- is validated without the live oracle. ``ed1_scorer`` carries the fake.
+    """
+    from whetstone.envs.ed1 import ENCODER_BODY_B
+    from whetstone.envs.ed1_scoring import CodeScore
+    from whetstone.envs.ed1m_dataset import load_ed1m_mutants
+
+    mutants = load_ed1m_mutants(limit=_ED1M_DRY_MUTANT_LIMIT)
+    by_prefix = {m.mutated_full_source[:60]: m for m in mutants}
+
+    def reply(prompt: str) -> str:
+        if prompt.startswith("Provide") or prompt.startswith("Compress"):
+            for prefix, m in by_prefix.items():
+                if prefix in prompt:
+                    return f"REBUILD:{m.mutant_id}"
+            return "REBUILD:x"
+        for m in mutants:
+            if f"REBUILD:{m.mutant_id}" in prompt:
+                return m.mutated_full_source
+        return "def _x():\n    return None\n"
+
+    def _fake_scorer(*, reconstruction: str, mutant) -> CodeScore:
+        # A faithful reconstruction (== mutant source) -> fidelity 1.0,
+        # attractor 0.0; anything else -> a partial deterministic score.
+        if reconstruction.strip() == mutant.mutated_full_source.strip():
+            return CodeScore(
+                passed=True, infrastructure_unknown=False,
+                outcome="ed1m_dry", fidelity=1.0, attractor_pull=0.0,
+            )
+        return CodeScore(
+            passed=False, infrastructure_unknown=False,
+            outcome="ed1m_dry", fidelity=0.5, attractor_pull=0.5,
+        )
+
+    if optimizer == "eval":
+        proposer = FakeProposerTransport(script={}, default=())
+    else:
+        proposer = FakeProposerTransport(script={}, default=(ENCODER_BODY_B,))
+    weight = blend_config.weight if blend_config is not None else 0.10
+    from whetstone.envs.ed1_blended import (
+        BoundedCompressionMetricConfig as _BC,
+    )
+    config = CellConfig(
+        optimizer=optimizer,
+        env="ed1m",
+        lane=lane,
+        attempt=attempt,
+        task_model=ED1_DRY_TASK_MODEL,
+        proposer_model=(
+            codex_proposer_ref("gpt-5.6") if optimizer == "codex"
+            else DRYRUN_PROPOSER_MODEL
+        ),
+        canonical=False,
+        proposer_config=_dryrun_proposer_config(),
+        proposer_transport=proposer,
+        rollout_transport=ScriptedRolloutTransport(reply=reply),
+        execution_policy=ProviderExecutionPolicy(
+            transport_policy=_dryrun_transport_policy(),
+            max_attempts=1,
+        ),
+        repeats=1,
+        official_repeats=1,
+        execution_mode=execution_mode,
+        window_notes="dry-run-fake (no live paid call)",
+        budget_ratio=budget_ratio,
+        ed1_task_limit=_ED1M_DRY_MUTANT_LIMIT,
+        ed1_blend_config=blend_config or _BC(weight=weight),
+        ed1_scorer=_fake_scorer,
+    )
+    ledger = Ledger(root=root)
+    ledger.load()
+    return run_cell(
+        config, ledger=ledger, credits_fetcher=_static_credits(),
+        events=events,
+    )

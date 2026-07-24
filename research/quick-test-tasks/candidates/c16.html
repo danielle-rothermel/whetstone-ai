@@ -6,13 +6,13 @@
 <!-- Pages live in candidates/ — css and favicon are one level up, hence ../ -->
 <link rel="icon" href="../favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="../doc.css">
-<link rel="stylesheet" href="../flow.css">
 <style>
-/* Candidate deep-dive additions — only what doc.css/flow.css lack.
+/* Candidate deep-dive additions — page-local, doc.css tokens only.
    Reuses the family palette (--accent, --green, --amber, --red, --line,
    --surface, --muted, and their -soft variants) so light+dark stay coherent. */
 
-/* (1) Status badge — one accent-tinted pill per adoption state. */
+/* Status badge — one accent-tinted pill per adoption state. Color is never
+   the only signal: each state also carries its own label text. */
 .badge {
   display: inline-block; vertical-align: middle;
   padding: 4px 13px; border-radius: 999px;
@@ -27,14 +27,12 @@
 .badge.below-cut { color: var(--red);    background: var(--red-soft);    border-color: var(--red); }
 
 /* Header row: id + name on the left, badge trailing on the right */
-.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+.cand-head { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 2px; }
 .cand-head h1 { margin: 0; }
 .cand-id { color: var(--muted); font: 700 20px/1.2 var(--font-system); margin-right: 6px; }
-.anchor-sub { margin: 6px 0 26px; color: var(--muted); font: 300 14px/1.5 var(--font-system); }
-.anchor-sub .key { font-weight: 500; }
 
-/* (2) Score chips — numbers as secondary metadata, never as prose. */
-.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0 0; }
+/* Score chips — numbers as secondary metadata, kept out of prose. */
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; }
 .chip {
   display: inline-flex; align-items: baseline; gap: 5px;
   padding: 3px 10px; border-radius: 999px;
@@ -46,7 +44,8 @@
 .chip.total { background: var(--accent-soft); border-color: var(--accent); }
 .chip.total .v { color: var(--accent); }
 
-/* (6) Perspectives grid — five named lenses, pros and cons in each */
+/* Perspectives grid — five named lenses, pros and cons in each; a lens
+   card is a keyed unit (named viewpoint), so it earns its border. */
 .lens {
   padding: 16px 20px; border: 1px solid var(--line);
   border-radius: 12px; background: var(--surface);
@@ -61,7 +60,7 @@
   letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
 }
 
-/* (4/5) Citations and link-verification marking. */
+/* Citations and link-verification marking. */
 .cite { font-style: italic; color: var(--muted); }
 .cite a { font-style: normal; }
 .unverified::after {
@@ -74,10 +73,28 @@
 .dead-branch { color: var(--muted); }
 .dead-branch .why { color: var(--muted); font-size: 13px; }
 
-/* (8) Footer nav row */
+/* Implementation steps — an ordered, keyed sequence. */
+.steps { counter-reset: step; display: grid; gap: 10px; margin: 4px 0; }
+.step { display: grid; grid-template-columns: 30px 1fr; gap: 12px; counter-increment: step; }
+.step::before {
+  content: counter(step);
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  font: 700 12px/26px var(--font-system); text-align: center;
+}
+.step h3 { margin: 0 0 3px; font-size: 15.5px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+/* Run-verification status token — a keyed pass/open/fail state. */
+.status { display: inline-block; padding: 1px 9px; border-radius: 999px; font: 700 11px/1.6 var(--font-system); text-transform: uppercase; letter-spacing: .04em; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.open, .status.partial { color: var(--amber); background: var(--amber-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
+/* Footer nav row */
 .cand-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
-  margin-top: 54px; padding-top: 18px; border-top: 2px solid var(--line);
+  margin-top: 40px; padding-top: 18px; border-top: 2px solid var(--line);
 }
 .cand-nav a {
   font: 600 12.5px/1.4 var(--font-system);
@@ -93,6 +110,7 @@
 @media (max-width: 900px) {
   .lens .pros, .lens .cons { font-size: 13.5px; }
   .cand-nav .spacer { flex-basis: 100%; height: 0; }
+  .step { grid-template-columns: 24px 1fr; }
 }
 </style>
 <title>whetstone-ai · c16 Wason Implication-Compliance Classifier</title>
@@ -100,40 +118,28 @@
 <body>
 <main>
 
-<!-- (1) HEADER: id + name, academic-anchor subtitle, status badge ------------->
 <div class="cand-head">
   <h1><span class="cand-id">c16</span>Wason Implication-Compliance Classifier</h1>
   <span class="badge ranked">RANKED #18</span>
 </div>
-<div class="anchor-sub">You know this as: <span class="key">the Wason conditional-reasoning paradigm (if-P-then-Q rule checking)</span> — reframed from the four-card selection puzzle into a single-call OK/VIOLATION (or which-rule-violated) compliance classifier over attribute records.</div>
+<p class="dek">The Wason conditional-reasoning paradigm, reframed as a single-call rule-compliance classifier over attribute records.</p>
+<div class="byline">whetstone-ai · 2026-07-22</div>
 
-<!-- (2) VERDICT BOX: round-2 standing + one-paragraph why, score chips -------->
-<div class="verdict"><!-- plain tone: ranked, neither adopted nor gated -->
-  <p><strong>27-tier candidate, dropped to #18 after the implementation-aware rescore because no reusable codebase exists.</strong>
-  On the round-1 design this candidate carries a genuinely rare property: it is the one task in the pool that retains real
-  <span class="key">model-side residual headroom</span>, because models systematically err on <span class="key">vacuous-truth</span>
-  handling and rule <span class="key">directionality</span> even when the conditional rules are fully stated, so a "perfect"
-  instruction does not instantly reach the ceiling the way it does for the execution-heavy tasks. The scoring surface is clean
-  &mdash; a record of four to six visible attributes is checked against four to five conjoined implication rules, and the model
-  emits OK/VIOLATION or the violated-rule letter for exact match &mdash; and attribute-combinatorial seeded generation is
-  contamination-proof. What sank it in round 2 is the same fact that sank c12, c13, and c14: discovery found no plausibly
-  reusable generator, so the double-weighted reuse axis scored zero and every implementation hour would be from scratch. The
-  residual-headroom virtue is also its calibration liability, since the binary/MC output and the vacuous-truth subtlety make the
-  floor hard to pin precisely without empirical gating.</p>
-  <div class="chips">
-    <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
-    <span class="chip"><span class="k">I1</span><span class="v">0</span></span>
-    <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
-    <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
-    <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
-    <span class="chip total"><span class="k">Impl total</span><span class="v">6</span></span>
-  </div>
+<p><strong>27-tier candidate, dropped to #18 after the implementation-aware rescore because no reusable codebase exists.</strong>
+On the round-1 design this candidate carries a rare property: it is the one task in the pool with real <span class="key">model-side residual headroom</span>, because models systematically err on <span class="key">vacuous-truth</span> handling and rule <span class="key">directionality</span> even when the conditional rules are fully stated, so a "perfect" instruction does not instantly reach the ceiling the way it does for execution-heavy tasks. The scoring surface is clean — a record of four to six visible attributes is checked against four to five conjoined implication rules, and the model emits OK/VIOLATION or the violated-rule letter for exact match — and attribute-combinatorial seeded generation is contamination-proof. What sank it in round 2 is the same fact that sank c12, c13, and c14: discovery found no plausibly reusable generator, so the double-weighted reuse axis scored zero and every implementation hour would be from scratch. The residual-headroom virtue is also its calibration liability, since the binary/MC output and the vacuous-truth subtlety make the floor hard to pin precisely without empirical gating.</p>
+
+<div class="chips">
+  <span class="chip"><span class="k">R1 rubric</span><span class="v">27</span></span>
+  <span class="chip"><span class="k">I1</span><span class="v">0</span></span>
+  <span class="chip"><span class="k">I2</span><span class="v">2</span></span>
+  <span class="chip"><span class="k">I3</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I4</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I5</span><span class="v">1</span></span>
+  <span class="chip"><span class="k">I6</span><span class="v">1</span></span>
+  <span class="chip total"><span class="k">Impl total</span><span class="v">6/16</span></span>
 </div>
 
-<!-- (3) WHAT IT PROPOSES ------------------------------------------------------>
-<div class="section-head"><h2>What it proposes</h2></div>
+<div class="section-head"><h2>What does it propose?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>A conditional-compliance classifier where the label names whether an implication rule was broken</h3>
@@ -143,17 +149,17 @@
     antecedent holds while its consequent fails; cases where the antecedent never fires are <span class="key">vacuously OK</span>.
     The model outputs either a bare OK/VIOLATION boolean or, in the richer variant, the <span class="key">violated-rule letter</span>,
     which escapes the fifty-percent guess floor and turns each failure into a diagnostic pointing at one rule. Ground truth is exact
-    match against a trivial boolean evaluation of the rule set. The latent rules that decompose difficulty are each individual
-    implication, correct vacuous-truth handling, directionality (the rules are one-way implications, not biconditionals), and the
-    presence of distractor attributes that no rule references. The distinctive property is that models keep erring on vacuous and
-    directional cases even under a fully-stated ruleset, so the ceiling is not instantly reachable — an unusual and desirable
-    model-side residual for a prompt-optimization ladder.</p>
+    match against a trivial boolean evaluation of the rule set.</p>
+    <p>The latent rules that decompose difficulty are each individual implication, correct vacuous-truth handling,
+    directionality (the rules are one-way implications, not biconditionals), and the presence of distractor attributes that no
+    rule references. Models keep erring on vacuous and directional cases even under a fully-stated ruleset, so the ceiling is
+    not instantly reachable — an unusual and desirable model-side residual for a prompt-optimization ladder.</p>
   </div>
   <div class="card">
     <h3>Example instance</h3>
-    <p class="small muted">Illustrative, built faithfully from the merged summary. Seeded conditions: this run draws three
-    implication rules over shape/edge/color, includes one vacuously-satisfied antecedent and one distractor attribute (size), and
-    uses the which-rule-violated output to avoid the bare-boolean guess floor.</p>
+    <p class="aside">Illustrative, built faithfully from the merged summary. This run draws three implication rules over
+    shape/edge/color, includes one vacuously-satisfied antecedent and one distractor attribute (size), and uses the
+    which-rule-violated output to avoid the bare-boolean guess floor.</p>
 <pre><code>Rules (this run):
   R1 : if shape = circle  then edge  = solid
   R2 : if color = red     then shape = square
@@ -175,8 +181,7 @@ error classes that survive a perfect instruction.</code></pre>
   </div>
 </div>
 
-<!-- (4) ACADEMIC ANCHOR & LINEAGE --------------------------------------------->
-<div class="section-head"><h2>Academic anchor &amp; lineage</h2></div>
+<div class="section-head"><h2>Where does it come from?</h2></div>
 <div class="grid-2">
   <div class="card">
     <h3>Literature parents</h3>
@@ -203,8 +208,7 @@ error classes that survive a perfect instruction.</code></pre>
   </ul>
 </div>
 
-<!-- (5) RELATED ACTIVE RESEARCH (2025-2026) ----------------------------------->
-<div class="section-head"><h2>Related active research (2025-2026)</h2></div>
+<div class="section-head"><h2>What's the current research context?</h2></div>
 <div class="card full">
   <ul>
     <li><span class="cite"><a href="https://arxiv.org/abs/2410.10998">WILT: A Multi-Turn, Memorization-Robust Inductive Logic Benchmark for LLMs</a> (Banatt et al., arXiv 2024)</span> — a Wason 2-4-6-inspired, contamination-robust rule-induction benchmark; the closest active LLM work to c16. Caveat: it is multi-turn interactive rule induction, unlike c16's single-call compliance-classification framing, so it validates the Wason lineage's currency more than the exact task shape.</li>
@@ -212,8 +216,7 @@ error classes that survive a perfect instruction.</code></pre>
   </ul>
 </div>
 
-<!-- (6) PERSPECTIVES: five named lenses, pros AND cons ------------------------->
-<div class="section-head"><h2>Perspectives</h2></div>
+<div class="section-head"><h2>How do different lenses see it?</h2></div>
 <div class="grid-3">
   <div class="lens">
     <h3>Round-1 rubric fit</h3>
@@ -252,14 +255,13 @@ error classes that survive a perfect instruction.</code></pre>
   </div>
 </div>
 
-<!-- (7) IMPLEMENTATION: STEPS & RISKS ----------------------------------------->
-<div class="section-head"><h2>Implementation: steps &amp; risks</h2></div>
+<div class="section-head"><h2>How would we build it, and what could go wrong?</h2></div>
 <div class="steps">
-  <div class="step"><h3>Author the record + rule sampler from scratch</h3><p>There is no donor repo, so write <code>c16_gen.py</code> with a threaded <code>random.Random(seed)</code> that draws four to six attributes over small closed vocabularies and four to five conjoined implication rules over those attributes; this is the entire generator, built new</p></div>
-  <div class="step"><h3>Write the trivial boolean oracle</h3><p>For each record, evaluate every rule as a one-way implication (antecedent-holds-and-consequent-fails == violation) and take the vacuous case as OK; this second path is independent of any prompt and hand-checkable in under a minute, securing the oracle-independence score</p></div>
-  <div class="step"><h3>Choose the output surface and balance cases</h3><p>Prefer the which-rule-violated MC label over bare OK/VIOLATION to escape the fifty-percent guess floor, and balance vacuous, violating, and clean cases across strata so no single class dominates</p></div>
-  <div class="step"><h3>Seed the residual-headroom strata</h3><p>Deliberately include vacuous-antecedent records and directional (non-biconditional) traps so the vacuous-truth and directionality error classes are exercised, since those are the model-side residuals the task exists to measure</p></div>
-  <div class="step"><h3>Calibrate the floor and ceiling empirically</h3><p>Because the floor is hard to pin, run pre-freeze gates to confirm a designer ceiling prompt reaches near-100% while a naive prompt leaves measurable residual, and audit for dead strata where every instance is trivially OK</p></div>
+  <div class="step"><h3>Author the record + rule sampler from scratch</h3><p>There is no donor repo, so write <code>c16_gen.py</code> with a threaded <code>random.Random(seed)</code> that draws four to six attributes over small closed vocabularies and four to five conjoined implication rules over those attributes; this is the entire generator, built new.</p></div>
+  <div class="step"><h3>Write the trivial boolean oracle</h3><p>For each record, evaluate every rule as a one-way implication (antecedent-holds-and-consequent-fails == violation) and take the vacuous case as OK; this second path is independent of any prompt and hand-checkable in under a minute, securing the oracle-independence score.</p></div>
+  <div class="step"><h3>Choose the output surface and balance cases</h3><p>Prefer the which-rule-violated MC label over bare OK/VIOLATION to escape the fifty-percent guess floor, and balance vacuous, violating, and clean cases across strata so no single class dominates.</p></div>
+  <div class="step"><h3>Seed the residual-headroom strata</h3><p>Deliberately include vacuous-antecedent records and directional (non-biconditional) traps so the vacuous-truth and directionality error classes are exercised, since those are the model-side residuals the task exists to measure.</p></div>
+  <div class="step"><h3>Calibrate the floor and ceiling empirically</h3><p>Because the floor is hard to pin, run pre-freeze gates to confirm a designer ceiling prompt reaches near-100% while a naive prompt leaves measurable residual, and audit for dead strata where every instance is trivially OK.</p></div>
 </div>
 
 <div class="grid-2 space-top">
@@ -275,14 +277,11 @@ error classes that survive a perfect instruction.</code></pre>
     <h3>Repo review &amp; run verification</h3>
     <ul>
       <li><span class="key">Codebase:</span> none. No plausibly reusable generator was found in discovery, and no repo-review file references c16 (a header grep across <code>repos/*.md</code> returns nothing).</li>
-      <li><span class="key">Run verification:</span>
-        <span class="status open">not run</span>
-        never run-verified — there is no code to run; I1 is a firm zero on the round-2 reuse axis, which alone leaves c16 in the bottom tier.</li>
+      <li><span class="key">Run verification:</span> <span class="status open">not run</span> — never run-verified, since there is no code to run; I1 is a firm zero on the round-2 reuse axis, which alone leaves c16 in the bottom tier.</li>
     </ul>
   </div>
 </div>
 
-<!-- (8) FOOTER NAV ------------------------------------------------------------>
 <nav class="cand-nav">
   <div class="navgroup">
     <span class="navlabel">Table</span>
@@ -307,6 +306,12 @@ error classes that survive a perfect instruction.</code></pre>
     <a href="../candidates-merged.html#c16">Candidates merged</a>
   </div>
 </nav>
+
+<div class="colophon">
+  Scores: R1 rubric 27 · TB 2 · I1 0 · I2 2 · I3 1 · I4 1 · I5 1 · I6 1 · Impl total 6/16 (round-2 implementation-aware rescore).
+  Sources: <a href="../recommendations.html">recommendations.md (round 1)</a> · <a href="../recommendations-round2.html#table">recommendations-round2.md (round 2)</a> · <a href="../candidates-merged.html#c16">candidates-merged.md</a>.
+  Regenerated from <code>c16.md</code> under html-doc-polish v2, 2026-07-23.
+</div>
 
 </main>
 </body>

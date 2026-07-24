@@ -18,7 +18,8 @@
 </head>
 <body>
 <main>
-<h1>GEPA Run Design</h1>
+<h1>GEPA evolves candidates over durable, restartable steps toward a multi-objective front</h1>
+<p class="dek">Each outer request runs one durable step: select, reflect, propose, compare, evaluate, update.</p>
 <div class="byline">whetstone-ai · 2026-07-20</div>
 
 <div class="family-nav">
@@ -61,7 +62,7 @@
   <b>Reference semantics and the named extension.</b> Reference GEPA accepts only a child that strictly improves on its parent on the same sampled minibatch, then fully evaluates the accepted child and updates per-instance/objective frontiers. This page preserves that ordering. The <a class="term-ref" href="#gepa-whetstone-variant">Whetstone multi-objective GEPA variant</a> defines “strictly improves” as strict Pareto improvement on the same minibatch—no objective worsens and at least one improves—and uses the fixed 24-task, two-objective evaluation only after acceptance. Its capacity-32 <a class="term-ref" href="#gepa-archive">archive</a> is a bounded active index, not the semantic frontier or acceptance authority.
 </div>
 
-<div class="section-head" id="hyperparameters"><h2>Algorithm Hyperparameter Registry</h2></div>
+<div class="section-head" id="hyperparameters"><h2>What do the GEPA-specific terms and hyperparameters mean?</h2><span class="tag">algorithm hyperparameter registry</span></div>
 
 <p class="small muted">Only the first group controls GEPA's search behavior. The remaining names make example evaluation settings, output cardinalities, and derived totals explicit without promoting them into algorithm hyperparameters.</p>
 
@@ -103,7 +104,7 @@
 </table>
 </div>
 
-<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<div class="section-head" id="target"><h2>What does the designer freeze before the run?</h2><span class="tag">example setup</span></div>
 
 <div class="grid-4">
   <div class="card optim">
@@ -143,7 +144,7 @@
   </div>
 </div>
 
-<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+<div class="section-head" id="specified"><h2>What does each Step Request serialize?</h2><span class="tag">run configurations</span></div>
 
 <div class="plane">
   <div class="plane-label"><a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> used as <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a> <span class="sub">· one artifact/identity, identical to the eval design</span></div>
@@ -168,7 +169,7 @@
 
 <div class="callout"><b>Measurement and acceptance.</b> Each <a class="term-ref" href="#gepa-optimization-step">GEPA step</a> samples one <a class="term-ref" href="#gepa-param-minibatch-size"><code>minibatch_size = 3</code></a> comparison minibatch and evaluates both <a class="term-ref" href="#gepa-parent">parent</a> and <a class="term-ref" href="#gepa-child">child</a> on those exact task IDs. <a class="term-ref" href="#gepa-param-acceptance-policy"><code>acceptance_policy = same_minibatch_strict_pareto/v1</code></a> is the named Whetstone extension of reference GEPA's strict-improvement gate. Only an accepted child receives the <a class="term-ref" href="#gepa-setting-objective-task-count"><code>objective_task_count = 24</code></a> full internal evaluation used to update per-instance/objective frontiers. <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> remains Sampling + Evaluation Procedure + Aggregation and references the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> assigned statically to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>. Internal and official evaluation use the same facts-first procedure, so matching <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a> retain <code>graph_hash</code>; Sampling/Aggregation changes only <code>eval_config_hash</code>. The <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> carries role, authority when official, and attestation; only an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies ordinary results as official.</div>
 
-<div class="section-head" id="system"><h2>Repeated Durable GEPA Steps, Then Official Evaluation</h2></div>
+<div class="section-head" id="system"><h2>How do repeated durable steps lead into official evaluation?</h2><span class="tag">repeated steps, then official evaluation</span></div>
 
 <div class="plane optim">
   <div class="plane-label" id="gepa-diagram-title">Repeated durable GEPA steps <span class="sub">· nested reflection and step loops with explicit exits</span></div>
@@ -208,7 +209,7 @@
 
 <div class="callout"><b>Step Result restart minimum.</b> Every <a class="term-ref" href="#gepa-step-result">Step Result</a> contains all of: run/step/config identities; deterministic seed and RNG state; parent and lineage; sampled tasks and evaluation/tool hashes; parent and child result references; bounded trace projection and truncation; reflection evidence, attempts, and cost; canonical child and diff validation; acceptance inputs, decision, and policy; accepted-child full-evaluation references; catalog/frontier/archive delta; remaining budgets; and <code>continue|complete|failed</code>. Absence of any applicable field is explicit and typed, never inferred from a missing event.</div>
 
-<div class="section-head" id="run"><h2>Detailed Walkthrough: Repeated Step Requests and Durable Step Results</h2></div>
+<div class="section-head" id="run"><h2>What happens across repeated Step Requests and durable Step Results?</h2><span class="tag">detailed walkthrough</span></div>
 
 <div class="run">
   <div class="tick">
@@ -300,11 +301,11 @@
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: five curves per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, and only official results</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot?</h2><span class="tag">five curves per Model Route · official results only</span></div>
 
 <p>Per <a class="term-ref" href="vocab_and_defs.html#term-model-route">Model Route</a>, eligible A/B baselines and three evolved templates retain separately attributable ratio slots, while converged slots share the planned/result-key set and <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregate</a> for their <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>. The resulting distinct-hash aggregates are each averaged over 164 tasks × 3 repeats; in the explicit nonconvergent example they form <span class="key">five candidate curves</span> with four aggregates each. The natural readings are whether evolution beat the starting templates and how the official Pareto Front moves. Internal <a class="term-ref" href="vocab_and_defs.html#term-tool-result">Tool Results</a> never appear here; their <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Contexts</a> lack official authority.</p>
 
-<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="section-head" id="notes"><h2>What edge cases and guarantees should you keep in mind?</h2><span class="tag">additional notes</span></div>
 
 <div class="grid-3">
   <div class="card optim">
@@ -349,6 +350,10 @@
       <li>dspy's GEPA is reference-only, never a dependency</li>
     </ul>
   </div>
+</div>
+
+<div class="colophon">
+  Whetstone design family · 2026-07-20 · one of five optimizer run designs. Terms link to <a href="vocab_and_defs.html">Vocab &amp; Defs</a>; sibling runs: <a href="eval-run.html">Eval</a>, <a href="copro-run.html">COPRO</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="codex-agent-run.html">Codex CLI agent</a>. Purple (<span class="key">optim</span>) marks what this run changes relative to the Eval run. This design specifies the named <code>whetstone_multi_objective/v1</code> variant, not exact upstream GEPA; step counts are illustrative for one walkthrough.
 </div>
 
 </main>

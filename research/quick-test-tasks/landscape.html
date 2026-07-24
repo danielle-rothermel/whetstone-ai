@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Task Landscape</title>
+<title>whetstone-ai · The quick-test task space is richest in invented-convention designs</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Task Landscape</h1>
+<h1>The quick-test task space is richest in invented-convention designs</h1>
+<p class="dek">A review of the whole design space searched for the quick-test task, scored against the rubric.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -19,15 +20,11 @@
   <span class="here">Landscape</span>
 </div>
 
-<div class="intro">
-  <p>A review of the whole design space searched for the quick-test task: the one cheap, single-call, exact-scored task family that validates the prompt-optimizer implementations (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) and the shared execution contract before the expensive HumanEval+ code-compression experiment. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
-</div>
+<p>This searches for the one cheap, single-call, exact-scored task family that validates the prompt-optimizer implementations (Eval identity, COPRO, MIPROv2, GEPA, Codex CLI agent) and the shared execution contract before the expensive HumanEval+ code-compression experiment. Authoritative criteria: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
 
-<div class="verdict good">
-  <p><strong>The space is richest in the invented-convention family</strong> — tasks where a seeded generator hides arbitrary rules and an invented codebook behind a single bounded question. All seven finalists live there. The standout is <span class="key">c21 (Relational Micro-World with Invented Vocabulary)</span>: the only candidate whose two independent sources of headroom — an unguessable closed vocabulary <em>and</em> seeded nonstandard relation properties — both survive adversarial review with only minor pinning fixes. The other six 28-scorers each carry a repairable, non-fatal design change. See <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
-</div>
+<p><b>The space is richest in the invented-convention family</b> — tasks where a seeded generator hides arbitrary rules and an invented codebook behind a single bounded question. All seven finalists live there. The standout is <span class="key">c21 (Relational Micro-World with Invented Vocabulary)</span>: the only candidate whose two independent sources of headroom — an unguessable closed vocabulary <i>and</i> seeded nonstandard relation properties — both survive adversarial review with only minor pinning fixes. The other six 28-scorers each carry a repairable, non-fatal design change. See <a href="recommendations.html">Recommendations</a> for the adoption case.</p>
 
-<div class="section-head" id="inputs"><h2>Inputs and pointers</h2></div>
+<div class="section-head" id="inputs"><h2>What feeds this review?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -55,7 +52,7 @@
   </div>
 </div>
 
-<div class="section-head" id="domains"><h2>Two search passes, eight domains</h2></div>
+<div class="section-head" id="domains"><h2>What domains did the two search passes cover?</h2></div>
 
 <p>Two independent passes were merged. The <span class="key">brainstorm</span> pass generated 76 ideas across model lenses (<code>claude-opus-4-8[1m]</code>, <code>kimi-k2p7</code>, <code>deepseek-v4-flash</code>, <code>minimax-m3</code>, <code>gpt-5.x-codex</code>, and first-principles design). The <span class="key">literature</span> pass contributed 108 candidates anchored in 2024-2026 benchmarks. Both were filtered through the same two hard rubric constraints — strict per-example 0/1 exact match (no partial credit inside an example) and bounded MC / few-word output, single call, no sandbox — which forced every "per-field partial scoring" idea to be rewritten as a single-field / single-token query, with incrementality relocated to <span class="key">rule strata across the task pool</span> rather than partial credit within an instance.</p>
 
@@ -70,7 +67,7 @@
   <div class="card"><h3>H · Instruction following / constrained generation</h3><p class="small muted">Simultaneous constraints or an authority policy over directives.</p></div>
 </div>
 
-<div class="section-head" id="clusters"><h2>Six structural clusters cut across the domains</h2></div>
+<div class="section-head" id="clusters"><h2>What structural clusters cut across the domains?</h2></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>Invented-notation evaluators</strong> (c01 glyph base arithmetic, c02 mixed-radix units, c03 keyed operators, c10 interlocking calendars/clocks) — parse a per-instance legend, then evaluate under nonstandard place/precedence/modulus rules.</li>
@@ -81,7 +78,7 @@
   <li><strong>Rule-induction from I/O</strong> (c23 hidden-rule string-transform ladder, c08 Rosetta MC puzzles, c09 cipher-chain decode, c07 case-marked conlang translation) — infer a hidden transform from demos and apply it, making the MIPROv2 demo axis load-bearing.</li>
 </ul>
 
-<div class="section-head" id="table"><h2>Full ranked table: all 24 scored candidates</h2></div>
+<div class="section-head" id="table"><h2>How did all 24 candidates score?</h2></div>
 
 <p class="small muted">Score = summed rubric fit (14 criteria, 0-2 each, max 28). TB = tie-breaker (0-2, separate from the rubric, 2025-2026 research activity). The seven 28-scorers are the verified finalists; notes carry each lens's repairable findings (none fatal).</p>
 
@@ -117,7 +114,7 @@
 </table>
 </div>
 
-<div class="section-head" id="regions"><h2>Strong regions decompose and localize; weak regions leak or blur</h2></div>
+<div class="section-head" id="regions"><h2>Which regions were strong or weak, and why?</h2></div>
 
 <div class="grid-3">
   <div class="card">
@@ -168,11 +165,11 @@
   </div>
 </div>
 
-<div class="callout warn space-top">
+<div class="callout space-top">
   <strong>The recurring failure mode is criterion-4 collapse.</strong> Whenever the latent rules are conventional, fully stated in-instance, or enumerable in one paragraph, the gap becomes one-shot guessable and every optimizer looks identical. The winning move — seen in c21/c15/c14/c11 — is to make the decisive knowledge <span class="key">arbitrary seeded information</span> that cannot be recalled or guessed, only discovered from demos and failure traces, while keeping a designer-authored ceiling prompt that provably reaches ~100%.
 </div>
 
-<div class="section-head" id="near-misses"><h2>Notable candidates just below the finalist cut</h2></div>
+<div class="section-head" id="near-misses"><h2>Which candidates missed the finalist cut, and why?</h2></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><strong>c17 Invented-Gate Circuit Evaluation (27)</strong> — arguably the purest embodiment of "demos are load-bearing" (randomized truth tables cannot be encoded by any fixed instruction), but its single-token boolean output gives slightly coarser strata than the 28-tier tasks.</li>

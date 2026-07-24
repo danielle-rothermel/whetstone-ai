@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Candidate Pool — Merged Brainstorm + Literature</title>
+<title>Quick-Test Candidate Pool — Merged Brainstorm + Literature · whetstone-ai</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Candidate Pool — Merged Brainstorm + Literature</h1>
+<h1>184 brainstorm and literature candidates reconcile into 24 quick-test task families</h1>
+<p class="dek">The deduplicated candidate pool; Landscape ranks these and Recommendations picks the finalist.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,15 +21,9 @@
   <span class="here">Merged pool</span>
 </div>
 
-<div class="intro">
-  <p>This is the merged candidate pool for the quick-test task: the two search passes reconciled into one deduplicated list of task families. The authoritative selection criteria are the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. The <a href="landscape.html">Landscape</a> scores and ranks these same candidates; the <a href="recommendations.html">Recommendations</a> pick the finalist.</p>
-</div>
+<p>This is the merged candidate pool for the quick-test task: the two search passes reconciled into one deduplicated list of task families. The authoritative selection criteria are the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>. The <a href="landscape.html">Landscape</a> scores and ranks these same candidates; the <a href="recommendations.html">Recommendations</a> pick the finalist.</p>
 
-<div class="verdict good">
-  <p><strong>76 brainstormed ideas plus 108 literature candidates merged into <span class="key">24 kept candidates</span> (c01–c24), with <span class="key">9 merged clusters dropped</span>.</strong> Two rubric constraints shaped every merge: (a) scoring is strict per-example 0/1 exact match — <em>no partial credit inside an example</em> — so all "per-field partial scoring" brainstorm variants were rewritten as single-field / single-token queries with incrementality coming from <span class="key">rule strata across the task pool</span>; (b) outputs are bounded to MC or a few words, single LLM call, no sandbox.</p>
-</div>
-
-<div class="section-head" id="inputs"><h2>Inputs and rubric constraints</h2></div>
+<div class="section-head" id="inputs"><h2>What went in, and what constraints shaped the merge?</h2><span class="tag">inputs · rubric constraints</span></div>
 
 <div class="grid-2">
   <div class="card">
@@ -48,9 +43,11 @@
   </div>
 </div>
 
-<div class="section-head" id="kept"><h2>Kept candidates (24)</h2></div>
+<div class="summary"><b>Merge result.</b> 76 brainstormed ideas plus 108 literature candidates became <span class="key">24 kept candidates</span> (c01–c24), with <span class="key">9 clusters dropped</span>. Incrementality that partial-scoring variants once carried inside an example is relocated to <span class="key">rule strata across the pool</span>, satisfying the strict per-example 0/1 exact-match rule.</div>
 
-<p class="small muted">Each card is a stable anchor (<code>#c01</code> … <code>#c24</code>) for deep-linking from sibling docs. Origin marks whether the candidate came from the brainstorm pass, the literature pass, or both. "Merged from" preserves the full lineage; "Adaptation" preserves the build notes.</p>
+<div class="section-head" id="kept"><h2>Which 24 candidates survived the merge?</h2><span class="tag">kept candidates</span></div>
+
+<p class="aside">Each card is a stable anchor (<code>#c01</code> … <code>#c24</code>) for deep-linking from sibling docs. Origin marks whether the candidate came from the brainstorm pass, the literature pass, or both. "Merged from" preserves the full lineage; "Adaptation" preserves the build notes.</p>
 
 <div class="card" id="c01">
   <h3>c01 · Invented-Glyph Positional Base Arithmetic</h3>
@@ -268,7 +265,7 @@
   <strong>Adaptation:</strong> Randomize key/direction per batch; ask for the full ordering so every key level is exercised; keep lists short so the output stays one bounded line.</p>
 </div>
 
-<div class="section-head" id="dropped"><h2>Dropped clusters (9)</h2></div>
+<div class="section-head" id="dropped"><h2>Which clusters were dropped, and why?</h2><span class="tag">dropped clusters</span></div>
 
 <div class="table-wrap">
 <table>
@@ -332,8 +329,12 @@
 </table>
 </div>
 
-<div class="callout space-top">
+<div class="callout">
   <strong>Reference-only literature entries</strong> were folded into kept candidates' source lists rather than counted as clusters: GSM-Symbolic/GSM-Plus (c02 methodology), NumericBench (c01), JSONSchemaBench (c11), StructText/DTBench/ExtractBench/LLMStructBench (c12, provenance caveats noted), FOLIO (c18 style reference), cryptarithmetic (c01 hard tail), L-systems (c04), Long-Horizon Execution (c05), MTOB/ConLangs/SIGMORPHON (c07), rare-script decipherment (c08).
+</div>
+
+<div class="colophon">
+  Merged candidate pool for the quick-test task, reconciling the <a href="brainstorm.html">76-idea brainstorm</a> with 108 literature candidates into 24 kept families (c01–c24, stable deep-link anchors) and 9 dropped clusters. Selection criteria: <a href="../../design/quick-test-rubric.html">quick-test rubric</a> (authoritative). Downstream: <a href="landscape.html">Landscape</a> scores and ranks these candidates; <a href="recommendations.html">Recommendations</a> picks the finalist.
 </div>
 
 </main>

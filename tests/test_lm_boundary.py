@@ -12,10 +12,10 @@ import pytest
 from dr_providers import (
     CostInfo,
     FailureClass,
-    LlmWarning,
     MessageRole,
     PromptMessage,
     ProviderTransportResponse,
+    ProviderTransportWarning,
     RateLimitedProviderError,
     ReasoningEffort,
     ResponsesDiagnostics,
@@ -131,7 +131,9 @@ class TestProviderResultFromResponse:
         response = ProviderTransportResponse(
             text="hello",
             warnings=(
-                LlmWarning(code="model_substitution", message="swapped"),
+                ProviderTransportWarning(
+                    code="model_substitution", message="swapped"
+                ),
             ),
         )
         result = provider_result_from_response(response)

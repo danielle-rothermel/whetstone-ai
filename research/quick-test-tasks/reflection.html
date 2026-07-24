@@ -7,10 +7,29 @@
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
 <title>Quick-Test Task Search: Process Reflection</title>
+<style>
+  /* page-local; doc.css tokens only */
+  .metric { font: 700 28px/1.1 var(--font-system); color: var(--ink); }
+  .metric .label { display: block; margin-top: 4px; font: 400 13px/1.3 var(--font-prose); color: var(--muted); }
+  .statrow { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 14px 24px; margin: 18px 0; }
+  .finding { margin: 16px 0; padding: 14px 20px; border: 1px solid var(--line); border-left: 6px solid var(--muted); border-radius: 12px; background: var(--surface); }
+  .finding.blocker { border-left-color: var(--red); }
+  .finding.high { border-left-color: var(--amber); }
+  .finding h3 { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .sev { font: 600 11px/1.7 var(--font-mono); text-transform: uppercase; letter-spacing: .05em; padding: 1px 8px; border-radius: 999px; }
+  .sev.blocker { background: var(--red-soft); color: var(--red); }
+  .sev.high { background: var(--amber-soft); color: var(--amber); }
+  ol.changes { margin: 8px 0 0; padding-left: 22px; }
+  ol.changes > li { margin-bottom: 14px; }
+  ol.changes > li::marker { color: var(--accent); font-weight: 700; }
+  ol.changes h3 { margin: 0 0 4px; font: 700 16px/1.3 var(--font-system); }
+  @media (max-width: 900px) { .statrow { grid-template-columns: repeat(2, 1fr); } }
+</style>
 </head>
 <body>
 <main>
-<h1>Quick-Test Task Search: Process Reflection</h1>
+<h1>Discovery converged; verification never happened</h1>
+<p class="dek">A retrospective on the process that produced the quick-test candidate set.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,39 +39,35 @@
   <span class="here">Reflection</span>
 </div>
 
-<div class="intro">
-  <p>A retrospective on the <em>process</em> that produced the quick-test candidate set — not a re-ranking of candidates. Grounded in <a href="brainstorm.html">brainstorm.html</a>, <a href="candidates-merged.html">candidates-merged.html</a>, the nine research docs, and the run statistics. Authoritative target throughout: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+<div class="section-head" id="stats"><h2>What did the run actually produce?</h2><span class="tag">run statistics</span></div>
+
+<div class="statrow">
+  <div class="metric">76<span class="label">brainstorm ideas</span></div>
+  <div class="metric">108<span class="label">literature candidates</span></div>
+  <div class="metric">24<span class="label">merged / scored</span></div>
+  <div class="metric">10<span class="label">verified finalists</span></div>
+  <div class="metric">14<span class="label">external ideas</span></div>
+  <div class="metric">8<span class="label">domains searched</span></div>
+  <div class="metric">9<span class="label">clusters dropped</span></div>
+  <div class="metric">0<span class="label">fatal refutations</span></div>
 </div>
 
-<div class="verdict">
-  <p><strong>The process was strong at discovery and weak at verification.</strong> Two independent generators converged on the same task families (<span class="key">22 of 24 candidates surfaced by both</span> brainstorm and literature), and the rubric was operationalized into hard, criterion-anchored filters. But <span class="key">the skeptics killed nothing</span> (<code>fatal_refutations=0</code>), <span class="key">no candidate was ever calibrated on the target model</span>, and heavy near-duplication survived into the final 24. The single highest-value fix is to insert a floor-vs-ceiling calibration gate before adversarial review, so the rubric's central knobs stop being guessed and start being measured.</p>
+<div class="summary">
+  <strong>The process was strong at discovery and weak at verification.</strong> Two independent generators converged on the same task families (<span class="key">22 of 24 candidates surfaced by both</span> brainstorm and literature), and the rubric was operationalized into hard, criterion-anchored filters. But <span class="key">the skeptics killed nothing</span> (<code>fatal_refutations=0</code>), <span class="key">no candidate was ever calibrated on the target model</span>, and heavy near-duplication survived into the final 24. The single highest-value fix: insert a floor-vs-ceiling calibration gate before adversarial review, so the rubric's central knobs stop being guessed and start being measured.
 </div>
 
-<div class="section-head" id="stats"><h2>Run statistics</h2></div>
-
-<div class="grid-4">
-  <div class="card"><div class="metric">76</div><div class="label">brainstorm ideas</div></div>
-  <div class="card"><div class="metric">108</div><div class="label">literature candidates</div></div>
-  <div class="card"><div class="metric">24</div><div class="label">merged / scored</div></div>
-  <div class="card"><div class="metric">10</div><div class="label">verified finalists</div></div>
-  <div class="card"><div class="metric">14</div><div class="label">external ideas</div></div>
-  <div class="card"><div class="metric">8</div><div class="label">domains searched</div></div>
-  <div class="card"><div class="metric">9</div><div class="label">clusters dropped</div></div>
-  <div class="card"><div class="metric">0</div><div class="label">fatal refutations</div></div>
-</div>
-
-<div class="section-head" id="worked"><h2>What worked well</h2></div>
+<div class="section-head" id="worked"><h2>What worked well?</h2></div>
 
 <div class="grid-2">
   <div class="card">
     <h3>Brainstorm/literature convergence was the headline signal</h3>
-    <p><span class="key">22 of 24 merged candidates are tagged <code>origin: both</code></span> — independently surfaced by first-principles brainstorm and by academic literature search. Only two are brainstorm-only (c10 interlocking-cycle calendar, c21 relational micro-world); <span class="key">zero are literature-only</span>. This is the single most reassuring result in the run: two methodologically independent generators landed on the same task families, so the finalist set is unlikely to be an artifact of either method's blind spots.</p>
+    <p><span class="key">22 of 24 merged candidates are tagged <code>origin: both</code></span> — independently surfaced by first-principles brainstorm and by academic literature search. Only two are brainstorm-only (c10 interlocking-cycle calendar, c21 relational micro-world); <span class="key">zero are literature-only</span>. Two methodologically independent generators landed on the same task families, so the finalist set is unlikely to be an artifact of either method's blind spots.</p>
     <p>It also answers "did brainstorm or literature contribute more finalists?" cleanly: <span class="key">neither dominated on discovery; they corroborated.</span> What each contributed was different and complementary:</p>
     <ul>
       <li><strong>Brainstorm</strong> contributed the <span class="key">task shapes</span> and the anti-one-shot engineering (per-instance keys, precedence stacks, "invent the glyphs / operators / house rules"). The rubric-critical design moves originate here: closed-vocab to protect temp-0 resolvability (c09), single-field queries to preserve strict 0/1 scoring (c11/c12), distractor-isolates-one-rule MC construction (c08/c23).</li>
       <li><strong>Literature</strong> contributed <span class="key">calibration evidence</span>: where the default floor sits, named diagnostic failure modes (the "decimal round-trip" error), and generator donors (GSM-Symbolic templating, InductionBench, RuleTaker/ProofWriter, IFEval/COLLIE checker libraries). Crucially, it supplied the only direct proof that our own optimizers (COPRO/MIPROv2/GEPA) close incremental, monotone gaps — on HotpotQA/HoVer/PUPA (<a href="research-prompt-opt-literature.html">research-prompt-opt-literature.html</a> §4–6) — which no brainstorm could provide.</li>
     </ul>
-    <p class="small muted">The merge used literature primarily to validate and de-risk shapes brainstorm had already proposed, rather than to introduce new ones — a healthy division of labor, but see the near-duplication risk it hides below.</p>
+    <p class="aside">The merge used literature primarily to validate and de-risk shapes brainstorm had already proposed, rather than to introduce new ones — a healthy division of labor, but see the near-duplication risk it hides below.</p>
   </div>
   <div class="card">
     <h3>External model lanes ran and added non-redundant ideas</h3>
@@ -76,10 +91,10 @@
   </div>
 </div>
 
-<div class="section-head" id="failed"><h2>What did not work well</h2></div>
+<div class="section-head" id="failed"><h2>What did not work well?</h2></div>
 
-<div class="finding">
-  <div class="finding-head"><h3>Skeptics killed nothing — scoring was almost certainly too credulous</h3><span class="severity blocker">Blocker</span></div>
+<div class="finding blocker">
+  <h3>Skeptics killed nothing — scoring was almost certainly too credulous <span class="sev blocker">Blocker</span></h3>
   <p><code>fatal_refutations=0</code> across 24 scored / 10 verified finalists, with two adversarial skeptics per finalist. <span class="key">Zero kills is a warning sign, not a victory.</span> Either the candidate set was already perfectly filtered before the skeptics ran (unlikely for 24 items), or the skeptic lenses were not sharp enough / the scoring rubric had no failing band. The merge doc itself flags real, unresolved risks a skeptic should have been able to convert into a kill-or-demote:</p>
   <ul>
     <li><strong>c20</strong> (invented micro-game) is self-described as "highest design effort in the list" with rules that "must be validated unambiguous with a reference ~100% prompt before use" — its ceiling is <span class="key">unverified</span>, a criterion-9 failure risk, yet it survived at full standing.</li>
@@ -89,57 +104,57 @@
   <p>None of these produced a refutation. The most likely process defect: skeptics critiqued candidates <em>in the abstract</em> rather than being required to name the one rubric criterion most likely to fail on the actual pinned cheap model, and scoring had no explicit "unverified ceiling/floor ⇒ cap the score" rule. A credulity check that produces zero kills on 24 bespoke, uncalibrated task designs is not measuring what it should.</p>
 </div>
 
-<div class="finding">
-  <div class="finding-head"><h3>Heavy near-duplication survived into 24 finalists</h3><span class="severity high">High</span></div>
+<div class="finding high">
+  <h3>Heavy near-duplication survived into 24 finalists <span class="sev high">High</span></h3>
   <p>The merge deduped clusters but the finalist set is still internally redundant: c01/c02/c03/c10 are four flavors of "invented arithmetic/notation"; c11/c12/c24 are three flavors of "canonicalize/extract/order under invented conventions"; c05/c17/c19/c20 are four flavors of "run an invented machine forward." For a quick-test selection whose entire purpose is to pick <span class="key">one</span> task, carrying 24 candidates — many siblings differing only in output format — is more than the decision needs and <span class="key">dilutes skeptic attention</span> across near-identical designs.</p>
   <p>The brainstorm's own cross-cutting notes already identified the robust clusters (rewrite-to-normal-form appeared 3–4× independently); the process could have collapsed to ~8 cluster-representatives <em>before</em> scoring and spent the skeptic budget on adversarially calibrating those eight on the real model.</p>
 </div>
 
-<div class="finding">
-  <div class="finding-head"><h3>No candidate was actually calibrated on the target model</h3><span class="severity blocker">Blocker</span></div>
+<div class="finding blocker">
+  <h3>No candidate was actually calibrated on the target model <span class="sev blocker">Blocker</span></h3>
   <p>Every "known ceiling / known floor" claim (criterion 9) in the candidate doc is <span class="key">asserted from literature analogy, never measured</span>. The constructed-notation doc is explicit that the two purest-fit synthetic families (balanced ternary #10, keyed novel-operator #11) have "no external validation of difficulty curve — you must calibrate floor/ceiling yourself on 10–20 evals."</p>
   <p>The process produced 24 plausible designs but <span class="key">zero data points</span> on the one question the rubric makes falsifiable: does a naive prompt actually score well below a ceiling prompt on the cheap model, with an incremental middle? A single afternoon of running a floor prompt + a ceiling prompt on 2–3 cluster-representatives would have been worth more than the 12th–24th candidate.</p>
 </div>
 
-<div class="finding">
-  <div class="finding-head"><h3>The vestigial second objective was under-developed</h3><span class="severity high">High</span></div>
+<div class="finding high">
+  <h3>The vestigial second objective was under-developed <span class="sev high">High</span></h3>
   <p>The rubric's <code>callout good</code> makes a second Objective (output bytes ↓) <span class="key">mandatory</span> to claim GEPA / two-objective coverage. The docs treat it as a bolt-on ("output bytes doubles as the vestigial second objective," c11) rather than a selection criterion. Only text-output tasks (Themes A/D/E/G) can carry it; the MC-output finalists (c06, c08, c14, c16, c17-verdict) <span class="key">cannot</span>, because a single-letter answer has no meaningful length-budget axis. That materially narrows which finalists can validate the two-objective plumbing, and the merge did not flag it as a discriminator. This should have been a scored column.</p>
 </div>
 
-<div class="section-head" id="changes"><h2>What I would change next time</h2></div>
+<div class="section-head" id="changes"><h2>What would I change next time?</h2></div>
 
-<div class="steps">
-  <div class="step">
+<ol class="changes">
+  <li>
     <h3>Insert a calibration gate between scoring and skeptics</h3>
     <p>Before adversarial review, run floor-prompt vs. ceiling-prompt on the pinned cheap model over 10–20 instances for each cluster representative. Criteria 4/9 stop being assertions. Any candidate whose measured floor≈ceiling or floor≈0 is demoted automatically. Directly targets the credulity and calibration failures above.</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Collapse to cluster-representatives before scoring, not after</h3>
     <p>Score ~8 representatives, not 24 siblings. Reallocate the freed skeptic budget to depth (calibrate each survivor) instead of breadth (re-litigating format variants). The brainstorm already names the clusters.</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Give skeptics a required output shape</h3>
     <p>Each skeptic must (a) name the single rubric criterion most likely to fail on the pinned model, and (b) propose the cheapest experiment that would falsify the candidate. Add an explicit scoring rule: "unverified ceiling, floor, or temp-0 noise floor caps the score below the promote line." Zero kills should be impossible unless a calibration experiment cleared the risk. Consider a third skeptic lens dedicated solely to "is this one-shot-guessable by a competent prompt engineer?" — the rubric's sharpest and most easily-violated criterion.</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Make the second objective a scored column, not a footnote</h3>
     <p>Tag each candidate "carries a length objective: yes/no" and weight it, since it is mandatory for the GEPA/two-objective claim the quick test exists to support. Prefer at least one finalist that carries it natively (a short string output, not MC).</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Prune the domain list at the edges; it was slightly too wide</h3>
     <p>Eight domains produced heavy overlap in the extraction/canonicalization and simulation regions (Themes E/F/G bled into each other repeatedly). Merging "structured extraction" with "classification under remapped labels," and "simulation/state-machines" with "formal grammars/rewriting," would cut duplicate literature work without losing coverage — the cross-cutting notes show these already collapse in practice.</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Keep the external lanes; they paid off</h3>
     <p>They seeded three finalists (c14, c21, c22) that the internal lens under-weighted (instruction-hierarchy, relational vocab, constrained generation). Do not cut them to save budget.</p>
-  </div>
-  <div class="step">
+  </li>
+  <li>
     <h3>Add one lens the current set lacks: "cheapest-to-implement first"</h3>
     <p>The process optimized for rubric fit but never scored build cost. c20 is flagged as highest-effort; c01/c11-slug/c03 are near-trivial generators. For a quick-test whose point is to unblock the debug loop soon, implementation cost should be an explicit axis, biasing toward the cheapest task that clears the calibration gate.</p>
-  </div>
-</div>
+  </li>
+</ol>
 
-<div class="section-head" id="open"><h2>Open questions about the rubric itself</h2></div>
+<div class="section-head" id="open"><h2>What open questions did the search surface about the rubric?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -162,6 +177,11 @@
     <h3>How many latent rules is "enough" before a task stops being one-shot guessable (crit. 4) yet stays learnable (crit. 12)?</h3>
     <p>The docs repeatedly settle on <span class="key">"4–5 interacting rules with precedence"</span> as folklore, never derived. Too few ⇒ one-shot; too many ⇒ unlearnable (InductionBench's warning that models fail even the simplest class). The rubric gives no target and no way to estimate it a priori — which is precisely why the calibration gate is the highest-value process change: the rubric's central knob is currently guessed, not measured.</p>
   </div>
+</div>
+
+<div class="colophon">
+  <p>Scope: a retrospective on the <em>process</em> that produced the quick-test candidate set, not a re-ranking of candidates. Grounded in <a href="brainstorm.html">brainstorm.html</a>, <a href="candidates-merged.html">candidates-merged.html</a>, the nine research docs, and the run statistics. Authoritative target throughout: the <a href="../../design/quick-test-rubric.html">quick-test rubric</a>.</p>
+  <p>Run statistics: <code>brainstorm=76, external=14, domains=8, literature=108, merged=24, dropped_clusters=9, scored=24, verified=10, fatal_refutations=0</code>.</p>
 </div>
 
 </main>

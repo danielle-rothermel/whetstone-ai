@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from dr_serialize import build_identity_document, identity_hash
+from dr_serialize import build_identity_document, identity_document_hash
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -188,7 +188,7 @@ class EvaluationContext(BaseModel):
             schema_version=EVALUATION_CONTEXT_SCHEMA_VERSION,
             payload=self.identity_payload(),
         )
-        return identity_hash(document)
+        return identity_document_hash(document)
 
 
 def rollout_execution_key(

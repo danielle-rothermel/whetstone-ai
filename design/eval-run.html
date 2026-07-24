@@ -10,7 +10,8 @@
 </head>
 <body>
 <main>
-<h1>Eval Run Design</h1>
+<h1>The Eval run measures fixed candidates through official evaluation, setting the baseline</h1>
+<p class="dek">A pure identity Step returns proposals unchanged; the harness materializes and evaluates every Graph Config.</p>
 <div class="byline">whetstone-ai · 2026-07-19</div>
 
 <div class="family-nav">
@@ -36,7 +37,7 @@
   </ul>
 </div>
 
-<div class="section-head" id="target"><h2>Example Setup</h2></div>
+<div class="section-head" id="target"><h2>What does the designer freeze before the run?</h2><span class="tag">example setup</span></div>
 
 <div class="grid-4">
   <div class="card">
@@ -101,7 +102,7 @@ Use at most {MAX_BUDGET} characters.
 
 {ENCODER_OUTPUT}</code></pre>
 
-<div class="section-head" id="specified"><h2>Run Configurations</h2></div>
+<div class="section-head" id="specified"><h2>What does the Step Request serialize?</h2><span class="tag">run configurations</span></div>
 
 <p>The canonical <a class="term-ref" href="vocab_and_defs.html#term-eval-definition">Eval Definition</a> defines the measurement-policy shape. dr-graph's versioned, variable-bearing DAG <a class="term-ref" href="vocab_and_defs.html#term-graph-definition">Graph Definition</a> is used by Whetstone in the role of <a class="term-ref" href="vocab_and_defs.html#term-rollout-definition">Rollout Definition</a>; those names do not denote separate artifacts or identities. Each complete output-affecting assignment and axis selection materializes one concrete <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> plus one <a class="term-ref" href="vocab_and_defs.html#term-materialization-record">Materialization Record</a>; the <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Config</a> is one <a class="term-ref" href="vocab_and_defs.html#term-rollout-variant">Rollout Variant</a> and <code>graph_hash</code> is its sole identity. A separately identified <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> is bound through an <a class="term-ref" href="vocab_and_defs.html#term-evaluation-context">Evaluation Context</a> when that variant is measured, but it must reference the identical <a class="term-ref" href="vocab_and_defs.html#term-evaluation-procedure-config">Evaluation Procedure Config</a> statically assigned to the Graph's <a class="term-ref" href="vocab_and_defs.html#term-eval-node">Eval Node</a>.</p>
 
@@ -141,7 +142,7 @@ Use at most {MAX_BUDGET} characters.
   <p class="small muted space-top">This Eval setup binds the same serialized <a class="term-ref" href="vocab_and_defs.html#term-eval-config">Eval Config</a> in separate contexts carrying <code>internal</code> and <code>official</code> <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Roles</a>, so <code>internal_eval_config_hash == official_eval_config_hash</code>. Equal hashes prove equal measurement policy; only an authority-issued <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results as official.</p>
 </div>
 
-<div class="section-head" id="system"><h2>Run <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation">Official Evaluation</a> on All <a class="term-ref" href="vocab_and_defs.html#term-graph-config">Graph Configs</a></h2></div>
+<div class="section-head" id="system"><h2>How does official evaluation run over every Graph Config?</h2><span class="tag">official evaluation on all configs</span></div>
 
 <div class="flow">
   <div class="plane">
@@ -217,7 +218,7 @@ Use at most {MAX_BUDGET} characters.
   </div>
 </div>
 
-<div class="section-head" id="run"><h2>Full run walkthrough: <code>D × 164 × 3</code> <a class="term-ref" href="vocab_and_defs.html#term-rollout">rollouts</a>; 15,744 in the nonconvergent baseline</h2></div>
+<div class="section-head" id="run"><h2>What happens across <code>D × 164 × 3</code> rollouts?</h2><span class="tag">full run walkthrough · 15,744 in the nonconvergent baseline</span></div>
 
 <div class="run">
   <div class="tick">
@@ -264,11 +265,11 @@ Use at most {MAX_BUDGET} characters.
   </div>
 </div>
 
-<div class="section-head" id="output"><h2>What lands on the plot: eight candidates, 32 <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">rollout aggregates</a> in the baseline, one front</h2></div>
+<div class="section-head" id="output"><h2>What lands on the plot?</h2><span class="tag">eight candidates · 32 rollout aggregates · one front</span></div>
 
 <p>Each selected candidate retains four separately attributable materialization slots across ratios, while converged slots share the planned/result-key set and <a class="term-ref" href="vocab_and_defs.html#term-rollout-aggregate">Rollout Aggregate</a> for their <a class="term-ref" href="vocab_and_defs.html#term-graph-hash">Graph Hash</a>. The resulting <code>D</code> distinct-hash aggregates are each averaged over 164 <a class="term-ref" href="vocab_and_defs.html#term-task">tasks</a> × 3 <a class="term-ref" href="vocab_and_defs.html#term-repeat">repeats</a>: <a class="term-ref" href="vocab_and_defs.html#term-average-binary-test-pass-rate">Average Binary Test Pass Rate</a> vs <a class="term-ref" href="vocab_and_defs.html#term-mean-compression-ratio">Mean Compression Ratio</a> derived from integer <a class="term-ref" href="vocab_and_defs.html#term-compressed-description-length">Compressed Description Length</a>. In this explicit nonconvergent baseline, <code>D=32</code>, forming eight budget-response curves and the official <a class="term-ref" href="vocab_and_defs.html#term-pareto-front">Pareto Front</a>.</p>
 
-<div class="section-head" id="notes"><h2>Additional Notes</h2></div>
+<div class="section-head" id="notes"><h2>What edge cases and guarantees should you keep in mind?</h2><span class="tag">additional notes</span></div>
 
 <div class="grid-3">
   <div class="card">
@@ -313,6 +314,10 @@ Use at most {MAX_BUDGET} characters.
       <li>One new mechanism: the <span class="key"><a class="term-ref" href="#local-per-task-budget-derivation">per-task budget derivation</a></span> inside the encoder stage</li>
     </ul>
   </div>
+</div>
+
+<div class="colophon">
+  Whetstone design family · 2026-07-19 · the baseline the four optimizer runs compare against. Terms link to <a href="vocab_and_defs.html">Vocab &amp; Defs</a>; optimizer runs: <a href="copro-run.html">COPRO</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="gepa-run.html">GEPA</a>, <a href="codex-agent-run.html">Codex CLI agent</a>. Rollout counts (15,744 baseline) are illustrative for one nonconvergent walkthrough.
 </div>
 
 </main>

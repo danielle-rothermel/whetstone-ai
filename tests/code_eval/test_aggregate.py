@@ -148,6 +148,87 @@ def test_failed_row_propagates_missing_data() -> None:
     assert agg.aggregation_output.status is AggregationStatus.MISSING_DATA
 
 
+# --- Bounded completeness tolerance (declared max_skip_fraction) ------------
+
+
+def _rows_with_skips(n_tasks: int, skipped: int) -> tuple[TaskRows, ...]:
+    """``n_tasks`` single-repeat tasks; the first ``skipped`` are failed."""
+    return tuple(
+        TaskRows(
+            task_identity=f"t{i}",
+            expected_repeats=1,
+            rows=(RowValue(failed=True),)
+            if i < skipped
+            else (RowValue(value=1.0),),
+        )
+        for i in range(n_tasks)
+    )
+
+
+def test_skip_within_tolerance_certifies_a_value() -> None:
+    # 1 of 100 rows skipped (1%) under a declared 2% tolerance: certified.
+    from whetstone.code_eval import CompletenessPolicy
+
+    task_rows = _rows_with_skips(100, skipped=1)
+    agg = _abtpr(
+        task_rows,
+        repeat_count=1,
+        policy=CompletenessPolicy(
+            row_policy=RowPolicy.SKIP, max_skip_fraction=0.02
+        ),
+    )
+    assert agg.rows_failed == 1
+    assert agg.rows_present == 99
+    # Within tolerance -> a real value over the surviving rows (all 1.0).
+    assert agg.aggregation_output.status is AggregationStatus.OK
+    assert agg.aggregation_output.value == pytest.approx(1.0)
+
+
+def test_skip_over_tolerance_forced_incomplete_but_counts_kept() -> None:
+    # 3 of 100 rows skipped (3%) exceeds the 2% bound: forced MISSING_DATA,
+    # value None (an incomplete arm), yet the skipped rows stay counted.
+    from whetstone.code_eval import CompletenessPolicy
+
+    task_rows = _rows_with_skips(100, skipped=3)
+    agg = _abtpr(
+        task_rows,
+        repeat_count=1,
+        policy=CompletenessPolicy(
+            row_policy=RowPolicy.SKIP, max_skip_fraction=0.02
+        ),
+    )
+    assert agg.rows_failed == 3
+    assert agg.rows_present == 97
+    assert agg.aggregation_output.status is AggregationStatus.MISSING_DATA
+    assert agg.aggregation_output.value is None
+
+
+def test_skip_exactly_at_tolerance_certifies() -> None:
+    # 2 of 100 (exactly 2%) is within the inclusive bound.
+    from whetstone.code_eval import CompletenessPolicy
+
+    agg = _abtpr(
+        _rows_with_skips(100, skipped=2),
+        repeat_count=1,
+        policy=CompletenessPolicy(
+            row_policy=RowPolicy.SKIP, max_skip_fraction=0.02
+        ),
+    )
+    assert agg.aggregation_output.status is AggregationStatus.OK
+
+
+def test_bare_skip_rowpolicy_is_legacy_unbounded() -> None:
+    # A bare RowPolicy.SKIP carries NO declared tolerance -> the legacy
+    # unbounded skip: even 50% skipped still certifies over the survivors.
+    agg = _abtpr(
+        _rows_with_skips(100, skipped=50),
+        repeat_count=1,
+        policy=RowPolicy.SKIP,
+    )
+    assert agg.aggregation_output.status is AggregationStatus.OK
+    assert agg.aggregation_output.value == pytest.approx(1.0)
+
+
 # --- Mean Compression Ratio ------------------------------------------------
 
 

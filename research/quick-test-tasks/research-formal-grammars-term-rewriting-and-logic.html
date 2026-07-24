@@ -6,11 +6,12 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Quick-Test Candidates: Formal Grammars, Term-Rewriting, and Logic</title>
+<title>whetstone-ai · Abstract-symbol rewriting is the strongest quick-test fit in formal logic</title>
 </head>
 <body>
 <main>
-<h1>Quick-Test Candidates: Formal Grammars, Term-Rewriting, and Logic</h1>
+<h1>Abstract-symbol rewriting families are the strongest quick-test fit in formal logic</h1>
+<p class="dek">Twelve grammar, term-rewriting, and deduction candidates surveyed against the rubric, unranked.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -20,15 +21,11 @@
   <span class="here">Grammars &amp; logic</span>
 </div>
 
-<div class="intro">
-  <p>Breadth survey of the formal-grammars / term-rewriting / logic-deduction domain (RuleTaker / ProofWriter style) for the whetstone-ai quick-test task selection. Twelve candidates, <span class="key">not ranked</span>. Each is evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a> criteria.</p>
-</div>
+<p>Breadth survey of the formal-grammars / term-rewriting / logic-deduction domain (RuleTaker / ProofWriter style) for the whetstone-ai quick-test task selection. Twelve candidates, <span class="key">not ranked</span>. Each is evaluated against the <a href="../../design/quick-test-rubric.html">quick-test rubric</a> criteria.</p>
 
-<div class="verdict good">
-  <p><strong>The strongest rubric fits are abstract-symbol rewriting families</strong> where the LLM applies invented productions to reach a normal form or a True/False/Unknown entailment. A recurring theme: the natural-language logic benchmarks (RuleTaker, ProofWriter, FOLIO, PrOntoQA) are all published, so they <span class="key">fail contamination-resistance (C8)</span> as-is and must be <span class="key">regenerated synthetically</span>. Their generators, on the other hand, are exactly what the rubric wants. The best pure-rubric fits are <span class="key">Candidate 5 (term rewriting to normal form)</span>, <span class="key">Candidate 3 (FLD generator)</span>, <span class="key">Candidate 4 (PrOntoQA fictional ontologies)</span>, and <span class="key">Candidate 11 (L-system derivation)</span> — they maximize C8/C10/C11 simultaneously.</p>
-</div>
+<p><b>The strongest rubric fits are abstract-symbol rewriting families</b> where the LLM applies invented productions to reach a normal form or a True/False/Unknown entailment. A recurring theme: the natural-language logic benchmarks (RuleTaker, ProofWriter, FOLIO, PrOntoQA) are all published, so they <span class="key">fail contamination-resistance (C8)</span> as-is and must be <span class="key">regenerated synthetically</span>. Their generators, on the other hand, are exactly what the rubric wants. The best pure-rubric fits are <span class="key">Candidate 5 (term rewriting to normal form)</span>, <span class="key">Candidate 3 (FLD generator)</span>, <span class="key">Candidate 4 (PrOntoQA fictional ontologies)</span>, and <span class="key">Candidate 11 (L-system derivation)</span> — they maximize C8/C10/C11 simultaneously.</p>
 
-<div class="section-head" id="rubric"><h2>Rubric quick-reference: what a good candidate needs</h2></div>
+<div class="section-head" id="rubric"><h2>What does a good candidate need against the rubric?</h2></div>
 
 <ul class="card" style="margin:0; padding:18px 22px 18px 40px;">
   <li><span class="key">C1</span> single LLM-call node + eval node (no encoder→decoder chain)</li>
@@ -46,7 +43,7 @@
   <li><span class="key">Tie-breaker</span> active 2025–2026 research interest</li>
 </ul>
 
-<div class="section-head" id="summary"><h2>All twelve candidates at a glance</h2></div>
+<div class="section-head" id="summary"><h2>How do all twelve candidates compare at a glance?</h2></div>
 
 <div class="table-wrap">
 <table>
@@ -68,7 +65,7 @@
 </table>
 </div>
 
-<div class="section-head" id="details"><h2>Candidate detail</h2></div>
+<div class="section-head" id="details"><h2>What is each candidate, and how does it adapt?</h2></div>
 
 <div class="grid-2">
 
@@ -182,7 +179,7 @@
 
 </div>
 
-<div class="section-head" id="cross-cutting"><h2>Cross-cutting notes</h2></div>
+<div class="section-head" id="cross-cutting"><h2>What patterns cut across the candidates?</h2></div>
 
 <div class="grid-2">
   <div class="card">
@@ -212,11 +209,11 @@
   </div>
 </div>
 
-<div class="callout warn space-top">
-  <strong>Contamination (C8) is the dominant filter.</strong> Every published NL logic set (1, 2, 4, 6, 7, 8, 12) must be regenerated with fresh/invented symbols. The two families that never had a public dataset — <span class="key">5 (term rewriting)</span> and the QA-repurposed <span class="key">11 (L-systems)</span> — are contamination-proof by construction.
+<div class="callout space-top">
+  <b>Contamination (C8) is the dominant filter.</b> Every published NL logic set (1, 2, 4, 6, 7, 8, 12) must be regenerated with fresh/invented symbols. The two families that never had a public dataset — <span class="key">5 (term rewriting)</span> and the QA-repurposed <span class="key">11 (L-systems)</span> — are contamination-proof by construction.
 </div>
 
-<p class="small muted space-top"><strong>Tie-breaker / 2025–2026 activity:</strong> SATBench (EMNLP 2025), Wason/deontic (EACL 2026), FLD follow-up (NeurIPS 2024), automated confluence-strategy invention (2024), L-system benchmark generation (2025).</p>
+<p class="aside space-top">Tie-breaker / 2025-2026 activity: SATBench (EMNLP 2025), Wason/deontic (EACL 2026), FLD follow-up (NeurIPS 2024), automated confluence-strategy invention (2024), L-system benchmark generation (2025).</p>
 
 </main>
 </body>

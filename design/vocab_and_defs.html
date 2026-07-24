@@ -6,11 +6,22 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="doc.css">
 <link rel="stylesheet" href="flow.css">
-<title>Vocabulary &amp; Definitions</title>
+<title>Vocabulary &amp; Definitions · whetstone-ai</title>
+<style>
+  /* Page-local, v2 tokens only. Term labels are 600-weight scan anchors;
+     implementation status is a keyed color encoding (green/amber/red = status). */
+  .term-name { font-weight: 600; }
+  dfn.term-name { font-style: normal; }
+  .term-implementation-implemented { color: var(--green); }
+  .term-implementation-planned { color: var(--amber); }
+  .term-implementation-uncaptured { color: var(--red); }
+  .term-group th { background: #eef1f6; color: var(--ink); font-size: 12.5px; }
+</style>
 </head>
 <body>
 <main>
-<h1>Vocabulary &amp; Definitions</h1>
+<h1>One normative vocabulary and identity contract joins the Whetstone repositories</h1>
+<p class="dek">The target contract: shared terms, object and identity rules, an API crosswalk, and a worked Eval example.</p>
 <div class="byline">whetstone-ai · 2026-07-21</div>
 
 <div class="family-nav">
@@ -24,14 +35,11 @@
   <a href="quick-test-rubric.html">Quick Test</a>
 </div>
 
-<div class="intro">
-  <p>This page is the target Whetstone contract: one normative vocabulary, the object and identity rules that join the repositories, a non-normative native-API crosswalk, and a concrete Eval example.</p>
-  <p><strong>Editorial follow-up.</strong> A later documentation pass should link canonical terminology throughout this page and the Eval/optimization pages. Linked terms should be lower case in explanatory prose for readability, while term labels, headings, diagram labels, proper names, acronyms, and code retain their appropriate casing.</p>
-</div>
+<p>This page is the target Whetstone contract: one normative vocabulary, the object and identity rules that join the repositories, a non-normative native-API crosswalk, and a concrete Eval example.</p>
 
-<div class="section-head" id="normative-vocabulary"><h2>Normative Vocabulary</h2></div>
+<div class="section-head" id="normative-vocabulary"><h2>What do the shared terms mean?</h2><span class="tag">normative vocabulary</span></div>
 
-<p class="small muted">Terms are presented as core lifecycle vocabulary, shared cross-repository vocabulary, first-party dependency-repository vocabulary, external runtime vocabulary, and Whetstone-specific roles and contracts. All tables in this section are normative; Whetstone role-qualified specializations stay in the Whetstone-specific table even when implemented atop a dependency.</p>
+<p class="aside">Terms are presented as core lifecycle vocabulary, shared cross-repository vocabulary, first-party dependency-repository vocabulary, external runtime vocabulary, and Whetstone-specific roles and contracts. All tables in this section are normative; Whetstone role-qualified specializations stay in the Whetstone-specific table even when implemented atop a dependency.</p>
 
 <p class="small">Implementation status: <span class="term-name term-implementation-implemented">Implemented</span> · <span class="term-name term-implementation-planned">Planned in Concrete Changes</span> · <span class="term-name term-implementation-uncaptured">Implementation gap not captured in Concrete Changes</span></p>
 
@@ -309,10 +317,10 @@
 </table>
 </div>
 
-<div class="section-head" id="target-system-contract"><h2>Target System Contract</h2></div>
+<div class="section-head" id="target-system-contract"><h2>What identity and object rules must hold?</h2><span class="tag">target system contract</span></div>
 
 <h3>Identity protocol</h3>
-<p>For every Whetstone identity, the owning domain deliberately selects and validates a finite-JSON Identity Payload containing exactly its identity-bearing fields. That payload appears inside the complete self-describing, versioned Identity Document <code>{"schema": "...", "schema_version": 1, "payload": {...}}</code>, whose shape is exact. dr-serialize MUST validate finite JSON and the document shape, reject non-string object keys, non-finite numbers, implicit object conversion, and unordered collections without schema-declared order, render Canonical Identity JSON as UTF-8 from the complete Identity Document, and compute its full lowercase 64-character SHA-256 Identity Hash. dr-serialize MUST NOT select domain fields. Diagnostic <code>Serializer.to_jsonable</code> output, Identity Hash Prefixes, dependency-native shortened hashes, and Content Hashes are not Identity Payloads or substitutes for Identity Hashes.</p>
+<p>For every Whetstone identity, the owning domain deliberately selects and validates a finite-JSON Identity Payload containing exactly its identity-bearing fields. That payload appears inside the complete self-describing, versioned Identity Document <code>{"schema": "...", "schema_version": 1, "payload": {...}}</code>, whose shape is exact. dr-serialize MUST validate finite JSON and the document shape, reject non-string object keys, non-finite numbers, implicit object conversion, and all unordered collections (any schema-declared order is applied by the owning domain, which passes an already-ordered list), render Canonical Identity JSON as UTF-8 from the complete Identity Document, and compute its full lowercase 64-character SHA-256 Identity Hash. dr-serialize MUST NOT select domain fields. Diagnostic <code>Serializer.to_jsonable</code> output, Identity Hash Prefixes, dependency-native shortened hashes, and Content Hashes are not Identity Payloads or substitutes for Identity Hashes.</p>
 
 <div class="table-wrap">
 <table>
@@ -454,9 +462,9 @@
 </table>
 </div>
 
-<div class="section-head" id="dependency-crosswalk"><h2>Non-normative Dependency Crosswalk</h2></div>
+<div class="section-head" id="dependency-crosswalk"><h2>How do current API names map to target terms?</h2><span class="tag">non-normative crosswalk</span></div>
 
-<p class="small muted">This section explicitly labels current migration-source names and required target dependency names, including coordinated breaking renames. Target names map to the normative Whetstone ontology above; current spellings are migration history only and do not remain as aliases, synonyms, serialized alternatives, or dual-read paths.</p>
+<p class="aside">This section explicitly labels current migration-source names and required target dependency names, including coordinated breaking renames. Target names map to the normative Whetstone ontology above; current spellings are migration history only and do not remain as aliases, synonyms, serialized alternatives, or dual-read paths.</p>
 
 <h3 id="crosswalk-dr-serialize">dr-serialize</h3>
 <div class="table-wrap">
@@ -557,7 +565,7 @@
 </table>
 </div>
 
-<div class="section-head" id="running-example"><h2>Running Example: Eval Experiment</h2></div>
+<div class="section-head" id="running-example"><h2>How do the terms apply to one concrete run?</h2><span class="tag">running example · eval experiment</span></div>
 
 <div class="table-wrap">
 <table>
@@ -594,6 +602,10 @@
     <tr><td><a class="term-ref" href="#term-official-plot-manifest">Official Plot Manifest</a></td><td>The published four-point curve per candidate resolves through a manifest naming Official Evaluation IDs, 32 complete aggregates for the stated nonconvergent baseline, Selection Policy, source and dataset revisions, dependency lock, and environment identity. It MUST preserve the ordered mapping from every selected Materialization Record reference through <code>graph_hash</code> to the shared planned/result-key set and aggregate reference, including when multiple selected records share one graph and aggregate.</td></tr>
   </tbody>
 </table>
+</div>
+
+<div class="colophon">
+  Target Whetstone contract vocabulary and identity rules. Term implementation status is keyed by color: <span class="term-name term-implementation-implemented">implemented</span>, <span class="term-name term-implementation-planned">planned in <a href="concrete-changes.html">Concrete Changes</a></span>, <span class="term-name term-implementation-uncaptured">gap not yet captured</span>. The dependency crosswalk is non-normative migration history; current spellings do not remain as aliases or dual-read paths. Editorial follow-up: a later documentation pass should link canonical terminology throughout this and the Eval/optimization pages, keeping linked terms lower case in explanatory prose while term labels, headings, diagram labels, proper names, acronyms, and code retain their casing. Sibling run designs: <a href="eval-run.html">Eval</a>, <a href="copro-run.html">COPRO</a>, <a href="miprov2-run.html">MIPROv2</a>, <a href="gepa-run.html">GEPA</a>, <a href="codex-agent-run.html">Codex CLI agent</a>, <a href="quick-test-rubric.html">Quick Test</a>.
 </div>
 
 </main>

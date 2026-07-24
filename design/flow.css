@@ -1,6 +1,43 @@
 /* Shared diagram vocabulary for the whetstone design-doc family.
    Loads after doc.css; reuses its variables. */
 
+/* ── Shared family text vocabulary (v2 tokens; formerly in the old doc.css) ──
+   The design docs are a tighter local system than a standard doc: a family-nav,
+   dense term-ref cross-links into vocab_and_defs, and per-doc real diagrams.
+   These rules restore the shared prose classes under v2 conventions.        */
+
+/* Lead paragraph: unboxed orientation prose, NOT a hero box. */
+.intro { margin: 4px 0 16px; }
+.intro p { margin: 0; font-size: 16px; }
+
+/* term-ref: a real cross-link into the vocab doc — reads as a link (accent). */
+a.term-ref { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+a.term-ref:hover { border-bottom-style: solid; }
+/* term-name / term-group: definitional anchors in the vocab doc — scan anchors,
+   not links, so they take the anchor hue. */
+.term-name { color: var(--anchor); font-weight: 600; }
+.term-group { color: var(--muted); font: 600 11px/1.4 var(--font-system); letter-spacing: .05em; text-transform: uppercase; }
+
+.muted { color: var(--muted); }
+.space-top { margin-top: 18px; }
+.table-wrap { margin: 14px 0; overflow-x: auto; }
+
+/* status = keyed pass/fail encoding, never a link. */
+.status { display: inline-block; padding: 1px 8px; border-radius: 999px; font: 600 11px/1.6 var(--font-system); white-space: nowrap; }
+.status.pass { color: var(--green); background: var(--green-soft); }
+.status.fail { color: var(--red); background: var(--red-soft); }
+
+/* verdict: a keyed key-point box carrying the anchor hue (scan-anchor material). */
+.verdict { margin: 14px 0; padding: 14px 18px; border-left: 4px solid var(--anchor); border-radius: 0 8px 8px 0; background: var(--anchor-soft); }
+.verdict > :first-child { margin-top: 0; }
+.verdict > :last-child { margin-bottom: 0; }
+
+/* steps: keyed ordered change units. */
+.steps { display: grid; gap: 12px; margin: 16px 0; }
+.step { padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.step h3 { margin-bottom: 6px; font: 700 16.5px/1.3 var(--font-system); }
+.step p { margin: 0; font-size: 14.5px; }
+
 /* Family navigation across the five configuration docs */
 .family-nav {
   display: flex; flex-wrap: wrap; gap: 8px;
