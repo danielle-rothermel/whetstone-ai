@@ -155,6 +155,7 @@ def build_request(*, content: str = "hello") -> ProviderCallRequest:
 
 def transport_policy() -> ProviderTransportPolicy:
     return policy_for(
+        ProviderKind.OPENROUTER,
         api_key_env=API_KEY_ENV,
         base_url="https://example.test/v1",
         native_retry_count=0,

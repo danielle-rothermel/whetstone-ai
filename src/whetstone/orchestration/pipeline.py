@@ -25,9 +25,9 @@ The Rollout Work Request (execution key, Graph Config + Evaluation Context
 refs, task inputs, repeat data, expected schema identities; **no**
 Materialization Record ref) rides opaquely: it is persisted through dr-store
 and its typed Object Reference is encoded as a scheme-tagged string in
-``WorkInput.input_ref``. The stage returns the terminal Rollout Result's typed
-reference as an equally-opaque ``output_reference``. dr-platform validates both
-only as non-empty strings and never parses them.
+``WorkInput.input_reference``. The stage returns the terminal Rollout Result's
+typed reference as an equally-opaque ``output_reference``. dr-platform
+validates both only as non-empty strings and never parses them.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 from dr_platform.staging import (
     PipelineDefinition,
+    PipelineIdentity,
     PipelineKey,
     StageDefinition,
     StageKey,
@@ -81,11 +82,11 @@ ROLLOUT_EXECUTION_STAGE_KEY = "rollout-execution"
 ROLLOUT_EXECUTION_STAGE_QUEUE = "whetstone-rollout-execution"
 
 
-def orchestration_pipeline_identity() -> tuple[PipelineKey, int]:
-    """The ``(PipelineKey, version)`` identity of the pipeline."""
-    return (
-        PipelineKey(ORCHESTRATION_PIPELINE_KEY),
-        ORCHESTRATION_PIPELINE_VERSION,
+def orchestration_pipeline_identity() -> PipelineIdentity:
+    """The immutable identity of the pipeline."""
+    return PipelineIdentity(
+        key=PipelineKey(ORCHESTRATION_PIPELINE_KEY),
+        version=ORCHESTRATION_PIPELINE_VERSION,
     )
 
 
@@ -97,7 +98,7 @@ def _rollout_execution_args(payload: AdmissionPayload) -> tuple[object, ...]:
     Reference). The platform never interprets it; Whetstone's stage body
     resolves it back to the immutable Work Request.
     """
-    return (payload.input_ref,)
+    return (payload.input_reference,)
 
 
 def orchestration_pipeline(
@@ -119,10 +120,10 @@ def orchestration_pipeline(
     Returns:
         the registrable ``PipelineDefinition`` (wrapped unless ``wrap=False``).
     """
-    key, version = orchestration_pipeline_identity()
+    identity = orchestration_pipeline_identity()
     declared = PipelineDefinition(
-        key=key,
-        version=version,
+        key=identity.key,
+        version=identity.version,
         stages=(
             StageDefinition(
                 key=StageKey(ROLLOUT_EXECUTION_STAGE_KEY),
@@ -167,6 +168,6 @@ def rollout_work_input(
     """
     return WorkInput(
         work_key=work_key_for_execution_key(execution_key),
-        input_ref=input_ref,
+        input_reference=input_ref,
         labels=quota_labels_for(quotas),
     )

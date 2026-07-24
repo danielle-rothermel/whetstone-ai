@@ -57,9 +57,9 @@ def test_wrapped_pipeline_registers_and_is_dbos_wrapped() -> None:
 
 
 def test_identity_is_a_pipeline_key_version_pair() -> None:
-    key, version = orchestration_pipeline_identity()
-    assert isinstance(key, PipelineKey)
-    assert version == ORCHESTRATION_PIPELINE_VERSION
+    identity = orchestration_pipeline_identity()
+    assert isinstance(identity.key, PipelineKey)
+    assert identity.version == ORCHESTRATION_PIPELINE_VERSION
 
 
 def test_work_item_maps_execution_key_to_native_work_key() -> None:
@@ -85,8 +85,8 @@ def test_work_item_carries_opaque_reference_and_quota_labels() -> None:
         input_ref=input_ref,
         quotas=(route,),
     )
-    # The input_ref is the opaque typed reference verbatim (never parsed).
-    assert work_input.input_ref == input_ref
+    # The input reference is opaque and preserved verbatim (never parsed).
+    assert work_input.input_reference == input_ref
     # The labels are exactly the collision-free quota labels.
     assert dict(work_input.labels) == quota_labels_for([route])
 

@@ -100,6 +100,7 @@ def test_plan_lane_routes_use_window_starts_data(lane: str) -> None:
     assert route.transport_policy.native_retry_count == 0
     assert route.transport_policy.timeout_seconds == 600.0
     assert route.transport_policy.idle_timeout_seconds == 90.0
+    assert route.call_config.controls.token_limit == 4096
 
 
 def test_all_four_plan_lanes_present() -> None:

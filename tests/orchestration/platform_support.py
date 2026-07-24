@@ -100,7 +100,7 @@ def submit_one(
         campaign_key=campaign_key,
         run_key=run_key,
         pipeline=orchestration_pipeline_identity(),
-        config_ref="config:1",
+        execution_config_reference="config:1",
         items=(
             rollout_work_input(
                 execution_key=execution_key,

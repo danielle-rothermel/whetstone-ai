@@ -2,10 +2,10 @@
 
 Task 26 adds RECORDING-only provenance fields to the ledger/rollout/partial/
 screen/spend artifacts. It must NOT perturb config-identity computation --
-``graph_hash`` / ``eval_config_hash`` must stay byte-identical to the base
-commit for any existing configuration. These pins were computed at the base
-commit (``fcad0ca``) BEFORE any recording change; if a provenance change ever
-touches identity, one of these assertions fails loudly (and the change must be
+``graph_hash`` / ``eval_config_hash`` must stay byte-identical for any existing
+configuration. These pins include the typed Provider Call Config identity
+introduced by ``dr-providers`` 0.2.0. If a recording-only change ever touches
+identity, one of these assertions fails loudly (and the change must be
 reworked or skipped, per the task-26 hard constraint).
 
 Two representative configurations are pinned: the d1 direct-optimization env
@@ -32,15 +32,15 @@ from whetstone.envs.d1 import build_d1_experiment
 from whetstone.envs.ed1 import build_ed1_experiment, load_ed1_tasks
 from whetstone.runner.task_split_manifest import load_task_split_manifest
 
-# Pins computed at base commit fcad0ca (pre-task-26). See module docstring.
+# Current typed-call identity pins. See module docstring.
 _D1_GRAPH_HASH = (
-    "5be2d083ac1c056082ca06be19dce5755d77742f1e64523c4bae8135cf29cb01"
+    "5c7b1b83fb78e8f2f78cddb8366c5a5cb8f6da2170b2d8aec5549b1c0437cd9d"
 )
 _D1_EVAL_HASH = (
     "fce39eeea8c39c44169cdd00f0c759a9fdd8db25aadf50f9ac4cbc0d8f515cba"
 )
 _ED1_GRAPH_HASH = (
-    "f85b10faff7f008f7b393aad804257b14f80d6bf9298ee2db2436650be27d97f"
+    "024f064af433596b46af9549061404b7afbdf0abfe1daffb38139b1118963557"
 )
 _ED1_EVAL_HASH = (
     "3cac7ea18825b51fd5763ffdf8d6c7e091db6e0970e95bf331b76c54c741d1c3"

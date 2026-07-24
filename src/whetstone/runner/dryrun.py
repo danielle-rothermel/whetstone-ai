@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from dr_providers import (
     ProviderCallRequest,
     ProviderInvocationEvidence,
+    ProviderKind,
     ProviderTransportPolicy,
     ProviderTransportResponse,
     RawHttpRequest,
@@ -103,6 +104,7 @@ _MISS = "definitely-not-a-label"
 
 def _dryrun_transport_policy() -> ProviderTransportPolicy:
     return policy_for(
+        ProviderKind.OPENROUTER,
         api_key_env="OPENROUTER_API_KEY",
         base_url="https://example.test/v1",
         native_retry_count=0,

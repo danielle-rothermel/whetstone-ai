@@ -86,9 +86,9 @@ __all__ = [
     "TerminalBindError",
 ]
 
-#: Resolves the opaque ``WorkInput.input_ref`` string to the immutable Rollout
-#: Work Request it references. Whetstone owns this resolution; the platform
-#: never parses the reference.
+#: Resolves the opaque ``WorkInput.input_reference`` string to the immutable
+#: Rollout Work Request it references. Whetstone owns this resolution; the
+#: platform never parses the reference.
 RolloutWorkResolver = Callable[[str], RolloutWorkRequest]
 
 #: Builds the concrete Provider Call Request for one Work Request. Injected so

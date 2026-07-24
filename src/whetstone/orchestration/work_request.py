@@ -15,10 +15,10 @@ contains exactly:
 deliberately excluded from the Work Request, the keys, and the Results; the
 schema has no field that could carry one.
 
-Transport is opaque. dr-platform's :class:`WorkInput.input_ref` and the stage
-``output_reference`` are validated only as non-empty strings and are never
-parsed, resolved, or decomposed by the platform. Whetstone therefore encodes
-a Work Request as one **typed object-reference string**
+Transport is opaque. dr-platform's :class:`WorkInput.input_reference` and the
+stage ``output_reference`` are validated only as non-empty strings and are
+never parsed, resolved, or decomposed by the platform. Whetstone therefore
+encodes a Work Request as one **typed object-reference string**
 (:func:`encode_work_request_ref`): a scheme-tagged URI carrying the record
 schema and the Content Hash of the canonical Work Request record. The platform
 carries that string byte-for-byte; only Whetstone resolves it back to the
@@ -57,8 +57,8 @@ __all__ = [
 ROLLOUT_WORK_REQUEST_SCHEMA = "whetstone.rollout_work_request"
 
 #: The scheme of the opaque typed object-reference strings Whetstone puts in
-#: ``WorkInput.input_ref`` / the stage ``output_reference``. dr-platform never
-#: parses it; it is Whetstone-owned.
+#: ``WorkInput.input_reference`` / the stage ``output_reference``.
+#: dr-platform never parses it; it is Whetstone-owned.
 _OBJREF_SCHEME = "objref"
 
 _HEX = frozenset("0123456789abcdef")
@@ -214,7 +214,7 @@ def decode_object_reference(encoded: str) -> ObjectReference:
 
 
 def encode_work_request_ref(request: RolloutWorkRequest) -> str:
-    """Encode a Rollout Work Request as its opaque ``WorkInput.input_ref``.
+    """Encode a Work Request as its opaque ``WorkInput.input_reference``.
 
     Convenience over :func:`work_request_reference` +
     :func:`encode_object_reference`: the caller persists the Work Request

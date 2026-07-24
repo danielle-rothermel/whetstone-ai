@@ -178,7 +178,7 @@ def _run_pipeline(
         campaign_key="camp-1",
         run_key="run-1",
         pipeline=orchestration_pipeline_identity(),
-        config_ref="config:1",
+        execution_config_reference="config:1",
         items=(
             rollout_work_input(
                 execution_key=key,

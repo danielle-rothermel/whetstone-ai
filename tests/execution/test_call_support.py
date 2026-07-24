@@ -7,7 +7,7 @@ predicate that drives FIX 2's single bounded observation re-drive.
 
 from __future__ import annotations
 
-from dr_providers import FailureClass, policy_for
+from dr_providers import FailureClass, ProviderKind, policy_for
 
 from tests.provider import support as s
 from whetstone.execution.call_support import (
@@ -26,6 +26,7 @@ def _policy(*, timeout_seconds: float, max_attempts: int) -> (
 ):
     return ProviderExecutionPolicy(
         transport_policy=policy_for(
+            ProviderKind.OPENROUTER,
             api_key_env="OPENROUTER_API_KEY",
             base_url="https://example.test/v1",
             timeout_seconds=timeout_seconds,

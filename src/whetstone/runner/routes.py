@@ -35,6 +35,7 @@ from dr_providers import (
     DEFAULT_IDLE_TIMEOUT_SECONDS,
     GenerationControls,
     ProviderCallConfig,
+    ProviderKind,
     ProviderTransportPolicy,
     ReasoningEffort,
     anthropic_messages_config,
@@ -309,6 +310,7 @@ def _execution_policy(
 def _controls(
     temperature: float | None,
     reasoning: ReasoningEffort | None = None,
+    token_limit: int | None = None,
 ) -> GenerationControls | None:
     """The GenerationControls for a route, or ``None`` when nothing is set.
 
@@ -319,9 +321,13 @@ def _controls(
     effort is a distinct route/graph variant. ``None`` leaves the control
     UNSET -> the provider default -> byte-identical to a run without the flag.
     """
-    if temperature is None and reasoning is None:
+    if temperature is None and reasoning is None and token_limit is None:
         return None
-    return GenerationControls(temperature=temperature, reasoning=reasoning)
+    return GenerationControls(
+        temperature=temperature,
+        reasoning=reasoning,
+        token_limit=token_limit,
+    )
 
 
 def canonical_task_route(
@@ -346,6 +352,7 @@ def canonical_task_route(
         model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
+        ProviderKind.OPENROUTER,
         api_key_env=OPENROUTER_KEY_ENV,
         base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
@@ -387,6 +394,7 @@ def openai_direct_route(
         model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
+        ProviderKind.OPENAI,
         api_key_env=OPENAI_KEY_ENV,
         base_url=OPENAI_BASE_URL,
         timeout_seconds=timeout_seconds,
@@ -425,6 +433,7 @@ def canonical_proposer_route(
         model=model, controls=_controls(temperature, reasoning)
     )
     transport_policy = policy_for(
+        ProviderKind.OPENROUTER,
         api_key_env=OPENROUTER_KEY_ENV,
         base_url=OPENROUTER_BASE_URL,
         timeout_seconds=timeout_seconds,
@@ -465,9 +474,11 @@ def lane_route(
         )
     spec = PLAN_LANES[lane]
     call_config = anthropic_messages_config(
-        model=spec.model, controls=_controls(temperature, reasoning)
+        model=spec.model,
+        controls=_controls(temperature, reasoning, token_limit=4096),
     )
     transport_policy = policy_for(
+        ProviderKind.ANTHROPIC,
         api_key_env=spec.key_env,
         base_url=spec.base_url,
         timeout_seconds=timeout_seconds,
