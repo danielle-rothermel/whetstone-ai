@@ -53,7 +53,7 @@ def _config():
 def test_proposal_prompt_preserves_placeholder_and_asks_for_rewrite() -> None:
     prompt = _proposal_prompt(_REQUEST)
     assert "{input}" in prompt
-    assert "REWRITTEN TEMPLATE" in prompt
+    assert "PROPOSED INSTRUCTION TEMPLATE" in prompt
     assert _REQUEST.base_template in prompt
 
 

@@ -1,163 +1,195 @@
-"""Tests for the single proposal-prompt seam (task 30a transport plumbing).
+"""Tests for the DSPy-faithful COPRO proposal-prompt content (task 30b).
 
-Before the seam, the codex-CLI and live-HTTP proposers each built their
-drafting instruction from ONLY ``request.base_template`` and dropped
-``request.context`` -- so COPRO's Reward-ranked score history never reached the
-model (every live proposal round was score-blind). These tests pin that the
-seam (a) keeps the original instruction/base template, (b) appends the ranked
-history in ASCENDING score order when present, (c) stays valid when context is
-absent, (d) tolerates MIPROv2's ``accepted`` shape, and (e) folds the
-prompt-schema identity tag idempotently.
+These assert the prompts stay as close to DSPy COPRO's
+``BasicGenerateInstruction`` / ``GenerateInstructionGivenAttempts`` as our
+representation allows: the verbatim optimizer-persona and creativity sentences,
+the increasing-score attempt ordering, the in-prompt format-rules block, and
+placeholder preservation. Reference: ``dspy/teleprompt/copro_optimizer.py``
+lines ~38-58 and ~299-303.
 """
 
 from __future__ import annotations
 
-from whetstone.optimization.proposal_prompts import (
-    PROMPT_SCHEMA_TAG,
-    PROMPT_SCHEMA_VERSION,
-    copro_proposal_prompt,
-    fold_prompt_schema_tag,
-)
+from whetstone.optimization.proposal_prompts import copro_proposal_prompt
 from whetstone.optimization.proposer import ProposalRequest
 
+_CREATIVITY = "Don't be afraid to be creative."
+_PERSONA = "You are an instruction optimizer for large language models."
+_TEMPLATE = "Compress the following {placeholder} for another agent."
 
-def _request(context: dict | None = None) -> ProposalRequest:
+
+def _seed_request() -> ProposalRequest:
+    return ProposalRequest(
+        proposal_mode="seed_proposal",
+        request_ordinal=0,
+        base_ref="base",
+        base_template=_TEMPLATE,
+        context={"seed_entries": [], "measured": []},
+    )
+
+
+def _history_request() -> ProposalRequest:
+    # ranked_history is best-first (Reward-descending), as COPRO produces.
     return ProposalRequest(
         proposal_mode="history_proposal",
         request_ordinal=1,
         base_ref="base",
-        base_template="Answer: {input}",
-        context=context or {},
+        base_template=_TEMPLATE,
+        context={
+            "ranked_history": [
+                {"candidate_id": "P0-0", "base_ref": "b",
+                 "template": "best {placeholder} template", "reward": 0.9},
+                {"candidate_id": "P0-2", "base_ref": "b",
+                 "template": "mid {placeholder} template", "reward": 0.5},
+                {"candidate_id": "P0-1", "base_ref": "b",
+                 "template": "worst {placeholder} template", "reward": 0.2},
+            ]
+        },
     )
 
 
-# --- Base instruction preserved -------------------------------------------
+# ---------------------------------------------------------------------------
+# SEED mode
+# ---------------------------------------------------------------------------
+
+def test_seed_contains_dspy_mirrored_sentences() -> None:
+    prompt = copro_proposal_prompt(_seed_request())
+    # Verbatim optimizer persona (copro_optimizer.py L39).
+    assert _PERSONA in prompt
+    # Verbatim creativity sentence (copro_optimizer.py L39).
+    assert _CREATIVITY in prompt
+    # Adapted task framing: instruction template for a task solver.
+    assert "instruction template for a task solver" in prompt
+    assert "perform the task well" in prompt
 
 
-def test_absent_context_prompt_is_valid_and_carries_base() -> None:
-    prompt = copro_proposal_prompt(_request())
-    # The original wording + base template are intact; no context block.
-    assert "You are optimizing the instruction template" in prompt
-    assert "ORIGINAL TEMPLATE:\nAnswer: {input}" in prompt
-    assert prompt.rstrip().endswith("REWRITTEN TEMPLATE:")
-    assert "PRIOR ATTEMPTS" not in prompt
-    assert "ALREADY-PROPOSED" not in prompt
+def test_seed_shows_base_template_and_preserves_placeholders() -> None:
+    prompt = copro_proposal_prompt(_seed_request())
+    assert _TEMPLATE in prompt
+    assert "{placeholder}" in prompt
 
 
-def test_absent_context_is_byte_identical_to_legacy_wording() -> None:
-    # Regression guard: with no context the seam reproduces the exact prompt
-    # the two transports emitted before the seam (a sibling owns rewording).
-    base = "Answer: {input}"
-    legacy = (
-        "You are optimizing the instruction template of a prompt-based "
-        "task solver. Rewrite the template below into a SINGLE improved "
-        "variant that is clearer and more likely to elicit a correct answer. "
-        "Rules: keep every {placeholder} token exactly as written; change the "
-        "wording so the result is NOT identical to the original; output ONLY "
-        "the rewritten template text with no preamble, quotes, or "
-        "commentary.\n"
-        f"\nORIGINAL TEMPLATE:\n{base}\n\nREWRITTEN TEMPLATE:"
+def test_seed_has_format_rules_block() -> None:
+    prompt = copro_proposal_prompt(_seed_request())
+    assert "FORMAT RULES" in prompt
+    assert "{placeholder}" in prompt
+    assert "Output ONLY" in prompt
+    assert "must differ" in prompt
+
+
+def test_no_history_selects_seed_mode() -> None:
+    # A request with no ranked_history renders the SEED body, never the
+    # iteration body, even if a non-seed mode string were used.
+    req = ProposalRequest(
+        proposal_mode="history_proposal",
+        request_ordinal=1,
+        base_ref="base",
+        base_template=_TEMPLATE,
+        context={},
     )
-    assert copro_proposal_prompt(_request()) == legacy
+    prompt = copro_proposal_prompt(req)
+    assert "perform the task well" in prompt
+    assert "even better" not in prompt
+    assert "ATTEMPTED INSTRUCTION TEMPLATES" not in prompt
 
 
-# --- COPRO ranked history --------------------------------------------------
+def test_seed_mode_when_no_ranked_history_key() -> None:
+    prompt = copro_proposal_prompt(_seed_request())
+    assert "even better" not in prompt
 
 
-def test_ranked_history_present_in_prompt_ascending_order() -> None:
-    # copro.rank_attempt_history yields BEST-first; the seam renders
-    # WORST-first so the strongest exemplar sits nearest the instruction.
-    ranked = [
-        {"candidate_id": "P1-0", "template": "BEST", "reward": 0.9},
-        {"candidate_id": "P0-1", "template": "MID", "reward": 0.5},
-        {"candidate_id": "A", "template": "WORST", "reward": 0.1},
-    ]
-    prompt = copro_proposal_prompt(_request({"ranked_history": ranked}))
-    assert "PRIOR ATTEMPTS" in prompt
-    # Ordering: WORST before MID before BEST (ascending score).
-    assert prompt.index("WORST") < prompt.index("MID") < prompt.index("BEST")
-    # Scores are rendered alongside each exemplar.
-    assert "[score=0.9000] BEST" in prompt
-    assert "[score=0.1000] WORST" in prompt
-    # The base instruction + template survive.
-    assert "ORIGINAL TEMPLATE:\nAnswer: {input}" in prompt
-    assert prompt.rstrip().endswith("REWRITTEN TEMPLATE:")
+# ---------------------------------------------------------------------------
+# ITERATION mode
+# ---------------------------------------------------------------------------
+
+def test_iteration_contains_dspy_mirrored_sentences() -> None:
+    prompt = copro_proposal_prompt(_history_request())
+    assert _PERSONA in prompt
+    # Verbatim creativity sentence, kept in iteration mode too.
+    assert _CREATIVITY in prompt
+    # "even better" kept verbatim (copro_optimizer.py L51).
+    assert "perform the task even better" in prompt
+    assert "increasing order" in prompt
 
 
-def test_ranked_history_missing_reward_renders_na() -> None:
-    ranked = [
-        {"candidate_id": "P1-0", "template": "SCORED", "reward": 0.7},
-        {"candidate_id": "A", "template": "UNSCORED"},  # no reward key
-    ]
-    prompt = copro_proposal_prompt(_request({"ranked_history": ranked}))
-    assert "[score=n/a] UNSCORED" in prompt
-    assert "[score=0.7000] SCORED" in prompt
+def test_iteration_lists_attempts_ascending_with_scores() -> None:
+    prompt = copro_proposal_prompt(_history_request())
+    # Attempts rendered increasing-score-first: worst (0.2) then 0.5 then 0.9.
+    idx_worst = prompt.index("worst {placeholder} template")
+    idx_mid = prompt.index("mid {placeholder} template")
+    idx_best = prompt.index("best {placeholder} template")
+    assert idx_worst < idx_mid < idx_best
+    # Each attempt carries its validation score.
+    assert "Resulting Score #1: 0.2" in prompt
+    assert "Resulting Score #2: 0.5" in prompt
+    assert "Resulting Score #3: 0.9" in prompt
+    # Numbered templates.
+    assert "Template #1: worst {placeholder} template" in prompt
+    assert "Template #3: best {placeholder} template" in prompt
 
 
-def test_ranked_history_skips_template_less_entries() -> None:
-    ranked = [
-        {"candidate_id": "A", "template": "", "reward": 0.4},  # empty template
-        {"candidate_id": "B", "reward": 0.4},  # no template key
-        {"candidate_id": "C", "template": "REAL", "reward": 0.4},
-    ]
-    prompt = copro_proposal_prompt(_request({"ranked_history": ranked}))
-    assert "REAL" in prompt
-    # Only the one real exemplar rendered.
-    assert prompt.count("[score=") == 1
+def test_iteration_preserves_placeholders_in_examples() -> None:
+    prompt = copro_proposal_prompt(_history_request())
+    assert prompt.count("{placeholder}") >= 3
 
 
-def test_empty_ranked_history_yields_no_block() -> None:
-    prompt = copro_proposal_prompt(_request({"ranked_history": []}))
-    assert "PRIOR ATTEMPTS" not in prompt
-    assert prompt.rstrip().endswith("REWRITTEN TEMPLATE:")
+def test_iteration_has_format_rules_block() -> None:
+    prompt = copro_proposal_prompt(_history_request())
+    assert "FORMAT RULES" in prompt
+    assert "must differ from every template shown above" in prompt
 
 
-# --- MIPROv2 accepted shape (no scores) ------------------------------------
-
-
-def test_accepted_shape_renders_dedup_block() -> None:
-    prompt = copro_proposal_prompt(
-        _request({"accepted": ["one {input}", "two {input}"]})
+def test_iteration_missing_reward_renders_unknown() -> None:
+    req = ProposalRequest(
+        proposal_mode="history_proposal",
+        request_ordinal=1,
+        base_ref="base",
+        base_template=_TEMPLATE,
+        context={
+            "ranked_history": [
+                {"candidate_id": "P0-0", "base_ref": "b",
+                 "template": "no-score template", "reward": None},
+            ]
+        },
     )
+    prompt = copro_proposal_prompt(req)
+    assert "Resulting Score #1: unknown" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Compatibility with the CodexProposer prompt_builder slot.
+# ---------------------------------------------------------------------------
+
+def test_callable_signature_matches_prompt_builder_slot() -> None:
+    # Both modes return a non-empty str for a ProposalRequest.
+    assert isinstance(copro_proposal_prompt(_seed_request()), str)
+    assert isinstance(copro_proposal_prompt(_history_request()), str)
+
+
+def test_prompt_schema_tag_folds_and_is_idempotent():
+    from whetstone.optimization.proposal_prompts import (
+        PROMPT_SCHEMA_TAG,
+        fold_prompt_schema_tag,
+    )
+
+    ref = "codex-cli/gpt-5.4-mini"
+    folded = fold_prompt_schema_tag(ref)
+    assert folded == f"{ref}#{PROMPT_SCHEMA_TAG}"
+    assert fold_prompt_schema_tag(folded) == folded
+
+
+def test_seed_prompt_renders_accepted_dedup_block():
+    from whetstone.optimization.proposal_prompts import copro_proposal_prompt
+    from whetstone.optimization.proposer import ProposalRequest
+
+    request = ProposalRequest(
+        proposal_mode="seed_proposal",
+        request_ordinal=0,
+        base_ref="b",
+        base_template="Base {input_code} template.",
+        context={"accepted": ["First accepted.", "Second accepted."]},
+    )
+    prompt = copro_proposal_prompt(request)
     assert "ALREADY-PROPOSED TEMPLATES" in prompt
-    assert "- one {input}" in prompt
-    assert "- two {input}" in prompt
-    # No score annotation for the scoreless MIPROv2 shape.
-    assert "[score=" not in prompt
-
-
-def test_ranked_history_takes_precedence_over_accepted() -> None:
-    prompt = copro_proposal_prompt(
-        _request(
-            {
-                "ranked_history": [{"template": "H", "reward": 0.5}],
-                "accepted": ["A"],
-            }
-        )
-    )
-    assert "PRIOR ATTEMPTS" in prompt
-    assert "ALREADY-PROPOSED" not in prompt
-
-
-# --- Prompt-schema identity tag --------------------------------------------
-
-
-def test_fold_prompt_schema_tag_appends() -> None:
-    assert (
-        fold_prompt_schema_tag("codex-cli/gpt-5.4-mini")
-        == f"codex-cli/gpt-5.4-mini#{PROMPT_SCHEMA_TAG}"
-    )
-    assert PROMPT_SCHEMA_TAG == f"pp{PROMPT_SCHEMA_VERSION}"
-
-
-def test_fold_prompt_schema_tag_is_idempotent() -> None:
-    once = fold_prompt_schema_tag("codex-cli/x")
-    assert fold_prompt_schema_tag(once) == once
-
-
-def test_untagged_and_tagged_refs_are_distinguishable() -> None:
-    # An old score-blind cell recorded no tag (pp1); a new cell carries pp2.
-    old = "codex-cli/gpt-5.4-mini"
-    new = fold_prompt_schema_tag(old)
-    assert old != new
-    assert new.endswith(f"#{PROMPT_SCHEMA_TAG}")
+    assert "- First accepted." in prompt
+    assert "- Second accepted." in prompt

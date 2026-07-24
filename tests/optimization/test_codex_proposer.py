@@ -288,9 +288,10 @@ def test_drafted_request_prompt_contains_ranked_history_block() -> None:
     )
     transport.draft(_config(), request, count=1)
     prompt, _model = invoker.calls[0]
-    assert "PRIOR ATTEMPTS" in prompt
-    assert "[score=0.8000] STRONG" in prompt
-    assert "[score=0.2000] WEAK" in prompt
+    assert "ATTEMPTED INSTRUCTION TEMPLATES (increasing score)" in prompt
+    assert "Template #1: WEAK" in prompt
+    assert "Resulting Score #1: 0.2" in prompt
+    assert "Template #2: STRONG" in prompt
     # Ascending order: the weaker exemplar precedes the stronger one.
     assert prompt.index("WEAK") < prompt.index("STRONG")
 

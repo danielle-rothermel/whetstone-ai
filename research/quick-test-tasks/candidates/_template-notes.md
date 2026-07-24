@@ -14,24 +14,29 @@ Sibling candidate pages are bare: `c07.html`. Never link a css/favicon/source do
 without `../`.
 
 ## Section order (fixed — do not reorder)
-1. Header — `.cand-head` (id + name + status badge) then `.anchor-sub`
-2. Verdict — `.verdict` box + `.chips`
+1. Header — `.cand-head` (id + name + status badge), then `.dek` (≤15 words), `.byline`, `.anchor-sub`
+2. Verdict — plain unboxed `<p>` prose (one point per paragraph) + `.chips-row` (no `.verdict` box — v2 deleted the hero-weight container; see html-doc-polish SKILL.md)
 3. What it proposes — `.grid-2` of `.card` (task, example instance)
 4. Academic anchor & lineage — `.grid-2` (literature / brainstorm parents) + full-width dead-branches card
 5. Related active research (2025-2026) — full-width `.card` list
 6. Perspectives — `.grid-3` of five `.lens` blocks
 7. Implementation: steps & risks — `.steps` + `.grid-2` (risks, repo/run)
-8. Footer nav — `nav.cand-nav`
+8. Footer nav — `nav.cand-nav`, then bottom `.colophon` (process metadata: rubric/methodology link, provenance notes)
+
+Section `<h2>`s are question-first (e.g. "What does the task ask the model to do?"); the
+old category title demotes to `<span class="tag">` beside it. Match the wording already
+used in c01–c07 rather than inventing new phrasing per page.
 
 ## CSS classes to use (defined in doc.css/flow.css or the page's `<style>`)
-- Layout: `main`, `section-head` > `h2`, `grid-2`/`grid-3`, `card`, `card full`, `space-top`.
-- Header: `cand-head`, `cand-id`, `badge` + one state, `anchor-sub`.
-- Verdict: `verdict` (`.good` adopt/backup · `.bad` gated/below-cut · plain for ranked); chips: `chips`, `chip`, `chip total`, inner `.k`/`.v`.
+- Layout: `main`, `section-head` > `h2` + optional `.tag`, `grid-2`/`grid-3`, `card`, `card full`, `space-top`.
+- Header: `cand-head`, `cand-id`, `badge` + one state, `.dek`, `.byline`, `anchor-sub`.
+- Verdict: plain `<p>` prose (never `.verdict` — deleted in v2, no hero-weight box); chips ride in `.chips-row` (unboxed), inner chips still use `chip`, `chip total`, `.k`/`.v`.
 - Lineage: `cite`, `unverified`, `dead-branch` + `.why`.
 - Perspectives: `lens`, `rowlabel`, `ul.pros`, `ul.cons`.
 - Steps/risks: `steps` > `step`, `card` lists, `status` + `.pass`/`.partial`/`.fail`/`.open`.
 - Nav: `cand-nav`, `navgroup`, `navlabel`, `spacer`.
-- Scan layer: `key` for 1-4 semantic anchors per paragraph/bullet; `muted`, `small` for secondary text.
+- Colophon: `.colophon`, bottom of page, process metadata only — reader-relevant honesty stays in context above as `.aside`, not here.
+- Scan layer: `key` for 1-4 semantic anchors per paragraph/bullet (anchor-purple, never link-blue); `.aside` for muted caveat/provenance lines under the statement they annotate; `small` for secondary text.
 Add no new component CSS — reuse the family palette variables if you must.
 
 ## Status badge — pick exactly one, keep class + label in sync
