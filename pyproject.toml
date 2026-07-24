@@ -8,10 +8,11 @@ authors = [
 requires-python = ">=3.13, <3.15"
 dependencies = [
     "dr-code",
-    "dr-graph",
+    "dr-graph>=0.1.0,<0.2",
     "dr-platform",
-    "dr-providers",
-    "dr-serialize",
+    "dr-providers>=0.2.0,<0.3",
+    "dr-serialize>=0.1.0,<0.2",
+    "dr-store>=0.1.0,<0.2",
 ]
 
 [dependency-groups]
@@ -26,14 +27,10 @@ dev = [
     "ty>=0.0.54",
 ]
 
-# dr-* libs are not on PyPI. Git sources remain reproducible through uv.lock;
-# dr-providers uses an exact reviewed revision.
+# Unreleased dr-* packages use exact reviewed revisions.
 [tool.uv.sources]
-dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
-dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "main" }
-dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
-dr-serialize = { git = "https://github.com/danielle-rothermel/dr-serialize", branch = "main" }
+dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "be6c53e5e99bf5f007160b3a3603727dc2cd464d" }
+dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "3f175698c6e15e807dac4a9721d52e92d273edce" }
 
 [build-system]
 requires = ["hatchling"]

@@ -29,9 +29,9 @@ def ensure_recordable(
 ) -> Any:
     """Shared path for all storable JSON/JSONB values."""
     try:
-        return Serializer(
-            limits=postgres_jsonb_limits(max_bytes)
-        ).to_jsonable(value)
+        return Serializer(limits=postgres_jsonb_limits(max_bytes)).to_jsonable(
+            value
+        )
     except SerializationError as exc:
         raise RecordingFailureError(str(exc), underlying=exc) from exc
 
