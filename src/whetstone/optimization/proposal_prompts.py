@@ -80,11 +80,30 @@ def miprov2_pool_prompt(request: ProposalRequest) -> str:
     )
 
 
+def gepa_reflection_prompt(request: ProposalRequest) -> str:
+    """Build a reflection prompt from the actual diagnostic evidence."""
+    return "\n".join(
+        [
+            "Reflect on the measured diagnostic evidence and improve the "
+            "instruction.",
+            f"Parent template:\n{request.base_template}",
+            "Exact diagnostic/objective evidence:",
+            json.dumps(
+                request.context.get("diagnostic_evidence", {}),
+                sort_keys=True,
+            ),
+            "Return only one replacement template. Preserve every "
+            "{placeholder} token exactly.",
+        ]
+    )
+
+
 __all__ = [
     "COPRO_HISTORY_ROLE",
     "COPRO_PROPOSAL_PROMPT_SCHEMA_TAG",
     "COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION",
     "COPRO_SEED_ROLE",
     "copro_proposal_prompt",
+    "gepa_reflection_prompt",
     "miprov2_pool_prompt",
 ]

@@ -10,6 +10,7 @@ def test_optimization_package_has_only_core_modules() -> None:
         "adapters.py",
         "copro.py",
         "copro_control.py",
+        "gepa.py",
         "harness.py",
         "identity.py",
         "mutation.py",
