@@ -626,6 +626,33 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PILOT_MAX_WALL_SECONDS,
         help="whole-run wall deadline for the screen",
     )
+
+    recompute = sub.add_parser(
+        "recompute-attractor",
+        help=(
+            "offline maintenance (task 28): recompute ed1m "
+            "mean_attractor_pull + per-task values for a cell from its "
+            "PERSISTED rollout_outputs jsonl by replaying the dual oracle "
+            "locally (NO live calls). Recovers item-1's attractor gap for "
+            "already-run cells."
+        ),
+    )
+    recompute.add_argument(
+        "--outputs", required=True,
+        help="path to a persisted ed1m rollout_outputs jsonl",
+    )
+    recompute.add_argument(
+        "--mutants", default=None,
+        help="path to mutants.jsonl (default: the canonical artifact)",
+    )
+    recompute.add_argument(
+        "--reported-role", default="official_best",
+        help="arm whose mean is the headline number (default official_best)",
+    )
+    recompute.add_argument(
+        "--out", default=None,
+        help="optional path to WRITE the recompute record (never the input)",
+    )
     return parser
 
 
@@ -1512,6 +1539,10 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         f"reasoning_effort={eff}{mode}\n"
         f"  excluded (always-pass, all screened arms): "
         f"{len(report.excluded_task_ids)} tasks\n"
+        # Provider-error pollution surfaced up front (task 28 item 2): the
+        # per-arm mean_pass below is the HONEST rate over non-error rows.
+        f"  rows_errored (provider_error, excluded from mean_pass): "
+        f"{report.rows_errored}\n"
     )
     def _fnum(v: float | None) -> str:
         return "n/a" if v is None else f"{v:.3f}"
@@ -1520,8 +1551,13 @@ def _run_screen(args: argparse.Namespace) -> int:  # pragma: no cover - live
         s = summary[arm]
         lat = _fnum(s["mean_latency_s"])
         reason = s["total_reasoning_tokens"]
+        # Headline mean_pass is the honest non-error rate; the polluted
+        # all-rows number + this arm's errored count are shown alongside so the
+        # dilution is visible instead of silently folded in.
         sys.stdout.write(
             f"  {arm}: mean_pass={_fnum(s['mean_pass_rate'])} "
+            f"(all_rows={_fnum(s['mean_pass_all_rows'])}) "
+            f"rows_errored={int(s['rows_errored'] or 0)} "
             f"tasks_full_pass={int(s['tasks_full_pass'] or 0)} "
             f"mean_latency_s={lat} reasoning_tokens={reason}\n"
         )
@@ -1586,6 +1622,37 @@ def _screen_fake_transport():  # pragma: no cover - dry-run wiring only
     return ScriptedRolloutTransport(reply=_reply)
 
 
+def _run_recompute_attractor(args: argparse.Namespace) -> int:
+    """Offline recompute of ed1m attractor pull from a rollout sidecar.
+
+    Reads the persisted ``rollout_outputs`` jsonl, replays the dual oracle
+    locally (NO live calls), prints the recomputed ``mean_attractor_pull`` +
+    per-arm values, and optionally writes the record to ``--out`` (never the
+    input). Recovers task 28 item-1's attractor gap for already-run cells.
+    """
+    from whetstone.tools.recompute_attractor import (
+        format_result,
+        recompute_attractor,
+        write_result,
+    )
+
+    outputs_path = Path(args.outputs)
+    if not outputs_path.exists():
+        sys.stderr.write(f"no such rollout_outputs file: {outputs_path}\n")
+        return 2
+    mutants_path = Path(args.mutants) if args.mutants else None
+    result = recompute_attractor(
+        outputs_path,
+        mutants_path=mutants_path,
+        reported_role=args.reported_role,
+    )
+    sys.stdout.write(format_result(result) + "\n")
+    if args.out:
+        out = write_result(result, Path(args.out))
+        sys.stdout.write(f"  wrote -> {out}\n")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     _force_unbuffered_stdout()
     parser = build_parser()
@@ -1598,6 +1665,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_refinalize(args)
     if args.command == "screen":
         return _run_screen(args)
+    if args.command == "recompute-attractor":
+        return _run_recompute_attractor(args)
     parser.error("unknown command")  # pragma: no cover
     return 1
 

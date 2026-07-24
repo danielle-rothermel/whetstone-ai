@@ -40,6 +40,7 @@ import re
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from whetstone.envs.ed1 import (
@@ -61,7 +62,11 @@ from whetstone.runner.events import (
     screen_key_locked_event,
 )
 
-SCREEN_SCHEMA = "whetstone.runner.task_screen/v2"
+# v3 (task 28 item 2): the headline ``mean_pass_rate`` now excludes typed
+# provider_error rows (the honest rate); the old all-rows number is kept as
+# ``mean_pass_all_rows``, and per-arm + total ``rows_errored`` are surfaced.
+# Sidecar + summary rows also gained an ``at`` recording timestamp (item 3).
+SCREEN_SCHEMA = "whetstone.runner.task_screen/v3"
 
 
 class ScreenKeyLocked(RuntimeError):
@@ -159,6 +164,20 @@ def screen_stem(
         f"ed1_{model_tag(model)}_{ratio_tag(budget_ratio)}"
         f"{effort_suffix(reasoning_effort)}"
     )
+
+
+def _is_provider_error(outcome: _ScreenRowOutcome) -> bool:
+    """True when a row failed on a typed PROVIDER error (task 28 item 2).
+
+    A provider_error row (rate limit / provider-side fault) is pollution, not a
+    genuine content failure, so the honest pass rate excludes it. Detected by
+    the typed ``provider_error`` payload when present; a restored row that
+    predates provider-error persistence falls back to the rate-limit
+    ``failure_code`` so a resumed 429 row is still recognized.
+    """
+    if outcome.provider_error is not None:
+        return True
+    return is_rate_limit_code(outcome.failure_code)
 
 
 def _mean(values: list[float]) -> float | None:
@@ -568,6 +587,12 @@ class TaskScreenRow:
     pass_counts: dict[str, int]
     fail_counts: dict[str, int]
     repeats: int
+    #: Per-arm count of rows that failed with a typed ``provider_error`` (task
+    #: 28 item 2): a rate-limited / provider-side error row is NOT a genuine
+    #: content failure, so it is EXCLUDED from the honest pass-rate denominator
+    #: (and surfaced explicitly). A subset of ``fail_counts`` (every error row
+    #: also counts as a fail); the honest ``mean_pass`` uses fail-minus-error.
+    error_counts: dict[str, int] = field(default_factory=dict)
     #: Task-20 per-arm telemetry samples for THIS task's rows (one entry per
     #: repeat that reported the field). Kept as lists so the report can compute
     #: mean/median + coverage counts over rows-with-field (never 0-conflated).
@@ -592,6 +617,9 @@ class TaskScreenRow:
             "repeats": self.repeats,
             "pass_counts": dict(self.pass_counts),
             "fail_counts": dict(self.fail_counts),
+            # Per-arm provider_error row counts (task 28 item 2): pollution
+            # made visible per task (a subset of fail_counts).
+            "error_counts": dict(self.error_counts),
             "always_pass": self.always_pass,
             # Per-arm telemetry samples (task 20): total reasoning tokens +
             # latency sample count for this task (coverage-honest).
@@ -634,8 +662,30 @@ class TaskScreenReport:
         """The always-pass task ids (the model's pool-exclusion list)."""
         return tuple(r.task_id for r in self.rows if r.always_pass)
 
+    def rows_errored_by_arm(self) -> dict[str, int]:
+        """Per-arm total count of provider_error rows (task 28 item 2)."""
+        return {
+            arm: sum(r.error_counts.get(arm, 0) for r in self.rows)
+            for arm in self.arms
+        }
+
+    @property
+    def rows_errored(self) -> int:
+        """The total provider_error rows across all arms (task 28 item 2)."""
+        return sum(self.rows_errored_by_arm().values())
+
     def arm_summary(self) -> dict[str, dict[str, float | None]]:
         """Per-arm pass rate + telemetry (task 20), coverage-honest.
+
+        Task 28 item 2 -- HONEST pass rate: the headline ``mean_pass_rate`` is
+        computed over NON-ERROR rows only (a typed ``provider_error`` row, e.g.
+        a rate-limited 429, is pollution, never a genuine content failure, and
+        would silently drag the rate down if counted as a fail). The polluted
+        all-rows number is kept as ``mean_pass_all_rows`` for continuity, and
+        the per-arm ``rows_errored`` count is surfaced so the pollution is
+        VISIBLE instead of folded in. ``tasks_full_pass`` likewise counts tasks
+        whose every NON-ERROR row passed (a task with at least one non-error
+        row); ``tasks_full_pass_all_rows`` keeps the old all-rows count.
 
         Adds per-arm mean/median wall-clock latency + total & mean reasoning
         tokens, each computed ONLY over rows that REPORTED the field, with a
@@ -648,19 +698,44 @@ class TaskScreenReport:
         total_rows_denom = self.repeats * len(self.rows) or 1
         for arm in self.arms:
             total_pass = sum(r.pass_counts.get(arm, 0) for r in self.rows)
+            total_error = sum(r.error_counts.get(arm, 0) for r in self.rows)
+            # Non-error denominator: every driven row for the arm MINUS the
+            # provider-error rows. Falls back to 1 when the arm was fully
+            # polluted (no honest row) so the ratio is a defined 0.0, not NaN.
+            non_error_denom = total_rows_denom - total_error
             full = sum(
                 1 for r in self.rows
                 if r.pass_counts.get(arm, 0) == self.repeats
             )
+            # Honest per-task full-pass: every NON-ERROR row passed AND the
+            # task had at least one non-error row (a fully-polluted task
+            # carries no honest verdict, so it does not count as full-pass).
+            full_non_error = 0
+            for r in self.rows:
+                errored = r.error_counts.get(arm, 0)
+                non_error_rows = self.repeats - errored
+                if non_error_rows > 0 and (
+                    r.pass_counts.get(arm, 0) == non_error_rows
+                ):
+                    full_non_error += 1
             lat: list[float] = []
             reason: list[int] = []
             for r in self.rows:
                 lat.extend(r.arm_latencies.get(arm, []))
                 reason.extend(r.arm_reasoning.get(arm, []))
             out[arm] = {
-                "mean_pass_rate": total_pass / total_rows_denom,
-                "tasks_full_pass": full,
-                "tasks_full_pass_fraction": full / n_tasks,
+                # HEADLINE: honest pass rate over non-error rows only.
+                "mean_pass_rate": (
+                    total_pass / non_error_denom if non_error_denom > 0
+                    else 0.0
+                ),
+                # Continuity: the old all-rows number (error rows folded in).
+                "mean_pass_all_rows": total_pass / total_rows_denom,
+                # Visible pollution count (per arm).
+                "rows_errored": total_error,
+                "tasks_full_pass": full_non_error,
+                "tasks_full_pass_fraction": full_non_error / n_tasks,
+                "tasks_full_pass_all_rows": full,
                 "mean_latency_s": _mean(lat),
                 "median_latency_s": _median(lat),
                 "latency_coverage": len(lat),
@@ -718,6 +793,12 @@ class TaskScreenReport:
             "rename_deltas": self.rename_deltas(),
             "excluded_task_ids": list(self.excluded_task_ids),
             "excluded_count": len(self.excluded_task_ids),
+            # Provider-error pollution made visible at the summary level (task
+            # 28 item 2): the headline arm_summary mean_pass_rate now EXCLUDES
+            # these rows, and they are surfaced here (total + per-arm) instead
+            # of being silently folded into the pass rate as failures.
+            "rows_errored": self.rows_errored,
+            "rows_errored_by_arm": self.rows_errored_by_arm(),
             "tasks": [r.as_dict() for r in self.rows],
         }
 
@@ -962,10 +1043,11 @@ def _run_task_screen_locked(
         inst = by_task[task_id]
         pass_counts: dict[str, int] = {}
         fail_counts: dict[str, int] = {}
+        error_counts: dict[str, int] = {}
         arm_lat: dict[str, list[float]] = {}
         arm_reason: dict[str, list[int]] = {}
         for arm in arms:
-            p = f = 0
+            p = f = e = 0
             lat: list[float] = []
             reason: list[int] = []
             for index in range(repeats):
@@ -974,6 +1056,11 @@ def _run_task_screen_locked(
                     p += 1
                 elif out.failed or out.passed is None:
                     f += 1
+                    # A typed provider_error (rate limit / provider fault) is
+                    # a POLLUTED row, not a genuine content failure (task 28
+                    # item 2): counted so the honest pass rate excludes it.
+                    if _is_provider_error(out):
+                        e += 1
                 # Coverage-honest: sample only rows that reported the field.
                 if out.latency_s is not None:
                     lat.append(out.latency_s)
@@ -981,6 +1068,7 @@ def _run_task_screen_locked(
                     reason.append(out.reasoning_tokens)
             pass_counts[arm] = p
             fail_counts[arm] = f
+            error_counts[arm] = e
             arm_lat[arm] = lat
             arm_reason[arm] = reason
         rows.append(TaskScreenRow(
@@ -989,6 +1077,7 @@ def _run_task_screen_locked(
             arm_reasoning=arm_reason,
             entry_point=inst.humaneval_task.entry_point,
             pass_counts=pass_counts, fail_counts=fail_counts,
+            error_counts=error_counts,
             repeats=repeats,
         ))
     # Push run telemetry (task 24) over the rows DRIVEN this pass (restored
@@ -1104,6 +1193,12 @@ def _persist_row(
                 # the full provider diagnostic on a failed row.
                 "finish_reason": outcome.finish_reason,
                 "provider_error": outcome.provider_error,
+                # ISO-8601 UTC wall-clock the row was recorded (task 28 item
+                # 3). Stamped on EVERY sidecar row -- success AND
+                # provider_error alike -- so failure-timing forensics work on
+                # error rows (the partial log already stamps this; the sidecar
+                # did not).
+                "at": datetime.now(UTC).isoformat(),
             }) + "\n")
 
 
@@ -1138,6 +1233,10 @@ def _restore_screen(
                 total_tokens=rec.total_tokens,
                 reasoning_tokens=rec.reasoning_tokens,
                 latency_s=rec.latency_s,
+                # Carry the provider-error diagnostic across a resume (task 28
+                # item 2) so a restored rate-limited row is still recognized as
+                # an ERROR row and stays out of the honest pass denominator.
+                provider_error=rec.provider_error,
             )
         )
     return restored
@@ -1243,7 +1342,11 @@ def cross_model_summary(
                 "budget_ratio": report.budget_ratio,
                 "reasoning_effort": report.reasoning_effort,
                 "config_key": _config_key(report),
+                # Honest headline (non-error rows) + the polluted all-rows
+                # number + the per-arm error count (task 28 item 2).
                 "mean_pass_rate": s["mean_pass_rate"],
+                "mean_pass_all_rows": s["mean_pass_all_rows"],
+                "rows_errored": s["rows_errored"],
                 "tasks_full_pass": s["tasks_full_pass"],
                 "mean_latency_s": s["mean_latency_s"],
                 "median_latency_s": s["median_latency_s"],

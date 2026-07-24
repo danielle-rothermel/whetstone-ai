@@ -741,7 +741,10 @@ def test_cell_writes_rollout_output_sidecar_with_full_coverage(
             "model", "split_role", "candidate_id", "instance_id", "repeat",
             "output_text", "score", "failure_code",
             "finish_reason", "provider_error",
+            # Task 28 item 3: an ISO-8601 UTC recording timestamp on every row.
+            "at",
         }
+        assert row["at"]  # non-empty on success rows (and error rows alike)
     roles = {row["split_role"] for row in rows}
     # Official arms AND internal candidate evals are ALL covered.
     assert "official_naive" in roles
@@ -989,3 +992,68 @@ def test_power_stage_base_rate_zero_anchor_floors_at_brief_sizes(
         if row["split_role"] in ("internal_candidate", "internal_naive")
     }
     assert len(internal) == ps.used_n_tasks >= brief_n
+
+
+# --- Task 28 item 1: attractor pull carried onto the CellRecord --------------
+
+
+def _attractor_config(env: str) -> CellConfig:
+    # A minimal CellConfig for the pure ``_ed1m_attractor`` helper (it reads
+    # only ``config.env``); built directly so it does not require ``env`` to be
+    # in the test registry.
+    return CellConfig(
+        optimizer="copro",
+        env=env,
+        lane="openrouter",
+        attempt=0,
+        task_model=TASK_MODEL,
+        proposer_model=PROPOSER_MODEL,
+        canonical=True,
+        proposer_config=proposer_config(),
+        proposer_transport=FakeProposerTransport(script={}, default=()),
+        rollout_transport=FakeTransport(reply=lambda _p: "x"),
+        execution_policy=runner_execution_policy(),
+        repeats=3,
+        pool_n_per_stratum=1,
+        split_sizes=SPLIT,
+        execution_mode=ExecutionMode.IN_PROCESS,
+    )
+
+
+def test_ed1m_attractor_helper_reports_best_arm_mean() -> None:
+    # (Task 28 item 1) The ed1m attractor sub-object carries the BEST arm's
+    # reported mean + per-task vector; the mean is over NON-null per-task
+    # values (a null task -- no discriminating sample -- is never zeroed in).
+    from whetstone.runner.cell import _ed1m_attractor
+
+    cfg = _attractor_config("ed1m")
+    by_role = {
+        "official_best": (0.5, (1.0, None, 0.0)),
+        "official_naive": (0.0, (0.0, 0.0)),
+    }
+    attractor = _ed1m_attractor(cfg, by_role)
+    assert attractor is not None
+    # Mean over the two non-null tasks: (1.0 + 0.0) / 2 = 0.5.
+    assert attractor.mean == pytest.approx(0.5)
+    assert attractor.per_task == (1.0, None, 0.0)
+    assert attractor.sampled_task_count == 2
+
+
+def test_ed1m_attractor_helper_null_when_no_sample() -> None:
+    # ed1m ran but no task produced a discriminating sample -> mean None (a
+    # non-null record with a null mean, never a fake 0).
+    from whetstone.runner.cell import _ed1m_attractor
+
+    cfg = _attractor_config("ed1m")
+    attractor = _ed1m_attractor(cfg, {"official_best": (None, (None, None))})
+    assert attractor is not None
+    assert attractor.mean is None
+    assert attractor.sampled_task_count == 0
+
+
+def test_attractor_helper_none_for_non_ed1m_envs() -> None:
+    # ed1 / QA / d1 do not measure attractor pull -> None (null-not-zero).
+    from whetstone.runner.cell import _ed1m_attractor
+
+    for env in ("ed1", "c11", "d1"):
+        assert _ed1m_attractor(_attractor_config(env), {}) is None

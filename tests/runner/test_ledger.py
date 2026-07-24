@@ -71,6 +71,8 @@ def test_cell_record_exact_schema_fields() -> None:
         "power_sizing",
         # ed1 enc-dec dual scores (None unless the env is ed1).
         "dual_scores",
+        # ed1m REPORTED attractor pull (None unless the env is ed1m; task 28).
+        "attractor",
         # Per-cell task-side usage + latency totals (task 20).
         "telemetry",
         # Per-call provenance (task 26): schema stamp, graph/eval-config
@@ -92,6 +94,8 @@ def test_cell_record_exact_schema_fields() -> None:
     assert dumped["artifacts"]["power_analysis_ref"] is None
     # A QA cell records no ed1 dual scores (single objective).
     assert dumped["dual_scores"] is None
+    # A QA cell records no ed1m attractor pull (only ed1m measures it).
+    assert dumped["attractor"] is None
 
 
 def test_invalid_status_rejected() -> None:

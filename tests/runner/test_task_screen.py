@@ -688,6 +688,143 @@ def test_screen_telemetry_mixed_coverage_counts_not_conflated() -> None:
     assert s["median_latency_s"] == pytest.approx(0.15)
 
 
+# --- Task 28 item 2: honest screen aggregates (provider_error excluded) ------
+
+
+def test_arm_summary_excludes_provider_error_rows_from_mean_pass() -> None:
+    # A rate-limited provider_error row is pollution, not a content failure:
+    # the headline mean_pass excludes it (non-error denominator), the polluted
+    # all-rows number is kept for continuity, and rows_errored is surfaced.
+    from whetstone.runner.task_screen import TaskScreenReport, TaskScreenRow
+
+    # 4 tasks x 5 repeats. Task t1 has 3 error (rate-limited) rows; of its 2
+    # non-error rows both pass -> honest full-pass. Its pass_counts=2.
+    rows = (
+        TaskScreenRow(
+            task_id="t1", entry_point="f", repeats=5,
+            pass_counts={"direct_original": 2},
+            fail_counts={"direct_original": 3},
+            error_counts={"direct_original": 3},
+        ),
+        TaskScreenRow(
+            task_id="t2", entry_point="g", repeats=5,
+            pass_counts={"direct_original": 5},
+            fail_counts={"direct_original": 0},
+            error_counts={"direct_original": 0},
+        ),
+        TaskScreenRow(
+            task_id="t3", entry_point="h", repeats=5,
+            pass_counts={"direct_original": 4},
+            fail_counts={"direct_original": 1},  # a genuine content fail
+            error_counts={"direct_original": 0},
+        ),
+        TaskScreenRow(
+            task_id="t4", entry_point="i", repeats=5,
+            pass_counts={"direct_original": 5},
+            fail_counts={"direct_original": 0},
+            error_counts={"direct_original": 0},
+        ),
+    )
+    report = TaskScreenReport(
+        model="m", budget_ratio=0.25, repeats=5,
+        arms=("direct_original",), rename_token="target_fxn",
+        dataset_revision="rev", name_only_wrapper="w", rows=rows,
+    )
+    s = report.arm_summary()["direct_original"]
+    total_pass = 2 + 5 + 4 + 5  # 16
+    # Honest denominator: 20 total rows - 3 error rows = 17.
+    assert s["mean_pass_rate"] == pytest.approx(total_pass / 17)
+    # Polluted all-rows number kept for continuity (denominator 20).
+    assert s["mean_pass_all_rows"] == pytest.approx(total_pass / 20)
+    # Pollution surfaced, not folded in.
+    assert s["rows_errored"] == 3
+    # Honest full-pass: t1 (2/2 non-error pass), t2, t4 -> 3; t3 has a real
+    # content fail so it is NOT full-pass.
+    assert s["tasks_full_pass"] == 3
+    # The all-rows full-pass count is stricter (t1's 2 != 5) -> only t2, t4.
+    assert s["tasks_full_pass_all_rows"] == 2
+    # Report-level totals expose the pollution.
+    assert report.rows_errored == 3
+    assert report.rows_errored_by_arm() == {"direct_original": 3}
+    data = report.as_dict()
+    assert data["rows_errored"] == 3
+    assert data["rows_errored_by_arm"] == {"direct_original": 3}
+
+
+def test_is_provider_error_detects_payload_and_rate_limit_code() -> None:
+    # An error row is one with a typed provider_error payload OR (for a
+    # restored row that predates payload persistence) a rate-limit code.
+    from whetstone.runner.task_screen import (
+        _is_provider_error,
+        _ScreenRowOutcome,
+    )
+
+    payload = _ScreenRowOutcome(
+        passed=None, failed=True, failure_code="http_status_429",
+        output_text=None, provider_error={"status": 429},
+    )
+    assert _is_provider_error(payload) is True
+    # No payload but a rate-limit failure code (restored row) still counts.
+    code_only = _ScreenRowOutcome(
+        passed=None, failed=True, failure_code="http_status_429",
+        output_text=None,
+    )
+    assert _is_provider_error(code_only) is True
+    # A genuine content failure (no payload, non-rate-limit code) does NOT.
+    content_fail = _ScreenRowOutcome(
+        passed=False, failed=False, failure_code="", output_text="wrong",
+    )
+    assert _is_provider_error(content_fail) is False
+
+
+def test_screen_sidecar_stamps_at_on_every_row(tmp_path: Path) -> None:
+    # (Task 28 item 3) Every sidecar row -- success AND (would-be) error
+    # rows -- carries an ISO-8601 UTC ``at`` stamp for failure-timing.
+    tasks = load_ed1_tasks(prefer_snapshot=True, limit=2)
+    sidecar = tmp_path / "ed1_qwen.outputs.jsonl"
+    run_task_screen(
+        model="qwen/qwen3-coder-flash",
+        transport=_all_pass_reply(tasks),
+        execution_policy=execution_policy(max_attempts=1),
+        tasks=tasks, repeats=1, concurrency=2,
+        variants=("direct_original",),
+        sidecar_path=sidecar,
+    )
+    lines = [
+        json.loads(line)
+        for line in sidecar.read_text().splitlines() if line.strip()
+    ]
+    assert lines  # rows were written
+    for row in lines:
+        assert row.get("at")  # non-empty ISO timestamp on every row
+        assert row["at"].endswith("+00:00") or "T" in row["at"]
+
+
+def test_arm_summary_fully_polluted_arm_is_defined_zero() -> None:
+    # An arm whose every row is a provider_error has no honest signal: the
+    # headline mean_pass is a defined 0.0 (never NaN) and rows_errored == all.
+    from whetstone.runner.task_screen import TaskScreenReport, TaskScreenRow
+
+    rows = (
+        TaskScreenRow(
+            task_id="t1", entry_point="f", repeats=3,
+            pass_counts={"direct_original": 0},
+            fail_counts={"direct_original": 3},
+            error_counts={"direct_original": 3},
+        ),
+    )
+    report = TaskScreenReport(
+        model="m", budget_ratio=0.25, repeats=3,
+        arms=("direct_original",), rename_token="target_fxn",
+        dataset_revision="rev", name_only_wrapper="w", rows=rows,
+    )
+    s = report.arm_summary()["direct_original"]
+    assert s["mean_pass_rate"] == 0.0
+    assert s["rows_errored"] == 3
+    # No non-error row -> the task carries no honest full-pass verdict.
+    assert s["tasks_full_pass"] == 0
+
+
 # --- Task 21.1: reasoning-effort keyed artifacts + honor-vs-ignore -----------
 
 
