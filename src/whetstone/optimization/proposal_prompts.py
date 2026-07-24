@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from whetstone.optimization.proposer import ProposalRequest
 
 COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION = 1
@@ -63,10 +65,26 @@ def copro_proposal_prompt(request: ProposalRequest) -> str:
     return "\n".join(lines)
 
 
+def miprov2_pool_prompt(request: ProposalRequest) -> str:
+    """Build an instruction-pool construction prompt."""
+    accepted = request.context.get("accepted", [])
+    return "\n".join(
+        [
+            "Construct a diverse instruction candidate for a MIPROv2 pool.",
+            f"Base template:\n{request.base_template}",
+            "Already accepted instructions:",
+            json.dumps(accepted, sort_keys=True),
+            "Return only a distinct replacement template and preserve every "
+            "{placeholder} token exactly.",
+        ]
+    )
+
+
 __all__ = [
     "COPRO_HISTORY_ROLE",
     "COPRO_PROPOSAL_PROMPT_SCHEMA_TAG",
     "COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION",
     "COPRO_SEED_ROLE",
     "copro_proposal_prompt",
+    "miprov2_pool_prompt",
 ]

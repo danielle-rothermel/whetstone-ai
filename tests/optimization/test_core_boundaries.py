@@ -13,6 +13,8 @@ def test_optimization_package_has_only_core_modules() -> None:
         "harness.py",
         "identity.py",
         "mutation.py",
+        "miprov2.py",
+        "miprov2_identity.py",
         "proposer.py",
         "proposal_prompts.py",
         "reward.py",
