@@ -42,6 +42,7 @@ from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness, SamplingOverrides
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY, FanoutConfig
 from whetstone.execution.partials import PartialLog
+from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.optimization.proposer import ProposerConfig, ProposerTransport
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
@@ -77,6 +78,7 @@ from whetstone.runner.ledger import (
     EnvOfficialCache,
     Ledger,
     PowerSizing,
+    PromptCacheControls,
     SpendRecord,
 )
 from whetstone.runner.optimizers import (
@@ -231,6 +233,17 @@ class CellConfig:
     #: ``recorded_reasoning_effort`` the ``--reasoning-effort`` value string.
     recorded_temperature: float | None = None
     recorded_reasoning_effort: str | None = None
+    #: OPT-IN run-level prompt result cache (task 31, ``--prompt-cache``).
+    #: ``False`` (the strict default) leaves the call seam byte-identical to a
+    #: run without it -- no store is created and every provider call is driven.
+    #: When ``True`` the cell builds a :class:`PromptResultCache` rooted at the
+    #: ledger root and threads it to every task-role split eval, so a byte-
+    #: identical (resolved prompt, model settings, repeat ordinal) reuses the
+    #: stored provider Result across rounds/cells. RECORDING-only: this flag
+    #: does NOT participate in any identity computation (the pinned-hash tests
+    #: stay unchanged), it is mirrored onto the cell record like the task-26
+    #: recorded controls.
+    prompt_cache_enabled: bool = False
 
     def official_repeats_effective(self) -> int:
         """Official repeats actually driven: the override, else the default."""
@@ -477,15 +490,29 @@ def _build_experiment(config: CellConfig) -> EnvExperiment:
     )
 
 
-def _cell_controls(config: CellConfig) -> CellControls:
+def _cell_controls(
+    config: CellConfig, cache: PromptResultCache | None = None
+) -> CellControls:
     """The literal sampling-control values this cell ran under (task 26).
 
     RECORDING-only mirror of the ``rollout_transport`` route controls, so the
     ledger line answers "temp 0 or temp 1?" without re-deriving from a hash.
+    Task 31: when a prompt cache ran, its enabled marker + hit/miss/store
+    counters are recorded here too (recording-only, never identity-bearing).
     """
+    prompt_cache_controls = None
+    if cache is not None:
+        counters = cache.counters()
+        prompt_cache_controls = PromptCacheControls(
+            enabled=True,
+            hits=counters["hits"],
+            misses=counters["misses"],
+            stores=counters["stores"],
+        )
     return CellControls(
         temperature=config.recorded_temperature,
         reasoning_effort=config.recorded_reasoning_effort,
+        prompt_cache=prompt_cache_controls,
     )
 
 
@@ -1243,6 +1270,17 @@ def run_cell(
         path=ledger.root / "partials" / f"{cell_id}.partial.jsonl"
     )
 
+    # OPT-IN run-level prompt result cache (task 31). OFF by default -> None ->
+    # the call seam is byte-identical to a run without it (no store created).
+    # When on, the store is rooted at the ledger root so every cell in the run
+    # shares one <root>/prompt_cache/, and a byte-identical (resolved prompt,
+    # settings, repeat ordinal) reuses the stored provider Result across cells.
+    prompt_cache = (
+        PromptResultCache(root=ledger.root)
+        if config.prompt_cache_enabled
+        else None
+    )
+
     # --- Whole-cell wall deadline: shared across every fan-out phase. ---
     cell_start = clock()
     # Wall-clock (ISO-8601 UTC) the cell started -- recorded on the ledger line
@@ -1503,6 +1541,7 @@ def run_cell(
             execution_mode=config.execution_mode,
             fanout=_fanout(),
             partial_log=partial_log,
+            cache=prompt_cache,
         )
         _observe(baseline, "official_naive")
         _collect_outputs("official_naive", baseline)
@@ -1540,6 +1579,7 @@ def run_cell(
             execution_mode=config.execution_mode,
             fanout=_fanout(),
             partial_log=partial_log,
+            cache=prompt_cache,
         )
         _observe(ceiling_eval, "official_ceiling")
         _collect_outputs("official_ceiling", ceiling_eval)
@@ -1635,6 +1675,7 @@ def run_cell(
             execution_mode=config.execution_mode,
             fanout=_fanout(),
             internal_task_count_override=internal_task_count_override,
+            cache=prompt_cache,
         )
     except CandidateEvaluationFailure as exc:
         return _incomplete_internal_arm(
@@ -1695,6 +1736,7 @@ def run_cell(
         fanout=_fanout(),
         partial_log=partial_log,
         render_guard=True,
+        cache=prompt_cache,
     )
     _observe(best, "official_best")
     _collect_outputs("official_best", best)
@@ -1782,7 +1824,12 @@ def run_cell(
             escalation_note = f"escalation skipped: {reason}"
         else:
             # Escalation ADDS repeats (pooled), so it must NOT restore/skip the
-            # already-recorded observations: pass no partial_log here.
+            # already-recorded observations: pass no partial_log here. It ALSO
+            # must NOT consult the prompt cache (task 31): escalation re-draws
+            # the SAME repeat ordinals to grow the sample pool, and a cache
+            # keyed on the repeat ordinal would serve the ORIGINAL draws back
+            # verbatim -- collapsing the escalation's added variance to zero.
+            # Escalation therefore always drives fresh, uncached.
             extra_naive = evaluate_split(
                 experiment, candidate=naive, instances=official,
                 split_role="official", transport=config.rollout_transport,
@@ -1991,7 +2038,7 @@ def run_cell(
         telemetry=_cell_telemetry(partial_log),
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,
-        controls=_cell_controls(config),
+        controls=_cell_controls(config, prompt_cache),
         started_at=started_at_iso,
         finished_at=datetime.now(UTC).isoformat(),
     )

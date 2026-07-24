@@ -53,9 +53,14 @@ from whetstone.execution.fanout import (
     run_call_pool,
 )
 from whetstone.execution.partials import PartialCallRecord, PartialLog
+from whetstone.execution.prompt_cache import (
+    CallExecution,
+    PromptResultCache,
+    execute_call,
+)
 from whetstone.optimization.schema import Candidate
 from whetstone.provider.attempt import ProviderCallResult
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.budget import CreditsSnapshot
 from whetstone.runner.events import (
@@ -325,6 +330,7 @@ def _probe_thunk(
     procedure_hash: str,
     logical_call_id: str,
     partial_log: PartialLog | None,
+    cache: PromptResultCache | None = None,
 ) -> Callable[[], _ProbeCall]:
     """A zero-arg thunk running one pilot call (the fan-out unit).
 
@@ -333,14 +339,19 @@ def _probe_thunk(
     already-finished call durably on disk (incremental persistence).
     """
 
-    def _build() -> _ProbeCall:
-        result = run_provider_call(
+    def _build() -> tuple[_ProbeCall, CallExecution]:
+        repeat_id = _repeat_of(logical_call_id)
+        execution = execute_call(
             request=request,
             policy=execution_policy,
             transport=transport,
             logical_call_id=logical_call_id,
+            repeat_index=repeat_id,
+            cache=cache,
+            phase="pilot",
+            unit=probe,
         )
-        repeat_id = _repeat_of(logical_call_id)
+        result = execution.result
         if not result.succeeded or result.generation is None:
             return _ProbeCall(
                 record=PilotCallRecord(
@@ -357,7 +368,7 @@ def _probe_thunk(
                     failure_code=failure_code_of(result),
                 ),
                 result=result,
-            )
+            ), execution
         text = result.generation.text
         score = env_exact_match_score(
             env=env,
@@ -386,12 +397,13 @@ def _probe_thunk(
                 failed=False,
             ),
             result=result,
-        )
+        ), execution
 
     def _run() -> _ProbeCall:
-        call = _build()
+        call, execution = _build()
         if partial_log is not None:
             r = call.record
+            marks = execution.cache_marks()
             partial_log.append(
                 PartialCallRecord(
                     phase="pilot", instance_id=r.instance_id, unit=probe,
@@ -400,6 +412,11 @@ def _probe_thunk(
                     prompt_tokens=r.prompt_tokens,
                     completion_tokens=r.completion_tokens,
                     total_tokens=r.total_tokens, raw_response=r.raw_response,
+                    cache_hit=marks.cache_hit,
+                    cache_source_phase=marks.cache_source_phase,
+                    cache_source_unit=marks.cache_source_unit,
+                    cache_source_call_id=marks.cache_source_call_id,
+                    cache_source_at=marks.cache_source_at,
                 )
             )
         return call
@@ -462,6 +479,7 @@ def _run_probe(
     estimate_source: str = "",
     fanout: FanoutConfig | None = None,
     partial_log: PartialLog | None = None,
+    cache: PromptResultCache | None = None,
 ) -> _ProbeRun:
     env = env_spec(experiment.env_name)
     config = experiment.rollout_definition.provider_call_config
@@ -494,6 +512,7 @@ def _run_probe(
                         # Each thunk persists its own partial record on
                         # completion (incremental persistence for resume).
                         partial_log=partial_log,
+                        cache=cache,
                     ),
                     deadline_seconds=guard_deadline_seconds(execution_policy),
                 )
@@ -600,6 +619,7 @@ def run_pilot(
     max_wall_seconds: float = DEFAULT_PILOT_MAX_WALL_SECONDS,
     partial_log: PartialLog | None = None,
     events: EventStream | None = None,
+    cache: PromptResultCache | None = None,
 ) -> PilotReport:
     """Run the checklist-B pilot for one env and return its report.
 
@@ -680,6 +700,7 @@ def run_pilot(
         estimate_source=estimate_source,
         fanout=_probe_fanout(),
         partial_log=partial_log,
+        cache=cache,
     )
     ceiling_run = _run_probe(
         experiment,
@@ -694,6 +715,7 @@ def run_pilot(
         estimate_source=estimate_source,
         fanout=_probe_fanout(),
         partial_log=partial_log,
+        cache=cache,
     )
     naive = naive_run.summary
     ceiling = ceiling_run.summary

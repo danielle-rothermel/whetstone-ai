@@ -40,6 +40,7 @@ from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.rollout_definition import valid_prompt_input_keys
 from whetstone.execution.fanout import FanoutConfig
+from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.optimization.mutation import (
     MUTATION_FIELD,
     invalid_template_placeholders,
@@ -502,6 +503,7 @@ def run_optimize(
     execution_mode: ExecutionMode = ExecutionMode.IN_PROCESS,
     fanout: FanoutConfig | None = None,
     internal_task_count_override: int | None = None,
+    cache: PromptResultCache | None = None,
 ) -> OptimizeResult:
     """Run the optimizer on the internal split; return the best candidate.
 
@@ -558,6 +560,7 @@ def run_optimize(
         execution_mode=execution_mode,
         fanout=fanout,
         apply_reward=needs_reward,
+        cache=cache,
     )
     best_candidate = naive
     best_score = baseline_eval.score
@@ -666,6 +669,7 @@ def run_optimize(
                     fanout=fanout,
                     apply_reward=needs_reward,
                     render_guard=True,
+                    cache=cache,
                 )
             except CandidateEvaluationFailure as exc:
                 # This PROPOSAL candidate's internal aggregate came back

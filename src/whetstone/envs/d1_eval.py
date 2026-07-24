@@ -62,8 +62,14 @@ from whetstone.execution.call_support import (
 )
 from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
 from whetstone.execution.partials import PartialCallRecord, PartialLog
+from whetstone.execution.prompt_cache import (
+    CallExecution,
+    PartialCacheMarks,
+    PromptResultCache,
+    execute_call,
+)
 from whetstone.optimization.reward import Reward
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.task_screen import (
     _direct_body,
@@ -109,6 +115,10 @@ class _D1RowOutcome:
     #: True when a TRANSIENT transport fault (timeout/stall/transport-error/
     #: rate-limit) exhausted its semantic retries -- eligible for ONE re-drive.
     redrivable: bool = False
+    #: Task-31 prompt-cache execution marker (``None`` on a render-failed row
+    #: with no call). Tells the persist step whether this row was served from
+    #: cache (mark + null latency) or freshly driven.
+    execution: CallExecution | None = None
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -151,6 +161,10 @@ def _drive_row(
     transport: TransportCall,
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
+    repeat_index: int,
+    cache: PromptResultCache | None,
+    cache_phase: str,
+    cache_unit: str,
 ) -> _D1RowOutcome:
     """Run one direct generate->score rollout for one (task, repeat)."""
     input_arm, score_task = _input_arm_text(experiment, instance)
@@ -161,17 +175,21 @@ def _drive_row(
             pass_value=None, output_text=None,
             failed=True, failure_code="d1_wrapper_render_error",
         )
-    result = run_provider_call(
+    execution = execute_call(
         request=_request(provider_call_config, prompt),
         policy=execution_policy, transport=transport,
         logical_call_id=logical_call_id,
+        repeat_index=repeat_index, cache=cache,
+        phase=cache_phase, unit=cache_unit,
     )
+    result = execution.result
     if not result.succeeded or result.generation is None:
         return _D1RowOutcome(
             pass_value=None, output_text=None,
             failed=True, failure_code=failure_code_of(result),
             provider_error=call_telemetry(result).provider_error,
             redrivable=is_transient_transport_failure(result),
+            execution=execution,
         )
     output_text = result.generation.text
     tel = call_telemetry(result)
@@ -185,6 +203,7 @@ def _drive_row(
             total_tokens=tel.total_tokens,
             reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
             finish_reason=tel.finish_reason,
+            execution=execution,
         )
     return _D1RowOutcome(
         pass_value=code_score.row_value,
@@ -195,6 +214,7 @@ def _drive_row(
         total_tokens=tel.total_tokens,
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         finish_reason=tel.finish_reason,
+        execution=execution,
     )
 
 
@@ -211,6 +231,7 @@ def _drive_and_persist(
     scorer: Callable[..., CodeScore],
     partial_log: PartialLog | None,
     split_role: str,
+    cache: PromptResultCache | None = None,
 ) -> _D1RowOutcome:
     """Drive one d1 row and append its partial record when it finishes."""
     outcome = _drive_row(
@@ -222,8 +243,19 @@ def _drive_and_persist(
         transport=transport,
         scorer=scorer,
         logical_call_id=f"{candidate_id}:{instance.id}#{index}",
+        repeat_index=index,
+        cache=cache,
+        cache_phase=split_role,
+        cache_unit=candidate_id,
     )
     if partial_log is not None:
+        # Task 31 honesty: null the latency of a cache-served row (no wire call
+        # this time) and stamp the cache marker + original-entry provenance.
+        marks = (
+            outcome.execution.cache_marks()
+            if outcome.execution is not None
+            else PartialCacheMarks()
+        )
         partial_log.append(
             PartialCallRecord(
                 phase=split_role,
@@ -238,10 +270,15 @@ def _drive_and_persist(
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
                 reasoning_tokens=outcome.reasoning_tokens,
-                latency_s=outcome.latency_s,
+                latency_s=None if marks.cache_hit else outcome.latency_s,
                 output_text=outcome.output_text,
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
+                cache_hit=marks.cache_hit,
+                cache_source_phase=marks.cache_source_phase,
+                cache_source_unit=marks.cache_source_unit,
+                cache_source_call_id=marks.cache_source_call_id,
+                cache_source_at=marks.cache_source_at,
             )
         )
     return outcome
@@ -297,6 +334,7 @@ def run_d1_eval(
     store: ObjectStore | None = None,
     partial_log: PartialLog | None = None,
     split_role: str = "cell",
+    cache: PromptResultCache | None = None,
 ) -> D1EvalResult:
     """Drive ``candidate_body`` over a d1 split -> the pass-rate aggregate.
 
@@ -337,6 +375,7 @@ def run_d1_eval(
                 scorer=scorer,
                 partial_log=partial_log,
                 split_role=split_role,
+                cache=cache,
             ),
             deadline_seconds=_deadline(execution_policy),
         )

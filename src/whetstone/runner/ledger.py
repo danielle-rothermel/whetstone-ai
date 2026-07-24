@@ -46,6 +46,7 @@ __all__ = [
     "CellTelemetry",
     "EnvOfficialCache",
     "Ledger",
+    "PromptCacheControls",
     "SpendRecord",
     "cell_key",
 ]
@@ -157,6 +158,29 @@ class CellControls(BaseModel):
 
     temperature: float | None = None
     reasoning_effort: StrictStr | None = None
+    #: Task 31: the RECORDING-only prompt-cache marker for this cell. ``None``
+    #: when the opt-in ``--prompt-cache`` flag was OFF (the strict default), so
+    #: a run without it is byte-identical. It NEVER participates in identity
+    #: (like the sampling values above are recording-only mirrors) -- it merely
+    #: records that the cache was on and the hit/miss/store counters observed.
+    prompt_cache: PromptCacheControls | None = None
+
+
+class PromptCacheControls(BaseModel):
+    """Recording-only prompt-cache telemetry for a cell (task 31).
+
+    Present ONLY when ``--prompt-cache`` was on. ``enabled`` is always True
+    when present; ``hits`` / ``misses`` / ``stores`` are the run-scoped store's
+    counters observed by this cell (a hit reused a stored Result; a miss drove
+    the transport then stored it). RECORDING-only: never folds into any hash.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    enabled: bool = True
+    hits: int = 0
+    misses: int = 0
+    stores: int = 0
 
 
 class CellArtifacts(BaseModel):

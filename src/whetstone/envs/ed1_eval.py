@@ -78,9 +78,15 @@ from whetstone.envs.internal_eval import RolloutOutput
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
 from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
 from whetstone.execution.partials import PartialCallRecord, PartialLog
+from whetstone.execution.prompt_cache import (
+    CacheProvenance,
+    PromptResultCache,
+    execute_call,
+    partial_cache_marks,
+)
 from whetstone.graph.character_budget import CharacterBudgetRule
 from whetstone.optimization.reward import Reward
-from whetstone.provider.driver import TransportCall, run_provider_call
+from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 
@@ -197,6 +203,14 @@ class _Ed1RowOutcome:
     #: scoring) is NOT redrivable (re-driving the same input will not change a
     #: deterministic "no").
     redrivable: bool = False
+    #: Task-31 prompt-cache honesty. A DUAL ed1 row is ``cache_hit`` True only
+    #: when BOTH the encoder AND decoder calls were served from cache (no wire
+    #: call at all this time -> latency nulled). If either leg was freshly
+    #: driven the row's latency is genuine and ``cache_hit`` is False.
+    #: ``cache_provenance`` refs the ENCODER entry's original source on a full
+    #: hit (the row's primary provenance), else ``None``.
+    cache_hit: bool = False
+    cache_provenance: CacheProvenance | None = None
 
     @property
     def over_budget(self) -> bool | None:
@@ -282,6 +296,10 @@ def _drive_row(
     transport: TransportCall,
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
+    repeat_index: int,
+    cache: PromptResultCache | None,
+    cache_phase: str,
+    cache_unit: str,
 ) -> _Ed1RowOutcome:
     """Run one enc->dec->score rollout for one (task, repeat)."""
     input_code = instance.prompt_inputs["input_code"]
@@ -302,11 +320,14 @@ def _drive_row(
             failed=True, failure_code="encoder_render_error",
             max_budget=max_budget, encoder_len=None,
         )
-    enc = run_provider_call(
+    enc_exec = execute_call(
         request=_request(provider_call_config, encoder_prompt),
         policy=execution_policy, transport=transport,
         logical_call_id=f"{logical_call_id}:enc",
+        repeat_index=repeat_index, cache=cache,
+        phase=cache_phase, unit=cache_unit,
     )
+    enc = enc_exec.result
     if not enc.succeeded or enc.generation is None:
         from whetstone.execution.call_support import (
             failure_code_of,
@@ -323,11 +344,18 @@ def _drive_row(
     encoder_text = enc.generation.text
     encoder_len = len(encoder_text)
     decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
-    dec = run_provider_call(
+    dec_exec = execute_call(
         request=_request(provider_call_config, decoder_prompt),
         policy=execution_policy, transport=transport,
         logical_call_id=f"{logical_call_id}:dec",
+        repeat_index=repeat_index, cache=cache,
+        phase=cache_phase, unit=cache_unit,
     )
+    dec = dec_exec.result
+    # A DUAL row is a full cache hit only when BOTH legs were served (no wire
+    # call this time); the encoder entry is the row's primary provenance.
+    row_cache_hit = enc_exec.cache_hit and dec_exec.cache_hit
+    row_cache_prov = enc_exec.provenance if row_cache_hit else None
     if not dec.succeeded or dec.generation is None:
         from whetstone.execution.call_support import (
             failure_code_of,
@@ -361,6 +389,7 @@ def _drive_row(
             reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
             max_budget=max_budget, encoder_len=encoder_len,
             finish_reason=dec_tel.finish_reason,
+            cache_hit=row_cache_hit, cache_provenance=row_cache_prov,
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
@@ -375,6 +404,7 @@ def _drive_row(
         reasoning_tokens=tel.reasoning_tokens, latency_s=tel.latency_s,
         max_budget=max_budget, encoder_len=encoder_len,
         finish_reason=dec_tel.finish_reason,
+        cache_hit=row_cache_hit, cache_provenance=row_cache_prov,
     )
 
 
@@ -412,6 +442,7 @@ def _drive_and_persist(
     scorer: Callable[..., CodeScore],
     partial_log: PartialLog | None,
     split_role: str,
+    cache: PromptResultCache | None = None,
 ) -> _Ed1RowOutcome:
     """Drive one ed1 row and append its partial record the instant it finishes.
 
@@ -430,8 +461,18 @@ def _drive_and_persist(
         transport=transport,
         scorer=scorer,
         logical_call_id=f"{candidate_id}:{instance.id}#{index}",
+        repeat_index=index,
+        cache=cache,
+        cache_phase=split_role,
+        cache_unit=candidate_id,
     )
     if partial_log is not None:
+        # Task 31 honesty: a full DUAL cache hit carries the cache marker + the
+        # encoder entry's original provenance. (The ed1 partial row does not
+        # persist latency, so there is no fabricated-latency concern here.)
+        marks = partial_cache_marks(
+            outcome.cache_hit, outcome.cache_provenance
+        )
         partial_log.append(
             PartialCallRecord(
                 phase=split_role,
@@ -453,6 +494,11 @@ def _drive_and_persist(
                 output_text=outcome.decoder_text,
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
+                cache_hit=marks.cache_hit,
+                cache_source_phase=marks.cache_source_phase,
+                cache_source_unit=marks.cache_source_unit,
+                cache_source_call_id=marks.cache_source_call_id,
+                cache_source_at=marks.cache_source_at,
             )
         )
     return outcome
@@ -631,6 +677,7 @@ def run_ed1_eval(
     store: ObjectStore | None = None,
     partial_log: PartialLog | None = None,
     split_role: str = "cell",
+    cache: PromptResultCache | None = None,
 ) -> Ed1EvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
@@ -678,6 +725,7 @@ def run_ed1_eval(
                 scorer=scorer,
                 partial_log=partial_log,
                 split_role=split_role,
+                cache=cache,
             ),
             deadline_seconds=_deadline(execution_policy),
         )
