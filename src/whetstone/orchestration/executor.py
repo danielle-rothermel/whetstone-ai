@@ -384,9 +384,9 @@ class ExecutorContext:
         it must equal one observation's ``evidence_ref``. A Content Hash of the
         stable evidence dict is deterministic and collision-free.
         """
-        from dr_serialize import sha256_json_digest
+        from dr_serialize import json_hash
 
-        return sha256_json_digest(evidence.to_stable_dict())
+        return json_hash(evidence.to_stable_dict())
 
     @staticmethod
     def _classification_label(attempt: Any) -> str:

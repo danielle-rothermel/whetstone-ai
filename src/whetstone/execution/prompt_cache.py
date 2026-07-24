@@ -54,7 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from dr_providers import ProviderCallRequest
-from dr_serialize import build_identity_document, identity_hash
+from dr_serialize import build_identity_document, identity_document_hash
 from pydantic import ValidationError
 
 from whetstone.provider.attempt import ProviderCallResult
@@ -137,7 +137,7 @@ def prompt_cache_key(
             "repeat_index": repeat_index,
         },
     )
-    return identity_hash(document)
+    return identity_document_hash(document)
 
 
 @dataclass(frozen=True, slots=True)

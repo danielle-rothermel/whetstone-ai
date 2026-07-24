@@ -143,9 +143,9 @@ def work_key_for_execution_key(key: RolloutExecutionKey) -> WorkKey:
     The platform key alphabet is restricted, so the canonical key encoding is
     hashed to a stable, collision-free platform work key.
     """
-    from dr_serialize import sha256_json_digest
+    from dr_serialize import json_hash
 
-    digest = sha256_json_digest(
+    digest = json_hash(
         {"rollout_execution_key": encode_rollout_execution_key(key)},
         length=48,
     )
