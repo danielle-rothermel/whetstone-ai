@@ -403,7 +403,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dr-serialize", specifier = ">=0.1.0" },
+    { name = "dr-serialize", specifier = ">=0.1.0,<0.2.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
 ]
 
@@ -448,33 +448,15 @@ dev = [
 [[package]]
 name = "dr-providers"
 version = "0.2.0"
-source = { editable = "../dr-providers" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "httpx" },
     { name = "pydantic" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "dr-serialize", specifier = ">=0.1.0" },
-    { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.121" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "typer", marker = "extra == 'cli'", specifier = ">=0.26.7" },
-    { name = "typer", marker = "extra == 'serve'", specifier = ">=0.26.7" },
-    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.35" },
-]
-provides-extras = ["cli", "serve"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "pre-commit", specifier = ">=4.6.0" },
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = ">=0.15.18" },
-    { name = "ty", specifier = ">=0.0.51" },
-    { name = "typer", specifier = ">=0.26.7" },
+sdist = { url = "https://files.pythonhosted.org/packages/fd/74/1c3efe265811dbacde684c62be3d4d249f54662bc49af9fdb2bc3fc352db/dr_providers-0.2.0.tar.gz", hash = "sha256:840ccecb66c54c8023c1861a85e42a504b3f65fdc71e6dd84dbbfe4fc589817a", size = 39850, upload-time = "2026-07-24T10:12:17.47Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/9b/fd7781b70d2120fc9cbd7d8e98d333c33c1117bdbc8c94aa514df7279534/dr_providers-0.2.0-py3-none-any.whl", hash = "sha256:f091fa76f98883ec42740d3fda3b3e77362c2047f0520aa68a8d150dea2203e9", size = 52571, upload-time = "2026-07-24T10:12:16.355Z" },
 ]
 
 [[package]]
@@ -2230,7 +2212,7 @@ requires-dist = [
     { name = "dr-code", editable = "../dr-code" },
     { name = "dr-graph", editable = "../dr-graph" },
     { name = "dr-platform", editable = "../dr-platform" },
-    { name = "dr-providers", editable = "../dr-providers" },
+    { name = "dr-providers", specifier = ">=0.2.0,<0.3" },
     { name = "dr-serialize", specifier = ">=0.1.0" },
     { name = "dr-store", specifier = ">=0.1.0" },
     { name = "whetstone-envs", editable = "../whetstone-envs" },

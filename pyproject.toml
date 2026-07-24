@@ -10,7 +10,7 @@ dependencies = [
     "dr-code",
     "dr-graph",
     "dr-platform",
-    "dr-providers",
+    "dr-providers>=0.2.0,<0.3",
     "dr-serialize>=0.1.0",
     "dr-store>=0.1.0",
     "whetstone-envs",
@@ -34,13 +34,11 @@ dev = [
 #   dr-code = { git = "https://github.com/danielle-rothermel/dr-code", branch = "main" }
 #   dr-graph = { git = "https://github.com/danielle-rothermel/dr-graph", branch = "main" }
 #   dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", branch = "main" }
-#   dr-providers = { git = "https://github.com/danielle-rothermel/dr-providers", rev = "befbef782f249c6a517f34fb6965d4e10b74cf29" }
 #   whetstone-envs = { git = "https://github.com/danielle-rothermel/whetstone-envs", branch = "main" }
 [tool.uv.sources]
 dr-code = { path = "../dr-code", editable = true }
 dr-graph = { path = "../dr-graph", editable = true }
 dr-platform = { path = "../dr-platform", editable = true }
-dr-providers = { path = "../dr-providers", editable = true }
 whetstone-envs = { path = "../whetstone-envs", editable = true }
 
 [project.scripts]
