@@ -13,6 +13,8 @@ dependencies = [
     "dr-providers>=0.2.0,<0.3",
     "dr-serialize>=0.1.0,<0.2",
     "dr-store>=0.1.0,<0.2",
+    "numpy>=2.5.1",
+    "zstandard>=0.25.0",
 ]
 
 [dependency-groups]
