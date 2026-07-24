@@ -9,7 +9,11 @@ from dr_store import ObjectStore
 
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import InternalEvalResult, run_internal_eval
-from whetstone.envs.rollout_definition import validate_candidate_prompt
+from whetstone.envs.registry import env_spec
+from whetstone.envs.rollout_definition import (
+    render_prompt,
+    validate_candidate_prompt,
+)
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.evaluation.schema import (
     EVALUATION_EVIDENCE_SCHEMA,
@@ -105,8 +109,6 @@ class EvaluationEngine:
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
-        from whetstone.envs.registry import env_spec
-
         validate_candidate_prompt(
             env_spec(self.experiment.env_name),
             candidate,
@@ -157,12 +159,20 @@ class EvaluationEngine:
         if persisted_eval != eval_ref.record_ref:
             raise ValueError("persisted Eval Config reference diverged")
         aggregate = result.aggregate
+        instance_by_id = {
+            instance.id: instance for instance in self.sampling.instances
+        }
         output_record = {
             "candidate_id": request.candidate.candidate_id,
             "outputs": [
                 {
                     "candidate_id": row.candidate_id,
                     "instance_id": row.instance_id,
+                    "rendered_prompt": render_prompt(
+                        env_spec(self.experiment.env_name),
+                        request.candidate,
+                        instance_by_id[row.instance_id],
+                    ),
                     "repeat": row.repeat,
                     "output_text": row.output_text,
                     "score": row.score,
