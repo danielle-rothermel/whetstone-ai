@@ -41,6 +41,7 @@ from whetstone.optimization.identity import compute_identity_hash
 __all__ = [
     "REWARD_POLICY_SCHEMA",
     "REWARD_POLICY_SCHEMA_VERSION",
+    "REWARD_RECORD_SCHEMA",
     "MissingDataPolicy",
     "OfficialRewardError",
     "Reward",
@@ -50,6 +51,7 @@ __all__ = [
     "apply_reward_policy",
 ]
 
+REWARD_RECORD_SCHEMA = "whetstone.reward"
 REWARD_POLICY_SCHEMA = "whetstone.reward_policy"
 REWARD_POLICY_SCHEMA_VERSION = 1
 

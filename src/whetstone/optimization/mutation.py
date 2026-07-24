@@ -18,6 +18,7 @@ attempt cap or fails the Step per its cardinality rule.
 from __future__ import annotations
 
 import string
+from collections import Counter
 from collections.abc import Iterable
 
 from whetstone.optimization.proposer import ProposalDraft
@@ -82,6 +83,7 @@ def candidate_from_draft(
     candidate_id: str,
     draft: ProposalDraft,
     valid_template_keys: Iterable[str],
+    required_template_keys: Iterable[str] = (),
 ) -> Candidate:
     """The sole draft-to-candidate validation path.
 
@@ -93,13 +95,30 @@ def candidate_from_draft(
         raise ProposalValidationError(
             draft.failure_detail or "proposer failed without detail"
         )
-    invalid = invalid_template_placeholders(
-        draft.template, valid_template_keys
-    )
+    try:
+        invalid = invalid_template_placeholders(
+            draft.template, valid_template_keys
+        )
+    except ValueError as exc:
+        raise ProposalValidationError(
+            f"proposal template has malformed placeholders: {exc}"
+        ) from exc
     if invalid:
         raise ProposalValidationError(
             "proposal template contains unavailable placeholders: "
             + ", ".join(invalid)
+        )
+    proposed_fields = Counter(template_placeholder_fields(draft.template))
+    required_fields = Counter(required_template_keys)
+    missing = tuple(
+        field
+        for field, count in required_fields.items()
+        if proposed_fields[field] < count
+    )
+    if missing:
+        raise ProposalValidationError(
+            "proposal template removes required placeholders: "
+            + ", ".join(missing)
         )
     proposed = Candidate(
         candidate_id=candidate_id,
