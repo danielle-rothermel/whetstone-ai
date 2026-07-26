@@ -35,6 +35,7 @@ def test_optimization_root_contains_only_shared_orchestration() -> None:
         "run_store.py",
     }
     assert _package_directories(root) == {
+        "codex",
         "copro",
         "gepa",
         "miprov2",
