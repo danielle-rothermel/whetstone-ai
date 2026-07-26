@@ -1,0 +1,65 @@
+{
+  "schema": "whetstone.gepa.upstream_source_manifest",
+  "schema_version": 1,
+  "distribution": {
+    "name": "gepa",
+    "version": "0.1.1",
+    "wheel_sha256": "71ead7c591eafcc727b83509cdc4182f20264800a6ddf8520d61419daeb47466",
+    "sdist_sha256": "643fda01c23de4c9f01306e01305dd69facc29bcb34ad59e4cd07e6621d34aa1"
+  },
+  "repository": {
+    "tag": "v0.1.1",
+    "commit": "b4dbb55b7601dac448cdb836d5a401ca7d9eb920"
+  },
+  "license": {
+    "expression": "MIT",
+    "file": "gepa-0.1.1.dist-info/licenses/LICENSE",
+    "sha256": "10c47467a961feb40adf3294fe27dd9cba79d4d1b7cf27173b1c34586d4126c3"
+  },
+  "public_apis": [
+    {
+      "symbol": "gepa.optimize",
+      "purpose": "Run the unmodified upstream optimization engine."
+    },
+    {
+      "symbol": "gepa.EvaluationBatch",
+      "purpose": "Carry ordered adapter evaluation outputs, scores, and traces."
+    },
+    {
+      "symbol": "gepa.GEPAAdapter",
+      "purpose": "Type the only task-evaluation and proposal integration seam."
+    },
+    {
+      "symbol": "gepa.GEPAResult",
+      "purpose": "Preserve the complete upstream algorithm result."
+    }
+  ],
+  "internal_apis": [],
+  "source_files": {
+    "gepa/__init__.py": "61cdac47f24d1f24315b8beb8d65e834a67a2a7a6cf9b667ecf6c669ddc6f4a6",
+    "gepa/adapters/default_adapter/default_adapter.py": "9d46f2670bf5e7b536151b2ef89b2ca4fa61ba99d0306d54f0dbe983f8700e18",
+    "gepa/api.py": "839d1c6020e84f79834f21936bab7fe1e3dc9c4f9fc3c9e556e23ed2e4297d3b",
+    "gepa/core/adapter.py": "ebe0ff1c63b7f6f6b69f1d47e60294674e6e6ebed4e963cc89962a233315ee90",
+    "gepa/core/callbacks.py": "10558d1afb1cf5ab511b0df3dab547db53e38d1aa0050ee2c4cc9c3b1f738408",
+    "gepa/core/data_loader.py": "b1343c92ca654bca51d42819d1b2e4b0edfa3c40124e3316ed060297837810bd",
+    "gepa/core/engine.py": "92627720354261b9eb5359337b9b237a2a29ebf179b22a4b724b737bde81a088",
+    "gepa/core/result.py": "5ee9ccfdf31e2d4d1262793c569e44ef7b39659a3e971e4f3dc7d656d69a1d85",
+    "gepa/core/state.py": "08108908eb922808c2ad134c9717d32b107581a5766e6b99199c248d538999e5",
+    "gepa/gepa_utils.py": "60aca7024e31a3e273a01187a6329f381f297a77ec7b6add4b9c90b4d64e9b6c",
+    "gepa/logging/experiment_tracker.py": "3b7f6ca3f94311dab198152f87773f0e2de2d443f66be0ed79d74050314e4de9",
+    "gepa/logging/logger.py": "10977fa9f2b28a708ad2416f00d129dfdfb18200883bee1c5d6fe0a91b003d4a",
+    "gepa/logging/utils.py": "43f488abf884b363083d2f76b288cb517c30f03e893322321857a28aa9c2e536",
+    "gepa/proposer/base.py": "ca6a4c6cac51d263ab497d6588f1a7708e823c6e115fb2b7e3ba29945bf46daa",
+    "gepa/proposer/merge.py": "cd0a3254927e399d0cae4a212076f7577161027b3c4ff19d03c3d2150408ee5a",
+    "gepa/proposer/reflective_mutation/base.py": "373b891ca58d0632f1cde6e0bf76f432e165f4507626a9138de076481ef74ed7",
+    "gepa/proposer/reflective_mutation/reflective_mutation.py": "23d5a6507d6a2f329943f94e440a5d2aba7460be3187d3c5529ab8ab82af4338",
+    "gepa/strategies/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "gepa/strategies/batch_sampler.py": "b9323860533d7f8e6a2c488ba3a5e7f41c06496415f26230fc76c96d42a05add",
+    "gepa/strategies/candidate_selector.py": "c2565e251d0cdc00d7548dde7fd0316190c97a64bc130ea86ea6e2fc8a232cfd",
+    "gepa/strategies/component_selector.py": "248cc6eb125eeddaa98f90b7780db2754ec0444a6143aeb1f97ff5660cf39568",
+    "gepa/strategies/eval_policy.py": "a54c5969ac47b82c5699e2bc0077ed09efbb046fa077661c10e8ed5f356055ce",
+    "gepa/strategies/instruction_proposal.py": "c3848586365c546afdbfb7ffd6f80b6f49def7575821ff352a29bbcf624bd977",
+    "gepa/utils/__init__.py": "191f199ec6f328421943ff23676301279ed628c2a8ff62965456c91e0995ad02",
+    "gepa/utils/stop_condition.py": "3f18fa989a376711dc198d60963dc9b866da6d5a81f5c5339e242b3301764a0c"
+  }
+}

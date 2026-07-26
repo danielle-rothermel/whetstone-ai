@@ -12,7 +12,7 @@ exceptions.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal
 
 from dr_providers import (
     MessageRole,
@@ -44,6 +44,7 @@ __all__ = [
     "OUTPUT_FIELD_TEXT",
     "PlainPromptAdapter",
     "ProviderResult",
+    "StructuredPromptAdapter",
     "provider_call_config_with_parameters",
     "provider_call_request_from_parameters",
     "provider_result_from_response",
@@ -94,6 +95,57 @@ class PlainPromptAdapter(BaseModel):
 
     def output_from_result(self, result: ProviderResult) -> dict[str, str]:
         return {self.output_field: result.text}
+
+
+class _TransientStructuredPromptMessage(PromptMessage):
+    """Ephemeral kernel bridge; durable state uses strict JSON envelopes."""
+
+    content: StrictStr | tuple[dict[str, Any], ...]
+
+    def provider_dict(self) -> dict[str, Any]:
+        return {"role": self.role.value, "content": self.content}
+
+    def identity_payload(self) -> dict[str, Any]:
+        return self.provider_dict()
+
+
+class StructuredPromptAdapter(PlainPromptAdapter):
+    """Identity-bound text or ordered structured-content adapter."""
+
+    content_mode: Literal["text_and_structured_parts/v1"] = (
+        "text_and_structured_parts/v1"
+    )
+
+    def messages_from_records(
+        self,
+        records: tuple[dict[str, Any], ...],
+    ) -> tuple[PromptMessage, ...]:
+        messages: list[PromptMessage] = []
+        for record in records:
+            if set(record) != {"role", "content"}:
+                raise ValueError(
+                    "structured prompt messages require role and content"
+                )
+            role = MessageRole(record["role"])
+            raw_content = record["content"]
+            if isinstance(raw_content, str):
+                content: str | tuple[dict[str, Any], ...] = raw_content
+            elif isinstance(raw_content, (list, tuple)) and raw_content:
+                if any(not isinstance(part, dict) for part in raw_content):
+                    raise ValueError(
+                        "structured prompt content parts must be objects"
+                    )
+                content = tuple(dict(part) for part in raw_content)
+            else:
+                raise ValueError(
+                    "structured prompt content must be text or content parts"
+                )
+            messages.append(
+                _TransientStructuredPromptMessage(role=role, content=content)
+            )
+        if not messages:
+            raise ValueError("structured prompt messages cannot be empty")
+        return tuple(messages)
 
 
 def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from whetstone.lm.boundary import (
     PlainPromptAdapter,
+    StructuredPromptAdapter,
     provider_call_request_from_parameters,
     provider_result_from_response,
 )
@@ -487,9 +488,25 @@ class ProviderProposerTransport:
                 "Proposer Config"
             )
 
+        raw_messages = request.context.get("proposal_messages")
+        if raw_messages is None:
+            messages = self._prompt_adapter.messages(user_content=prompt)
+        else:
+            if not isinstance(self._prompt_adapter, StructuredPromptAdapter):
+                raise ValueError(
+                    "structured proposer messages require the identity-bound "
+                    "StructuredPromptAdapter"
+                )
+            if not isinstance(raw_messages, list):
+                raise ValueError(
+                    "proposal_messages must be an ordered JSON list"
+                )
+            messages = self._prompt_adapter.messages_from_records(
+                tuple(raw_messages)
+            )
         provider_request = provider_call_request_from_parameters(
             config=provider_config,
-            messages=self._prompt_adapter.messages(user_content=prompt),
+            messages=messages,
             parameters={"temperature": config.temperature},
         )
 
