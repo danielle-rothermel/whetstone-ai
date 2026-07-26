@@ -37,7 +37,11 @@ from whetstone.provider.driver import (
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 if TYPE_CHECKING:
-    from dr_providers import ProviderCallConfig, ProviderCallRequest
+    from dr_providers import (
+        ProviderCallConfig,
+        ProviderCallRequest,
+        ProviderInvocationEvidence,
+    )
 
 __all__ = [
     "PROMPT_ADAPTER_SCHEMA",
@@ -50,6 +54,8 @@ __all__ = [
     "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION",
     "DurableProposalExecutor",
     "FakeProposerTransport",
+    "IdempotentTransportCall",
+    "PhysicalAttemptExecutor",
     "ProposalDraft",
     "ProposalExecutorDurabilityContract",
     "ProposalRequest",
@@ -57,6 +63,7 @@ __all__ = [
     "ProposerTransport",
     "ProviderCallConfigResolver",
     "ProviderProposerTransport",
+    "RetryDurableProposerTransport",
     "prompt_adapter_identity_hash",
 ]
 
@@ -363,6 +370,58 @@ def _durable_proposal_executor(
 
 
 ProviderCallConfigResolver = Callable[[IdentityRef], "ProviderCallConfig"]
+PhysicalAttemptExecutor = Callable[
+    [
+        TransportCall,
+        "ProviderCallRequest",
+        str,
+        int,
+    ],
+    "ProviderInvocationEvidence",
+]
+
+
+@runtime_checkable
+class IdempotentTransportCall(Protocol):
+    """A physical provider transport accepting a stable attempt key."""
+
+    @property
+    def idempotency_policy_identity_hash(self) -> str: ...
+
+    def invoke_idempotent(
+        self,
+        request: ProviderCallRequest,
+        *,
+        idempotency_key: str,
+    ) -> ProviderInvocationEvidence: ...
+
+
+@runtime_checkable
+class RetryDurableProposerTransport(Protocol):
+    """A proposer whose physical attempts can be checkpointed separately."""
+
+    @property
+    def supports_provider_idempotency(self) -> bool: ...
+
+    @property
+    def durability_identity_hash(self) -> str: ...
+
+    def draft_with_attempt_executor(
+        self,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        count: int,
+        *,
+        execute_attempt: PhysicalAttemptExecutor,
+        sleep: Sleep,
+    ) -> tuple[ProposalDraft, ...]: ...
+
+    def invoke_physical_attempt(
+        self,
+        request: ProviderCallRequest,
+        *,
+        idempotency_key: str | None,
+    ) -> ProviderInvocationEvidence: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -428,6 +487,12 @@ class ProviderProposerTransport:
         return prompt_adapter_identity_hash(self._prompt_adapter)
 
     @property
+    def supports_provider_idempotency(self) -> bool:
+        """Whether the physical transport has a real idempotency contract."""
+
+        return isinstance(self._transport, IdempotentTransportCall)
+
+    @property
     def durability_identity_hash(self) -> str:
         """Identify the exact capability a durable executor may invoke."""
 
@@ -451,6 +516,61 @@ class ProviderProposerTransport:
         config: ProposerConfig,
         request: ProposalRequest,
         count: int,
+    ) -> tuple[ProposalDraft, ...]:
+        return self._draft(
+            config,
+            request,
+            count,
+            execute_attempt=None,
+            sleep=self._sleep,
+        )
+
+    def draft_with_attempt_executor(
+        self,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        count: int,
+        *,
+        execute_attempt: PhysicalAttemptExecutor,
+        sleep: Sleep,
+    ) -> tuple[ProposalDraft, ...]:
+        """Run retries with one caller-owned boundary per physical attempt."""
+
+        return self._draft(
+            config,
+            request,
+            count,
+            execute_attempt=execute_attempt,
+            sleep=sleep,
+        )
+
+    def invoke_physical_attempt(
+        self,
+        request: ProviderCallRequest,
+        *,
+        idempotency_key: str | None,
+    ) -> ProviderInvocationEvidence:
+        """Invoke exactly one physical transport attempt."""
+
+        if idempotency_key is None:
+            return self._transport(request)
+        if not isinstance(self._transport, IdempotentTransportCall):
+            raise RuntimeError(
+                "physical proposer transport does not support idempotency"
+            )
+        return self._transport.invoke_idempotent(
+            request,
+            idempotency_key=idempotency_key,
+        )
+
+    def _draft(
+        self,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        count: int,
+        *,
+        execute_attempt: PhysicalAttemptExecutor | None,
+        sleep: Sleep | None,
     ) -> tuple[ProposalDraft, ...]:
         if type(count) is not int or count < 1:
             raise ValueError("proposer draft count must be a positive integer")
@@ -497,6 +617,8 @@ class ProviderProposerTransport:
                 provider_request=provider_request,
                 count=count,
                 slot=slot,
+                execute_attempt=execute_attempt,
+                sleep=sleep,
             )
             for slot in range(count)
         )
@@ -514,6 +636,8 @@ class ProviderProposerTransport:
         provider_request: ProviderCallRequest,
         count: int,
         slot: int,
+        execute_attempt: PhysicalAttemptExecutor | None = None,
+        sleep: Sleep | None = None,
     ) -> ProposalDraft:
         logical_call_id = (
             f"proposer:{config.identity_hash()}:"
@@ -521,13 +645,30 @@ class ProviderProposerTransport:
             f"{self.prompt_adapter_identity_hash}:"
             f"{proposal_request.identity_hash()}:{slot}"
         )
+        attempt_number = 0
+
+        def invoke(request: ProviderCallRequest) -> ProviderInvocationEvidence:
+            nonlocal attempt_number
+            attempt_number += 1
+            if execute_attempt is None:
+                return self._transport(request)
+            return execute_attempt(
+                self._transport,
+                request,
+                logical_call_id,
+                attempt_number,
+            )
+
+        durable_clock = (
+            None if execute_attempt is None else lambda: float(attempt_number)
+        )
         result = run_provider_call(
             request=provider_request,
             policy=self._execution_policy,
-            transport=self._transport,
+            transport=invoke,
             logical_call_id=logical_call_id,
-            clock=self._clock,
-            sleep=self._sleep,
+            clock=self._clock if durable_clock is None else durable_clock,
+            sleep=sleep,
         )
         request_evidence = {
             "logical_call_id": logical_call_id,
@@ -645,6 +786,12 @@ class FakeProposerTransport:
     @property
     def prompt_adapter_identity_hash(self) -> str:
         return self._prompt_adapter_identity_hash
+
+    @property
+    def supports_provider_idempotency(self) -> bool:
+        """The scripted fake never carries a provider idempotency contract."""
+
+        return False
 
     @property
     def durability_identity_hash(self) -> str:
