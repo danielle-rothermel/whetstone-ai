@@ -47,7 +47,7 @@ def procedure_config(
         definition_id="pre",
         version="1",
         steps=(
-            PreprocessingStepBinding(instance_name="sf", step="select_first"),
+            PreprocessingStepBinding(instance_name="ra", step="return_all"),
         ),
     ).materialize()
     metric = MetricExtractionDefinition(
