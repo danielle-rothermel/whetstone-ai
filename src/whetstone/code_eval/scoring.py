@@ -1,15 +1,9 @@
 """Whetstone code-eval Score / Metric Fact derivations.
 
-Three experiment-specific derivations over dr-code's kernel primitives.
+Two experiment-specific derivations over dr-code's kernel primitives.
 Whetstone owns these; dr-code owns the generic ``compression_ratio``,
 ``MetricFact``, and ``Score`` types they build on.
 
-* **Binary Test Pass Score** — a Whetstone :class:`~dr_code.eval.Score` equal
-  to ``1`` when Candidate Correctness ``PASSED`` and ``0`` when it is a
-  ``DEFINITIVE_TEST_FAILURE`` (or any other definitive non-passing scorable
-  outcome). An infrastructure-unknown correctness result has **no** Binary
-  Test Pass Score — deriving one raises, so the rollout fails instead of
-  producing a spurious ``0``.
 * **Compressed Description Length** — a Whetstone
   :class:`~dr_code.eval.MetricFact` equal to the nonnegative integer byte
   count produced by **zstd level 19** over the exact encoder Generation
@@ -35,60 +29,15 @@ from dr_code.eval import (
     compression_ratio,
 )
 
-from whetstone.code_eval.correctness import (
-    CorrectnessOutcome,
-    CorrectnessResult,
-)
-
 #: The pinned zstd level for Compressed Description Length. Fixed by the
 #: experiment; a level change is a deliberate breaking measurement change.
 ZSTD_LEVEL = 19
 
-BINARY_TEST_PASS_SCORE_NAME = "binary_test_pass"
 COMPRESSED_DESCRIPTION_LENGTH_NAME = "compressed_description_length"
 COMPRESSION_RATIO_NAME = "compression_ratio"
 
-_BINARY_UNIT = "pass"
 _BYTES_UNIT = "bytes"
 _RATIO_UNIT = "ratio"
-
-
-class InfrastructureUnknownScoreError(ValueError):
-    """Raised when a Binary Test Pass Score is requested for an
-    infrastructure-unknown correctness result.
-
-    Infrastructure uncertainty must fail the rollout, never become score 0.
-    """
-
-
-def binary_test_pass_score(
-    result: CorrectnessResult,
-    *,
-    evaluation_procedure_config_hash: str,
-    derived_from: tuple[str, ...] = (),
-) -> Score:
-    """Derive the Binary Test Pass Score from a Candidate Correctness result.
-
-    ``1`` when correctness ``PASSED``; ``0`` when it is any definitive
-    non-passing scorable outcome (definitive test failure, compile failure,
-    empty set, or an absence cause). Raises
-    :class:`InfrastructureUnknownScoreError` for an infrastructure-unknown
-    result — that case has no score and must terminate the rollout as failed.
-    """
-
-    if result.is_infrastructure_failure:
-        raise InfrastructureUnknownScoreError(
-            "infrastructure-unknown correctness has no Binary Test Pass "
-            "Score; the rollout must fail rather than score 0"
-        )
-    value = 1 if result.outcome is CorrectnessOutcome.PASSED else 0
-    return Score(
-        name=BINARY_TEST_PASS_SCORE_NAME,
-        value=value,
-        unit=_BINARY_UNIT,
-        evaluation_procedure_config_hash=evaluation_procedure_config_hash,
-        derived_from=derived_from,
-    )
 
 
 def compressed_description_length_bytes(encoder_generation: str) -> int:
@@ -171,12 +120,9 @@ def compression_ratio_score(
 
 
 __all__ = [
-    "BINARY_TEST_PASS_SCORE_NAME",
     "COMPRESSED_DESCRIPTION_LENGTH_NAME",
     "COMPRESSION_RATIO_NAME",
     "ZSTD_LEVEL",
-    "InfrastructureUnknownScoreError",
-    "binary_test_pass_score",
     "compressed_description_length_bytes",
     "compressed_description_length_fact",
     "compression_ratio_score",

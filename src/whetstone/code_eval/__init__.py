@@ -1,8 +1,7 @@
 """Whetstone dr-code adapters and experiment derivations.
 
-This package is the Whetstone side of the dr-code ownership move: it consumes
-the released dr-code evaluation kernel (typed candidates, compile-valid Code
-Artifacts, generic compression references, pure aggregation) and adds only the
+This package consumes the released dr-code evaluation kernel's generic
+compression references and pure aggregation primitives, and adds only
 Whetstone-owned experiment policy and boundary roles. It introduces **no**
 duplicate dr-code type, artifact, schema, or identity.
 
@@ -10,11 +9,8 @@ Deliverables:
 
 * **Code Generation / Submission Text** boundary (``submission``) — projects an
   exact decoder Generation into native ``TextArtifact.text``.
-* **Candidate Correctness** (``correctness``) — the all-candidates any-passing
-  policy with distinguishable outcomes; infrastructure-unknown fails the
-  rollout, never scores 0.
-* **Score / Metric Fact derivations** (``scoring``) — Binary Test Pass Score,
-  Compressed Description Length (zstd-19), Compression Ratio.
+* **Score / Metric Fact derivations** (``scoring``) — Compressed Description
+  Length (zstd-19) and Compression Ratio.
 * **Compression Reference Selection** (``compression_selection``) — the
   experiment rule selecting ``task.gt_code_wo_comments`` bytes onto a generic
   dr-code Compression Reference Key.
@@ -47,15 +43,6 @@ from whetstone.code_eval.compression_selection import (
     compression_reference_key,
     select_compression_reference,
 )
-from whetstone.code_eval.correctness import (
-    CandidateEvaluation,
-    CandidateRunner,
-    CandidateVerdict,
-    CorrectnessOutcome,
-    CorrectnessResult,
-    correctness_absent,
-    evaluate_candidate_correctness,
-)
 from whetstone.code_eval.power import (
     DEFAULT_ALPHA,
     DEFAULT_MDD_PLATEAU_EPSILON,
@@ -69,12 +56,9 @@ from whetstone.code_eval.power import (
     analyze_power,
 )
 from whetstone.code_eval.scoring import (
-    BINARY_TEST_PASS_SCORE_NAME,
     COMPRESSED_DESCRIPTION_LENGTH_NAME,
     COMPRESSION_RATIO_NAME,
     ZSTD_LEVEL,
-    InfrastructureUnknownScoreError,
-    binary_test_pass_score,
     compressed_description_length_bytes,
     compressed_description_length_fact,
     compression_ratio_score,
@@ -95,7 +79,6 @@ from whetstone.code_eval.submission import (
 )
 
 __all__ = [
-    "BINARY_TEST_PASS_SCORE_NAME",
     "COMPRESSED_DESCRIPTION_LENGTH_NAME",
     "COMPRESSION_RATIO_NAME",
     "COMPRESSION_REFERENCE_NAMESPACE",
@@ -107,14 +90,8 @@ __all__ = [
     "SELECTED_FIELD",
     "ZSTD_LEVEL",
     "BootstrapCI",
-    "CandidateEvaluation",
-    "CandidateRunner",
-    "CandidateVerdict",
     "CompletenessPolicy",
-    "CorrectnessOutcome",
-    "CorrectnessResult",
     "ExperimentTaskView",
-    "InfrastructureUnknownScoreError",
     "PowerConfig",
     "PowerRecommendation",
     "PowerResult",
@@ -127,7 +104,6 @@ __all__ = [
     "aggregation_definition",
     "analyze_power",
     "average_binary_test_pass_rate",
-    "binary_test_pass_score",
     "bootstrap_delta_ci",
     "bootstrap_mean_ci",
     "bootstrap_paired_delta_ci",
@@ -138,9 +114,7 @@ __all__ = [
     "compression_ratio_value",
     "compression_reference_binding",
     "compression_reference_key",
-    "correctness_absent",
     "enforce_skip_tolerance",
-    "evaluate_candidate_correctness",
     "mean",
     "mean_compression_ratio",
     "resample_indices",

@@ -128,8 +128,8 @@ class RowValue:
 
     #: The measured numeric value, when the row produced one.
     value: float | None = None
-    #: The row's Rollout failed (e.g. exhausted causal failure / rollout
-    #: failure from infrastructure-unknown correctness).
+    #: The row's Rollout failed (for example, an exhausted provider or
+    #: execution-infrastructure failure).
     failed: bool = False
     #: The planned row is absent from the observed matrix.
     missing: bool = False

@@ -1,105 +1,26 @@
-"""Binary Test Pass Score, Compressed Description Length, Compression Ratio."""
+"""Compressed Description Length and Compression Ratio."""
 
 from __future__ import annotations
 
-import pytest
 import zstandard
 from dr_code.eval import (
-    AbsenceMode,
     Applicability,
-    CodeCandidateSet,
     CompressionReferenceArtifact,
-    Score,
 )
 
 from whetstone.code_eval import (
     COMPRESSED_DESCRIPTION_LENGTH_NAME,
     COMPRESSION_RATIO_NAME,
     ZSTD_LEVEL,
-    CandidateVerdict,
-    CorrectnessOutcome,
-    InfrastructureUnknownScoreError,
-    binary_test_pass_score,
     compressed_description_length_bytes,
     compressed_description_length_fact,
     compression_ratio_score,
     compression_ratio_value,
-    correctness_absent,
-    evaluate_candidate_correctness,
 )
 
 from .support import FULL_HASH, operator_lineage
 
 ENCODER_TEXT = "def f(x):\n    return x + 1\n" * 8
-
-
-def _passed_result():
-    cs = CodeCandidateSet.from_sources(
-        ("def f():\n    return 1\n",), origin="t"
-    )
-    return evaluate_candidate_correctness(
-        cs, runner=lambda _a: CandidateVerdict.PASSED
-    )
-
-
-def _failed_result():
-    cs = CodeCandidateSet.from_sources(
-        ("def f():\n    return 1\n",), origin="t"
-    )
-    return evaluate_candidate_correctness(
-        cs, runner=lambda _a: CandidateVerdict.FAILED
-    )
-
-
-def _infra_result():
-    cs = CodeCandidateSet.from_sources(
-        ("def f():\n    return 1\n",), origin="t"
-    )
-    return evaluate_candidate_correctness(
-        cs, runner=lambda _a: CandidateVerdict.INFRASTRUCTURE_UNKNOWN
-    )
-
-
-# --- Binary Test Pass Score ------------------------------------------------
-
-
-def test_binary_score_one_on_any_pass() -> None:
-    score = binary_test_pass_score(
-        _passed_result(), evaluation_procedure_config_hash=FULL_HASH
-    )
-    assert isinstance(score, Score)
-    assert score.value == 1
-
-
-def test_binary_score_zero_on_definitive_fail() -> None:
-    score = binary_test_pass_score(
-        _failed_result(), evaluation_procedure_config_hash=FULL_HASH
-    )
-    assert score.value == 0
-
-
-def test_binary_score_zero_on_absence_causes() -> None:
-    # Compile failure / empty set / absence causes are scorable definitives.
-    for result in (
-        correctness_absent(AbsenceMode.NO_INPUT),
-        correctness_absent(AbsenceMode.EMPTY_CANDIDATE_SET),
-    ):
-        score = binary_test_pass_score(
-            result, evaluation_procedure_config_hash=FULL_HASH
-        )
-        assert score.value == 0
-
-
-def test_binary_score_infrastructure_unknown_raises_not_zero() -> None:
-    # Infrastructure-unknown has NO score: deriving one raises so the rollout
-    # fails rather than producing a spurious 0.
-    result = _infra_result()
-    assert result.outcome is CorrectnessOutcome.INFRASTRUCTURE_FAILURE
-    with pytest.raises(InfrastructureUnknownScoreError):
-        binary_test_pass_score(
-            result, evaluation_procedure_config_hash=FULL_HASH
-        )
-
 
 # --- Compressed Description Length -----------------------------------------
 

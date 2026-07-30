@@ -2,8 +2,8 @@
 
 The adapters consume the released dr-code kernel and add only Whetstone policy
 and boundary roles. They must not redefine dr-code's evaluation-kernel
-contracts (TextArtifact, Code Artifact, candidates, MetricFact, Score,
-compression key/artifact/resolver, Aggregation Output).
+contracts (TextArtifact, MetricFact, Score, compression
+key/artifact/resolver, Aggregation Output).
 """
 
 from __future__ import annotations
@@ -15,11 +15,7 @@ import dr_code.trace as dr_trace
 
 from whetstone.code_eval import (
     BootstrapCI,
-    CandidateEvaluation,
-    CandidateVerdict,
     CompletenessPolicy,
-    CorrectnessOutcome,
-    CorrectnessResult,
     PowerConfig,
     PowerRecommendation,
     PowerResult,
@@ -28,7 +24,6 @@ from whetstone.code_eval import (
     RowValue,
     TaskRows,
     VarianceDecomposition,
-    binary_test_pass_score,
     compressed_description_length_fact,
     compression_ratio_score,
     compression_selection,
@@ -47,11 +42,6 @@ def test_boundary_reuses_dr_code_text_artifact() -> None:
 
 
 def test_scoring_returns_dr_code_score_and_fact_types() -> None:
-    score = binary_test_pass_score(
-        _passed(), evaluation_procedure_config_hash="0" * 64
-    )
-    assert type(score) is dr_eval.Score
-
     fact = compressed_description_length_fact(
         "code", lineage=operator_lineage()
     )
@@ -76,7 +66,7 @@ def test_compression_selection_returns_generic_types() -> None:
 
 
 def test_no_module_redefines_a_dr_code_kernel_type() -> None:
-    dr_code_names = set(dr_eval.__all__) | {"TextArtifact", "CodeArtifact"}
+    dr_code_names = set(dr_eval.__all__) | {"TextArtifact"}
     for module in (
         submission,
         scoring,
@@ -95,20 +85,6 @@ def test_no_module_redefines_a_dr_code_kernel_type() -> None:
                 ), f"{module.__name__}.{name} shadows a dr-code type"
 
 
-def _passed():
-    from whetstone.code_eval import (
-        CandidateVerdict,
-        evaluate_candidate_correctness,
-    )
-
-    cs = dr_eval.CodeCandidateSet.from_sources(
-        ("def f():\n    return 1\n",), origin="t"
-    )
-    return evaluate_candidate_correctness(
-        cs, runner=lambda _a: CandidateVerdict.PASSED
-    )
-
-
 def test_submission_generation_is_whetstone_owned() -> None:
     # Code Generation stays a Whetstone Generation; dr-code never learns it.
     gen = generation(text="x = 1\n")
@@ -119,8 +95,6 @@ def test_submission_generation_is_whetstone_owned() -> None:
 
 def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     value_objects = (
-        CandidateEvaluation(position=0, verdict=CandidateVerdict.PASSED),
-        CorrectnessResult(outcome=CorrectnessOutcome.PASSED),
         CompletenessPolicy(),
         RowValue(value=1.0),
         TaskRows(
@@ -192,8 +166,8 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         naive_mean=0.5,
         ceiling_mean=0.5,
         pool_ceiling=1,
-        decomposition=value_objects[7],
-        recommendation=value_objects[8],
+        decomposition=value_objects[5],
+        recommendation=value_objects[6],
     )
     for value in (aggregate, result):
         assert is_dataclass(value)
