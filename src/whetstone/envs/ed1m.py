@@ -4,7 +4,7 @@ ed1m is the behavioral-mutant variant of ed1 (task 18). It reuses the whole ed1
 enc-dec machinery -- the immutable encoder frame + strategy-body Mutation
 Surface, the decoder, compression scoring, the task-22 weighted-blend reward,
 the no-budget frame, SKIP tolerance, telemetry, dual-score sidecars -- and it
-ONLY the correctness scorer:
+changes only the correctness scorer:
 
   * The encoder's INPUT_CODE is the MUTATED HumanEval+ program (a seeded bug).
   * The decoder reconstructs a program.
@@ -16,16 +16,19 @@ ONLY the correctness scorer:
     snapped to the CANONICAL behavior) is the REPORTED contamination
     measurement, NEVER a reward objective.
 
-The mutant suite is loaded DIRECTLY from ``mutants.jsonl``
-(:mod:`whetstone.envs.ed1m_dataset`) -- no ``dr_code.mutants`` import, so ed1m
-builds/tests WITHOUT a dr-code checkout flip.
+The caller supplies a published mutant artifact directory. The canonical
+dr-code loader authenticates its manifest and records before any experiment
+state is built.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from dr_code.mutants import load_dataset
+from dr_code.mutants.dataset import MutantRecord
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import (
@@ -37,11 +40,6 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
-from whetstone.envs.ed1m_dataset import (
-    Ed1mMutant,
-    ed1m_manifest_identity,
-    load_ed1m_mutants,
-)
 from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 from whetstone.envs.encdec_rollout import build_encdec_rollout_definition
 from whetstone.envs.factory import EnvEvalConfigs
@@ -56,7 +54,7 @@ ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 _ED1M_STRATUM = "ed1m"
 
 
-def _mutant_to_instance(mutant: Ed1mMutant) -> Instance:
+def _mutant_to_instance(mutant: MutantRecord) -> Instance:
     """Pack one mutant as a whetstone Instance (mutated source = INPUT_CODE).
 
     The encoder INPUT_CODE is the MUTATED program; the compression reference is
@@ -65,14 +63,14 @@ def _mutant_to_instance(mutant: Ed1mMutant) -> Instance:
     so the Instance stays a light string carrier.
     """
     return Instance(
-        id=mutant.mutant_id,
+        id=mutant.content_identity,
         seed=mutant.seed,
         strata=(_ED1M_STRATUM,),
         prompt_inputs={
             "input_code": mutant.mutated_full_source,
             "task_id": mutant.task_id,
             "entry_point": mutant.entry_point,
-            "operator_family": mutant.operator_family,
+            "operator_family": mutant.operator_family.value,
         },
         gold=mutant.canonical_full_source,
     )
@@ -90,7 +88,7 @@ class Ed1mExperiment(Ed1Experiment):
     """
 
     #: Per-instance mutant map (Instance id -> the mutant its oracle scores).
-    mutants: dict[str, Ed1mMutant] = field(default_factory=dict)
+    mutants: dict[str, MutantRecord] = field(default_factory=dict)
 
 
 def score_ed1m_row(
@@ -100,8 +98,8 @@ def score_ed1m_row(
 
     Returns a :class:`CodeScore` whose ``fidelity`` (fractional, rewarded)
     + ``attractor_pull`` (reported) come from the per-input oracle. An
-    infrastructure-unknown oracle (subprocess crash/timeout on every input)
-    fails the row (never scores 0), matching the ed1 invariant.
+    infrastructure-unknown oracle failure fails the row (never scores 0),
+    matching the ed1 invariant.
     """
     mutant = experiment.mutants.get(str(instance.id))
     if mutant is None:  # pragma: no cover - guarded by construction
@@ -111,7 +109,7 @@ def score_ed1m_row(
     scorer = experiment.scorer
     if scorer is not None:
         # A test/dry-run may inject a fake scorer taking the reconstruction +
-        # mutant; the production path uses the local subprocess oracle.
+        # mutant; the production path uses the canonical dr-code oracle.
         result = scorer(reconstruction=reconstruction, mutant=mutant)
         if isinstance(result, CodeScore):
             return result
@@ -135,31 +133,38 @@ def score_ed1m_row(
 
 def build_ed1m_experiment(
     *,
+    artifact_dir: Path,
     model: str = ED1M_CANONICAL_MODEL,
     budget_ratio: float | None = None,
-    prefer_snapshot: bool = True,
     limit: int | None = None,
     internal_n: int | None = None,
     official_n: int | None = None,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
     repeats: int = 3,
-    mutants: tuple[Ed1mMutant, ...] | None = None,
     exclude_mutant_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
     scorer: Callable[..., CodeScore] | None = None,
 ) -> Ed1mExperiment:
     """Build the ed1m experiment (mutant enc-dec + dual scoring).
 
-    Loads the behavioral-mutant suite (or uses injected ``mutants`` for tests),
-    packs each mutant as an Instance, and builds the SAME enc-dec rollout +
-    configs / blended reward as ed1 -- with the mutant oracle as the scorer.
-    ``budget_ratio=None`` (the default) uses the no-budget frame. Mirrors
-    ``build_ed1_experiment``'s split + identity handling.
+    Authenticates the caller-provided published dataset, packs its canonical
+    ``MutantRecord`` values as Instances, and builds the same enc-dec rollout,
+    configs, and blended reward as ed1 with the mutant oracle as scorer.
+    ``budget_ratio=None`` (the default) uses the no-budget frame. The
+    manifest's dataset identity is carried as the experiment and split dataset
+    revision.
     """
-    pool = mutants if mutants is not None else load_ed1m_mutants(limit=limit)
+    if not isinstance(artifact_dir, Path):
+        raise TypeError("artifact_dir must be pathlib.Path")
+    loaded = load_dataset(artifact_dir)
+    pool = loaded.records[:limit] if limit is not None else loaded.records
     if exclude_mutant_ids:
-        pool = tuple(m for m in pool if m.mutant_id not in exclude_mutant_ids)
+        pool = tuple(
+            mutant
+            for mutant in pool
+            if mutant.content_identity not in exclude_mutant_ids
+        )
     if not pool:
         raise ValueError("ed1m mutant pool is empty")
 
@@ -171,7 +176,7 @@ def build_ed1m_experiment(
         budget_ratio=budget_ratio,
     )
     all_instances = tuple(_mutant_to_instance(m) for m in pool)
-    mutant_map = {m.mutant_id: m for m in pool}
+    mutant_map = {m.content_identity: m for m in pool}
     n = len(all_instances)
     i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
     internal_instances = all_instances[:i_n]
@@ -184,6 +189,7 @@ def build_ed1m_experiment(
     from whetstone.envs.ed1 import _ed1_split
 
     internal_split = _ed1_split(
+        dataset_revision=loaded.manifest.dataset_identity,
         split_role="internal_eval",
         instances=internal_instances,
         procedure=procedure,
@@ -192,6 +198,7 @@ def build_ed1m_experiment(
         repeats=repeats,
     )
     official_split = _ed1_split(
+        dataset_revision=loaded.manifest.dataset_identity,
         split_role="official",
         instances=official_instances,
         procedure=procedure,
@@ -218,7 +225,7 @@ def build_ed1m_experiment(
         ),
         encdec_rollout=rollout,
         budget_ratio=budget_ratio,
-        dataset_revision=ed1m_manifest_identity() or "unknown",
+        dataset_revision=loaded.manifest.dataset_identity,
         scorer=scorer,
         blend_config=blend_config,
         mutants=mutant_map,

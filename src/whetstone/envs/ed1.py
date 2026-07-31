@@ -56,7 +56,7 @@ from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import aggregation_definition
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.ed1_scoring import ED1_PARSER_PROFILE, CodeScore
 from whetstone.envs.encdec_rollout import (
     EncDecRolloutDefinition,
     build_encdec_rollout_definition,
@@ -353,6 +353,14 @@ def _ed1_metric_extraction_config() -> MetricExtractionConfig:
                     ("dataset", ED1_DATASET_ID),
                     ("revision", ED1_DATASET_REVISION),
                     ("scorer", "dr_code.humaneval.score_humaneval_submission"),
+                    (
+                        "parser_profile_id",
+                        ED1_PARSER_PROFILE.profile_id,
+                    ),
+                    (
+                        "parser_profile_version",
+                        ED1_PARSER_PROFILE.version,
+                    ),
                 ),
             ),
             MetricQuestionBinding(
@@ -401,6 +409,7 @@ def build_ed1_procedure_config(
 
 def _ed1_split(
     *,
+    dataset_revision: str,
     split_role: str,
     instances: tuple[Instance, ...],
     procedure: EvaluationProcedureConfig,
@@ -425,7 +434,7 @@ def _ed1_split(
         namespace = f"{namespace}.{manifest_tag}"
     return derive_split_sampling(
         namespace=namespace,
-        dataset_revision=ED1_DATASET_REVISION,
+        dataset_revision=dataset_revision,
         split_role=split_role,
         instances=instances,
         task_identity_of=lambda instance: str(instance.id),
@@ -683,6 +692,7 @@ def build_ed1_experiment(
         if not official_instances:
             official_instances = internal_instances
     internal_split = _ed1_split(
+        dataset_revision=ED1_DATASET_REVISION,
         split_role="internal_eval",
         instances=internal_instances,
         procedure=procedure,
@@ -692,6 +702,7 @@ def build_ed1_experiment(
         manifest_tag=manifest_tag,
     )
     official_split = _ed1_split(
+        dataset_revision=ED1_DATASET_REVISION,
         split_role="official",
         instances=official_instances,
         procedure=procedure,

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from dr_code.execution import SubprocessStartError
+from dr_code.humaneval import STRICT_FIELD_MARKER_PARSER_PROFILE
 from dr_providers import (
     FailureClass,
     ProviderCallRequest,
@@ -162,6 +164,53 @@ def test_humaneval_scoring_canonical_passes_wrong_fails() -> None:
     )
     assert good.passed and not good.infrastructure_unknown
     assert not bad.passed and not bad.infrastructure_unknown
+
+
+@pytest.mark.parametrize(
+    ("raw_submission", "expected_outcome"),
+    [
+        ("", "empty_submission"),
+        ("x = 1", "no_top_level_functions"),
+        ("```python\nthis is ???\n```", "extraction_failed"),
+    ],
+)
+def test_humaneval_scoring_completed_rejections_are_definitive(
+    raw_submission: str,
+    expected_outcome: str,
+) -> None:
+    task = _tasks(1)[0].humaneval_task
+    score = score_ed1_submission(raw_submission=raw_submission, task=task)
+
+    assert score.outcome == expected_outcome
+    assert score.infrastructure_unknown is False
+
+
+def test_humaneval_scoring_projects_harness_failure() -> None:
+    task = _tasks(1)[0].humaneval_task
+
+    def unavailable(*, source: str, input_text: str, timeout_seconds: float):
+        raise SubprocessStartError("subprocess unavailable")
+
+    harness_failure = score_ed1_submission(
+        raw_submission=task.ground_truth_code,
+        task=task,
+        run_in_subprocess=unavailable,
+    )
+
+    assert harness_failure.outcome == "harness_failure"
+    assert harness_failure.infrastructure_unknown is True
+
+
+def test_humaneval_scoring_honors_explicit_parser_profile() -> None:
+    task = _tasks(1)[0].humaneval_task
+    score = score_ed1_submission(
+        raw_submission=task.ground_truth_code,
+        task=task,
+        parser_profile=STRICT_FIELD_MARKER_PARSER_PROFILE,
+    )
+
+    assert score.outcome == "extraction_failed"
+    assert score.infrastructure_unknown is False
 
 
 def test_body_validation_rejects_before_transport() -> None:
