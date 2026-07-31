@@ -163,7 +163,7 @@ class FiniteFloat(float):
         )
 
 
-type JsonScalar = None | bool | int | float | str
+type JsonScalar = bool | int | float | str | None
 type ImmutableJsonValue = JsonScalar | Mapping[str, Any] | tuple[Any, ...]
 
 
