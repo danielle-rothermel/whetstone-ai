@@ -1,7 +1,7 @@
 """The D1 direct-generation HumanEval Submission Score drive.
 
-Drives one candidate over a d1 split through the injected transport, running a
-SINGLE LLM Call per (task, repeat):
+Drives one candidate over a d1 split through serializable process jobs,
+running a SINGLE LLM Call per (task, repeat):
 
 1. compose the mutable wrapper ``{body}`` (the candidate's Mutation-Surface
    payload) around the FROZEN input arm (the screen DIRECT-arm slice of the
@@ -20,8 +20,10 @@ itself: the transport and code-eval scorer are injected.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from dr_code.humaneval import HumanEvalTask
 from dr_providers import (
@@ -31,6 +33,7 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
@@ -48,24 +51,33 @@ from whetstone.envs.ed1 import (
     reward_from_primary_score,
     validate_ed1_body,
 )
-from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
+from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.input_transform import (
     direct_body,
     renamed_task,
     split_prompt,
 )
-from whetstone.envs.internal_eval import RolloutOutput
+from whetstone.envs.internal_eval import (
+    ProcessInstance,
+    RolloutOutput,
+    process_request_identity,
+    remaining_phase_wall_seconds,
+    start_phase_deadline,
+)
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.execution.call_support import (
-    call_telemetry,
     failure_code_of,
     is_transient_transport_failure,
 )
-from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
+from whetstone.execution.fanout import (
+    DEFAULT_CONCURRENCY,
+    CallSpec,
+    FanoutStatus,
+    ProcessJob,
+    run_call_pool,
+)
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
-    CallExecution,
-    PartialCacheMarks,
     PromptResultCache,
     execute_call,
 )
@@ -90,13 +102,20 @@ class D1EvalResult:
     outputs: tuple[RolloutOutput, ...] = ()
 
 
-@dataclass(frozen=True, slots=True)
-class _D1RowOutcome:
+class D1RowOutcome(BaseModel):
     """One (task, repeat) direct rollout's result + provenance."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
 
     submission_score: float | None
     output_text: str | None
     failed: bool
+    missing: bool = False
     failure_code: str = ""
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -111,10 +130,117 @@ class _D1RowOutcome:
     #: True when a TRANSIENT transport fault (timeout/stall/transport-error/
     #: rate-limit) exhausted its semantic retries -- eligible for ONE re-drive.
     redrivable: bool = False
-    #: Task-31 prompt-cache execution marker (``None`` on a render-failed row
-    #: with no call). Tells the persist step whether this row was served from
-    #: cache (mark + null latency) or freshly driven.
-    execution: CallExecution | None = None
+    cache_hit: bool = False
+    cache_source_phase: str | None = None
+    cache_source_unit: str | None = None
+    cache_source_call_id: str | None = None
+    cache_source_at: str | None = None
+
+    @model_validator(mode="after")
+    def _valid_outcome(self) -> D1RowOutcome:
+        if self.failed and self.missing:
+            raise ValueError("a row cannot be both failed and missing")
+        if (self.failed or self.missing) == (
+            self.submission_score is not None
+        ):
+            raise ValueError(
+                "a successful row requires a score and an absent row "
+                "forbids one"
+            )
+        if self.cache_hit != (self.cache_source_call_id is not None):
+            raise ValueError(
+                "cache_hit and original-entry provenance must be paired"
+            )
+        return self
+
+
+_D1_ROW_REQUEST_SCHEMA = "whetstone.envs.d1_row_request/v1"
+_D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v1"
+
+
+class HumanEvalTaskPayload(BaseModel):
+    """Stable JSON fields needed to reconstruct one HumanEval task."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    task_id: str
+    prompt: str
+    canonical_solution: str
+    entry_point: str
+    test: str
+
+    @classmethod
+    def from_task(cls, task: HumanEvalTask) -> HumanEvalTaskPayload:
+        return cls(
+            task_id=task.task_id,
+            prompt=task.prompt,
+            canonical_solution=task.canonical_solution,
+            entry_point=task.entry_point,
+            test=task.test,
+        )
+
+    def to_task(self) -> HumanEvalTask:
+        return HumanEvalTask(
+            task_id=self.task_id,
+            prompt=self.prompt,
+            canonical_solution=self.canonical_solution,
+            entry_point=self.entry_point,
+            test=self.test,
+        )
+
+
+class D1RowRequest(BaseModel):
+    """Complete serializable request and provenance for one D1 row."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.d1_row_request/v1"] = (
+        _D1_ROW_REQUEST_SCHEMA
+    )
+    candidate_body: str
+    candidate_id: str
+    instance: ProcessInstance
+    humaneval_task: HumanEvalTaskPayload
+    input_arm: str
+    rename_token: str
+    provider_call_config: ProviderCallConfig
+    execution_policy: ProviderExecutionPolicy
+    procedure_config_hash: str
+    logical_call_id: str
+    repeat_index: int
+    drive_ordinal: int
+    cache_phase: str
+    cache_unit: str
+    cache_root: str | None
+
+    @property
+    def request_identity(self) -> str:
+        return process_request_identity(self)
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> D1RowRequest:
+        """Validate a decoded JSON payload using Pydantic's JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+class D1RowResult(BaseModel):
+    """A D1 outcome cryptographically bound to its submitted request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.d1_row_result/v1"] = (
+        _D1_ROW_RESULT_SCHEMA
+    )
+    request_identity: str
+    outcome: D1RowOutcome
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> D1RowResult:
+        """Validate a decoded worker result using JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+type D1RowJobFactory = Callable[[D1RowRequest], ProcessJob]
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -148,7 +274,7 @@ def _input_arm_text(
     return body, score_task
 
 
-def _drive_row(
+def drive_d1_row(
     *,
     experiment: D1Experiment,
     candidate_body: str,
@@ -159,16 +285,17 @@ def _drive_row(
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
     repeat_index: int,
+    drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
-) -> _D1RowOutcome:
+) -> D1RowOutcome:
     """Run one direct generate->score rollout for one (task, repeat)."""
     input_arm, score_task = _input_arm_text(experiment, instance)
     try:
         prompt = render_d1_frame(candidate_body, input_arm=input_arm)
     except (KeyError, IndexError, ValueError):
-        return _D1RowOutcome(
+        return D1RowOutcome(
             submission_score=None,
             output_text=None,
             failed=True,
@@ -180,131 +307,80 @@ def _drive_row(
         transport=transport,
         logical_call_id=logical_call_id,
         repeat_index=repeat_index,
+        drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
         unit=cache_unit,
     )
     result = execution.result
+    telemetry = execution.telemetry()
+    marks = execution.cache_marks()
     if not result.succeeded or result.generation is None:
-        return _D1RowOutcome(
+        return D1RowOutcome(
             submission_score=None,
             output_text=None,
             failed=True,
             failure_code=failure_code_of(result),
-            provider_error=call_telemetry(result).provider_error,
+            latency_s=telemetry.latency_s,
+            provider_error=telemetry.provider_error,
             redrivable=is_transient_transport_failure(result),
-            execution=execution,
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
         )
     output_text = result.generation.text
-    tel = call_telemetry(result)
     code_score = scorer(raw_submission=output_text, task=score_task)
     if code_score.infrastructure_unknown:
-        return _D1RowOutcome(
+        return D1RowOutcome(
             submission_score=None,
             output_text=output_text,
             failed=True,
             failure_code="code_eval_infrastructure_unknown",
-            prompt_tokens=tel.prompt_tokens,
-            completion_tokens=tel.completion_tokens,
-            total_tokens=tel.total_tokens,
-            reasoning_tokens=tel.reasoning_tokens,
-            latency_s=tel.latency_s,
-            finish_reason=tel.finish_reason,
-            execution=execution,
+            prompt_tokens=telemetry.prompt_tokens,
+            completion_tokens=telemetry.completion_tokens,
+            total_tokens=telemetry.total_tokens,
+            reasoning_tokens=telemetry.reasoning_tokens,
+            latency_s=telemetry.latency_s,
+            finish_reason=telemetry.finish_reason,
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
         )
-    return _D1RowOutcome(
+    return D1RowOutcome(
         submission_score=code_score.row_value,
         output_text=output_text,
         failed=False,
-        prompt_tokens=tel.prompt_tokens,
-        completion_tokens=tel.completion_tokens,
-        total_tokens=tel.total_tokens,
-        reasoning_tokens=tel.reasoning_tokens,
-        latency_s=tel.latency_s,
-        finish_reason=tel.finish_reason,
-        execution=execution,
+        prompt_tokens=telemetry.prompt_tokens,
+        completion_tokens=telemetry.completion_tokens,
+        total_tokens=telemetry.total_tokens,
+        reasoning_tokens=telemetry.reasoning_tokens,
+        latency_s=telemetry.latency_s,
+        finish_reason=telemetry.finish_reason,
+        cache_hit=marks.cache_hit,
+        cache_source_phase=marks.cache_source_phase,
+        cache_source_unit=marks.cache_source_unit,
+        cache_source_call_id=marks.cache_source_call_id,
+        cache_source_at=marks.cache_source_at,
     )
-
-
-def _drive_and_persist(
-    *,
-    experiment: D1Experiment,
-    candidate_body: str,
-    candidate_id: str,
-    instance: Instance,
-    index: int,
-    provider_call_config: ProviderCallConfig,
-    execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    scorer: Callable[..., CodeScore],
-    partial_log: PartialLog | None,
-    split_role: str,
-    cache: PromptResultCache | None = None,
-) -> _D1RowOutcome:
-    """Drive one d1 row and append its partial record when it finishes."""
-    outcome = _drive_row(
-        experiment=experiment,
-        candidate_body=candidate_body,
-        instance=instance,
-        provider_call_config=provider_call_config,
-        execution_policy=execution_policy,
-        transport=transport,
-        scorer=scorer,
-        logical_call_id=f"{candidate_id}:{instance.id}#{index}",
-        repeat_index=index,
-        cache=cache,
-        cache_phase=split_role,
-        cache_unit=candidate_id,
-    )
-    if partial_log is not None:
-        # Task 31 honesty: null the latency of a cache-served row (no wire call
-        # this time) and stamp the cache marker + original-entry provenance.
-        marks = (
-            outcome.execution.cache_marks()
-            if outcome.execution is not None
-            else PartialCacheMarks()
-        )
-        partial_log.append(
-            PartialCallRecord(
-                phase=split_role,
-                instance_id=str(instance.id),
-                unit=candidate_id,
-                repeat_id=index,
-                score=outcome.submission_score,
-                failed=outcome.failed,
-                failure_code=outcome.failure_code,
-                split_role=split_role,
-                prompt_tokens=outcome.prompt_tokens,
-                completion_tokens=outcome.completion_tokens,
-                total_tokens=outcome.total_tokens,
-                reasoning_tokens=outcome.reasoning_tokens,
-                latency_s=None if marks.cache_hit else outcome.latency_s,
-                output_text=outcome.output_text,
-                finish_reason=outcome.finish_reason,
-                provider_error=outcome.provider_error,
-                cache_hit=marks.cache_hit,
-                cache_source_phase=marks.cache_source_phase,
-                cache_source_unit=marks.cache_source_unit,
-                cache_source_call_id=marks.cache_source_call_id,
-                cache_source_at=marks.cache_source_at,
-            )
-        )
-    return outcome
 
 
 def _restore_recorded(
     partial_log: PartialLog | None,
     split_role: str,
     candidate_id: str,
-) -> dict[tuple[str, int], _D1RowOutcome]:
+) -> dict[tuple[str, int], D1RowOutcome]:
     """Rebuild d1 row outcomes already durably recorded (resume skip)."""
     if partial_log is None:
         return {}
-    restored: dict[tuple[str, int], _D1RowOutcome] = {}
+    restored: dict[tuple[str, int], D1RowOutcome] = {}
     for record in partial_log.load():
         if record.phase != split_role or record.unit != candidate_id:
             continue
-        restored[(record.instance_id, record.repeat_id)] = _D1RowOutcome(
+        restored[(record.instance_id, record.repeat_id)] = D1RowOutcome(
             submission_score=record.score,
             output_text=None,
             failed=record.failed,
@@ -333,25 +409,27 @@ def run_d1_eval(
     candidate_id: str,
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    scorer: Callable[..., CodeScore] | None = None,
-    fanout: FanoutConfig | None = None,
+    row_job_factory: D1RowJobFactory,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    max_wall_seconds: float | None = None,
     apply_reward: bool = True,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
 ) -> D1EvalResult:
     """Drive ``candidate_body`` over a D1 split.
 
-    Fans out one direct generate->score rollout per (task, repeat) through the
-    injected transport + code scorer, reduces to the HumanEval Submission
-    Score aggregate, derives its Reward when requested, and collects per-row
-    outputs. Incremental persistence + resume mirror the ED1 drive: each
-    completed row appends its record when it finishes; a resumed drive restores
-    already-recorded rows instead of re-paying.
+    Fans out one serializable direct generate->score process job per (task,
+    repeat), reduces to the HumanEval Submission Score aggregate, derives its
+    Reward when requested, and collects per-row outputs. Incremental
+    persistence + resume mirror the ED1 drive: each completed row appends its
+    record when it finishes; a resumed drive restores already-recorded rows
+    instead of re-paying.
+
+    ``row_job_factory`` is the trusted scoring authority. It must execute the
+    exact :class:`D1RowRequest` under its declared procedure; the parent binds
+    result identity before persistence but cannot attest arbitrary worker code.
     """
     validate_ed1_body(candidate_body)
-    fanout = fanout or FanoutConfig()
-    scorer = scorer or score_ed1_submission
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role
@@ -368,71 +446,144 @@ def run_d1_eval(
     eval_config_hash = sampling.eval_config.config_identity_hash
     restored = _restore_recorded(partial_log, split_role, candidate_id)
 
+    def _persist(
+        instance: Instance,
+        index: int,
+        outcome: D1RowOutcome,
+    ) -> None:
+        if partial_log is None:
+            return
+        partial_log.append(
+            PartialCallRecord(
+                phase=split_role,
+                instance_id=str(instance.id),
+                unit=candidate_id,
+                repeat_id=index,
+                score=outcome.submission_score,
+                failed=outcome.failed,
+                failure_code=outcome.failure_code,
+                split_role=split_role,
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                total_tokens=outcome.total_tokens,
+                reasoning_tokens=outcome.reasoning_tokens,
+                latency_s=outcome.latency_s,
+                output_text=outcome.output_text,
+                finish_reason=outcome.finish_reason,
+                provider_error=outcome.provider_error,
+                cache_hit=outcome.cache_hit,
+                cache_source_phase=outcome.cache_source_phase,
+                cache_source_unit=outcome.cache_source_unit,
+                cache_source_call_id=outcome.cache_source_call_id,
+                cache_source_at=outcome.cache_source_at,
+            )
+        )
+
     def _spec(
-        instance: Instance, index: int
-    ) -> CallSpec[tuple[str, int], _D1RowOutcome]:
+        instance: Instance,
+        index: int,
+        *,
+        drive_ordinal: int,
+    ) -> CallSpec[tuple[str, int], D1RowOutcome]:
+        request = D1RowRequest(
+            candidate_body=candidate_body,
+            candidate_id=candidate_id,
+            instance=ProcessInstance.from_instance(instance),
+            humaneval_task=HumanEvalTaskPayload.from_task(
+                experiment.humaneval_for(instance)
+            ),
+            input_arm=experiment.input_arm,
+            rename_token=experiment.rename_token,
+            provider_call_config=rd.provider_call_config,
+            execution_policy=execution_policy,
+            procedure_config_hash=rd.procedure_config_hash,
+            logical_call_id=f"{candidate_id}:{instance.id}#{index}",
+            repeat_index=index,
+            drive_ordinal=drive_ordinal,
+            cache_phase=split_role,
+            cache_unit=candidate_id,
+            cache_root=None if cache is None else str(cache.root),
+        )
+
+        def _decode(value: JsonValue) -> D1RowOutcome:
+            result = D1RowResult.from_process_payload(value)
+            if result.request_identity != request.request_identity:
+                raise ValueError(
+                    "D1 row result does not match its submitted request"
+                )
+            return result.outcome
+
         return CallSpec(
             key=(str(instance.id), index),
-            run=lambda inst=instance, i=index: _drive_and_persist(
-                experiment=experiment,
-                candidate_body=candidate_body,
-                candidate_id=candidate_id,
-                instance=inst,
-                index=i,
-                provider_call_config=rd.provider_call_config,
-                execution_policy=execution_policy,
-                transport=transport,
-                scorer=scorer,
-                partial_log=partial_log,
-                split_role=split_role,
-                cache=cache,
-            ),
+            job=row_job_factory(request),
+            decode=_decode,
             deadline_seconds=_deadline(execution_policy),
+            commit=lambda outcome, inst=instance, i=index: _persist(
+                inst, i, outcome
+            ),
         )
 
     by_instance = {str(inst.id): inst for inst in instances}
+    phase_deadline = start_phase_deadline(max_wall_seconds)
 
     def _drive(
-        pending: list[CallSpec[tuple[str, int], _D1RowOutcome]],
-    ) -> dict[tuple[str, int], _D1RowOutcome]:
+        pending: list[CallSpec[tuple[str, int], D1RowOutcome]],
+    ) -> dict[tuple[str, int], D1RowOutcome]:
         pool = run_call_pool(
             pending,
-            concurrency=fanout.concurrency,
+            concurrency=concurrency,
             is_rate_limited=lambda _o: False,
-            max_wall_seconds=fanout.max_wall_seconds,
+            max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
-        out: dict[tuple[str, int], _D1RowOutcome] = {}
+        out: dict[tuple[str, int], D1RowOutcome] = {}
         for res in pool.results:
-            if res.value is not None:
+            if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
-            else:
-                out[res.key] = _D1RowOutcome(
+            elif res.status is FanoutStatus.UNIT_TIMEOUT:
+                out[res.key] = D1RowOutcome(
                     submission_score=None,
                     output_text=None,
                     failed=True,
                     failure_code="runner_timeout",
                     redrivable=True,
                 )
+            else:
+                out[res.key] = D1RowOutcome(
+                    submission_score=None,
+                    output_text=None,
+                    failed=False,
+                    missing=True,
+                )
         return out
 
     specs = [
-        _spec(instance, index)
+        _spec(instance, index, drive_ordinal=0)
         for instance in instances
         for index in range(repeats)
         if (str(instance.id), index) not in restored
     ]
-    driven: dict[tuple[str, int], _D1RowOutcome] = dict(restored)
+    driven: dict[tuple[str, int], D1RowOutcome] = dict(restored)
     driven.update(_drive(specs))
 
     # ONE bounded re-drive of timed-out / transient-transport rows (a single
     # flaky observation must not fail the whole d1 arm under FAIL policy).
     redrive_specs = [
-        _spec(by_instance[key[0]], key[1])
+        _spec(by_instance[key[0]], key[1], drive_ordinal=1)
         for key, out in driven.items()
         if out.redrivable
     ]
     if redrive_specs:
-        driven.update(_drive(redrive_specs))
+        redriven = _drive(redrive_specs)
+        driven.update(
+            (key, outcome)
+            for key, outcome in redriven.items()
+            if not outcome.missing
+        )
+
+    if partial_log is not None:
+        for key, outcome in driven.items():
+            if outcome.failure_code == "runner_timeout":
+                _persist(by_instance[key[0]], key[1], outcome)
 
     submission_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
@@ -443,7 +594,9 @@ def run_d1_eval(
         task_submission_rows: list[RowValue] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
-            if outcome.failed or outcome.submission_score is None:
+            if outcome.missing:
+                task_submission_rows.append(RowValue(missing=True))
+            elif outcome.failed or outcome.submission_score is None:
                 task_submission_rows.append(RowValue(failed=True))
             else:
                 task_submission_rows.append(
@@ -512,5 +665,8 @@ def run_d1_eval(
 
 __all__ = [
     "D1EvalResult",
+    "D1RowJobFactory",
+    "D1RowOutcome",
+    "drive_d1_row",
     "run_d1_eval",
 ]

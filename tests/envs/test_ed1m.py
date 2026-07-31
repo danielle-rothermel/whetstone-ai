@@ -274,7 +274,7 @@ def test_build_uses_content_and_dataset_identities(
 def test_ed1m_eval_rewards_fidelity_reports_attractor(
     mutant_dataset_dir: Path,
 ) -> None:
-    from tests.envs.support import FakeTransport, execution_policy
+    from tests.envs.support import execution_policy, process_row_job_factory
     from whetstone.envs.ed1 import ed1_initial_candidate
     from whetstone.envs.ed1_eval import run_ed1_eval
     from whetstone.envs.ed1m import (
@@ -283,7 +283,6 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
     )
     from whetstone.optimization.mutation import MUTATION_FIELD
 
-    record = load_dataset(mutant_dataset_dir).records[0]
     experiment = build_ed1m_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
@@ -291,20 +290,17 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
         repeats=1,
     )
 
-    def reply(prompt: str) -> str:
-        if prompt.startswith(("Provide", "Compress")):
-            return f"REBUILD:{record.content_identity}"
-        if prompt.startswith("Decode"):
-            return _MUTATED_SOURCE
-        return ""
-
     evaluation = run_ed1_eval(
         experiment,
-        candidate_template=ed1_initial_candidate().payload[MUTATION_FIELD],
+        candidate_template=str(
+            ed1_initial_candidate().payload[MUTATION_FIELD]
+        ),
         candidate_id="ed1m-naive",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
-        transport=FakeTransport(reply=reply),
+        row_job_factory=process_row_job_factory(
+            "tests.envs.process_workers:drive_ed1_success"
+        ),
         apply_reward=True,
     )
 

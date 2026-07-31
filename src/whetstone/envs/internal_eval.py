@@ -1,7 +1,7 @@
-"""The transport-injected internal-eval loop over an env's internal split.
+"""The process-isolated internal-eval loop over an env's internal split.
 
 :func:`run_internal_eval` drives a candidate (the naive Initial Candidate in
-the factory tests) through an injected transport over the internal split and
+the factory tests) through serializable row jobs over the internal split and
 produces a provenance-bearing internal ``env_exact_match`` Rollout Aggregate
 plus the Reward the Reward Policy maps it to.
 
@@ -22,8 +22,13 @@ planned internal matrix (no row dropped).
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 from dr_code.eval import (
     AggregationConfig,
@@ -38,6 +43,7 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
@@ -62,27 +68,24 @@ from whetstone.envs.rollout_definition import (
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.envs.task import EnvTask
 from whetstone.execution.call_support import (
-    call_telemetry,
     guard_deadline_seconds,
     is_rate_limit_failure,
     is_transient_transport_failure,
 )
 from whetstone.execution.fanout import (
-    RUNNER_TIMEOUT_CODE,
+    DEFAULT_CONCURRENCY,
     CallSpec,
-    FanoutConfig,
+    FanoutStatus,
+    ProcessJob,
     run_call_pool,
 )
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
-    CallExecution,
-    PartialCacheMarks,
     PromptResultCache,
     execute_call,
 )
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import Candidate
-from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -215,29 +218,191 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _RowOutcome:
-    """One repeat's result plus its terminal Provider Call Result.
+class InternalRowOutcome(BaseModel):
+    """Serializable result of one internal-evaluation process job."""
 
-    ``row`` is the aggregate contribution; ``result`` is the terminal call
-    Result (``None`` when this observation was RESTORED from a partial log, not
-    re-driven -- a resumed cell never re-calls a recorded observation).
-    ``score`` is the reconstructed 0/1 (``None`` on a failed row), used to
-    append the partial record.
-    """
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
 
-    row: RowValue
-    result: ProviderCallResult | None
     score: float | None
+    failed: bool = False
+    missing: bool = False
     failure_code: str = ""
-    #: The prompt-cache execution marker for this row (task 31). ``None`` on a
-    #: RESTORED (partial-log) row; otherwise the :class:`CallExecution` telling
-    #: the row writer whether the Result was served from cache (mark the row +
-    #: null its latency) or freshly driven.
-    execution: CallExecution | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
+    output_text: str | None = None
+    finish_reason: str | None = None
+    provider_error: dict[str, object] | None = None
+    rate_limited: bool = False
+    redrivable: bool = False
+    cache_hit: bool = False
+    cache_source_phase: str | None = None
+    cache_source_unit: str | None = None
+    cache_source_call_id: str | None = None
+    cache_source_at: str | None = None
+
+    @model_validator(mode="after")
+    def _valid_row_state(self) -> InternalRowOutcome:
+        if self.failed and self.missing:
+            raise ValueError("a row cannot be both failed and missing")
+        if (self.failed or self.missing) == (self.score is not None):
+            raise ValueError(
+                "a present row requires a score and an absent row forbids one"
+            )
+        if self.cache_hit != (self.cache_source_call_id is not None):
+            raise ValueError(
+                "cache_hit and original-entry provenance must be paired"
+            )
+        return self
+
+    @property
+    def row(self) -> RowValue:
+        if self.failed:
+            return RowValue(failed=True)
+        if self.missing:
+            return RowValue(missing=True)
+        assert self.score is not None
+        return RowValue(value=self.score)
 
 
-def _generation_row(
+_INTERNAL_ROW_REQUEST_SCHEMA = "whetstone.envs.internal_row_request/v1"
+_INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v1"
+
+
+class ProcessInstance(BaseModel):
+    """JSON-safe form of the frozen environment Instance value object."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    id: str
+    seed: int
+    strata: tuple[str, ...]
+    prompt_inputs: dict[str, str]
+    gold: str
+
+    @classmethod
+    def from_instance(cls, instance: Instance) -> ProcessInstance:
+        return cls(
+            id=str(instance.id),
+            seed=instance.seed,
+            strata=instance.strata,
+            prompt_inputs=dict(instance.prompt_inputs),
+            gold=instance.gold,
+        )
+
+    def to_instance(self) -> Instance:
+        return Instance(
+            id=self.id,
+            seed=self.seed,
+            strata=self.strata,
+            prompt_inputs=self.prompt_inputs,
+            gold=self.gold,
+        )
+
+
+def process_request_identity(model: BaseModel) -> str:
+    """Hash one strict row request's canonical JSON representation."""
+    payload = json.dumps(
+        model.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
+    """Validate one phase wall and convert it to an absolute deadline."""
+    if max_wall_seconds is None:
+        return None
+    if type(max_wall_seconds) not in (int, float):
+        raise ValueError(
+            "max_wall_seconds must be a finite nonnegative real number"
+        )
+    try:
+        seconds = float(max_wall_seconds)
+    except OverflowError:
+        raise ValueError(
+            "max_wall_seconds must be a finite nonnegative real number "
+            "representable as seconds"
+        ) from None
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(
+            "max_wall_seconds must be a finite nonnegative real number"
+        )
+    return time.monotonic() + seconds
+
+
+def remaining_phase_wall_seconds(deadline: float | None) -> float | None:
+    """Return the nonnegative remainder of one shared phase wall."""
+    if deadline is None:
+        return None
+    return max(0.0, deadline - time.monotonic())
+
+
+class InternalRowRequest(BaseModel):
+    """Complete serializable request and provenance for one internal row."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.internal_row_request/v1"] = (
+        _INTERNAL_ROW_REQUEST_SCHEMA
+    )
+    env_name: str
+    candidate: Candidate
+    instance: ProcessInstance
+    provider_call_config: ProviderCallConfig
+    execution_policy: ProviderExecutionPolicy
+    procedure_config_hash: str
+    logical_call_id: str
+    repeat_index: int
+    drive_ordinal: int
+    cache_phase: str
+    cache_unit: str
+    cache_root: str | None
+    render_guard: bool
+
+    @property
+    def request_identity(self) -> str:
+        return process_request_identity(self)
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> InternalRowRequest:
+        """Validate a decoded JSON payload using Pydantic's JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+class InternalRowResult(BaseModel):
+    """A row outcome cryptographically bound to its submitted request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.internal_row_result/v1"] = (
+        _INTERNAL_ROW_RESULT_SCHEMA
+    )
+    request_identity: str
+    outcome: InternalRowOutcome
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> InternalRowResult:
+        """Validate a decoded worker result using JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+type InternalRowJobFactory = Callable[[InternalRowRequest], ProcessJob]
+
+
+RUNNER_TIMEOUT_CODE = "runner_timeout"
+
+
+def drive_internal_row(
     env: EnvSpec,
     *,
     candidate: Candidate,
@@ -248,11 +413,12 @@ def _generation_row(
     procedure_config_hash: str,
     logical_call_id: str,
     repeat_index: int,
+    drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
     render_guard: bool = False,
-) -> _RowOutcome:
+) -> InternalRowOutcome:
     """Run one repeat: render, call the transport, score via the env oracle.
 
     When ``render_guard`` is True (a NON-canonical candidate template), a
@@ -267,10 +433,9 @@ def _generation_row(
         try:
             prompt = render_prompt(env, candidate, instance)
         except KeyError:
-            return _RowOutcome(
-                row=RowValue(failed=True),
-                result=None,
+            return InternalRowOutcome(
                 score=None,
+                failed=True,
                 failure_code=RENDER_FAILURE_CODE,
             )
     else:
@@ -281,18 +446,28 @@ def _generation_row(
         transport=transport,
         logical_call_id=logical_call_id,
         repeat_index=repeat_index,
+        drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
         unit=cache_unit,
     )
     result = execution.result
+    telemetry = execution.telemetry()
+    marks = execution.cache_marks()
     if not result.succeeded or result.generation is None:
-        return _RowOutcome(
-            row=RowValue(failed=True),
-            result=result,
+        return InternalRowOutcome(
             score=None,
+            failed=True,
             failure_code=failure_code_of(result),
-            execution=execution,
+            latency_s=telemetry.latency_s,
+            provider_error=telemetry.provider_error,
+            rate_limited=is_rate_limit_failure(result),
+            redrivable=is_transient_transport_failure(result),
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
         )
     score = env_exact_match_score(
         env=env,
@@ -300,11 +475,20 @@ def _generation_row(
         gold=instance.gold,
         evaluation_procedure_config_hash=procedure_config_hash,
     )
-    return _RowOutcome(
-        row=RowValue(value=float(score.value)),
-        result=result,
+    return InternalRowOutcome(
         score=float(score.value),
-        execution=execution,
+        prompt_tokens=telemetry.prompt_tokens,
+        completion_tokens=telemetry.completion_tokens,
+        total_tokens=telemetry.total_tokens,
+        reasoning_tokens=telemetry.reasoning_tokens,
+        latency_s=telemetry.latency_s,
+        output_text=result.generation.text,
+        finish_reason=telemetry.finish_reason,
+        cache_hit=marks.cache_hit,
+        cache_source_phase=marks.cache_source_phase,
+        cache_source_unit=marks.cache_source_unit,
+        cache_source_call_id=marks.cache_source_call_id,
+        cache_source_at=marks.cache_source_at,
     )
 
 
@@ -374,8 +558,9 @@ def run_internal_eval(
     candidate: Candidate,
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    fanout: FanoutConfig | None = None,
+    row_job_factory: InternalRowJobFactory,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    max_wall_seconds: float | None = None,
     partial_log: PartialLog | None = None,
     apply_reward: bool = True,
     render_guard: bool = False,
@@ -383,10 +568,14 @@ def run_internal_eval(
 ) -> InternalEvalResult:
     """Evaluate ``candidate`` over one exact derived sampling contract.
 
-    For each bound instance, the bound repeats run through the
-    injected transport; each accepted Generation is scored 0/1 by the env
-    oracle. The per-task means reduce to a single ``env_exact_match`` Rollout
-    Aggregate. No live paid call is made: the transport is injected.
+    For each bound instance, ``row_job_factory`` supplies one serializable
+    process job whose result decodes to :class:`InternalRowOutcome`. The
+    per-task means reduce to a single ``env_exact_match`` Rollout Aggregate.
+    The factory is the trusted execution authority: it must give its worker
+    the exact :class:`InternalRowRequest` and use the declared evaluation
+    procedure. The parent verifies the returned request identity before any
+    persistence, which prevents cross-row attribution but does not attest an
+    arbitrary worker's scoring implementation.
 
     **Reward application is caller-controlled.** When ``apply_reward`` is True
     (the internal/optimizer path, the default) the Reward Policy maps the
@@ -399,7 +588,7 @@ def run_internal_eval(
     incomplete official aggregate (timed-out observations) is visible
     incompleteness, never a process crash.
 
-    The observations fan out through a bounded worker pool (``fanout``): at
+    The observations fan out through a bounded worker pool: at
     most ``concurrency`` calls run at once, each under a runner-level
     wall-clock guard, and the RECORDED per-task rows are assembled by their
     ``(candidate, instance, repeat)`` key in instance/repeat order -- so the
@@ -425,7 +614,6 @@ def run_internal_eval(
     # helper stamps a stable internal id derived from the internal Eval Config
     # identity onto the aggregate provenance.
     evaluation_context_id = eval_config_hash
-    fanout = fanout or FanoutConfig()
     unit = candidate.candidate_id
 
     recorded = _restore_recorded(
@@ -438,70 +626,124 @@ def run_internal_eval(
         for instance in instances
     ]
 
+    def _persist(
+        instance: Instance,
+        index: int,
+        outcome: InternalRowOutcome,
+    ) -> None:
+        if partial_log is None:
+            return
+        partial_log.append(
+            PartialCallRecord(
+                phase=partial_phase,
+                instance_id=str(instance.id),
+                unit=unit,
+                repeat_id=index,
+                score=outcome.score,
+                failed=outcome.failed,
+                failure_code=outcome.failure_code,
+                split_role=sampling.split_role,
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                total_tokens=outcome.total_tokens,
+                reasoning_tokens=outcome.reasoning_tokens,
+                latency_s=outcome.latency_s,
+                output_text=outcome.output_text,
+                finish_reason=outcome.finish_reason,
+                provider_error=outcome.provider_error,
+                cache_hit=outcome.cache_hit,
+                cache_source_phase=outcome.cache_source_phase,
+                cache_source_unit=outcome.cache_source_unit,
+                cache_source_call_id=outcome.cache_source_call_id,
+                cache_source_at=outcome.cache_source_at,
+            )
+        )
+
     def _spec(
-        instance: Instance, task: EnvTask, index: int
-    ) -> CallSpec[tuple[str, str, int], _RowOutcome]:
+        instance: Instance,
+        index: int,
+        *,
+        drive_ordinal: int,
+    ) -> CallSpec[tuple[str, str, int], InternalRowOutcome]:
         key = (unit, str(instance.id), index)
+        request = InternalRowRequest(
+            env_name=env.name,
+            candidate=candidate,
+            instance=ProcessInstance.from_instance(instance),
+            provider_call_config=rd.provider_call_config,
+            execution_policy=execution_policy,
+            procedure_config_hash=procedure_hash,
+            logical_call_id=(
+                f"{EnvTask.from_instance(env.name, instance).task_identity()}"
+                f"#{index}"
+            ),
+            repeat_index=index,
+            drive_ordinal=drive_ordinal,
+            cache_phase=partial_phase,
+            cache_unit=unit,
+            cache_root=None if cache is None else str(cache.root),
+            render_guard=render_guard,
+        )
+
+        def _decode(value: JsonValue) -> InternalRowOutcome:
+            result = InternalRowResult.from_process_payload(value)
+            if result.request_identity != request.request_identity:
+                raise ValueError(
+                    "internal row result does not match its submitted request"
+                )
+            return result.outcome
+
         return CallSpec(
             key=key,
-            run=_row_thunk(
-                env,
-                candidate=candidate,
-                instance=instance,
-                provider_call_config=rd.provider_call_config,
-                execution_policy=execution_policy,
-                transport=transport,
-                procedure_config_hash=procedure_hash,
-                logical_call_id=f"{task.task_identity()}#{index}",
-                # The thunk persists its OWN partial record the instant the
-                # call completes, so a crash mid-drive keeps every finished
-                # call durably on disk (incremental persistence, not a post-hoc
-                # batch). Both the first drive AND a re-drive append a record.
-                partial_log=partial_log,
-                partial_phase=partial_phase,
-                partial_split_role=sampling.split_role,
-                partial_instance_id=str(instance.id),
-                partial_unit=unit,
-                repeat_id=index,
-                cache=cache,
-                render_guard=render_guard,
-            ),
+            job=row_job_factory(request),
+            decode=_decode,
             deadline_seconds=guard_deadline_seconds(execution_policy),
+            commit=lambda outcome, inst=instance, i=index: _persist(
+                inst, i, outcome
+            ),
         )
 
     by_instance = {str(inst.id): (inst, tsk) for inst, tsk in tasks}
+    phase_deadline = start_phase_deadline(max_wall_seconds)
     specs = [
-        _spec(instance, task, index)
+        _spec(instance, index, drive_ordinal=0)
         for instance, task in tasks
         for index in range(repeats)
         if (unit, str(instance.id), index) not in recorded
     ]
 
+    effective_concurrency = concurrency
+
     def _drive(
-        pending: list[CallSpec[tuple[str, str, int], _RowOutcome]],
-    ) -> tuple[dict[tuple[str, str, int], _RowOutcome], bool, bool, int]:
+        pending: list[CallSpec[tuple[str, str, int], InternalRowOutcome]],
+    ) -> tuple[
+        dict[tuple[str, str, int], InternalRowOutcome], bool, bool, int
+    ]:
+        nonlocal effective_concurrency
         pool = run_call_pool(
             pending,
-            concurrency=fanout.concurrency,
+            concurrency=effective_concurrency,
             is_rate_limited=_row_is_rate_limited,
-            max_wall_seconds=fanout.max_wall_seconds,
+            max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
-        driven: dict[tuple[str, str, int], _RowOutcome] = {}
+        effective_concurrency = pool.effective_concurrency
+        driven: dict[tuple[str, str, int], InternalRowOutcome] = {}
         for res in pool.results:
-            if res.timed_out:
-                driven[res.key] = _RowOutcome(
-                    row=RowValue(failed=True),
-                    result=None,
+            if res.status is FanoutStatus.UNIT_TIMEOUT:
+                driven[res.key] = InternalRowOutcome(
                     score=None,
+                    failed=True,
                     failure_code=RUNNER_TIMEOUT_CODE,
+                    redrivable=True,
                 )
-            elif res.not_dispatched:
+            elif res.status in {
+                FanoutStatus.NOT_DISPATCHED,
+                FanoutStatus.OPERATION_DEADLINE,
+            }:
                 # The whole-phase deadline stopped dispatch before this call:
                 # the planned row is absent (missing), never a fabricated
                 # failure, and nothing is recorded (a resume re-drives it).
-                driven[res.key] = _RowOutcome(
-                    row=RowValue(missing=True), result=None, score=None
-                )
+                driven[res.key] = InternalRowOutcome(score=None, missing=True)
             elif res.value is not None:
                 driven[res.key] = res.value
         return (
@@ -517,12 +759,13 @@ def run_internal_eval(
     # A runner-guard timeout or a TERMINAL transient transport failure (the
     # driver's own semantic retries were exhausted) is re-driven exactly once
     # through the same semantic-retry path before it lands as a failed row.
-    # Both attempts are recorded in the partial log (the re-drive thunk appends
-    # its own record); a re-drive that still fails/times-out lands as failed
-    # row. A not-dispatched (deadline) row is NOT re-driven (a resume handles
-    # it). This bounds a single flaky observation without re-driving the split.
+    # Both attempts are recorded in the partial log (the parent commit appends
+    # each accepted record); a re-drive that still fails/times-out lands as a
+    # failed row. A not-dispatched (deadline) row is NOT re-driven (a resume
+    # handles it). This bounds one flaky observation without re-driving the
+    # split.
     redrive_specs = [
-        _spec(*by_instance[key[1]], key[2])
+        _spec(by_instance[key[1]][0], key[2], drive_ordinal=1)
         for key, out in driven.items()
         if _should_redrive(out)
     ]
@@ -530,7 +773,11 @@ def run_internal_eval(
     guard_2 = 0
     if redrive_specs:
         redriven, halved_2, deadline_2, guard_2 = _drive(redrive_specs)
-        driven.update(redriven)
+        driven.update(
+            (key, outcome)
+            for key, outcome in redriven.items()
+            if not outcome.missing
+        )
 
     # A first-attempt timeout that was NOT re-driven (or a re-drive that also
     # timed out) is a real failed observation: record it so a resume does not
@@ -538,17 +785,7 @@ def run_internal_eval(
     if partial_log is not None:
         for key, out in driven.items():
             if out.failure_code == RUNNER_TIMEOUT_CODE:
-                partial_log.append(
-                    PartialCallRecord(
-                        phase=partial_phase,
-                        instance_id=key[1],
-                        unit=unit,
-                        repeat_id=key[2],
-                        score=None,
-                        failed=True,
-                        failure_code=RUNNER_TIMEOUT_CODE,
-                    )
-                )
+                _persist(by_instance[key[1]][0], key[2], out)
 
     concurrency_halved = halved_1 or halved_2
     deadline_reached = deadline_1 or deadline_2
@@ -569,17 +806,16 @@ def run_internal_eval(
             else:
                 outcome = driven[key]
                 rows.append(outcome.row)
-                tel = call_telemetry(outcome.result)
                 outputs.append(
                     RolloutOutput(
                         candidate_id=unit,
                         instance_id=str(instance.id),
                         repeat=index,
-                        output_text=_output_text_of(outcome.result),
+                        output_text=outcome.output_text,
                         score=outcome.score,
                         failure_code=outcome.failure_code,
-                        finish_reason=tel.finish_reason,
-                        provider_error=tel.provider_error,
+                        finish_reason=outcome.finish_reason,
+                        provider_error=outcome.provider_error,
                     )
                 )
         task_rows.append(
@@ -622,114 +858,12 @@ def run_internal_eval(
     )
 
 
-def _row_thunk(
-    env: EnvSpec,
-    *,
-    candidate: Candidate,
-    instance: Instance,
-    provider_call_config: ProviderCallConfig,
-    execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    procedure_config_hash: str,
-    logical_call_id: str,
-    partial_log: PartialLog | None,
-    partial_phase: str,
-    partial_instance_id: str,
-    partial_unit: str,
-    repeat_id: int,
-    cache: PromptResultCache | None = None,
-    partial_split_role: str | None = None,
-    render_guard: bool = False,
-) -> Callable[[], _RowOutcome]:
-    """A zero-arg thunk running one repeat (the fan-out unit of work).
-
-    On completion it appends its own :class:`PartialCallRecord` to the partial
-    log (when one is given) BEFORE returning, so the observation is durable the
-    instant the call finishes -- a crash between here and the phase's assembly
-    keeps it.
-    """
-
-    def _run() -> _RowOutcome:
-        outcome = _generation_row(
-            env,
-            candidate=candidate,
-            instance=instance,
-            provider_call_config=provider_call_config,
-            execution_policy=execution_policy,
-            transport=transport,
-            procedure_config_hash=procedure_config_hash,
-            logical_call_id=logical_call_id,
-            repeat_index=repeat_id,
-            cache=cache,
-            cache_phase=partial_phase,
-            cache_unit=partial_unit,
-            render_guard=render_guard,
-        )
-        if partial_log is not None:
-            tel = call_telemetry(outcome.result)
-            # Task 31 honesty: a cache-served row had NO wire call this time,
-            # so its latency is None (never a fabricated 0) and it carries the
-            # cache marker + a ref to the ORIGINAL entry's provenance.
-            marks = (
-                outcome.execution.cache_marks()
-                if outcome.execution is not None
-                else PartialCacheMarks()
-            )
-            partial_log.append(
-                PartialCallRecord(
-                    phase=partial_phase,
-                    instance_id=partial_instance_id,
-                    unit=partial_unit,
-                    repeat_id=repeat_id,
-                    score=outcome.score,
-                    failed=outcome.row.failed,
-                    failure_code=outcome.failure_code,
-                    split_role=partial_split_role,
-                    # FIX 6: retain the measured token counts on the cell path
-                    # (they were null before) so spend reconciliation can sum
-                    # them. Task 20: also the reasoning tokens + per-call
-                    # latency. Task 26: persist the output text (previously
-                    # dropped on the cell path -- 100% empty on disk) so a
-                    # resumed row keeps its evidence, plus the per-call
-                    # finish_reason + full provider-error diagnostic.
-                    prompt_tokens=tel.prompt_tokens,
-                    completion_tokens=tel.completion_tokens,
-                    total_tokens=tel.total_tokens,
-                    reasoning_tokens=tel.reasoning_tokens,
-                    latency_s=None if marks.cache_hit else tel.latency_s,
-                    output_text=_output_text_of(outcome.result),
-                    finish_reason=tel.finish_reason,
-                    provider_error=tel.provider_error,
-                    cache_hit=marks.cache_hit,
-                    cache_source_phase=marks.cache_source_phase,
-                    cache_source_unit=marks.cache_source_unit,
-                    cache_source_call_id=marks.cache_source_call_id,
-                    cache_source_at=marks.cache_source_at,
-                )
-            )
-        return outcome
-
-    return _run
-
-
-def _output_text_of(result: ProviderCallResult | None) -> str | None:
-    """The FULL (untruncated) model output text of a driven call, else None.
-
-    Returns the accepted Generation's text for a succeeded call; ``None`` for a
-    failed / restored / generation-less call. Never truncated -- the sidecar
-    keeps whole streams (c23 outputs are long).
-    """
-    if result is None or not result.succeeded or result.generation is None:
-        return None
-    return result.generation.text
-
-
-def _row_is_rate_limited(outcome: _RowOutcome) -> bool:
+def _row_is_rate_limited(outcome: InternalRowOutcome) -> bool:
     """Whether a driven row's terminal Result is a rate-limit failure."""
-    return outcome.result is not None and is_rate_limit_failure(outcome.result)
+    return outcome.rate_limited
 
 
-def _should_redrive(outcome: _RowOutcome) -> bool:
+def _should_redrive(outcome: InternalRowOutcome) -> bool:
     """Whether a first-attempt outcome earns ONE bounded re-drive.
 
     A runner-guard timeout (``runner_timeout``) or a terminal transient
@@ -741,9 +875,7 @@ def _should_redrive(outcome: _RowOutcome) -> bool:
     """
     if outcome.failure_code == RUNNER_TIMEOUT_CODE:
         return True
-    return outcome.result is not None and is_transient_transport_failure(
-        outcome.result
-    )
+    return outcome.redrivable
 
 
 def _restore_recorded(
@@ -776,6 +908,9 @@ def _restore_recorded(
 __all__ = [
     "RENDER_FAILURE_CODE",
     "InternalEvalResult",
+    "InternalRowJobFactory",
+    "InternalRowOutcome",
     "RolloutOutput",
+    "drive_internal_row",
     "run_internal_eval",
 ]

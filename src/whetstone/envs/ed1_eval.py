@@ -1,7 +1,7 @@
 """The ed1 encoder->decoder->code-eval drive (dual scores).
 
-Drives one candidate over an ed1 split through the injected transport, running
-the three-node rollout per (task, repeat):
+Drives one candidate over an ed1 split through serializable process jobs,
+running the three-node rollout per (task, repeat):
 
 1. render the candidate's Mutation-Surface ENCODER template against the task's
    ``INPUT_CODE`` (= ``gt_code_wo_comments``) and the per-task character budget
@@ -27,7 +27,9 @@ import json
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
+from dr_code.mutants.dataset import MutantRecord
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -35,6 +37,7 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
+from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
@@ -62,11 +65,23 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import blend_per_task
-from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
-from whetstone.envs.internal_eval import RolloutOutput
+from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.internal_eval import (
+    ProcessInstance,
+    RolloutOutput,
+    process_request_identity,
+    remaining_phase_wall_seconds,
+    start_phase_deadline,
+)
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
-from whetstone.execution.fanout import CallSpec, FanoutConfig, run_call_pool
+from whetstone.execution.fanout import (
+    DEFAULT_CONCURRENCY,
+    CallSpec,
+    FanoutStatus,
+    ProcessJob,
+    run_call_pool,
+)
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
     CacheProvenance,
@@ -178,8 +193,7 @@ class Ed1EvalResult:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class _Ed1RowOutcome:
+class Ed1RowOutcome(BaseModel):
     """One (task, repeat) rollout's dual result + provenance.
 
     ``primary_value`` is ED1's HumanEval Submission Score or ED1M's fractional
@@ -187,11 +201,19 @@ class _Ed1RowOutcome:
     measurement (``None`` for ED1).
     """
 
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
+
     primary_value: float | None
     compression_value: float | None
     encoder_text: str | None
     decoder_text: str | None
     failed: bool
+    missing: bool = False
     failure_code: str = ""
     #: ed1m only: the reported attractor-pull for this row (``None`` for ed1).
     attractor_pull: float | None = None
@@ -234,6 +256,21 @@ class _Ed1RowOutcome:
     cache_hit: bool = False
     cache_provenance: CacheProvenance | None = None
 
+    @model_validator(mode="after")
+    def _valid_outcome(self) -> Ed1RowOutcome:
+        if self.failed and self.missing:
+            raise ValueError("a row cannot be both failed and missing")
+        if (self.failed or self.missing) == (self.primary_value is not None):
+            raise ValueError(
+                "a successful row requires a primary value and an absent row "
+                "forbids one"
+            )
+        if self.cache_hit != (self.cache_provenance is not None):
+            raise ValueError(
+                "cache_hit and original-entry provenance must be paired"
+            )
+        return self
+
     @property
     def over_budget(self) -> bool | None:
         """True when the encoder output exceeded MAX_BUDGET (diagnostic only).
@@ -245,6 +282,84 @@ class _Ed1RowOutcome:
         if self.max_budget is None or self.encoder_len is None:
             return None
         return self.encoder_len > self.max_budget
+
+
+_ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.ed1_row_request/v1"
+_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v1"
+
+
+class Ed1RowRequest(BaseModel):
+    """Complete serializable request and provenance for one ED1-family row."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.ed1_row_request/v1"] = (
+        _ED1_ROW_REQUEST_SCHEMA
+    )
+    env_name: str
+    dataset_revision: str
+    primary_metric_name: str
+    graph_hash: str
+    candidate_template: str
+    candidate_id: str
+    instance: ProcessInstance
+    provider_call_config: ProviderCallConfig
+    execution_policy: ProviderExecutionPolicy
+    procedure_config_hash: str
+    budget_ratio: float | None
+    logical_call_id: str
+    repeat_index: int
+    drive_ordinal: int
+    cache_phase: str
+    cache_unit: str
+    cache_root: str | None
+    mutant_record: MutantRecord | None = None
+
+    @model_validator(mode="after")
+    def _valid_mutant_binding(self) -> Ed1RowRequest:
+        from whetstone.envs.ed1m import ED1M_ENV_NAME
+
+        if self.env_name == ED1M_ENV_NAME:
+            if self.mutant_record is None:
+                raise ValueError(
+                    "an ED1M row requires its authenticated mutant"
+                )
+            if self.mutant_record.content_identity != self.instance.id:
+                raise ValueError(
+                    "ED1M mutant identity does not match the row instance"
+                )
+        elif self.mutant_record is not None:
+            raise ValueError("a non-ED1M row forbids mutant oracle data")
+        return self
+
+    @property
+    def request_identity(self) -> str:
+        return process_request_identity(self)
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> Ed1RowRequest:
+        """Validate a decoded JSON payload using Pydantic's JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+class Ed1RowResult(BaseModel):
+    """An ED1 outcome cryptographically bound to its submitted request."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    schema_name: Literal["whetstone.envs.ed1_row_result/v1"] = (
+        _ED1_ROW_RESULT_SCHEMA
+    )
+    request_identity: str
+    outcome: Ed1RowOutcome
+
+    @classmethod
+    def from_process_payload(cls, payload: JsonValue) -> Ed1RowResult:
+        """Validate a decoded worker result using JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+type Ed1RowJobFactory = Callable[[Ed1RowRequest], ProcessJob]
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -309,7 +424,7 @@ def _render_encoder(
     )
 
 
-def _drive_row(
+def drive_ed1_row(
     *,
     experiment: Ed1Experiment,
     candidate_template: str,
@@ -320,10 +435,11 @@ def _drive_row(
     scorer: Callable[..., CodeScore],
     logical_call_id: str,
     repeat_index: int,
+    drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
-) -> _Ed1RowOutcome:
+) -> Ed1RowOutcome:
     """Run one enc->dec->score rollout for one (task, repeat)."""
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
@@ -337,7 +453,7 @@ def _drive_row(
             candidate_template, input_code=input_code, max_budget=max_budget
         )
     except (KeyError, IndexError, ValueError):
-        return _Ed1RowOutcome(
+        return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
@@ -353,6 +469,7 @@ def _drive_row(
         transport=transport,
         logical_call_id=f"{logical_call_id}:enc",
         repeat_index=repeat_index,
+        drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
         unit=cache_unit,
@@ -364,7 +481,7 @@ def _drive_row(
             is_transient_transport_failure,
         )
 
-        return _Ed1RowOutcome(
+        return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
@@ -385,6 +502,7 @@ def _drive_row(
         transport=transport,
         logical_call_id=f"{logical_call_id}:dec",
         repeat_index=repeat_index,
+        drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
         unit=cache_unit,
@@ -400,7 +518,7 @@ def _drive_row(
             is_transient_transport_failure,
         )
 
-        return _Ed1RowOutcome(
+        return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
@@ -422,7 +540,7 @@ def _drive_row(
     # (encoder output) is always computed (it does not depend on the sandbox).
     code_score = _score_row(experiment, instance, decoder_text, scorer)
     if code_score.infrastructure_unknown:
-        return _Ed1RowOutcome(
+        return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
@@ -441,7 +559,7 @@ def _drive_row(
             cache_provenance=row_cache_prov,
         )
     compression = _compression_ratio(encoder_text, input_code)
-    return _Ed1RowOutcome(
+    return Ed1RowOutcome(
         primary_value=code_score.row_value,
         compression_value=compression,
         encoder_text=encoder_text,
@@ -482,82 +600,7 @@ def _score_row(
     return scorer(raw_submission=decoder_text, task=task)
 
 
-def _drive_and_persist(
-    *,
-    experiment: Ed1Experiment,
-    candidate_template: str,
-    candidate_id: str,
-    instance: Instance,
-    index: int,
-    provider_call_config: ProviderCallConfig,
-    execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    scorer: Callable[..., CodeScore],
-    partial_log: PartialLog | None,
-    split_role: str,
-    cache: PromptResultCache | None = None,
-) -> _Ed1RowOutcome:
-    """Drive one ed1 row and append its partial record the instant it finishes.
-
-    The dual result (compression + encoder/decoder text) that the reducer
-    needs but ``PartialCallRecord`` has no native field for is carried in the
-    record's ``raw_response`` as a compact JSON blob, so a resumed drive can
-    fully reconstruct the row without re-paying. Mirrors the QA row thunk's
-    persist-on-completion contract.
-    """
-    outcome = _drive_row(
-        experiment=experiment,
-        candidate_template=candidate_template,
-        instance=instance,
-        provider_call_config=provider_call_config,
-        execution_policy=execution_policy,
-        transport=transport,
-        scorer=scorer,
-        logical_call_id=f"{candidate_id}:{instance.id}#{index}",
-        repeat_index=index,
-        cache=cache,
-        cache_phase=split_role,
-        cache_unit=candidate_id,
-    )
-    if partial_log is not None:
-        # Task 31 honesty: a full DUAL cache hit carries the cache marker + the
-        # encoder entry's original provenance. (The ed1 partial row does not
-        # persist latency, so there is no fabricated-latency concern here.)
-        marks = partial_cache_marks(
-            outcome.cache_hit, outcome.cache_provenance
-        )
-        partial_log.append(
-            PartialCallRecord(
-                phase=split_role,
-                instance_id=str(instance.id),
-                unit=candidate_id,
-                repeat_id=index,
-                score=outcome.primary_value,
-                failed=outcome.failed,
-                failure_code=outcome.failure_code,
-                split_role=split_role,
-                prompt_tokens=outcome.prompt_tokens,
-                completion_tokens=outcome.completion_tokens,
-                total_tokens=outcome.total_tokens,
-                # ed1 dual payload (compression + texts) the reducer needs on
-                # resume rides in raw_response; task 26 ALSO persists the
-                # decoder text as the human-readable output_text + the per-call
-                # finish_reason / provider-error diagnostic.
-                raw_response=_encode_ed1_payload(outcome),
-                output_text=outcome.decoder_text,
-                finish_reason=outcome.finish_reason,
-                provider_error=outcome.provider_error,
-                cache_hit=marks.cache_hit,
-                cache_source_phase=marks.cache_source_phase,
-                cache_source_unit=marks.cache_source_unit,
-                cache_source_call_id=marks.cache_source_call_id,
-                cache_source_at=marks.cache_source_at,
-            )
-        )
-    return outcome
-
-
-def _encode_ed1_payload(outcome: _Ed1RowOutcome) -> str:
+def _encode_ed1_payload(outcome: Ed1RowOutcome) -> str:
     """Compact JSON of the ed1 dual extras for a partial record's resume."""
     return json.dumps(
         {
@@ -572,7 +615,7 @@ def _restore_ed1_recorded(
     partial_log: PartialLog | None,
     split_role: str,
     candidate_id: str,
-) -> dict[tuple[str, int], _Ed1RowOutcome]:
+) -> dict[tuple[str, int], Ed1RowOutcome]:
     """Rebuild ed1 row outcomes already durably recorded (resume skip).
 
     Restores only records for THIS phase (``split_role``) + unit
@@ -582,7 +625,7 @@ def _restore_ed1_recorded(
     """
     if partial_log is None:
         return {}
-    restored: dict[tuple[str, int], _Ed1RowOutcome] = {}
+    restored: dict[tuple[str, int], Ed1RowOutcome] = {}
     for record in partial_log.load():
         if record.phase != split_role or record.unit != candidate_id:
             continue
@@ -596,7 +639,7 @@ def _restore_ed1_recorded(
                 extras = {}
         comp = extras.get("compression_value")
         comp_value = float(comp) if isinstance(comp, int | float) else None
-        restored[(record.instance_id, record.repeat_id)] = _Ed1RowOutcome(
+        restored[(record.instance_id, record.repeat_id)] = Ed1RowOutcome(
             primary_value=record.score,
             compression_value=comp_value,
             encoder_text=_opt_str(extras.get("encoder_text")),
@@ -655,31 +698,32 @@ def run_ed1_eval(
     candidate_id: str,
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
-    transport: TransportCall,
-    scorer: Callable[..., CodeScore] | None = None,
-    fanout: FanoutConfig | None = None,
+    row_job_factory: Ed1RowJobFactory,
+    concurrency: int = DEFAULT_CONCURRENCY,
+    max_wall_seconds: float | None = None,
     apply_reward: bool = True,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
 ) -> Ed1EvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
-    Fans out one enc->dec->score rollout per (task, repeat) through the
-    injected
-    transport + code scorer, reduces to the primary + compression aggregates,
-    derives Reward from the primary aggregate when unblended, and collects
-    per-row outputs (encoder + decoder text) for the dual-score sidecar.
+    Fans out one serializable enc->dec->score process job per (task, repeat),
+    reduces to the primary + compression aggregates, derives Reward from the
+    primary aggregate when unblended, and collects per-row outputs (encoder +
+    decoder text) for the dual-score sidecar.
 
     Incremental persistence: when a ``partial_log`` is given, each (task,
-    repeat) row appends its OWN dual-result record the instant it completes
-    (thread-safe), so a crash/interrupt mid-drive keeps every finished row on
+    repeat) row is appended by its parent-owned commit the instant it
+    completes, so a crash/interrupt mid-drive keeps every finished row on
     disk. A resumed drive restores already-recorded rows (keyed by the
     candidate ``unit`` = ``candidate_id`` and ``split_role`` phase) instead of
     re-driving+re-paying for them.
+
+    ``row_job_factory`` is the trusted scoring authority. It must execute the
+    exact :class:`Ed1RowRequest` under its declared procedure; the parent binds
+    result identity before persistence but cannot attest arbitrary worker code.
     """
     validate_ed1_body(candidate_template)
-    fanout = fanout or FanoutConfig()
-    scorer = scorer or score_ed1_submission
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role
@@ -698,49 +742,115 @@ def run_ed1_eval(
     eval_config_hash = sampling.eval_config.config_identity_hash
     restored = _restore_ed1_recorded(partial_log, split_role, candidate_id)
 
+    def _persist(
+        instance: Instance,
+        index: int,
+        outcome: Ed1RowOutcome,
+    ) -> None:
+        if partial_log is None:
+            return
+        marks = partial_cache_marks(
+            outcome.cache_hit, outcome.cache_provenance
+        )
+        partial_log.append(
+            PartialCallRecord(
+                phase=split_role,
+                instance_id=str(instance.id),
+                unit=candidate_id,
+                repeat_id=index,
+                score=outcome.primary_value,
+                failed=outcome.failed,
+                failure_code=outcome.failure_code,
+                split_role=split_role,
+                prompt_tokens=outcome.prompt_tokens,
+                completion_tokens=outcome.completion_tokens,
+                total_tokens=outcome.total_tokens,
+                raw_response=_encode_ed1_payload(outcome),
+                output_text=outcome.decoder_text,
+                finish_reason=outcome.finish_reason,
+                provider_error=outcome.provider_error,
+                cache_hit=marks.cache_hit,
+                cache_source_phase=marks.cache_source_phase,
+                cache_source_unit=marks.cache_source_unit,
+                cache_source_call_id=marks.cache_source_call_id,
+                cache_source_at=marks.cache_source_at,
+            )
+        )
+
     def _spec(
-        instance: Instance, index: int
-    ) -> CallSpec[tuple[str, int], _Ed1RowOutcome]:
+        instance: Instance,
+        index: int,
+        *,
+        drive_ordinal: int,
+    ) -> CallSpec[tuple[str, int], Ed1RowOutcome]:
+        from whetstone.envs.ed1m import Ed1mExperiment
+
+        mutant_record = (
+            experiment.mutants[str(instance.id)]
+            if isinstance(experiment, Ed1mExperiment)
+            else None
+        )
+        request = Ed1RowRequest(
+            env_name=rd.env_name,
+            dataset_revision=experiment.dataset_revision,
+            primary_metric_name=primary_metric_name,
+            graph_hash=graph_hash,
+            candidate_template=candidate_template,
+            candidate_id=candidate_id,
+            instance=ProcessInstance.from_instance(instance),
+            provider_call_config=rd.provider_call_config,
+            execution_policy=execution_policy,
+            procedure_config_hash=rd.procedure_config_hash,
+            budget_ratio=rd.budget_ratio,
+            logical_call_id=f"{candidate_id}:{instance.id}#{index}",
+            repeat_index=index,
+            drive_ordinal=drive_ordinal,
+            cache_phase=split_role,
+            cache_unit=candidate_id,
+            cache_root=None if cache is None else str(cache.root),
+            mutant_record=mutant_record,
+        )
+
+        def _decode(value: JsonValue) -> Ed1RowOutcome:
+            result = Ed1RowResult.from_process_payload(value)
+            if result.request_identity != request.request_identity:
+                raise ValueError(
+                    "ED1 row result does not match its submitted request"
+                )
+            return result.outcome
+
         return CallSpec(
             key=(str(instance.id), index),
-            run=lambda inst=instance, i=index: _drive_and_persist(
-                experiment=experiment,
-                candidate_template=candidate_template,
-                candidate_id=candidate_id,
-                instance=inst,
-                index=i,
-                provider_call_config=rd.provider_call_config,
-                execution_policy=execution_policy,
-                transport=transport,
-                scorer=scorer,
-                partial_log=partial_log,
-                split_role=split_role,
-                cache=cache,
-            ),
+            job=row_job_factory(request),
+            decode=_decode,
             deadline_seconds=_deadline(execution_policy),
+            commit=lambda outcome, inst=instance, i=index: _persist(
+                inst, i, outcome
+            ),
         )
 
     by_instance = {str(inst.id): inst for inst in instances}
+    phase_deadline = start_phase_deadline(max_wall_seconds)
 
     def _drive(
-        pending: list[CallSpec[tuple[str, int], _Ed1RowOutcome]],
-    ) -> dict[tuple[str, int], _Ed1RowOutcome]:
+        pending: list[CallSpec[tuple[str, int], Ed1RowOutcome]],
+    ) -> dict[tuple[str, int], Ed1RowOutcome]:
         pool = run_call_pool(
             pending,
-            concurrency=fanout.concurrency,
+            concurrency=concurrency,
             is_rate_limited=lambda _o: False,
-            max_wall_seconds=fanout.max_wall_seconds,
+            max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
-        out: dict[tuple[str, int], _Ed1RowOutcome] = {}
+        out: dict[tuple[str, int], Ed1RowOutcome] = {}
         for res in pool.results:
-            if res.value is not None:
+            if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
-            else:
+            elif res.status is FanoutStatus.UNIT_TIMEOUT:
                 # A runner-guard timeout: the row hung past its (2-call) guard.
                 # Marked redrivable so ONE bounded re-drive gets a fresh try
                 # before it lands as a failed row (a single hung row must not
                 # kill an anchor arm under the FAIL policy).
-                out[res.key] = _Ed1RowOutcome(
+                out[res.key] = Ed1RowOutcome(
                     primary_value=None,
                     compression_value=None,
                     encoder_text=None,
@@ -749,16 +859,25 @@ def run_ed1_eval(
                     failure_code="runner_timeout",
                     redrivable=True,
                 )
+            else:
+                out[res.key] = Ed1RowOutcome(
+                    primary_value=None,
+                    compression_value=None,
+                    encoder_text=None,
+                    decoder_text=None,
+                    failed=False,
+                    missing=True,
+                )
         return out
 
     # Only drive rows NOT already durably recorded (resume skip).
     specs = [
-        _spec(instance, index)
+        _spec(instance, index, drive_ordinal=0)
         for instance in instances
         for index in range(repeats)
         if (str(instance.id), index) not in restored
     ]
-    driven: dict[tuple[str, int], _Ed1RowOutcome] = dict(restored)
+    driven: dict[tuple[str, int], Ed1RowOutcome] = dict(restored)
     driven.update(_drive(specs))
 
     # --- ONE bounded re-drive of timed-out / transient-transport rows. ---
@@ -769,12 +888,22 @@ def run_ed1_eval(
     # rejection, infra-unknown scoring) is NOT re-driven. Mirrors the QA arm's
     # bounded re-drive; the re-drive persists its own partial record.
     redrive_specs = [
-        _spec(by_instance[key[0]], key[1])
+        _spec(by_instance[key[0]], key[1], drive_ordinal=1)
         for key, out in driven.items()
         if out.redrivable
     ]
     if redrive_specs:
-        driven.update(_drive(redrive_specs))
+        redriven = _drive(redrive_specs)
+        driven.update(
+            (key, outcome)
+            for key, outcome in redriven.items()
+            if not outcome.missing
+        )
+
+    if partial_log is not None:
+        for key, outcome in driven.items():
+            if outcome.failure_code == "runner_timeout":
+                _persist(by_instance[key[0]], key[1], outcome)
 
     # Assemble per-task rows (primary + compression) + outputs, instance/repeat
     # order.
@@ -810,13 +939,17 @@ def run_ed1_eval(
                     over_budget=outcome.over_budget,
                 )
             )
-            if outcome.failed or outcome.primary_value is None:
+            if outcome.missing:
+                task_primary_rows.append(RowValue(missing=True))
+            elif outcome.failed or outcome.primary_value is None:
                 task_primary_rows.append(RowValue(failed=True))
             else:
                 task_primary_rows.append(
                     RowValue(value=float(outcome.primary_value))
                 )
-            if outcome.compression_value is None:
+            if outcome.missing:
+                c_rows.append(RowValue(missing=True))
+            elif outcome.compression_value is None:
                 c_rows.append(
                     RowValue(failed=True)
                     if outcome.failed
@@ -954,7 +1087,7 @@ def run_ed1_eval(
     )
 
 
-def _row_output_text(outcome: _Ed1RowOutcome) -> str | None:
+def _row_output_text(outcome: Ed1RowOutcome) -> str | None:
     """The sidecar output text: the encoder + decoder outputs (both kept)."""
     if outcome.encoder_text is None and outcome.decoder_text is None:
         return None
@@ -983,5 +1116,8 @@ __all__ = [
     "Ed1EvalDiagnostics",
     "Ed1EvalResult",
     "Ed1RowDiag",
+    "Ed1RowJobFactory",
+    "Ed1RowOutcome",
+    "drive_ed1_row",
     "run_ed1_eval",
 ]

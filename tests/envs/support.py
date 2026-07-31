@@ -21,8 +21,11 @@ from dr_providers import (
     RawHttpRequest,
     policy_for,
 )
+from pydantic import BaseModel, JsonValue
+from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
+from whetstone.execution.fanout import ProcessJob
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
@@ -30,6 +33,80 @@ API_KEY_ENV = "OPENROUTER_API_KEY"
 #: A text-returning callable keyed on the request's user-message content
 #: (the rendered prompt), so a fake can answer differently per task.
 ReplyFn = Callable[[str], str]
+RowPayloadFn = Callable[[Instance, int, int], BaseModel | JsonValue]
+
+
+def row_job_factory(
+    payload_for: RowPayloadFn,
+) -> Callable[[BaseModel], ProcessJob]:
+    """Build request-bound importable jobs for reducer-focused tests."""
+
+    def build(request: BaseModel) -> ProcessJob:
+        from whetstone.envs.d1_eval import (
+            D1RowOutcome,
+            D1RowRequest,
+            D1RowResult,
+        )
+        from whetstone.envs.ed1_eval import (
+            Ed1RowOutcome,
+            Ed1RowRequest,
+            Ed1RowResult,
+        )
+        from whetstone.envs.internal_eval import (
+            InternalRowOutcome,
+            InternalRowRequest,
+            InternalRowResult,
+        )
+
+        if not isinstance(
+            request, InternalRowRequest | D1RowRequest | Ed1RowRequest
+        ):
+            raise TypeError(f"unsupported row request {type(request)!r}")
+        instance = request.instance.to_instance()
+        repeat = request.repeat_index
+        drive_ordinal = request.drive_ordinal
+        outcome = payload_for(instance, repeat, drive_ordinal)
+        if isinstance(request, InternalRowRequest):
+            if not isinstance(outcome, InternalRowOutcome):
+                raise TypeError("internal request requires InternalRowOutcome")
+            envelope = InternalRowResult(
+                request_identity=request.request_identity,
+                outcome=outcome,
+            )
+        elif isinstance(request, D1RowRequest):
+            if not isinstance(outcome, D1RowOutcome):
+                raise TypeError("D1 request requires D1RowOutcome")
+            envelope = D1RowResult(
+                request_identity=request.request_identity,
+                outcome=outcome,
+            )
+        else:
+            if not isinstance(outcome, Ed1RowOutcome):
+                raise TypeError("ED1 request requires Ed1RowOutcome")
+            envelope = Ed1RowResult(
+                request_identity=request.request_identity,
+                outcome=outcome,
+            )
+        return ProcessJob(
+            entrypoint="tests.envs.process_workers:return_payload",
+            payload=envelope.model_dump(mode="json"),
+        )
+
+    return build
+
+
+def process_row_job_factory(
+    entrypoint: str,
+) -> Callable[[BaseModel], ProcessJob]:
+    """Send the complete typed row request to a real driver worker."""
+
+    def build(request: BaseModel) -> ProcessJob:
+        return ProcessJob(
+            entrypoint=entrypoint,
+            payload=request.model_dump(mode="json"),
+        )
+
+    return build
 
 
 def transport_policy() -> ProviderTransportPolicy:
