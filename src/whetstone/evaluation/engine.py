@@ -9,7 +9,11 @@ from dr_store import ObjectStore
 
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import InternalEvalResult, run_internal_eval
-from whetstone.envs.rollout_definition import validate_candidate_prompt
+from whetstone.envs.registry import env_spec
+from whetstone.envs.rollout_definition import (
+    render_prompt,
+    validate_candidate_prompt,
+)
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.evaluation.schema import (
     EVALUATION_EVIDENCE_SCHEMA,
@@ -18,6 +22,9 @@ from whetstone.evaluation.schema import (
     ROLLOUT_AGGREGATE_SCHEMA,
     CacheEvidence,
     EvaluationEvidence,
+    EvaluationOutputComponentTraceStep,
+    EvaluationOutputRow,
+    EvaluationOutputsRecord,
     RowAccounting,
 )
 from whetstone.execution.fanout import FanoutConfig
@@ -105,8 +112,6 @@ class EvaluationEngine:
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
-        from whetstone.envs.registry import env_spec
-
         validate_candidate_prompt(
             env_spec(self.experiment.env_name),
             candidate,
@@ -118,6 +123,91 @@ class EvaluationEngine:
         return TypedRef(
             schema_name=reference.schema,
             content_hash=reference.content_hash,
+        )
+
+    def _evaluation_outputs_record(
+        self,
+        request: EvaluationRequest,
+        result: InternalEvalResult,
+    ) -> EvaluationOutputsRecord:
+        instance_ids = tuple(
+            str(instance.id) for instance in self.sampling.instances
+        )
+        task_identities = self.sampling.task_set.task_identities
+        if len(instance_ids) != len(task_identities):
+            raise ValueError(
+                "sampling instances and task identities must align exactly"
+            )
+        if len(set(instance_ids)) != len(instance_ids):
+            raise ValueError("sampling instance IDs must be unique")
+        if len(set(task_identities)) != len(task_identities):
+            raise ValueError("sampling task identities must be unique")
+
+        task_identity_by_instance = dict(
+            zip(instance_ids, task_identities, strict=True)
+        )
+        instance_by_id = {
+            str(instance.id): instance for instance in self.sampling.instances
+        }
+        repeat_count = self.sampling.repeat_plan.repeat_count
+        planned_ordinal = {
+            (instance_id, repeat): instance_index * repeat_count + repeat
+            for instance_index, instance_id in enumerate(instance_ids)
+            for repeat in range(repeat_count)
+        }
+
+        rows: list[EvaluationOutputRow] = []
+        prior_ordinal = -1
+        for output in result.outputs:
+            if output.candidate_id != request.candidate.candidate_id:
+                raise ValueError(
+                    "evaluation output candidate_id does not match request"
+                )
+            key = (output.instance_id, output.repeat)
+            ordinal = planned_ordinal.get(key)
+            if ordinal is None:
+                raise ValueError(
+                    "evaluation output row is outside the exact sampling plan"
+                )
+            if ordinal <= prior_ordinal:
+                raise ValueError(
+                    "evaluation output rows must follow sampling instance/"
+                    "repeat order"
+                )
+            prior_ordinal = ordinal
+            rows.append(
+                EvaluationOutputRow(
+                    candidate_id=output.candidate_id,
+                    instance_id=output.instance_id,
+                    task_identity=task_identity_by_instance[
+                        output.instance_id
+                    ],
+                    repeat=output.repeat,
+                    rendered_prompt=render_prompt(
+                        env_spec(self.experiment.env_name),
+                        request.candidate,
+                        instance_by_id[output.instance_id],
+                    ),
+                    output_text=output.output_text,
+                    score=output.score,
+                    failure_code=output.failure_code,
+                    component_trace_steps=tuple(
+                        EvaluationOutputComponentTraceStep(
+                            component_id=trace.component_id,
+                            inputs=trace.inputs,
+                            outputs=trace.outputs,
+                        )
+                        for trace in output.component_trace_steps
+                    ),
+                    finish_reason=output.finish_reason,
+                    provider_error=output.provider_error,
+                    max_budget=output.max_budget,
+                    over_budget=output.over_budget,
+                )
+            )
+        return EvaluationOutputsRecord(
+            candidate_id=request.candidate.candidate_id,
+            outputs=tuple(rows),
         )
 
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
@@ -157,25 +247,10 @@ class EvaluationEngine:
         if persisted_eval != eval_ref.record_ref:
             raise ValueError("persisted Eval Config reference diverged")
         aggregate = result.aggregate
-        output_record = {
-            "candidate_id": request.candidate.candidate_id,
-            "outputs": [
-                {
-                    "candidate_id": row.candidate_id,
-                    "instance_id": row.instance_id,
-                    "repeat": row.repeat,
-                    "output_text": row.output_text,
-                    "score": row.score,
-                    "failure_code": row.failure_code,
-                    "finish_reason": row.finish_reason,
-                    "provider_error": row.provider_error,
-                    "max_budget": row.max_budget,
-                    "over_budget": row.over_budget,
-                }
-                for row in result.outputs
-            ],
-        }
-        outputs_ref = self._put(EVALUATION_OUTPUTS_SCHEMA, output_record)
+        output_record = self._evaluation_outputs_record(request, result)
+        outputs_ref = self._put(
+            EVALUATION_OUTPUTS_SCHEMA, output_record.record_content()
+        )
         aggregation_output = aggregate.aggregation_output
         aggregate_record = {
             "name": aggregate.name,
@@ -214,6 +289,7 @@ class EvaluationEngine:
             evaluation_role=request.evaluation_role,
             evaluation_context_id=request.evaluation_context_id,
             purpose=request.purpose,
+            dataset_identity=self.sampling.task_set.dataset_revision,
             task_identities=self.sampling.task_set.task_identities,
             repeat_count=self.sampling.repeat_plan.repeat_count,
             per_task_values=result.per_task_scores,

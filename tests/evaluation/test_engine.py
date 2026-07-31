@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from threading import Event
 
 import pytest
@@ -17,8 +18,12 @@ from whetstone.evaluation import (
     EngineEvaluationService,
     EngineToolEvaluator,
     EvaluationEngine,
+    EvaluationOutputComponentTraceStep,
+    EvaluationOutputRow,
+    EvaluationOutputsRecord,
     EvaluationRequest,
 )
+from whetstone.evaluation import engine as evaluation_engine_module
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.graph.rollout import EvaluationRole
@@ -89,7 +94,18 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     )
     assert store.get(evidence.candidate.record_ref.reference)
     assert store.get(evidence.eval_config.record_ref.reference)
-    assert store.get(evidence.outputs_ref.reference)
+    output_record = EvaluationOutputsRecord.model_validate(
+        store.get(evidence.outputs_ref.reference)
+    )
+    assert output_record.record_content() == store.get(
+        evidence.outputs_ref.reference
+    )
+    assert output_record.candidate_id == (
+        engine.experiment.initial_candidate.candidate_id
+    )
+    assert tuple(row.task_identity for row in output_record.outputs) == (
+        engine.sampling.task_set.task_identities
+    )
     assert store.get(evidence.aggregate_ref.reference)
     assert evidence.reward_ref is not None
     reward = Reward.model_validate(store.get(evidence.reward_ref.reference))
@@ -100,6 +116,185 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert evidence.row_accounting.present == 1
     assert evidence.per_task_counts == (1,)
     assert evidence.eval_config == engine.eval_config_ref
+    assert evidence.dataset_identity == (
+        engine.sampling.task_set.dataset_revision
+    )
+
+
+def test_evaluation_outputs_wire_contract_is_exact() -> None:
+    record = EvaluationOutputsRecord(
+        candidate_id="candidate-1",
+        outputs=(
+            EvaluationOutputRow(
+                candidate_id="candidate-1",
+                instance_id="instance-1",
+                task_identity="task-1",
+                repeat=0,
+                rendered_prompt="Question?",
+                output_text="Answer.",
+                score=1.0,
+                failure_code="",
+                component_trace_steps=(
+                    EvaluationOutputComponentTraceStep(
+                        component_id="predictor",
+                        inputs={"question": "Question?"},
+                        outputs={"answer": "Answer."},
+                    ),
+                ),
+                finish_reason="stop",
+                provider_error=None,
+                max_budget=100,
+                over_budget=False,
+            ),
+        ),
+    )
+
+    assert record.record_content() == {
+        "candidate_id": "candidate-1",
+        "outputs": [
+            {
+                "candidate_id": "candidate-1",
+                "instance_id": "instance-1",
+                "task_identity": "task-1",
+                "repeat": 0,
+                "rendered_prompt": "Question?",
+                "output_text": "Answer.",
+                "score": 1.0,
+                "failure_code": "",
+                "component_trace_steps": [
+                    {
+                        "component_id": "predictor",
+                        "inputs": {"question": "Question?"},
+                        "outputs": {"answer": "Answer."},
+                    }
+                ],
+                "finish_reason": "stop",
+                "provider_error": None,
+                "max_budget": 100,
+                "over_budget": False,
+            }
+        ],
+    }
+
+
+def test_evaluation_outputs_reject_candidate_mismatch() -> None:
+    row = EvaluationOutputRow(
+        candidate_id="other",
+        instance_id="instance-1",
+        task_identity="task-1",
+        repeat=0,
+        rendered_prompt="Question?",
+        output_text="Answer.",
+        score=1.0,
+        failure_code="",
+        component_trace_steps=(),
+        finish_reason="stop",
+        provider_error=None,
+        max_budget=None,
+        over_budget=None,
+    )
+
+    with pytest.raises(ValueError, match="candidate_id must match"):
+        EvaluationOutputsRecord(candidate_id="candidate-1", outputs=(row,))
+
+
+@pytest.mark.parametrize(
+    ("update", "message"),
+    (
+        ({"repeat": True}, "valid integer"),
+        ({"score": float("nan")}, "finite number"),
+        ({"unexpected": "drift"}, "Extra inputs are not permitted"),
+    ),
+)
+def test_evaluation_output_row_rejects_wire_schema_drift(
+    update, message
+) -> None:
+    payload = {
+        "candidate_id": "candidate-1",
+        "instance_id": "instance-1",
+        "task_identity": "task-1",
+        "repeat": 0,
+        "rendered_prompt": "Question?",
+        "output_text": "Answer.",
+        "score": 1.0,
+        "failure_code": "",
+        "component_trace_steps": [],
+        "finish_reason": "stop",
+        "provider_error": None,
+        "max_budget": None,
+        "over_budget": None,
+        **update,
+    }
+
+    with pytest.raises(ValueError, match=message):
+        EvaluationOutputRow.model_validate(payload)
+
+
+def test_engine_rejects_output_outside_sampling_plan(
+    tmp_path, monkeypatch
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "output-drift.sqlite"))
+    transport = FakeTransport(reply=constant_reply("wrong"))
+    engine = _engine(tmp_path, store=store, transport=transport)
+    canonical_run = evaluation_engine_module.run_internal_eval
+
+    def drifted_run(*args, **kwargs):
+        result = canonical_run(*args, **kwargs)
+        assert len(result.outputs) == 1
+        return replace(
+            result,
+            outputs=(
+                replace(result.outputs[0], instance_id="unknown-instance"),
+            ),
+        )
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_internal_eval",
+        drifted_run,
+    )
+
+    with pytest.raises(ValueError, match="outside the exact sampling plan"):
+        engine.evaluate(
+            EvaluationRequest(
+                candidate=engine.experiment.initial_candidate,
+                evaluation_role=EvaluationRole.INTERNAL,
+                evaluation_context_id="ctx",
+                purpose="test",
+            )
+        )
+
+
+def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "output-order.sqlite"))
+    transport = FakeTransport(reply=constant_reply("wrong"))
+    engine = _engine(
+        tmp_path,
+        store=store,
+        transport=transport,
+        repeats=2,
+    )
+    canonical_run = evaluation_engine_module.run_internal_eval
+
+    def reversed_run(*args, **kwargs):
+        result = canonical_run(*args, **kwargs)
+        return replace(result, outputs=tuple(reversed(result.outputs)))
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_internal_eval",
+        reversed_run,
+    )
+
+    with pytest.raises(ValueError, match="must follow sampling"):
+        engine.evaluate(
+            EvaluationRequest(
+                candidate=engine.experiment.initial_candidate,
+                evaluation_role=EvaluationRole.INTERNAL,
+                evaluation_context_id="ctx",
+                purpose="test",
+            )
+        )
 
 
 def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:

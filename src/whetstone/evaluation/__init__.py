@@ -9,6 +9,9 @@ from whetstone.evaluation.schema import (
     CacheEvidence,
     EvaluationEvidence,
     EvaluationFailureEvidence,
+    EvaluationOutputComponentTraceStep,
+    EvaluationOutputRow,
+    EvaluationOutputsRecord,
     RowAccounting,
 )
 from whetstone.evaluation.service import EngineEvaluationService
@@ -22,6 +25,9 @@ __all__ = [
     "EvaluationEngine",
     "EvaluationEvidence",
     "EvaluationFailureEvidence",
+    "EvaluationOutputComponentTraceStep",
+    "EvaluationOutputRow",
+    "EvaluationOutputsRecord",
     "EvaluationRequest",
     "RowAccounting",
 ]
