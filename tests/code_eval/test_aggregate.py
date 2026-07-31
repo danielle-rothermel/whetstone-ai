@@ -1,13 +1,15 @@
-"""Rollout Aggregate: provenance binding + ABTPR + Mean Compression Ratio.
+"""Rollout Aggregate: provenance binding and scalar reductions.
 
 Proves the Rollout Aggregate binds the pure dr-code Aggregation Output to
 ``(graph_hash, eval_config_hash)``, the complete planned matrix, and the
-Evaluation Context; that Average Binary Test Pass Rate is the per-task mean
-then the unweighted cross-task mean; and that failed / missing / invalid rows
-are handled explicitly (never silently dropped) under the declared policy.
+Evaluation Context; that the generic task reducer is the per-task mean then
+the unweighted cross-task mean; and that failed / missing / invalid rows are
+handled explicitly (never silently dropped) under the declared policy.
 """
 
 from __future__ import annotations
+
+from typing import cast
 
 import pytest
 from dr_code.eval import AggregationOutput, AggregationStatus
@@ -19,23 +21,26 @@ from whetstone.code_eval import (
     RowValue,
     TaskRows,
     aggregation_definition,
-    average_binary_test_pass_rate,
     mean_compression_ratio,
+    unweighted_task_mean,
 )
 from whetstone.code_eval.aggregate import SKIP_TOLERANCE_VARIABLE
 
 from .support import FULL_HASH
 
 CTX = "c" * 64
+AGGREGATE_NAME = "custom_scalar_quality"
 PROPAGATE = CompletenessPolicy()
 
 
-def _abtpr(
-    task_rows,
-    repeat_count=3,
-    policy=PROPAGATE,
-):
-    return average_binary_test_pass_rate(
+def _task_mean(
+    task_rows: tuple[TaskRows, ...],
+    repeat_count: int = 3,
+    policy: CompletenessPolicy = PROPAGATE,
+    aggregate_name: str = AGGREGATE_NAME,
+) -> RolloutAggregate:
+    return unweighted_task_mean(
+        aggregate_name=aggregate_name,
         graph_hash=FULL_HASH,
         eval_config_hash=FULL_HASH,
         evaluation_context_id=CTX,
@@ -54,7 +59,7 @@ def test_aggregate_binds_pure_output_to_identity_and_context() -> None:
         expected_repeats=2,
         rows=(RowValue(value=1.0), RowValue(value=0.0)),
     )
-    agg = _abtpr((t1,), repeat_count=2)
+    agg = _task_mean((t1,), repeat_count=2)
     assert isinstance(agg, RolloutAggregate)
     # Identity ( graph_hash, eval_config_hash ) + Evaluation Context.
     assert agg.graph_hash == FULL_HASH
@@ -67,44 +72,81 @@ def test_aggregate_binds_pure_output_to_identity_and_context() -> None:
     assert agg.repeat_count == 2
 
 
-# --- Average Binary Test Pass Rate: two-stage mean -------------------------
+# --- Generic scalar task mean: two-stage mean ------------------------------
 
 
-def test_abtpr_is_per_task_then_unweighted_cross_task_mean() -> None:
-    # t1: [1,0,1] -> 2/3 ; t2: [0,0,0] -> 0. Cross-task unweighted mean = 1/3.
+def test_unweighted_task_mean_accepts_generic_scalar_values() -> None:
+    # t1: [2,4,6] -> 4; t2: [10,14,18] -> 14. Cross-task mean = 9.
     t1 = TaskRows(
         task_identity="t1",
         expected_repeats=3,
-        rows=(RowValue(value=1.0), RowValue(value=0.0), RowValue(value=1.0)),
+        rows=(RowValue(value=2.0), RowValue(value=4.0), RowValue(value=6.0)),
     )
     t2 = TaskRows(
         task_identity="t2",
         expected_repeats=3,
-        rows=(RowValue(value=0.0), RowValue(value=0.0), RowValue(value=0.0)),
+        rows=(
+            RowValue(value=10.0),
+            RowValue(value=14.0),
+            RowValue(value=18.0),
+        ),
     )
-    agg = _abtpr((t1, t2))
+    agg = _task_mean((t1, t2))
     assert agg.aggregation_output.status is AggregationStatus.OK
-    assert agg.aggregation_output.value == pytest.approx(1 / 3)
+    assert agg.aggregation_output.value == pytest.approx(9.0)
     assert agg.rows_present == 6
     assert agg.rows_missing == 0
 
 
-def test_abtpr_is_unweighted_regardless_of_repeat_counts() -> None:
-    # Both tasks contribute equally to the cross-task mean (unweighted), even
-    # though per-task means come from the same repeat_count here.
-    t_all_pass = TaskRows(
+def test_unweighted_task_mean_is_two_stage_not_row_weighted() -> None:
+    full_task = TaskRows(
         task_identity="t1",
         expected_repeats=3,
-        rows=(RowValue(value=1.0),) * 3,
+        rows=(RowValue(value=2.0), RowValue(value=4.0), RowValue(value=6.0)),
     )
-    t_all_fail = TaskRows(
+    sparse_task = TaskRows(
         task_identity="t2",
         expected_repeats=3,
-        rows=(RowValue(value=0.0),) * 3,
+        rows=(RowValue(value=20.0),),
     )
-    agg = _abtpr((t_all_pass, t_all_fail))
-    # (1.0 + 0.0) / 2 = 0.5 unweighted.
-    assert agg.aggregation_output.value == pytest.approx(0.5)
+    agg = _task_mean(
+        (full_task, sparse_task),
+        policy=CompletenessPolicy(
+            row_policy=RowPolicy.SKIP,
+            max_skip_fraction=1 / 3,
+        ),
+    )
+    # Per-task means are 4 and 20, so the unweighted task mean is 12. A flat
+    # row mean would be 8 and would violate the two-stage contract.
+    assert agg.aggregation_output.value == pytest.approx(12.0)
+
+
+def test_unweighted_task_mean_propagates_caller_owned_name() -> None:
+    task = TaskRows(
+        task_identity="t1",
+        expected_repeats=1,
+        rows=(RowValue(value=3.5),),
+    )
+    aggregate_name = "latency_adjusted_quality"
+    agg = _task_mean((task,), repeat_count=1, aggregate_name=aggregate_name)
+    assert agg.name == aggregate_name
+
+
+@pytest.mark.parametrize("aggregate_name", ["", " ", "\t\n"])
+def test_unweighted_task_mean_rejects_blank_name(
+    aggregate_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="aggregate_name must be nonblank"):
+        _task_mean((), repeat_count=1, aggregate_name=aggregate_name)
+
+
+def test_unweighted_task_mean_rejects_non_string_name() -> None:
+    with pytest.raises(TypeError, match="aggregate_name must be a string"):
+        _task_mean(
+            (),
+            repeat_count=1,
+            aggregate_name=cast(str, 42),
+        )
 
 
 # --- Missing / failed rows are never silently dropped ----------------------
@@ -116,7 +158,7 @@ def test_missing_rows_padded_and_counted_propagate() -> None:
     t1 = TaskRows(
         task_identity="t1", expected_repeats=3, rows=(RowValue(value=1.0),)
     )
-    agg = _abtpr((t1,))
+    agg = _task_mean((t1,))
     assert agg.rows_missing == 2
     assert agg.rows_present == 1
     # Matrix fully accounted for.
@@ -137,7 +179,7 @@ def test_missing_rows_skip_policy_excludes_but_counts() -> None:
         expected_repeats=3,
         rows=(RowValue(value=1.0), RowValue(value=0.0)),
     )
-    agg = _abtpr(
+    agg = _task_mean(
         (t1,),
         policy=CompletenessPolicy(
             row_policy=RowPolicy.SKIP,
@@ -157,7 +199,7 @@ def test_failed_row_propagates_missing_data() -> None:
         expected_repeats=2,
         rows=(RowValue(value=1.0), RowValue(failed=True)),
     )
-    agg = _abtpr((t1,), repeat_count=2)
+    agg = _task_mean((t1,), repeat_count=2)
     assert agg.rows_failed == 1
     assert agg.aggregation_output.status is AggregationStatus.MISSING_DATA
 
@@ -182,7 +224,7 @@ def _rows_with_skips(n_tasks: int, skipped: int) -> tuple[TaskRows, ...]:
 def test_skip_within_tolerance_certifies_a_value() -> None:
     # 1 of 100 rows skipped (1%) under a declared 2% tolerance: certified.
     task_rows = _rows_with_skips(100, skipped=1)
-    agg = _abtpr(
+    agg = _task_mean(
         task_rows,
         repeat_count=1,
         policy=CompletenessPolicy(
@@ -200,7 +242,7 @@ def test_skip_over_tolerance_forced_incomplete_but_counts_kept() -> None:
     # 3 of 100 rows skipped (3%) exceeds the 2% bound: forced MISSING_DATA,
     # value None (an incomplete arm), yet the skipped rows stay counted.
     task_rows = _rows_with_skips(100, skipped=3)
-    agg = _abtpr(
+    agg = _task_mean(
         task_rows,
         repeat_count=1,
         policy=CompletenessPolicy(
@@ -215,7 +257,7 @@ def test_skip_over_tolerance_forced_incomplete_but_counts_kept() -> None:
 
 def test_skip_exactly_at_tolerance_certifies() -> None:
     # 2 of 100 (exactly 2%) is within the inclusive bound.
-    agg = _abtpr(
+    agg = _task_mean(
         _rows_with_skips(100, skipped=2),
         repeat_count=1,
         policy=CompletenessPolicy(
@@ -245,10 +287,10 @@ def test_skip_requires_an_explicit_bounded_completeness_policy() -> None:
     # A bare SKIP declares no completeness bound and is rejected. Callers must
     # provide an identity-bearing max_skip_fraction.
     with pytest.raises(TypeError, match="CompletenessPolicy"):
-        _abtpr(
+        _task_mean(
             _rows_with_skips(100, skipped=1),
             repeat_count=1,
-            policy=RowPolicy.SKIP,
+            policy=cast(CompletenessPolicy, RowPolicy.SKIP),
         )
 
 

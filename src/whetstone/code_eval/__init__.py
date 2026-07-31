@@ -15,7 +15,7 @@ Deliverables:
   experiment rule selecting ``task.gt_code_wo_comments`` bytes onto a generic
   dr-code Compression Reference Key.
 * **Rollout Aggregate** (``aggregate``) — provenance-bearing binding of pure
-  dr-code aggregation output; Average Binary Test Pass Rate and Mean
+  dr-code aggregation output; caller-named Unweighted Task Mean and Mean
   Compression Ratio with explicit missing/failed-row policy.
 * **Bootstrap Statistics** (``statistics``) — reproducible percentile
   confidence intervals with tasks as the resampling unit.
@@ -30,9 +30,9 @@ from whetstone.code_eval.aggregate import (
     RowValue,
     TaskRows,
     aggregation_definition,
-    average_binary_test_pass_rate,
     enforce_skip_tolerance,
     mean_compression_ratio,
+    unweighted_task_mean,
 )
 from whetstone.code_eval.compression_selection import (
     COMPRESSION_REFERENCE_NAMESPACE,
@@ -103,7 +103,6 @@ __all__ = [
     "VarianceDecomposition",
     "aggregation_definition",
     "analyze_power",
-    "average_binary_test_pass_rate",
     "bootstrap_delta_ci",
     "bootstrap_mean_ci",
     "bootstrap_paired_delta_ci",
@@ -121,4 +120,5 @@ __all__ = [
     "select_compression_reference",
     "submission_text",
     "submission_text_artifact",
+    "unweighted_task_mean",
 ]

@@ -7,22 +7,24 @@ over an explicitly complete tuple of inputs. Whetstone binds that value into a
 and the stated Evaluation Context. Whetstone owns provenance/context; dr-code
 owns the numeric reduction.
 
-Two Rollout Aggregates are derived here:
+Two Rollout Aggregate forms are derived here:
 
-* **Average Binary Test Pass Rate** — the mean Binary Test Pass Score across
-  Repeat IDs *per Task*, followed by the configured **unweighted** mean across
-  the **complete** Task Set. The per-task mean is a first reduction; the
-  cross-task mean is the second. Every planned cell is accounted for.
+* **Unweighted Task Mean** — the mean caller-derived scalar across Repeat IDs
+  *per Task*, followed by the configured **unweighted** mean across the
+  **complete** Task Set. The caller supplies the durable aggregate name. The
+  per-task mean is a first reduction; the cross-task mean is the second. Every
+  planned cell is accounted for.
 * **Mean Compression Ratio** — the configured complete-matrix mean of measured
   Compression Ratios.
 
 Both handle failed rows, missing rows, and invalid (zero-denominator)
 Compression Ratios **explicitly** via the declared :class:`RowPolicy`: rows are
-never silently dropped. Under ``PROPAGATE`` any incomplete/failed/invalid cell
-makes the whole aggregate ``MISSING_DATA``; under ``SKIP`` such cells are
-excluded but their exclusion is recorded in the provenance counts, and a
-wholly-empty reduction is an explicit ``ZERO_DENOMINATOR`` / ``MISSING_DATA``
-rather than a fabricated value.
+never silently dropped. Under ``PROPAGATE`` an incomplete or failed cell makes
+the whole aggregate ``MISSING_DATA``; invalid cells are explicit
+not-applicable inputs. Under ``SKIP`` non-present cells are excluded but their
+exclusion is recorded in the provenance counts and checked against the
+declared skip tolerance. A wholly-empty reduction has an explicit non-OK
+status rather than a fabricated value.
 """
 
 from __future__ import annotations
@@ -342,8 +344,9 @@ def enforce_skip_tolerance(
     )
 
 
-def average_binary_test_pass_rate(
+def unweighted_task_mean(
     *,
+    aggregate_name: str,
     graph_hash: str,
     eval_config_hash: str,
     evaluation_context_id: str,
@@ -351,16 +354,17 @@ def average_binary_test_pass_rate(
     repeat_count: int,
     policy: CompletenessPolicy = _PROPAGATE_POLICY,
 ) -> RolloutAggregate:
-    """Average Binary Test Pass Rate over the complete Task Set.
+    """Unweighted mean of caller-derived scalars over the complete Task Set.
 
     Two staged reductions:
 
-    1. **Per Task**: the mean Binary Test Pass Score across the task's Repeat
-       IDs. Each task's planned rows are padded to ``repeat_count`` with
-       explicit missing rows, so the per-task denominator is the full plan.
+    1. **Per Task**: the mean scalar across the task's Repeat IDs. Each task's
+       planned rows are padded to ``repeat_count`` with explicit missing rows,
+       so the per-task denominator is the full plan.
     2. **Across the complete Task Set**: the configured unweighted mean of the
        per-task means.
 
+    ``aggregate_name`` is the caller-owned durable name bound to the result.
     ``policy`` governs failed / missing rows. Under ``PROPAGATE`` any such row
     makes a task's mean (and hence the aggregate) ``MISSING_DATA``. Under
     ``SKIP`` those rows are excluded from the per-task denominator, and a task
@@ -368,6 +372,11 @@ def average_binary_test_pass_rate(
     mean. No row is silently dropped: all are counted in the aggregate's
     provenance.
     """
+
+    if not isinstance(aggregate_name, str):
+        raise TypeError("aggregate_name must be a string")
+    if not aggregate_name.strip():
+        raise ValueError("aggregate_name must be nonblank")
 
     per_task_config = _aggregation_config("mean", policy)
 
@@ -415,7 +424,7 @@ def average_binary_test_pass_rate(
         planned=len(all_rows),
     )
     return RolloutAggregate(
-        name="average_binary_test_pass_rate",
+        name=aggregate_name,
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,
         evaluation_context_id=evaluation_context_id,
@@ -493,8 +502,8 @@ __all__ = [
     "RowValue",
     "TaskRows",
     "aggregation_definition",
-    "average_binary_test_pass_rate",
     "enforce_skip_tolerance",
     "mean_compression_ratio",
     "tolerance_variable_spec",
+    "unweighted_task_mean",
 ]
