@@ -27,16 +27,17 @@ from whetstone.evaluation.schema import (
     EvaluationOutputsRecord,
     RowAccounting,
 )
-from whetstone.execution.fanout import FanoutConfig
+from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.graph.rollout import EvaluationRole
 from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.reward import reward_reference
 from whetstone.optimization.schema import (
     CANDIDATE_RECORD_SCHEMA,
     EVAL_CONFIG_RECORD_SCHEMA,
     Candidate,
     EvalConfigRef,
+    EvaluationBinding,
     candidate_reference,
     eval_config_reference,
 )
@@ -49,8 +50,7 @@ class EvaluationRequest:
     """Internal value passed to the canonical engine."""
 
     candidate: Candidate
-    evaluation_role: EvaluationRole
-    evaluation_context_id: str
+    evaluation_binding: EvaluationBinding
     purpose: str
 
 
@@ -65,7 +65,7 @@ class EngineEvaluation:
     def reward_value(self) -> float | None:
         if self.evidence.reward_ref is None:
             return None
-        return self.evidence.aggregate_value
+        return self.evidence.reward_ref.record.value
 
 
 class EvaluationEngine:
@@ -84,7 +84,8 @@ class EvaluationEngine:
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
         transport: TransportCall,
-        fanout: FanoutConfig | None = None,
+        concurrency: int = DEFAULT_CONCURRENCY,
+        max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
         prompt_cache: PromptResultCache | None = None,
     ) -> None:
@@ -93,7 +94,8 @@ class EvaluationEngine:
         self.sampling = sampling
         self._execution_policy = execution_policy
         self._transport = transport
-        self._fanout = fanout
+        self._concurrency = concurrency
+        self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
         expected = experiment.eval_configs.eval_config_for(sampling.split_role)
@@ -117,6 +119,12 @@ class EvaluationEngine:
             candidate,
             self.sampling.instances,
         )
+
+    def _validate_binding(self, binding: EvaluationBinding) -> None:
+        if binding.eval_config != self.eval_config_ref:
+            raise ValueError(
+                "evaluation binding must name the engine's exact Eval Config"
+            )
 
     def _put(self, schema: str, content: dict[str, Any]) -> TypedRef:
         reference, _ = self._store.put(schema, content)
@@ -211,10 +219,7 @@ class EvaluationEngine:
         )
 
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
-        if request.evaluation_role is EvaluationRole.OFFICIAL:
-            apply_reward = False
-        else:
-            apply_reward = True
+        self._validate_binding(request.evaluation_binding)
         self.preflight(request.candidate)
         result = run_internal_eval(
             self.experiment,
@@ -222,9 +227,10 @@ class EvaluationEngine:
             sampling=self.sampling,
             execution_policy=self._execution_policy,
             transport=self._transport,
-            fanout=self._fanout,
+            evaluation_binding=request.evaluation_binding,
+            concurrency=self._concurrency,
+            max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
-            apply_reward=apply_reward,
             render_guard=True,
             cache=self._prompt_cache,
         )
@@ -252,42 +258,24 @@ class EvaluationEngine:
             EVALUATION_OUTPUTS_SCHEMA, output_record.record_content()
         )
         aggregation_output = aggregate.aggregation_output
-        aggregate_record = {
-            "name": aggregate.name,
-            "graph_hash": aggregate.graph_hash,
-            "eval_config_hash": aggregate.eval_config_hash,
-            "evaluation_context_id": request.evaluation_context_id,
-            "task_count": aggregate.task_count,
-            "repeat_count": aggregate.repeat_count,
-            "aggregation_output": aggregation_output.model_dump(mode="json"),
-            "rows_present": aggregate.rows_present,
-            "rows_missing": aggregate.rows_missing,
-            "rows_failed": aggregate.rows_failed,
-            "rows_invalid": aggregate.rows_invalid,
-        }
+        aggregate_record = aggregate.record_content()
         aggregate_ref = self._put(ROLLOUT_AGGREGATE_SCHEMA, aggregate_record)
-        reward = (
-            result.reward.model_copy(
-                update={
-                    "evidence_ref_content_hash": aggregate_ref.content_hash
-                }
+        if aggregate_ref != aggregate.record_ref():
+            raise ValueError("persisted aggregate reference diverged")
+        reward_ref = None
+        if result.reward is not None:
+            reward_ref = reward_reference(result.reward)
+            persisted_reward = self._put(
+                REWARD_SCHEMA, result.reward.record_content()
             )
-            if result.reward is not None
-            else None
-        )
-        reward_ref = (
-            self._put(REWARD_SCHEMA, reward.record_content())
-            if reward is not None
-            else None
-        )
+            if persisted_reward != reward_ref.record_ref:
+                raise ValueError("persisted Reward reference diverged")
         cache = self._cache_evidence(request.candidate.candidate_id)
         evidence = EvaluationEvidence(
             candidate=candidate_ref,
-            eval_config=eval_ref,
+            evaluation_binding=request.evaluation_binding,
             graph_hash=aggregate.graph_hash,
             graph_config_ref=aggregate.graph_hash,
-            evaluation_role=request.evaluation_role,
-            evaluation_context_id=request.evaluation_context_id,
             purpose=request.purpose,
             dataset_identity=self.sampling.task_set.dataset_revision,
             task_identities=self.sampling.task_set.task_identities,

@@ -15,16 +15,16 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.graph.rollout import EvaluationRole
-from whetstone.optimization.identity import TypedRef, reject_non_json
-from whetstone.optimization.schema import CandidateRef, EvalConfigRef
+from whetstone.code_eval.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.optimization.identity import ImmutableJsonObject, TypedRef
+from whetstone.optimization.reward import RewardRef
+from whetstone.optimization.schema import CandidateRef, EvaluationBinding
 
 EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
 #: Persisted-format contract for EvaluationOutputsRecord. Exact wire fields
 #: are pinned by a golden test; never derive them from internal dataclass
 #: names.
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
-ROLLOUT_AGGREGATE_SCHEMA = "whetstone.rollout_aggregate"
 REWARD_SCHEMA = "whetstone.reward"
 EVALUATION_FAILURE_SCHEMA = "whetstone.evaluation_failure"
 EVALUATION_INTENT_CLAIM_SCHEMA = "whetstone.evaluation_intent_claim"
@@ -63,15 +63,13 @@ class EvaluationOutputComponentTraceStep(BaseModel):
     )
 
     component_id: StrictStr
-    inputs: dict[StrictStr, Any]
-    outputs: dict[StrictStr, Any]
+    inputs: ImmutableJsonObject
+    outputs: ImmutableJsonObject
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputComponentTraceStep:
         if not self.component_id.strip():
             raise ValueError("component_id must be non-empty")
-        reject_non_json(self.inputs, field="inputs")
-        reject_non_json(self.outputs, field="outputs")
         return self
 
 
@@ -94,7 +92,7 @@ class EvaluationOutputRow(BaseModel):
     failure_code: StrictStr
     component_trace_steps: tuple[EvaluationOutputComponentTraceStep, ...]
     finish_reason: StrictStr | None
-    provider_error: dict[StrictStr, Any] | None
+    provider_error: ImmutableJsonObject | None
     max_budget: StrictInt | None
     over_budget: StrictBool | None
 
@@ -107,8 +105,6 @@ class EvaluationOutputRow(BaseModel):
             raise ValueError("repeat must be non-negative")
         if self.max_budget is not None and self.max_budget < 0:
             raise ValueError("max_budget must be non-negative")
-        if self.provider_error is not None:
-            reject_non_json(self.provider_error, field="provider_error")
         return self
 
 
@@ -187,11 +183,9 @@ class EvaluationEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: CandidateRef
-    eval_config: EvalConfigRef
+    evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
     graph_config_ref: StrictStr
-    evaluation_role: EvaluationRole
-    evaluation_context_id: StrictStr
     purpose: StrictStr
     #: Source dataset revision/manifest identity. The ordered TaskSet identity
     #: is a separate sampling/config identity and must not be substituted here.
@@ -206,7 +200,7 @@ class EvaluationEvidence(BaseModel):
     aggregate_name: StrictStr
     aggregate_value: float | None
     aggregate_status: StrictStr
-    reward_ref: TypedRef | None = None
+    reward_ref: RewardRef | None = None
     cache: CacheEvidence = Field(default_factory=CacheEvidence)
     concurrency_halved: StrictBool = False
     deadline_reached: StrictBool = False
@@ -228,7 +222,7 @@ class EvaluationFailureEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: CandidateRef
-    eval_config: EvalConfigRef
+    evaluation_binding: EvaluationBinding
     purpose: StrictStr
     exception_type: StrictStr
     message: StrictStr

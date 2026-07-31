@@ -19,7 +19,11 @@ from whetstone.evaluation.schema import (
     EvaluationFailureEvidence,
     EvaluationIntentClaim,
 )
-from whetstone.optimization.identity import TypedRef, typed_ref_for_record
+from whetstone.optimization.identity import (
+    TerminalFailure,
+    TypedRef,
+    typed_ref_for_record,
+)
 from whetstone.optimization.schema import (
     EvaluationIntent,
     IntentOutcome,
@@ -39,6 +43,16 @@ class _LeaseLostError(RuntimeError):
     pass
 
 
+def _wait_for_renewal(interval: float, stop: threading.Event) -> bool:
+    return stop.wait(interval)
+
+
+def _ignore_renewal_publication(
+    _claim: EvaluationIntentClaim,
+) -> None:
+    pass
+
+
 class EngineEvaluationService:
     """Resolve each immutable intent exactly once across process restarts."""
 
@@ -50,6 +64,12 @@ class EngineEvaluationService:
         claim_lease_seconds: float = 300.0,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
+        _renewal_wait: Callable[[float, threading.Event], bool] = (
+            _wait_for_renewal
+        ),
+        _renewal_published: Callable[[EvaluationIntentClaim], None] = (
+            _ignore_renewal_publication
+        ),
     ) -> None:
         if claim_lease_seconds <= 0:
             raise ValueError("claim_lease_seconds must be positive")
@@ -58,6 +78,8 @@ class EngineEvaluationService:
         self._claim_lease_seconds = claim_lease_seconds
         self._clock = clock
         self._sleep = sleep
+        self._renewal_wait = _renewal_wait
+        self._renewal_published = _renewal_published
         self._owner_id = uuid.uuid4().hex
         self._resolve_lock = threading.Lock()
 
@@ -245,6 +267,7 @@ class EngineEvaluationService:
             raise _LeaseLostError(
                 "evaluation lease renewal lost claim arbitration"
             )
+        self._renewal_published(winner)
 
     def _assert_generation_current(
         self,
@@ -314,8 +337,10 @@ class EngineEvaluationService:
 
         def heartbeat() -> None:
             interval = self._claim_lease_seconds / 3
-            while not stop.wait(interval):
+            while True:
                 try:
+                    if self._renewal_wait(interval, stop):
+                        return
                     self._renew_claim(intent, owned)
                 except Exception as exc:
                     heartbeat_errors.append(exc)
@@ -410,21 +435,28 @@ class EngineEvaluationService:
             evaluated = self._engine.evaluate(
                 EvaluationRequest(
                     candidate=intent.candidate.record,
-                    evaluation_role=intent.context_role,
-                    evaluation_context_id=intent.intent_id,
+                    evaluation_binding=intent.evaluation_binding,
                     purpose=intent.purpose,
                 )
             )
         except Exception as exc:
             failure = EvaluationFailureEvidence(
                 candidate=intent.candidate,
-                eval_config=intent.target_eval_config,
+                evaluation_binding=intent.evaluation_binding,
                 purpose=intent.purpose,
                 exception_type=type(exc).__name__,
                 message=str(exc) or type(exc).__name__,
             )
             ref, _ = self._store.put(
                 EVALUATION_FAILURE_SCHEMA, failure.record_content()
+            )
+            terminal_failure = TerminalFailure(
+                code=f"evaluation_{failure.exception_type}",
+                message=failure.message,
+                details={
+                    "evidence_schema": ref.schema,
+                    "evidence_content_hash": ref.content_hash,
+                },
             )
             return self._bind_if_owned(
                 intent,
@@ -442,6 +474,7 @@ class EngineEvaluationService:
                         ),
                     ),
                     resolved_eval_config=intent.target_eval_config,
+                    terminal_failure=terminal_failure,
                 ),
                 owned,
             )

@@ -6,7 +6,7 @@ from dataclasses import replace
 from threading import Event
 
 import pytest
-from dr_store import ObjectStore, SqliteBackend
+from dr_store import MemoryBackend, ObjectStore, SqliteBackend
 
 from tests.envs.support import (
     FakeTransport,
@@ -25,9 +25,10 @@ from whetstone.evaluation import (
     EvaluationRequest,
 )
 from whetstone.evaluation import engine as evaluation_engine_module
+from whetstone.evaluation.schema import EvaluationIntentClaim
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.graph.rollout import EvaluationRole
 from whetstone.optimization import (
     Candidate,
     EvaluationIntent,
@@ -35,11 +36,16 @@ from whetstone.optimization import (
     Reward,
     ToolCall,
     ToolCapacity,
+    ToolCapacityScope,
     ToolConfig,
     ToolDefinition,
     TypedRef,
     candidate_reference,
+    tool_capacity_binding,
+    tool_config_reference,
+    tool_definition_reference,
 )
+from whetstone.optimization.schema import EvaluationBinding
 
 
 def _experiment(*, repeats: int = 1):
@@ -75,6 +81,45 @@ def _engine(
     )
 
 
+def _binding(
+    engine: EvaluationEngine,
+    *,
+    role: EvaluationRole = EvaluationRole.INTERNAL,
+    campaign: str = "evaluation-test",
+) -> EvaluationBinding:
+    return EvaluationBinding(
+        eval_config=engine.eval_config_ref,
+        role=role,
+        authority_principal=(
+            "test-authority" if role is EvaluationRole.OFFICIAL else None
+        ),
+        campaign=campaign,
+    )
+
+
+def _intent(
+    engine: EvaluationEngine,
+    *,
+    intent_id: str,
+    purpose: str,
+    candidate: Candidate | None = None,
+) -> EvaluationIntent:
+    return EvaluationIntent(
+        intent_id=intent_id,
+        candidate=candidate_reference(
+            candidate or engine.experiment.initial_candidate
+        ),
+        target_eval_config=engine.eval_config_ref,
+        evaluation_binding=_binding(engine, campaign=intent_id),
+        purpose=purpose,
+        run_id="run",
+        step_index=0,
+        expected_reward_policy_hash=(
+            engine.experiment.reward_policy.identity_hash()
+        ),
+    )
+
+
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "engine.sqlite"))
     transport = FakeTransport(reply=constant_reply("wrong"))
@@ -83,8 +128,7 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     result = engine.evaluate(
         EvaluationRequest(
             candidate=engine.experiment.initial_candidate,
-            evaluation_role=EvaluationRole.INTERNAL,
-            evaluation_context_id="ctx",
+            evaluation_binding=_binding(engine),
             purpose="test",
         )
     )
@@ -94,7 +138,9 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
         evidence.record_content()
     )
     assert store.get(evidence.candidate.record_ref.reference)
-    assert store.get(evidence.eval_config.record_ref.reference)
+    assert store.get(
+        evidence.evaluation_binding.eval_config.record_ref.reference
+    )
     output_record = EvaluationOutputsRecord.model_validate(
         store.get(evidence.outputs_ref.reference)
     )
@@ -109,14 +155,15 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     )
     assert store.get(evidence.aggregate_ref.reference)
     assert evidence.reward_ref is not None
-    reward = Reward.model_validate(store.get(evidence.reward_ref.reference))
-    assert reward.evidence_ref_content_hash == (
-        evidence.aggregate_ref.content_hash
+    reward = Reward.model_validate(
+        store.get(evidence.reward_ref.record_ref.reference)
     )
+    assert reward == evidence.reward_ref.record
+    assert reward.evidence_refs == (evidence.aggregate_ref,)
     assert evidence.row_accounting.planned == 1
     assert evidence.row_accounting.present == 1
     assert evidence.per_task_counts == (1,)
-    assert evidence.eval_config == engine.eval_config_ref
+    assert evidence.evaluation_binding.eval_config == engine.eval_config_ref
     assert evidence.dataset_identity == (
         engine.sampling.task_set.dataset_revision
     )
@@ -140,8 +187,7 @@ def test_evaluation_evidence_rejects_coercible_booleans(
     evidence = engine.evaluate(
         EvaluationRequest(
             candidate=engine.experiment.initial_candidate,
-            evaluation_role=EvaluationRole.INTERNAL,
-            evaluation_context_id="ctx",
+            evaluation_binding=_binding(engine),
             purpose="test",
         )
     ).evidence
@@ -289,8 +335,7 @@ def test_engine_rejects_output_outside_sampling_plan(
         engine.evaluate(
             EvaluationRequest(
                 candidate=engine.experiment.initial_candidate,
-                evaluation_role=EvaluationRole.INTERNAL,
-                evaluation_context_id="ctx",
+                evaluation_binding=_binding(engine),
                 purpose="test",
             )
         )
@@ -321,8 +366,7 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
         engine.evaluate(
             EvaluationRequest(
                 candidate=engine.experiment.initial_candidate,
-                evaluation_role=EvaluationRole.INTERNAL,
-                evaluation_context_id="ctx",
+                evaluation_binding=_binding(engine),
                 purpose="test",
             )
         )
@@ -337,14 +381,11 @@ def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
         base_ref=engine.experiment.initial_candidate.base_ref,
         payload={"user_prompt_template": "Use {private_gold}."},
     )
-    intent = EvaluationIntent(
+    intent = _intent(
+        engine,
         intent_id="invalid-intent",
-        candidate=candidate_reference(invalid),
-        target_eval_config=engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
+        candidate=invalid,
         purpose="preflight",
-        run_id="run",
-        step_index=0,
     )
 
     resolution = EngineEvaluationService(
@@ -368,14 +409,11 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
         cache=True,
     )
     candidate = engine.experiment.initial_candidate
-    intent = EvaluationIntent(
+    intent = _intent(
+        engine,
         intent_id="restart-intent",
-        candidate=candidate_reference(candidate),
-        target_eval_config=engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
+        candidate=candidate,
         purpose="restart",
-        run_id="run",
-        step_index=0,
     )
     first = EngineEvaluationService(
         store=store, engine=engine
@@ -419,16 +457,10 @@ def test_two_resolvers_share_one_durable_evaluation(tmp_path) -> None:
     second_store = ObjectStore(SqliteBackend(database))
     first_engine = _engine(tmp_path, store=first_store, transport=transport)
     second_engine = _engine(tmp_path, store=second_store, transport=transport)
-    intent = EvaluationIntent(
+    intent = _intent(
+        first_engine,
         intent_id="concurrent-intent",
-        candidate=candidate_reference(
-            first_engine.experiment.initial_candidate
-        ),
-        target_eval_config=first_engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
         purpose="concurrent",
-        run_id="run",
-        step_index=0,
     )
 
     def wait_for_winner(_seconds: float) -> None:
@@ -455,11 +487,113 @@ def test_two_resolvers_share_one_durable_evaluation(tmp_path) -> None:
     assert len(transport.served) == 1
 
 
-def test_live_slow_evaluation_renews_its_durable_claim(tmp_path) -> None:
+def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
+    now = [100.0]
+    transport_entered = Event()
+    waiter_entered = Event()
+    renewal_wait_entered = Event()
+    release_renewal = Event()
+    initial_renewal_published = Event()
+    scripted_renewal_published = Event()
+    release = Event()
+    requested_intervals: list[float] = []
+    published_claims: list[EvaluationIntentClaim] = []
+
+    def blocked_reply(_prompt: str) -> str:
+        transport_entered.set()
+        assert release.wait(timeout=2)
+        return "wrong"
+
+    def wait_for_winner(_seconds: float) -> None:
+        waiter_entered.set()
+        assert release.wait(timeout=2)
+
+    def scripted_renewal_wait(interval: float, stop: Event) -> bool:
+        if not requested_intervals:
+            requested_intervals.append(interval)
+            renewal_wait_entered.set()
+            assert release_renewal.wait(timeout=2)
+            return stop.is_set()
+        assert stop.wait(timeout=2)
+        return True
+
+    def record_renewal(claim: EvaluationIntentClaim) -> None:
+        published_claims.append(claim)
+        if len(published_claims) == 1:
+            initial_renewal_published.set()
+        else:
+            scripted_renewal_published.set()
+
+    transport = FakeTransport(reply=blocked_reply)
+    backend = MemoryBackend()
+    first_store = ObjectStore(backend)
+    second_store = ObjectStore(backend)
+    first_engine = _engine(tmp_path, store=first_store, transport=transport)
+    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+    intent = _intent(
+        first_engine,
+        intent_id="slow-live-intent",
+        purpose="heartbeat",
+    )
+    first_service = EngineEvaluationService(
+        store=first_store,
+        engine=first_engine,
+        claim_lease_seconds=3.0,
+        clock=lambda: now[0],
+        _renewal_wait=scripted_renewal_wait,
+        _renewal_published=record_renewal,
+    )
+    second_service = EngineEvaluationService(
+        store=second_store,
+        engine=second_engine,
+        claim_lease_seconds=3.0,
+        clock=lambda: now[0],
+        sleep=wait_for_winner,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(first_service.resolve_evaluation_intent, intent)
+        try:
+            assert initial_renewal_published.wait(timeout=2)
+            assert transport_entered.wait(timeout=2)
+            assert renewal_wait_entered.wait(timeout=2)
+            assert requested_intervals == [1.0]
+            initial = published_claims[0]
+
+            now[0] = 102.0
+            release_renewal.set()
+            assert scripted_renewal_published.wait(timeout=2)
+            renewed = published_claims[1]
+            assert renewed.event_ordinal == initial.event_ordinal + 1
+            assert renewed.heartbeat_ordinal == (initial.heartbeat_ordinal + 1)
+            assert renewed.expires_at > initial.expires_at
+
+            now[0] = initial.expires_at + 0.5
+            second = pool.submit(
+                second_service.resolve_evaluation_intent, intent
+            )
+            assert waiter_entered.wait(timeout=2)
+            assert first_service._latest_claim(intent) == renewed
+            assert len(transport.served) == 1
+        finally:
+            release_renewal.set()
+            release.set()
+        assert second.result(timeout=2) == first.result(timeout=2)
+
+    assert len(transport.served) == 1
+
+
+@pytest.mark.sqlite_time_integration
+def test_real_sqlite_heartbeat_renews_past_original_expiry(
+    tmp_path,
+) -> None:
     database = tmp_path / "heartbeat.sqlite"
     transport_entered = Event()
     waiter_entered = Event()
+    initial_renewal_published = Event()
+    renewed_past_original_expiry = Event()
     release = Event()
+    published_claims: list[EvaluationIntentClaim] = []
 
     def blocked_reply(_prompt: str) -> str:
         transport_entered.set()
@@ -470,55 +604,54 @@ def test_live_slow_evaluation_renews_its_durable_claim(tmp_path) -> None:
         waiter_entered.set()
         assert release.wait(timeout=10)
 
+    def record_renewal(claim: EvaluationIntentClaim) -> None:
+        published_claims.append(claim)
+        if len(published_claims) == 1:
+            initial_renewal_published.set()
+        elif time.time() > published_claims[0].expires_at:
+            renewed_past_original_expiry.set()
+
     transport = FakeTransport(reply=blocked_reply)
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
     first_engine = _engine(tmp_path, store=first_store, transport=transport)
     second_engine = _engine(tmp_path, store=second_store, transport=transport)
-    intent = EvaluationIntent(
+    intent = _intent(
+        first_engine,
         intent_id="slow-live-intent",
-        candidate=candidate_reference(
-            first_engine.experiment.initial_candidate
-        ),
-        target_eval_config=first_engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
         purpose="heartbeat",
-        run_id="run",
-        step_index=0,
     )
     first_service = EngineEvaluationService(
         store=first_store,
         engine=first_engine,
-        claim_lease_seconds=3.0,
+        claim_lease_seconds=0.3,
+        _renewal_published=record_renewal,
     )
     second_service = EngineEvaluationService(
         store=second_store,
         engine=second_engine,
-        claim_lease_seconds=3.0,
+        claim_lease_seconds=0.3,
         sleep=wait_for_winner,
     )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(first_service.resolve_evaluation_intent, intent)
-        assert transport_entered.wait(timeout=10)
-        initial = first_service._latest_claim(intent)
-        assert initial is not None
-        deadline = time.monotonic() + 10
-        while True:
-            renewed = first_service._latest_claim(intent)
-            assert renewed is not None
-            if (
-                renewed.event_ordinal > initial.event_ordinal
-                and renewed.expires_at > initial.expires_at
-            ):
-                break
-            if time.monotonic() >= deadline:
-                pytest.fail("durable heartbeat did not renew the live claim")
-            time.sleep(0.01)
-        second = pool.submit(second_service.resolve_evaluation_intent, intent)
-        assert waiter_entered.wait(timeout=10)
-        assert len(transport.served) == 1
-        release.set()
+        try:
+            assert initial_renewal_published.wait(timeout=10)
+            assert transport_entered.wait(timeout=10)
+            assert renewed_past_original_expiry.wait(timeout=10)
+            initial = published_claims[0]
+            renewed = published_claims[-1]
+            assert renewed.event_ordinal > initial.event_ordinal
+            assert renewed.expires_at > initial.expires_at
+
+            second = pool.submit(
+                second_service.resolve_evaluation_intent, intent
+            )
+            assert waiter_entered.wait(timeout=10)
+            assert len(transport.served) == 1
+        finally:
+            release.set()
         assert second.result(timeout=10) == first.result(timeout=10)
 
     assert len(transport.served) == 1
@@ -550,16 +683,10 @@ def test_renewal_wins_same_event_slot_as_stale_takeover(
     second_store = ObjectStore(SqliteBackend(database))
     first_engine = _engine(tmp_path, store=first_store, transport=transport)
     second_engine = _engine(tmp_path, store=second_store, transport=transport)
-    intent = EvaluationIntent(
+    intent = _intent(
+        first_engine,
         intent_id="renewal-race-intent",
-        candidate=candidate_reference(
-            first_engine.experiment.initial_candidate
-        ),
-        target_eval_config=first_engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
         purpose="renewal-race",
-        run_id="run",
-        step_index=0,
     )
     first = EngineEvaluationService(
         store=first_store,
@@ -624,16 +751,10 @@ def test_expired_claim_retries_after_resolver_crash(tmp_path) -> None:
     transport.reply = crash_once
     first_store = ObjectStore(SqliteBackend(database))
     first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    intent = EvaluationIntent(
+    intent = _intent(
+        first_engine,
         intent_id="crashed-intent",
-        candidate=candidate_reference(
-            first_engine.experiment.initial_candidate
-        ),
-        target_eval_config=first_engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
         purpose="crash-retry",
-        run_id="run",
-        step_index=0,
     )
     crashed = EngineEvaluationService(
         store=first_store,
@@ -671,16 +792,10 @@ def test_expired_owner_cannot_renew_after_new_generation_claims(
     transport = FakeTransport(reply=constant_reply("wrong"))
     first_engine = _engine(tmp_path, store=first_store, transport=transport)
     second_engine = _engine(tmp_path, store=second_store, transport=transport)
-    intent = EvaluationIntent(
+    intent = _intent(
+        first_engine,
         intent_id="fenced-intent",
-        candidate=candidate_reference(
-            first_engine.experiment.initial_candidate
-        ),
-        target_eval_config=first_engine.eval_config_ref,
-        context_role=EvaluationRole.INTERNAL,
         purpose="fence",
-        run_id="run",
-        step_index=0,
     )
     first = EngineEvaluationService(
         store=first_store,
@@ -722,8 +837,7 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     engine.evaluate(
         EvaluationRequest(
             candidate=base,
-            evaluation_role=EvaluationRole.INTERNAL,
-            evaluation_context_id="first",
+            evaluation_binding=_binding(engine, campaign="first"),
             purpose="cache",
         )
     )
@@ -731,8 +845,7 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     result = engine.evaluate(
         EvaluationRequest(
             candidate=same_prompt,
-            evaluation_role=EvaluationRole.INTERNAL,
-            evaluation_context_id="second",
+            evaluation_binding=_binding(engine, campaign="second"),
             purpose="cache",
         )
     )
@@ -763,24 +876,24 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
         output_fields=("evaluation_evidence_ref", "output_artifact_ref"),
     )
     config = ToolConfig(
-        tool_name=definition.tool_name,
-        tool_definition_ref="tooldef://evaluate_candidate",
-        tool_definition_identity_hash=definition.identity_hash(),
-        endpoint="mcp://whetstone/evaluate_candidate",
-        eval_config_ref=engine.eval_config_ref.record_ref.content_hash,
-        eval_config_identity_hash=engine.eval_config_ref.identity_hash,
-        reward_policy_ref=engine.experiment.reward_policy.identity_hash(),
-        capacity=ToolCapacity(max_accepted_calls=1),
-        store_namespace="tool-projection",
+        definition=tool_definition_reference(definition),
+        endpoint_key="evaluate_candidate",
+        eval_config=engine.sampling.eval_config,
+        reward_policy_hash=engine.experiment.reward_policy.identity_hash(),
+        capacity=ToolCapacity(
+            max_accepted_calls=1,
+            scope=ToolCapacityScope.GLOBAL,
+        ),
+        store_namespace_key="tool-projection",
     )
     base = engine.experiment.initial_candidate
     call = ToolCall(
         call_id="tool-call",
-        tool_config_hash=config.identity_hash(),
-        store_namespace=config.store_namespace,
+        tool_config=tool_config_reference(config),
+        capacity_binding=tool_capacity_binding(ToolCapacityScope.GLOBAL),
         args={
-            "base_ref": base.base_ref,
-            "model_route": base.base_ref,
+            "base_ref": base.base_ref.model_dump(mode="json"),
+            "model_route": "openai/test",
             "template": base.payload["user_prompt_template"],
         },
     )
@@ -789,10 +902,8 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
 
     assert projected.eval_config_hash == engine.eval_config_ref.identity_hash
     assert len(projected.rollout_refs) == 1
-    assert projected.extra_output["evaluation_evidence_ref"] == (
+    assert projected.output["evaluation_evidence_ref"] == (
         projected.rollout_refs[0].model_dump(mode="json")
     )
-    artifact = TypedRef.model_validate(
-        projected.extra_output["output_artifact_ref"]
-    )
+    artifact = TypedRef.model_validate(projected.output["output_artifact_ref"])
     assert store.get(artifact.reference)
