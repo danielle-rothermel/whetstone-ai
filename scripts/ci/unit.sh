@@ -2,4 +2,4 @@
 set -euo pipefail
 
 uv sync --locked --group dev
-uv run pytest tests/ -q -m "not process_integration"
+uv run pytest tests/ -q -m "not process_integration and not sqlite_time_integration and not sqlite_contention"

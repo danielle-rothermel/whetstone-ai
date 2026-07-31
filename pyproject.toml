@@ -50,6 +50,8 @@ addopts = ["--strict-markers"]
 markers = [
     "process_integration: exercises real spawned process and process-group boundaries",
     "process_guardian: exercises guardian and parent-death containment",
+    "sqlite_time_integration: exercises SQLite behavior against real elapsed time",
+    "sqlite_contention: exercises SQLite behavior under concurrent access",
 ]
 
 [tool.pyright]
