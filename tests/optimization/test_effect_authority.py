@@ -4,14 +4,13 @@ import inspect
 import multiprocessing
 import os
 import sqlite3
-import time
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Lock, Thread
 from typing import Any, LiteralString, cast
 from uuid import uuid4
 
@@ -22,6 +21,12 @@ from tests.optimization.effect_authority_spawn import (
     acquire_then_exit,
     race_acquire,
 )
+from tests.optimization.processes import (
+    in_process_start_methods,
+    join_processes,
+    terminate_processes,
+)
+from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
 from whetstone.optimization import (
     effect_authority as effect_authority_module,
 )
@@ -66,21 +71,69 @@ class _FakeClock:
             self._now += duration
 
 
+class _ScriptedRenewalWait:
+    def __init__(self) -> None:
+        self._condition = Condition()
+        self._requested_intervals: list[float] = []
+        self._releases = 0
+
+    def wait(self, interval_seconds: float, stop: Event) -> bool:
+        with self._condition:
+            self._requested_intervals.append(interval_seconds)
+            self._condition.notify_all()
+            ready = self._condition.wait_for(
+                lambda: stop.is_set() or self._releases > 0,
+                timeout=2,
+            )
+            if not ready:
+                raise TimeoutError("test did not script the next renewal wait")
+            if stop.is_set():
+                return True
+            self._releases -= 1
+            return False
+
+    def wake(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
+
+    def await_request_count(self, count: int) -> tuple[float, ...]:
+        with self._condition:
+            observed = self._condition.wait_for(
+                lambda: len(self._requested_intervals) >= count,
+                timeout=2,
+            )
+            if not observed:
+                raise AssertionError(
+                    f"renewer did not request {count} scripted waits"
+                )
+            return tuple(self._requested_intervals)
+
+    def release_one(self) -> None:
+        with self._condition:
+            self._releases += 1
+            self._condition.notify_all()
+
+
 @dataclass(frozen=True, slots=True)
 class _Backend:
     authority: EffectAuthority
     clock: _FakeClock | None
+    database: Path | None
 
-    def advance_past(self, duration: timedelta) -> None:
+    def advance_past(self, instant: datetime) -> None:
         if self.clock is not None:
-            self.clock.advance(duration + timedelta(microseconds=1))
-        else:
-            time.sleep(duration.total_seconds() + 0.04)
+            now = self.clock()
+            if now <= instant:
+                self.clock.advance(instant - now + timedelta(microseconds=1))
+            return
+        assert self.database is not None
+        wait_for_sqlite_authority_after(self.database, instant)
 
 
 class _CoordinatedAuthority(EffectAuthority):
     def __init__(self, authority: EffectAuthority) -> None:
         self._authority = authority
+        self._renewal_wait_strategy = authority._renewal_wait_strategy
         self.release_renewal = Event()
         self.renewal_entered = Event()
         self.terminal_entered = Event()
@@ -131,15 +184,21 @@ class _CoordinatedAuthority(EffectAuthority):
         )
 
 
-@pytest.fixture(params=("memory", "sqlite"))
+@pytest.fixture(
+    params=(
+        "memory",
+        pytest.param(
+            "sqlite",
+            marks=pytest.mark.sqlite_time_integration,
+        ),
+    )
+)
 def backend(request: pytest.FixtureRequest, tmp_path: Path) -> _Backend:
     if request.param == "memory":
         clock = _FakeClock()
-        return _Backend(EffectAuthority.memory(clock=clock), clock)
-    return _Backend(
-        EffectAuthority.sqlite(tmp_path / "authority.sqlite"),
-        None,
-    )
+        return _Backend(EffectAuthority.memory(clock=clock), clock, None)
+    database = tmp_path / "authority.sqlite"
+    return _Backend(EffectAuthority.sqlite(database), None, database)
 
 
 def _result_ref(label: str = "result") -> TypedRef:
@@ -406,10 +465,7 @@ def test_renew_and_takeover_share_backend_authority_time(
     first = _acquire(backend.authority, request)
     assert first.lease is not None
 
-    if backend.clock is not None:
-        backend.clock.advance(timedelta(milliseconds=30))
-    else:
-        time.sleep(0.03)
+    backend.advance_past(first.lease.expires_at - _LEASE_DURATION)
     renewed = backend.authority.renew(
         first.lease,
         lease_duration=_LEASE_DURATION,
@@ -422,7 +478,7 @@ def test_renew_and_takeover_share_backend_authority_time(
             lease_duration=_LEASE_DURATION,
         )
 
-    backend.advance_past(_LEASE_DURATION)
+    backend.advance_past(renewed.expires_at)
     takeover = _acquire(
         backend.authority,
         request,
@@ -447,7 +503,7 @@ def test_stale_attempt_cannot_terminalize_after_takeover(
     request = _request(policy=policy)
     first = _acquire(backend.authority, request)
     assert first.lease is not None
-    backend.advance_past(_LEASE_DURATION)
+    backend.advance_past(first.lease.expires_at)
     takeover = _acquire(
         backend.authority,
         request,
@@ -475,7 +531,7 @@ def test_no_redrive_expiry_becomes_immutable_recovery_required(
     request = _request(policy=ReplayPolicy.NO_REDRIVE)
     first = _acquire(backend.authority, request)
     assert first.lease is not None
-    backend.advance_past(_LEASE_DURATION)
+    backend.advance_past(first.lease.expires_at)
 
     recovered = _acquire(
         backend.authority,
@@ -639,7 +695,11 @@ def test_terminal_outcome_shapes_and_serialized_lease_are_exact() -> None:
 
 def test_heartbeat_renews_across_multiple_durations() -> None:
     clock = _FakeClock()
-    authority = EffectAuthority.memory(clock=clock)
+    renewal_wait = _ScriptedRenewalWait()
+    authority = EffectAuthority.memory(
+        clock=clock,
+        _renewal_wait_strategy=renewal_wait,
+    )
     acquired = _acquire(
         authority,
         _request(),
@@ -652,9 +712,13 @@ def test_heartbeat_renews_across_multiple_durations() -> None:
         acquired.lease,
         lease_duration=timedelta(milliseconds=90),
     ) as maintenance:
-        for _ in range(4):
+        intervals = renewal_wait.await_request_count(1)
+        assert intervals == pytest.approx((0.03,))
+        for tick in range(1, 5):
             clock.advance(timedelta(milliseconds=30))
-            time.sleep(0.045)
+            renewal_wait.release_one()
+            intervals = renewal_wait.await_request_count(tick + 1)
+            assert intervals == pytest.approx((0.03,) * (tick + 1))
             maintenance.check()
         maintained_lease = maintenance.lease
         assert maintained_lease.expires_at >= (
@@ -666,7 +730,11 @@ def test_heartbeat_renews_across_multiple_durations() -> None:
 
 def test_heartbeat_reports_lease_loss_on_clean_exit() -> None:
     clock = _FakeClock()
-    authority = EffectAuthority.memory(clock=clock)
+    renewal_wait = _ScriptedRenewalWait()
+    authority = EffectAuthority.memory(
+        clock=clock,
+        _renewal_wait_strategy=renewal_wait,
+    )
     acquired = _acquire(
         authority,
         _request(),
@@ -678,14 +746,22 @@ def test_heartbeat_reports_lease_loss_on_clean_exit() -> None:
         with authority.maintain(
             acquired.lease,
             lease_duration=timedelta(milliseconds=60),
-        ):
+        ) as maintenance:
+            assert renewal_wait.await_request_count(1) == pytest.approx(
+                (0.02,)
+            )
             clock.advance(timedelta(milliseconds=61))
-            time.sleep(0.04)
+            renewal_wait.release_one()
+            assert maintenance._stop.wait(timeout=1)
 
 
 def test_maintained_success_waits_for_renewal_and_uses_latest_lease() -> None:
     clock = _FakeClock()
-    base_authority = EffectAuthority.memory(clock=clock)
+    renewal_wait = _ScriptedRenewalWait()
+    base_authority = EffectAuthority.memory(
+        clock=clock,
+        _renewal_wait_strategy=renewal_wait,
+    )
     authority = _CoordinatedAuthority(base_authority)
     acquired = _acquire(
         base_authority,
@@ -702,8 +778,10 @@ def test_maintained_success_waits_for_renewal_and_uses_latest_lease() -> None:
         lease_duration=timedelta(milliseconds=90),
     ) as maintenance:
         maintenance_thread = maintenance._thread
-        assert authority.renewal_entered.wait(timeout=1)
+        assert renewal_wait.await_request_count(1) == pytest.approx((0.03,))
         clock.advance(timedelta(milliseconds=30))
+        renewal_wait.release_one()
+        assert authority.renewal_entered.wait(timeout=1)
 
         def publish() -> None:
             try:
@@ -715,9 +793,11 @@ def test_maintained_success_waits_for_renewal_and_uses_latest_lease() -> None:
 
         publisher = Thread(target=publish, name="test-terminal-publisher")
         publisher.start()
-        assert maintenance._stop.wait(timeout=1)
-        assert not authority.terminal_entered.is_set()
-        authority.release_renewal.set()
+        try:
+            assert maintenance._stop.wait(timeout=1)
+            assert not authority.terminal_entered.is_set()
+        finally:
+            authority.release_renewal.set()
         publisher.join(timeout=2)
         assert not publisher.is_alive()
         assert not errors
@@ -845,7 +925,11 @@ def test_clean_maintenance_exit_requires_terminal_publication() -> None:
 
 def test_exception_exit_stops_renewer_and_preserves_observed_loss() -> None:
     clock = _FakeClock()
-    base_authority = EffectAuthority.memory(clock=clock)
+    renewal_wait = _ScriptedRenewalWait()
+    base_authority = EffectAuthority.memory(
+        clock=clock,
+        _renewal_wait_strategy=renewal_wait,
+    )
     authority = _CoordinatedAuthority(base_authority)
     acquired = _acquire(
         base_authority,
@@ -860,8 +944,12 @@ def test_exception_exit_stops_renewer_and_preserves_observed_loss() -> None:
             lease_duration=timedelta(milliseconds=90),
         ) as maintenance:
             maintenance_thread = maintenance._thread
-            assert authority.renewal_entered.wait(timeout=1)
+            assert renewal_wait.await_request_count(1) == pytest.approx(
+                (0.03,)
+            )
             clock.advance(timedelta(milliseconds=91))
+            renewal_wait.release_one()
+            assert authority.renewal_entered.wait(timeout=1)
             authority.release_renewal.set()
             assert maintenance._stop.wait(timeout=1)
             raise LookupError("body failed")
@@ -871,22 +959,49 @@ def test_exception_exit_stops_renewer_and_preserves_observed_loss() -> None:
         maintenance.check()
 
 
+@pytest.mark.sqlite_time_integration
 def test_sqlite_heartbeat_keeps_real_time_work_publishable(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority = EffectAuthority.sqlite(tmp_path / "heartbeat.sqlite")
+    database = tmp_path / "heartbeat.sqlite"
+    authority = EffectAuthority.sqlite(database)
     acquired = _acquire(
         authority,
         _request(),
         duration=timedelta(milliseconds=180),
     )
     assert acquired.lease is not None
+    initial_expiry = acquired.lease.expires_at
+    renewal_observed_past_original_expiry = Event()
+    real_renew = authority.renew
+
+    def recording_renew(
+        lease: EffectLease,
+        *,
+        lease_duration: timedelta,
+    ) -> EffectLease:
+        renewed = real_renew(lease, lease_duration=lease_duration)
+        renewal_authority_time = renewed.expires_at - lease_duration
+        if renewal_authority_time > initial_expiry:
+            renewal_observed_past_original_expiry.set()
+        return renewed
+
+    monkeypatch.setattr(authority, "renew", recording_renew)
     with authority.maintain(
         acquired.lease,
         lease_duration=timedelta(milliseconds=180),
     ) as maintenance:
-        time.sleep(0.48)
+        assert renewal_observed_past_original_expiry.wait(timeout=10)
         maintenance.check()
+        contender = _acquire(
+            EffectAuthority.sqlite(database),
+            _request(),
+            owner="contender",
+            attempt="contender-attempt",
+            duration=timedelta(milliseconds=180),
+        )
+        assert contender.outcome is AcquireOutcome.BUSY
         terminal = maintenance.succeed(
             result_ref=_result_ref("sqlite-heartbeat")
         )
@@ -923,17 +1038,19 @@ def test_sqlite_rejects_submillisecond_lease_durations(
         )
 
 
+@pytest.mark.sqlite_time_integration
 def test_sqlite_maintenance_terminalization_surfaces_renewal_loss(
     tmp_path: Path,
 ) -> None:
-    authority = EffectAuthority.sqlite(tmp_path / "renewal-loss.sqlite")
+    database = tmp_path / "renewal-loss.sqlite"
+    authority = EffectAuthority.sqlite(database)
     acquired = _acquire(
         authority,
         _request(),
         duration=timedelta(milliseconds=1),
     )
     assert acquired.lease is not None
-    time.sleep(0.01)
+    wait_for_sqlite_authority_after(database, acquired.lease.expires_at)
 
     with pytest.raises(StaleLeaseError, match="effect lease is stale"):
         with authority.maintain(
@@ -1021,14 +1138,19 @@ def _spawn_result(queue: Any, *, timeout: float = 10.0) -> dict[str, Any]:
         ) from exc
 
 
-def test_spawned_same_owner_different_attempts_arbitrate_once(
-    tmp_path: Path,
-) -> None:
-    context = multiprocessing.get_context("spawn")
-    database = tmp_path / "race.sqlite"
+def _run_spawned_authority_contention(
+    database: Path,
+    *,
+    start_method: str,
+) -> list[dict[str, Any]]:
+    context = cast(Any, multiprocessing.get_context(start_method))
+    EffectAuthority.sqlite(database)
     payload = _request().model_dump()
     start = context.Event()
     output = context.Queue()
+    ready = [context.Event() for _ in range(2)]
+    attempted = [context.Event() for _ in range(2)]
+    acquired = [context.Event() for _ in range(2)]
     processes = [
         context.Process(
             target=race_acquire,
@@ -1038,25 +1160,57 @@ def test_spawned_same_owner_different_attempts_arbitrate_once(
                 "shared-worker",
                 attempt,
                 0.25,
+                ready[index],
                 start,
+                attempted[index],
+                acquired[index],
                 output,
             ),
         )
-        for attempt in ("attempt-1", "attempt-2")
+        for index, attempt in enumerate(("attempt-1", "attempt-2"))
     ]
-    for process in processes:
-        process.start()
-    start.set()
-    results = [_spawn_result(output) for _ in processes]
-    for process in processes:
-        process.join(timeout=10)
-        assert process.exitcode == 0
+    coordinator = sqlite3.connect(database, isolation_level=None)
+    started: list[Any] = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        assert all(signal.wait(timeout=10) for signal in ready)
+        coordinator.execute("BEGIN IMMEDIATE")
+        start.set()
+        assert all(signal.wait(timeout=10) for signal in attempted)
+        assert not any(signal.is_set() for signal in acquired)
+        coordinator.rollback()
+        assert all(signal.wait(timeout=10) for signal in acquired)
+        results = [_spawn_result(output) for _ in processes]
+        assert not [result for result in results if "error" in result]
+        join_processes(processes, timeout=10)
+        return results
+    finally:
+        coordinator.rollback()
+        coordinator.close()
+        start.set()
+        terminate_processes(started, timeout=10)
+
+
+@pytest.mark.sqlite_contention
+@pytest.mark.parametrize("start_method", in_process_start_methods())
+def test_spawned_same_owner_different_attempts_arbitrate_once(
+    tmp_path: Path,
+    start_method: str,
+) -> None:
+    results = _run_spawned_authority_contention(
+        tmp_path / "race.sqlite",
+        start_method=start_method,
+    )
     assert sorted(result["outcome"] for result in results) == [
         AcquireOutcome.ACQUIRED.value,
         AcquireOutcome.BUSY.value,
     ]
 
 
+@pytest.mark.sqlite_time_integration
+@pytest.mark.sqlite_contention
 def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
     tmp_path: Path,
 ) -> None:
@@ -1071,19 +1225,28 @@ def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
             request.model_dump(),
             "crashed-worker",
             "crashed-attempt",
-            0.12,
+            1.2,
             output,
         ),
     )
-    process.start()
-    first = _spawn_result(output)
-    process.join(timeout=10)
-    assert process.exitcode == 0
+    process_started = False
+    try:
+        process.start()
+        process_started = True
+        first = _spawn_result(output)
+        join_processes((process,), timeout=10)
+    finally:
+        if process_started:
+            terminate_processes((process,), timeout=10)
     assert first["lease"]["fence"] == 1
-    time.sleep(0.16)
+    first_expiry = datetime.fromisoformat(first["lease"]["expires_at"])
+    wait_for_sqlite_authority_after(database, first_expiry)
 
     start = context.Event()
     takeover_output = context.Queue()
+    ready = [context.Event() for _ in range(2)]
+    attempted = [context.Event() for _ in range(2)]
+    acquired_signals = [context.Event() for _ in range(2)]
     replacements = [
         context.Process(
             target=race_acquire,
@@ -1093,22 +1256,35 @@ def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
                 owner,
                 attempt,
                 0.25,
+                ready[index],
                 start,
+                attempted[index],
+                acquired_signals[index],
                 takeover_output,
             ),
         )
-        for owner, attempt in (
-            ("replacement-1", "attempt-1"),
-            ("replacement-2", "attempt-2"),
+        for index, (owner, attempt) in enumerate(
+            (
+                ("replacement-1", "attempt-1"),
+                ("replacement-2", "attempt-2"),
+            )
         )
     ]
-    for replacement in replacements:
-        replacement.start()
-    start.set()
-    takeovers = [_spawn_result(takeover_output) for _ in replacements]
-    for replacement in replacements:
-        replacement.join(timeout=10)
-        assert replacement.exitcode == 0
+    started_replacements: list[Any] = []
+    try:
+        for replacement in replacements:
+            replacement.start()
+            started_replacements.append(replacement)
+        assert all(signal.wait(timeout=10) for signal in ready)
+        start.set()
+        assert all(signal.wait(timeout=10) for signal in attempted)
+        assert all(signal.wait(timeout=10) for signal in acquired_signals)
+        takeovers = [_spawn_result(takeover_output) for _ in replacements]
+        assert not [result for result in takeovers if "error" in result]
+        join_processes(replacements, timeout=10)
+    finally:
+        start.set()
+        terminate_processes(started_replacements, timeout=10)
     assert sorted(result["outcome"] for result in takeovers) == [
         AcquireOutcome.ACQUIRED.value,
         AcquireOutcome.BUSY.value,

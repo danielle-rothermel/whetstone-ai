@@ -599,6 +599,12 @@ class _AdmissionBackend(Protocol):
     def close(self) -> None: ...
 
 
+class _SQLiteTransactionObserver(Protocol):
+    def transaction_attempted(self) -> None: ...
+
+    def transaction_acquired(self) -> None: ...
+
+
 type _EntryKey = tuple[str, str]
 type _ScopeKey = tuple[str, str, str, str]
 
@@ -897,7 +903,12 @@ def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
 
 
 class _SQLiteAdmissionBackend:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        transaction_observer: _SQLiteTransactionObserver | None = None,
+    ) -> None:
         self._path = str(path)
         if not self._path:
             raise ValueError("SQLite path must be non-empty")
@@ -905,12 +916,33 @@ class _SQLiteAdmissionBackend:
             raise ValueError(
                 "use ToolAdmissionAuthority.memory() for process-local memory"
             )
+        self._transaction_observer = transaction_observer
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(
+        self, *, observe_transaction: bool = False
+    ) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self._path, timeout=30.0, isolation_level=None
         )
         connection.execute("PRAGMA busy_timeout = 30000")
+        if observe_transaction and self._transaction_observer is not None:
+            observer = self._transaction_observer
+
+            def authorize(
+                action_code: int,
+                argument_1: str | None,
+                _argument_2: str | None,
+                _database_name: str | None,
+                _trigger_name: str | None,
+            ) -> int:
+                if (
+                    action_code == sqlite3.SQLITE_TRANSACTION
+                    and argument_1 == "BEGIN"
+                ):
+                    observer.transaction_attempted()
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
         return connection
 
     def initialize(self) -> None:
@@ -1001,9 +1033,11 @@ class _SQLiteAdmissionBackend:
         refused: ToolCallStoreEntry,
         max_accepted_calls: int,
     ) -> ToolCallStoreEntry:
-        connection = self._connect()
+        connection = self._connect(observe_transaction=True)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self._transaction_observer is not None:
+                self._transaction_observer.transaction_acquired()
             key = _entry_key(accepted)
             existing = self._load(connection, key)
             if existing is not None:
@@ -1066,9 +1100,11 @@ class _SQLiteAdmissionBackend:
             connection.close()
 
     def refuse(self, entry: ToolCallStoreEntry) -> ToolCallStoreEntry:
-        connection = self._connect()
+        connection = self._connect(observe_transaction=True)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self._transaction_observer is not None:
+                self._transaction_observer.transaction_acquired()
             key = _entry_key(entry)
             existing = self._load(connection, key)
             if existing is not None:
@@ -1101,9 +1137,11 @@ class _SQLiteAdmissionBackend:
             connection.close()
 
     def complete(self, entry: ToolCallStoreEntry) -> ToolCallStoreEntry:
-        connection = self._connect()
+        connection = self._connect(observe_transaction=True)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self._transaction_observer is not None:
+                self._transaction_observer.transaction_acquired()
             key = _entry_key(entry)
             completed = _complete_transition(
                 self._load(connection, key), entry
@@ -1779,8 +1817,18 @@ class ToolAdmissionAuthority:
         return cls(_MemoryAdmissionBackend())
 
     @classmethod
-    def sqlite(cls, path: str | Path) -> ToolAdmissionAuthority:
-        return cls(_SQLiteAdmissionBackend(path))
+    def sqlite(
+        cls,
+        path: str | Path,
+        *,
+        _transaction_observer: _SQLiteTransactionObserver | None = None,
+    ) -> ToolAdmissionAuthority:
+        return cls(
+            _SQLiteAdmissionBackend(
+                path,
+                transaction_observer=_transaction_observer,
+            )
+        )
 
     @classmethod
     def postgresql(

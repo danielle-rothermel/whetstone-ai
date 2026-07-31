@@ -848,14 +848,17 @@ def test_same_executor_concurrent_replay_has_one_active_evaluator(
     with ThreadPoolExecutor(max_workers=2) as pool:
         future = pool.submit(handle, call)
         assert entered.wait(timeout=10)
-        with pytest.raises(ToolExecutionBusyError):
-            handle(call)
-        release.set()
+        try:
+            with pytest.raises(ToolExecutionBusyError):
+                handle(call)
+        finally:
+            release.set()
         result = future.result(timeout=10)
     assert result.output is not None
     assert evaluator.evaluations == 1
 
 
+@pytest.mark.sqlite_time_integration
 def test_long_evaluation_renews_lease_and_prevents_takeover(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

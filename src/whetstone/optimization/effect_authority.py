@@ -360,6 +360,29 @@ class _Store(Protocol):
     def close(self) -> None: ...
 
 
+class _RenewalWaitStrategy(Protocol):
+    def wait(self, interval_seconds: float, stop: Event) -> bool: ...
+
+    def wake(self) -> None: ...
+
+
+class _EventRenewalWaitStrategy:
+    def wait(self, interval_seconds: float, stop: Event) -> bool:
+        return stop.wait(interval_seconds)
+
+    def wake(self) -> None:
+        pass
+
+
+_EVENT_RENEWAL_WAIT = _EventRenewalWaitStrategy()
+
+
+class _SQLiteTransactionObserver(Protocol):
+    def transaction_attempted(self) -> None: ...
+
+    def transaction_acquired(self) -> None: ...
+
+
 class _MemoryStore:
     def __init__(self, clock: Callable[[], datetime]) -> None:
         self._rows: dict[str, _EffectRow] = {}
@@ -548,7 +571,12 @@ def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
 
 
 class _SQLiteStore:
-    def __init__(self, path: str | Path) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        transaction_observer: _SQLiteTransactionObserver | None = None,
+    ) -> None:
         raw_path = str(path)
         if not raw_path:
             raise ValueError("SQLite path must be non-empty")
@@ -557,14 +585,35 @@ class _SQLiteStore:
                 "use EffectAuthority.memory() for process-local memory"
             )
         self._path = raw_path
+        self._transaction_observer = transaction_observer
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(
+        self, *, observe_transaction: bool = False
+    ) -> sqlite3.Connection:
         connection = sqlite3.connect(
             self._path,
             timeout=30.0,
             isolation_level=None,
         )
         connection.execute("PRAGMA busy_timeout = 30000")
+        if observe_transaction and self._transaction_observer is not None:
+            observer = self._transaction_observer
+
+            def authorize(
+                action_code: int,
+                argument_1: str | None,
+                _argument_2: str | None,
+                _database_name: str | None,
+                _trigger_name: str | None,
+            ) -> int:
+                if (
+                    action_code == sqlite3.SQLITE_TRANSACTION
+                    and argument_1 == "BEGIN"
+                ):
+                    observer.transaction_attempted()
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
         return connection
 
     def initialize(self) -> None:
@@ -609,9 +658,11 @@ class _SQLiteStore:
         semantic_key: str,
         transition: _Transition[_T],
     ) -> _T:
-        connection = self._connect()
+        connection = self._connect(observe_transaction=True)
         try:
             connection.execute("BEGIN IMMEDIATE")
+            if self._transaction_observer is not None:
+                self._transaction_observer.transaction_acquired()
             now_raw = connection.execute(_SQLITE_SELECT_NOW).fetchone()
             if now_raw is None:
                 raise _AuthorityCorruptionError(
@@ -1496,6 +1547,7 @@ class LeaseMaintenance:
         authority: EffectAuthority,
         lease: EffectLease,
         lease_duration: timedelta,
+        renewal_wait_strategy: _RenewalWaitStrategy,
     ) -> None:
         self._authority = authority
         self._lease = lease
@@ -1503,6 +1555,7 @@ class LeaseMaintenance:
             lease_duration
         )
         self._interval_seconds = self._lease_duration.total_seconds() / 3
+        self._renewal_wait_strategy = renewal_wait_strategy
         self._stop = Event()
         self._lock = Lock()
         self._loss: BaseException | None = None
@@ -1533,6 +1586,10 @@ class LeaseMaintenance:
             raise loss
         raise EffectAuthorityError("lease maintenance failed") from loss
 
+    def _stop_renewer(self) -> None:
+        self._stop.set()
+        self._renewal_wait_strategy.wake()
+
     def _lease_for_terminalization(self) -> EffectLease:
         with self._lock:
             if self._terminalization_started:
@@ -1547,7 +1604,7 @@ class LeaseMaintenance:
                 )
             if loss is None:
                 self._terminalization_started = True
-                self._stop.set()
+                self._stop_renewer()
 
         if loss is not None:
             self.check()
@@ -1586,7 +1643,9 @@ class LeaseMaintenance:
         return terminal
 
     def _run(self) -> None:
-        while not self._stop.wait(self._interval_seconds):
+        while not self._renewal_wait_strategy.wait(
+            self._interval_seconds, self._stop
+        ):
             with self._lock:
                 current = self._lease
             try:
@@ -1597,7 +1656,7 @@ class LeaseMaintenance:
             except BaseException as exc:
                 with self._lock:
                     self._loss = exc
-                self._stop.set()
+                self._stop_renewer()
                 return
             with self._lock:
                 self._lease = renewed
@@ -1613,7 +1672,7 @@ class LeaseMaintenance:
     def __exit__(self, *args: object) -> None:
         with self._lock:
             self._exited = True
-            self._stop.set()
+            self._stop_renewer()
         self._thread.join()
         with self._lock:
             terminalized = self._terminalized
@@ -1629,8 +1688,18 @@ class LeaseMaintenance:
 class EffectAuthority:
     """One authority contract backed by memory, SQLite, or PostgreSQL."""
 
-    def __init__(self, store: _Store) -> None:
+    def __init__(
+        self,
+        store: _Store,
+        *,
+        _renewal_wait_strategy: _RenewalWaitStrategy | None = None,
+    ) -> None:
         self._store = store
+        self._renewal_wait_strategy = (
+            _EVENT_RENEWAL_WAIT
+            if _renewal_wait_strategy is None
+            else _renewal_wait_strategy
+        )
         self._store.initialize()
 
     @classmethod
@@ -1638,16 +1707,33 @@ class EffectAuthority:
         cls,
         *,
         clock: Callable[[], datetime] | None = None,
+        _renewal_wait_strategy: _RenewalWaitStrategy | None = None,
     ) -> EffectAuthority:
-        """Open a process-local authority owning one injectable UTC clock."""
+        """Open a process-local authority owning one injectable UTC clock.
+
+        ``_renewal_wait_strategy`` scripts renewal scheduling in tests.
+        """
         authority_clock = (
             (lambda: datetime.now(UTC)) if clock is None else clock
         )
-        return cls(_MemoryStore(authority_clock))
+        return cls(
+            _MemoryStore(authority_clock),
+            _renewal_wait_strategy=_renewal_wait_strategy,
+        )
 
     @classmethod
-    def sqlite(cls, path: str | Path) -> EffectAuthority:
-        return cls(_SQLiteStore(path))
+    def sqlite(
+        cls,
+        path: str | Path,
+        *,
+        _transaction_observer: _SQLiteTransactionObserver | None = None,
+    ) -> EffectAuthority:
+        return cls(
+            _SQLiteStore(
+                path,
+                transaction_observer=_transaction_observer,
+            )
+        )
 
     @classmethod
     def postgresql(
@@ -1901,7 +1987,12 @@ class EffectAuthority:
         lease_duration: timedelta,
     ) -> LeaseMaintenance:
         """Maintain a lease whose terminal is published inside the context."""
-        return LeaseMaintenance(self, lease, lease_duration)
+        return LeaseMaintenance(
+            self,
+            lease,
+            lease_duration,
+            self._renewal_wait_strategy,
+        )
 
     def _validate_lease_duration(self, value: timedelta) -> timedelta:
         return self._store.validate_lease_duration(

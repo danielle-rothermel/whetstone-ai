@@ -65,6 +65,11 @@ from whetstone.optimization.tools import (
     tool_definition_reference,
 )
 
+from .processes import (
+    in_process_start_methods,
+    join_processes,
+    terminate_processes,
+)
 from .support import eval_config
 from .tool_store_spawn import admit_once, load_terminal_result_once
 
@@ -1151,34 +1156,89 @@ def test_sqlite_admission_decode_rejects_blob_json(tmp_path) -> None:
         store.get(call)
 
 
-def test_spawned_sqlite_capacity_race_is_atomic(tmp_path) -> None:
+def _run_spawned_admissions(
+    database: Path,
+    config: ToolConfig,
+    calls: tuple[tuple[str, str], ...],
+    *,
+    start_method: str,
+    hold_transaction: bool,
+) -> list[dict[str, Any]]:
+    context = cast(Any, multiprocessing.get_context(start_method))
+    queue = context.Queue()
+    start = context.Event()
+    ready = [context.Event() for _ in calls]
+    attempted = [context.Event() for _ in calls]
+    acquired = [context.Event() for _ in calls]
+    processes = [
+        context.Process(
+            target=admit_once,
+            args=(
+                str(
+                    database.with_name(
+                        f"{database.stem}-objects-{index}.sqlite"
+                    )
+                ),
+                str(database),
+                config.model_dump(mode="json"),
+                call_id,
+                template,
+                ready[index],
+                start,
+                attempted[index],
+                acquired[index],
+                queue,
+            ),
+        )
+        for index, (call_id, template) in enumerate(calls)
+    ]
+    started: list[Any] = []
+    coordinator: sqlite3.Connection | None = None
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        assert all(signal.wait(timeout=30) for signal in ready)
+        if hold_transaction:
+            coordinator = sqlite3.connect(database, isolation_level=None)
+            coordinator.execute("BEGIN IMMEDIATE")
+        start.set()
+        assert all(signal.wait(timeout=30) for signal in attempted)
+        if coordinator is not None:
+            assert not any(signal.is_set() for signal in acquired)
+            coordinator.rollback()
+            coordinator.close()
+            coordinator = None
+        assert all(signal.wait(timeout=30) for signal in acquired)
+        records = [queue.get(timeout=30) for _ in processes]
+        join_processes(processes, timeout=30)
+        return records
+    finally:
+        start.set()
+        if coordinator is not None:
+            coordinator.rollback()
+            coordinator.close()
+        terminate_processes(started, timeout=30)
+
+
+@pytest.mark.sqlite_contention
+@pytest.mark.parametrize("start_method", in_process_start_methods())
+def test_spawned_sqlite_capacity_race_is_atomic(
+    tmp_path: Path,
+    start_method: str,
+) -> None:
     database = tmp_path / "race.sqlite"
     config = _config(capacity=4)
     # Initialize tables before processes start; each process still opens fully
     # independent ObjectStore and admission-authority instances.
     _store(database)
-    context = multiprocessing.get_context("spawn")
-    queue = context.Queue()
-    processes = [
-        context.Process(
-            target=admit_once,
-            args=(
-                str(database),
-                config.model_dump(mode="json"),
-                f"call-{index}",
-                f"template-{index}",
-                queue,
-            ),
-        )
-        for index in range(12)
-    ]
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=30)
-        assert process.exitcode == 0
-
-    records = [queue.get(timeout=5) for _ in processes]
+    records = _run_spawned_admissions(
+        database,
+        config,
+        tuple((f"call-{index}", f"template-{index}") for index in range(12)),
+        start_method=start_method,
+        hold_transaction=True,
+    )
     assert not [record for record in records if "error" in record]
     accepted = [record for record in records if record["state"] == "accepted"]
     refused = [record for record in records if record["state"] == "refused"]
@@ -1193,34 +1253,22 @@ def test_spawned_sqlite_capacity_race_is_atomic(tmp_path) -> None:
     )
 
 
+@pytest.mark.sqlite_contention
+@pytest.mark.parametrize("start_method", in_process_start_methods())
 def test_spawned_global_capacity_has_one_process_shared_bucket(
-    tmp_path,
+    tmp_path: Path,
+    start_method: str,
 ) -> None:
     database = tmp_path / "global-race.sqlite"
     config = _config(capacity=1, scope=ToolCapacityScope.GLOBAL)
     _store(database)
-    context = multiprocessing.get_context("spawn")
-    queue = context.Queue()
-    processes = [
-        context.Process(
-            target=admit_once,
-            args=(
-                str(database),
-                config.model_dump(mode="json"),
-                f"global-{index}",
-                f"template-{index}",
-                queue,
-            ),
-        )
-        for index in range(8)
-    ]
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=30)
-        assert process.exitcode == 0
-
-    records = [queue.get(timeout=5) for _ in processes]
+    records = _run_spawned_admissions(
+        database,
+        config,
+        tuple((f"global-{index}", f"template-{index}") for index in range(8)),
+        start_method=start_method,
+        hold_transaction=False,
+    )
     assert not [record for record in records if "error" in record]
     assert sum(record["state"] == "accepted" for record in records) == 1
     assert sum(record["state"] == "refused" for record in records) == 7
@@ -1233,33 +1281,23 @@ def test_spawned_global_capacity_has_one_process_shared_bucket(
     )
 
 
-def test_spawned_same_call_replay_has_one_ordinal(tmp_path) -> None:
+@pytest.mark.sqlite_contention
+@pytest.mark.parametrize("start_method", in_process_start_methods())
+def test_spawned_same_call_replay_has_one_ordinal(
+    tmp_path: Path,
+    start_method: str,
+) -> None:
     database = tmp_path / "same.sqlite"
     config = _config(capacity=4)
     _store(database)
-    context = multiprocessing.get_context("spawn")
-    queue = context.Queue()
-    processes = [
-        context.Process(
-            target=admit_once,
-            args=(
-                str(database),
-                config.model_dump(mode="json"),
-                "same",
-                "same-template",
-                queue,
-            ),
-        )
-        for _ in range(6)
-    ]
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=30)
-        assert process.exitcode == 0
-
-    records = [queue.get(timeout=5) for _ in processes]
-    assert records == [{"state": "accepted", "ordinal": 1} for _ in processes]
+    records = _run_spawned_admissions(
+        database,
+        config,
+        (("same", "same-template"),) * 6,
+        start_method=start_method,
+        hold_transaction=False,
+    )
+    assert records == [{"state": "accepted", "ordinal": 1} for _ in range(6)]
     assert (
         _store(database).accepted_count(
             config, _binding(ToolCapacityScope.RUN)

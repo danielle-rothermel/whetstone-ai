@@ -1,6 +1,6 @@
 """Proposal evaluation is outside the checkpointed adapter invocation."""
 
-import time
+import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -26,6 +26,7 @@ from whetstone.optimization.harness import (
 from whetstone.optimization.identity import ImmutableJsonObject
 from whetstone.optimization.schema import eval_config_reference
 
+from .sqlite_time import wait_for_sqlite_authority_after
 from .support import (
     CountingProposalAdapter,
     RecordingEvaluationService,
@@ -244,37 +245,66 @@ def test_invalid_adapter_output_is_not_checkpointed_and_can_retry(
     assert ADAPTER_CHECKPOINT_SCHEMA in persisted_schemas
 
 
+@pytest.mark.sqlite_time_integration
 def test_fresh_sqlite_restart_reuses_adapter_checkpoint(tmp_path) -> None:
     adapter = CountingProposalAdapter()
     request = proposal_request()
+    effect_database = tmp_path / "effects.sqlite"
+    lease_duration = timedelta(seconds=1.2)
     crashed_store = make_store(tmp_path)
     crashed = make_harness(
         store=crashed_store,
         adapter_registry=registry(adapter),
         run=request.run,
-        effect_authority=EffectAuthority.sqlite(tmp_path / "effects.sqlite"),
+        effect_authority=EffectAuthority.sqlite(effect_database),
         evaluation_service=CrashOnceEvaluationService(),
-        lease_duration=timedelta(milliseconds=20),
+        lease_duration=lease_duration,
     )
     with pytest.raises(RuntimeError, match="crash during"):
         crashed.run_step(request)
     assert adapter.invocations == 1
     assert crashed.resolve_step_result(request.run_id, 0) is None
 
+    with sqlite3.connect(effect_database) as connection:
+        active = connection.execute(
+            """
+            SELECT semantic_key, fence, expires_at
+            FROM whetstone_effect_authority
+            WHERE state = 'leased'
+            """
+        ).fetchall()
+    assert len(active) == 1
+    crashed_effect_key, crashed_fence, crashed_expiry_text = active[0]
+    assert type(crashed_effect_key) is str
+    assert crashed_fence == 1
+    assert type(crashed_expiry_text) is str
+
     fresh_store = make_store(tmp_path)
-    time.sleep(0.05)
+    wait_for_sqlite_authority_after(
+        effect_database,
+        datetime.fromisoformat(crashed_expiry_text),
+    )
     fresh = make_harness(
         store=fresh_store,
         adapter_registry=registry(adapter),
         run=request.run,
-        effect_authority=EffectAuthority.sqlite(tmp_path / "effects.sqlite"),
+        effect_authority=EffectAuthority.sqlite(effect_database),
         evaluation_service=RecordingEvaluationService(fresh_store),
-        lease_duration=timedelta(milliseconds=20),
+        lease_duration=lease_duration,
     )
     result, result_ref = fresh.run_step(request)
     assert adapter.invocations == 1
     assert result.resolved_intents[0].outcome is IntentOutcome.COMPLETED
     assert fresh.resolve_step_result(request.run_id, 0) == result_ref
+    with sqlite3.connect(effect_database) as connection:
+        terminal = connection.execute(
+            """
+            SELECT state, fence FROM whetstone_effect_authority
+            WHERE semantic_key = ?
+            """,
+            (crashed_effect_key,),
+        ).fetchone()
+    assert terminal == ("succeeded", 2)
 
 
 def test_restart_reuses_terminal_intent_prefix_after_later_crash(

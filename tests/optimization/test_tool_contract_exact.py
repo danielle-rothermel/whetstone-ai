@@ -626,6 +626,7 @@ raise SystemExit("unordered set was accepted")
             env=environment,
             capture_output=True,
             text=True,
+            timeout=10,
         )
         assert completed.returncode == 0, completed.stderr
 

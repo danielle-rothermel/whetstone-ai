@@ -24,19 +24,42 @@ from whetstone.optimization.tools import (
 )
 
 
+class _TransactionSignals:
+    def __init__(self, attempted: Any, acquired: Any) -> None:
+        self._attempted = attempted
+        self._acquired = acquired
+
+    def transaction_attempted(self) -> None:
+        self._attempted.set()
+
+    def transaction_acquired(self) -> None:
+        self._acquired.set()
+
+
 def admit_once(
-    database: str,
+    object_database: str,
+    admission_database: str,
     config_payload: dict[str, Any],
     call_id: str,
     template: str,
+    ready: Any,
+    start: Any,
+    attempted: Any,
+    acquired: Any,
     queue: Queue,
 ) -> None:
     """Open independent stores, admit one call, and report stable evidence."""
     try:
         config = ToolConfig.model_validate(config_payload)
         store = ToolCallStore(
-            ObjectStore(SqliteBackend(Path(database))),
-            ToolAdmissionAuthority.sqlite(database),
+            ObjectStore(SqliteBackend(Path(object_database))),
+            ToolAdmissionAuthority.sqlite(
+                admission_database,
+                _transaction_observer=_TransactionSignals(
+                    attempted,
+                    acquired,
+                ),
+            ),
             EffectAuthority.memory(),
         )
         call = ToolCall(
@@ -55,6 +78,9 @@ def admit_once(
             ),
             args={"model_route": "route", "template": template},
         )
+        ready.set()
+        if not start.wait(timeout=60):
+            raise TimeoutError("admission worker was not released")
         entry = store.admit(call, config)
         queue.put(
             {
