@@ -1110,10 +1110,12 @@ def run_call_pool[K: Hashable, R](
         dispatch_available()
         while True:
             collect_wall_cancellations()
+            # Guardian liveness is meaningful only while the scheduler still
+            # owns the active entry. The wall watcher removes an entry before
+            # killing its group, so keep that ownership check atomic.
             with active_lock:
-                guardian_snapshot = list(active.values())
-            for process in guardian_snapshot:
-                process.require_guardian_alive()
+                for process in active.values():
+                    process.require_guardian_alive()
             completed = harvest_completed()
             for process in completed:
                 envelope = process.envelope

@@ -14,7 +14,7 @@ import threading
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
 from pydantic import JsonValue, ValidationError
@@ -31,6 +31,39 @@ from whetstone.execution.fanout import (
 )
 
 _WORKERS = "tests.execution.process_workers"
+
+
+class _KqueueEvent(Protocol):
+    fflags: int
+
+
+class _Kqueue(Protocol):
+    def control(
+        self,
+        changes: list[_KqueueEvent],
+        max_events: int,
+        timeout: float,
+    ) -> list[_KqueueEvent]: ...
+
+    def close(self) -> None: ...
+
+
+class _KqueueApi(Protocol):
+    KQ_FILTER_PROC: int
+    KQ_EV_ADD: int
+    KQ_EV_ONESHOT: int
+    KQ_NOTE_EXIT: int
+
+    def kqueue(self) -> _Kqueue: ...
+
+    def kevent(
+        self,
+        ident: int,
+        *,
+        filter: int,
+        flags: int,
+        fflags: int,
+    ) -> _KqueueEvent: ...
 
 
 def _identity(value: JsonValue) -> JsonValue:
@@ -113,19 +146,20 @@ def _assert_process_gone(pid: int) -> None:
         finally:
             os.close(descriptor)
         return
-    queue = select.kqueue()
+    kqueue_api = cast(_KqueueApi, cast(object, select))
+    queue = kqueue_api.kqueue()
     try:
-        event = select.kevent(
+        event = kqueue_api.kevent(
             pid,
-            filter=select.KQ_FILTER_PROC,
-            flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
-            fflags=select.KQ_NOTE_EXIT,
+            filter=kqueue_api.KQ_FILTER_PROC,
+            flags=kqueue_api.KQ_EV_ADD | kqueue_api.KQ_EV_ONESHOT,
+            fflags=kqueue_api.KQ_NOTE_EXIT,
         )
         observed = queue.control([event], 1, 3.0)
     finally:
         queue.close()
     assert observed, f"process {pid} survived scheduler return"
-    assert observed[0].fflags & select.KQ_NOTE_EXIT
+    assert observed[0].fflags & kqueue_api.KQ_NOTE_EXIT
 
 
 def _assert_process_group_absent(process_group_id: int) -> None:
@@ -764,7 +798,7 @@ def test_cancellation_failure_retains_uncontained_process_state(
     ]
     max_wall_seconds: float | None = None
     if failure_site == "wall-watcher":
-        max_wall_seconds = 0.2
+        max_wall_seconds = sys.float_info.max
     elif failure_site == "outer-exception":
         specs.append(
             _gated_spec(
@@ -1748,11 +1782,19 @@ def test_unit_timeout_kills_process_and_prevents_late_commit(
 @pytest.mark.process_integration
 def test_operation_deadline_kills_active_and_never_dispatches_queue(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del tmp_path
     signals = ProcessSignals()
     commits: list[JsonValue] = []
     outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+    wall_ready = threading.Event()
+    scripted_deadline = _ScriptedDeadline(wall_ready)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
+    )
 
     def schedule() -> None:
         outcomes.append(
@@ -1782,7 +1824,7 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
                     ),
                 ],
                 concurrency=2,
-                max_wall_seconds=2.0,
+                max_wall_seconds=sys.float_info.max,
                 is_rate_limited=_never_rate_limited,
             )
         )
@@ -1797,6 +1839,7 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
             "active-2-descendant",
         ]
         signals.wait_entered(active_keys)
+        wall_ready.set()
         scheduler.join(timeout=10)
     finally:
         signals.close()
@@ -1810,6 +1853,7 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
         FanoutStatus.NOT_DISPATCHED,
     ]
     assert outcome.deadline_reached
+    scripted_deadline.assert_satisfied()
     assert outcome.not_dispatched == ["queued-1", "queued-2"]
     assert commits == []
     assert not {"queued-1", "queued-2"} & signals.entered_keys
