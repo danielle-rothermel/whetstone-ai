@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from dr_store import ObjectStore
 from pydantic import (
     BaseModel,
     ConfigDict,
-    Field,
-    StrictBool,
     StrictInt,
     StrictStr,
     model_validator,
@@ -62,45 +61,6 @@ class Miprov2RowAccounting(BaseModel):
     missing: StrictInt
     failed: StrictInt
     invalid: StrictInt
-
-
-class _CacheEvidenceProjection(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    partial_row_count: StrictInt = 0
-    cache_hit_count: StrictInt = 0
-    source_call_ids: tuple[str, ...] = ()
-
-
-class _EvaluationEvidenceProjection(BaseModel):
-    """Exact local mirror avoiding an optimization-to-evaluation edge."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    candidate: CandidateRef
-    eval_config: EvalConfigRef
-    graph_hash: StrictStr
-    graph_config_ref: StrictStr
-    evaluation_role: EvaluationRole
-    evaluation_context_id: StrictStr
-    purpose: StrictStr
-    task_identities: tuple[str, ...]
-    repeat_count: StrictInt
-    per_task_values: tuple[float, ...]
-    per_task_counts: tuple[int, ...]
-    row_accounting: Miprov2RowAccounting
-    outputs_ref: TypedRef
-    aggregate_ref: TypedRef
-    aggregate_name: StrictStr
-    aggregate_value: float | None
-    aggregate_status: StrictStr
-    reward_ref: TypedRef | None = None
-    cache: _CacheEvidenceProjection = Field(
-        default_factory=_CacheEvidenceProjection
-    )
-    concurrency_halved: StrictBool = False
-    deadline_reached: StrictBool = False
-    guard_timeouts: StrictInt = 0
 
 
 class _RolloutAggregateProjection(BaseModel):
@@ -244,14 +204,16 @@ class Miprov2ResolvedEvaluation(BaseModel):
     row_accounting: Miprov2RowAccounting
 
 
-class _ResolvedEvidence(BaseModel):
+@dataclass(frozen=True, slots=True)
+class _ResolvedEvidence:
     """Internal common evidence projection shared by eval and bootstrap."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     context: Miprov2IntentContext
     evidence_ref: TypedRef
-    evidence: _EvaluationEvidenceProjection
+    row_accounting: Miprov2RowAccounting
+    repeat_count: int
+    outputs_ref: TypedRef
+    aggregate_ref: TypedRef
     reward_ref: TypedRef
     reward: Reward
 
@@ -313,7 +275,10 @@ def _resolve_miprov2_evidence(
     # The evaluation package eagerly imports its engine, which depends back on
     # optimization through environment construction. Import its contract only
     # once the module graph is initialized and evidence is actually resolved.
-    from whetstone.evaluation.schema import EVALUATION_OUTPUTS_SCHEMA
+    from whetstone.evaluation.schema import (
+        EVALUATION_OUTPUTS_SCHEMA,
+        EvaluationEvidence,
+    )
 
     context = load_miprov2_intent_context(store, resolution.intent)
     if resolution.outcome is not IntentOutcome.COMPLETED:
@@ -325,7 +290,7 @@ def _resolve_miprov2_evidence(
     evidence_ref = resolution.evaluation_evidence_refs[0]
     if evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
         raise ValueError("MIPROv2 requires canonical evaluation evidence")
-    evidence = _EvaluationEvidenceProjection.model_validate(
+    evidence = EvaluationEvidence.model_validate(
         store.get(evidence_ref.reference)
     )
     expected = (
@@ -418,7 +383,12 @@ def _resolve_miprov2_evidence(
     return _ResolvedEvidence(
         context=context,
         evidence_ref=evidence_ref,
-        evidence=evidence,
+        row_accounting=Miprov2RowAccounting.model_validate(
+            evidence.row_accounting.model_dump(mode="json")
+        ),
+        repeat_count=evidence.repeat_count,
+        outputs_ref=evidence.outputs_ref,
+        aggregate_ref=evidence.aggregate_ref,
         reward_ref=resolution.reward_ref,
         reward=reward,
     )
@@ -483,7 +453,7 @@ def resolve_miprov2_evaluation(
         reward_value=resolved.reward.value,
         normalized_score=normalized_score,
         evaluation=binding,
-        row_accounting=resolved.evidence.row_accounting,
+        row_accounting=resolved.row_accounting,
     )
 
 
@@ -609,20 +579,19 @@ def resolve_miprov2_bootstrap(
     if context.effect_kind != "bootstrap":
         raise ValueError("resolution is not a MIPROv2 bootstrap effect")
     if (
-        resolved.evidence.row_accounting.planned != 1
-        or resolved.evidence.row_accounting.present != 1
-        or resolved.evidence.row_accounting.missing
-        or resolved.evidence.row_accounting.failed
-        or resolved.evidence.row_accounting.invalid
+        resolved.row_accounting.planned != 1
+        or resolved.row_accounting.present != 1
+        or resolved.row_accounting.missing
+        or resolved.row_accounting.failed
+        or resolved.row_accounting.invalid
     ):
         raise ValueError(
             "bootstrap requires exactly one successful task output row"
         )
-    evidence = resolved.evidence
-    if evidence.repeat_count != 1:
+    if resolved.repeat_count != 1:
         raise ValueError("bootstrap requires repeat_count=1")
     output_record = EvaluationOutputsRecord.model_validate(
-        store.get(evidence.outputs_ref.reference)
+        store.get(resolved.outputs_ref.reference)
     )
     if len(output_record.outputs) != 1:
         raise ValueError("bootstrap requires exactly one output row")
@@ -693,8 +662,8 @@ def resolve_miprov2_bootstrap(
     )
     return BootstrapRolloutResult(
         attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-        source_rollout_identity=evidence.aggregate_ref.content_hash,
-        source_trace_identity=evidence.outputs_ref.content_hash,
+        source_rollout_identity=resolved.aggregate_ref.content_hash,
+        source_trace_identity=resolved.outputs_ref.content_hash,
         source_output_identity=row_identity,
         source_score_identity=resolved.reward_ref.content_hash,
         metric_present=True,

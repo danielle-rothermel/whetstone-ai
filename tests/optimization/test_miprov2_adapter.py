@@ -585,6 +585,7 @@ def _resolution(
         "evaluation_role": EvaluationRole.INTERNAL.value,
         "evaluation_context_id": intent.intent_id,
         "purpose": intent.purpose,
+        "dataset_identity": "test",
         "task_identities": list(context.task_batch_identities),
         "repeat_count": 1,
         "per_task_values": [score for _ in range(task_count)],
