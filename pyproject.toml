@@ -46,6 +46,7 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--strict-markers"]
 markers = [
     "process_integration: exercises real spawned process and process-group boundaries",
     "process_guardian: exercises guardian and parent-death containment",
