@@ -16,6 +16,7 @@ import dr_code.trace as dr_trace
 from whetstone.code_eval import (
     BootstrapCI,
     CompletenessPolicy,
+    EvaluationMatrixPlan,
     PowerConfig,
     PowerRecommendation,
     PowerResult,
@@ -99,7 +100,6 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         RowValue(value=1.0),
         TaskRows(
             task_identity="task",
-            expected_repeats=1,
             rows=(RowValue(value=1.0),),
         ),
         BootstrapCI(point=0.5, low=0.25, high=0.75, level=0.95, resamples=10),
@@ -138,6 +138,10 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         assert is_dataclass(value)
         assert hasattr(type(value), "__slots__")
         assert type(value).__dataclass_params__.frozen
+
+    assert is_dataclass(EvaluationMatrixPlan)
+    assert hasattr(EvaluationMatrixPlan, "__slots__")
+    assert EvaluationMatrixPlan.__dataclass_params__.frozen
 
     # Aggregate/result containers obey the same internal-value-object rule.
     output = dr_eval.AggregationOutput(

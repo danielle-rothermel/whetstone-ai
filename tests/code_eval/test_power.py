@@ -8,8 +8,13 @@ repeat-plateau, and the LOUD pool-limited verdict (never a silent clamp).
 
 from __future__ import annotations
 
+import re
+from typing import cast
+
+import numpy as np
 import pytest
 
+from whetstone.code_eval import power
 from whetstone.code_eval.power import (
     PowerConfig,
     PowerSurfacePoint,
@@ -50,6 +55,27 @@ _C22_CEILING = (
     1.0,
     0.667,
 )
+
+_PROBABILITY_ERROR = (
+    "naive/ceiling per-task scores must be one-dimensional, "
+    "finite probabilities in [0, 1]"
+)
+
+
+class _RecordingRng:
+    def __init__(self) -> None:
+        self.sizes: list[int | tuple[int, ...]] = []
+
+    def normal(
+        self,
+        *,
+        loc: float,
+        scale: float,
+        size: int | tuple[int, ...],
+    ) -> np.ndarray:
+        del loc, scale
+        self.sizes.append(size)
+        return np.zeros(size, dtype=float)
 
 
 def test_determinism_same_seed_same_result() -> None:
@@ -254,18 +280,177 @@ def test_zero_headroom_gives_zero_target_gap() -> None:
     assert res.recommendation.achievable is False
 
 
-def test_mismatched_or_empty_vectors_rejected() -> None:
-    with pytest.raises(ValueError):
+@pytest.mark.parametrize("arm", ["naive", "ceiling"])
+@pytest.mark.parametrize(
+    "invalid_probability",
+    [float("nan"), float("inf"), float("-inf"), -0.1, 1.1],
+)
+def test_invalid_probability_rejected_in_either_arm(
+    arm: str, invalid_probability: float
+) -> None:
+    valid = (0.25, 0.75)
+    invalid = (0.25, invalid_probability)
+    naive = invalid if arm == "naive" else valid
+    ceiling = invalid if arm == "ceiling" else valid
+
+    with pytest.raises(ValueError, match=r"finite probabilities in \[0, 1\]"):
+        analyze_power(
+            naive_per_task=naive,
+            ceiling_per_task=ceiling,
+            pool_ceiling=2,
+            anchor_repeats=3,
+        )
+
+
+def test_non_vector_probability_arrays_rejected() -> None:
+    matrix = cast(tuple[float, ...], ((0.2, 0.3), (0.4, 0.5)))
+    vector = (0.2, 0.3)
+
+    with pytest.raises(ValueError, match="one-dimensional"):
+        analyze_power(
+            naive_per_task=matrix,
+            ceiling_per_task=vector,
+            pool_ceiling=2,
+            anchor_repeats=3,
+        )
+    with pytest.raises(ValueError, match="one-dimensional"):
+        analyze_power(
+            naive_per_task=vector,
+            ceiling_per_task=matrix,
+            pool_ceiling=2,
+            anchor_repeats=3,
+        )
+
+
+def test_mismatched_or_empty_probability_arrays_rejected() -> None:
+    with pytest.raises(ValueError, match=re.escape(_PROBABILITY_ERROR)):
         analyze_power(
             naive_per_task=(),
             ceiling_per_task=(),
             pool_ceiling=4,
             anchor_repeats=3,
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match=re.escape(_PROBABILITY_ERROR)):
         analyze_power(
             naive_per_task=(0.5, 0.5),
             ceiling_per_task=(0.5,),
             pool_ceiling=4,
             anchor_repeats=3,
         )
+
+
+@pytest.mark.parametrize(
+    "target_prob",
+    [float("-inf"), 0.0, 0.5, 1.0, float("inf"), float("nan")],
+)
+def test_target_probability_must_be_finite_and_above_chance(
+    target_prob: float,
+) -> None:
+    with pytest.raises(ValueError, match=r"target_prob must be in \(0.5, 1\)"):
+        PowerConfig(target_prob=target_prob)
+
+
+@pytest.mark.parametrize("alpha", [float("-inf"), float("inf"), float("nan")])
+def test_alpha_must_be_finite(alpha: float) -> None:
+    with pytest.raises(ValueError, match="alpha"):
+        PowerConfig(alpha=alpha)
+
+
+@pytest.mark.parametrize(
+    "epsilon", [float("-inf"), float("inf"), float("nan")]
+)
+def test_plateau_epsilon_must_be_finite(epsilon: float) -> None:
+    with pytest.raises(ValueError, match="mdd_plateau_epsilon"):
+        PowerConfig(mdd_plateau_epsilon=epsilon)
+
+
+@pytest.mark.parametrize(
+    "per_call_usd", [float("-inf"), float("inf"), float("nan")]
+)
+def test_per_call_cost_must_be_finite(per_call_usd: float) -> None:
+    with pytest.raises(ValueError, match="per_call_usd"):
+        PowerConfig(per_call_usd=per_call_usd)
+
+
+def test_constant_arm_shift_is_not_between_task_variance() -> None:
+    result = analyze_power(
+        naive_per_task=(0.2, 0.2, 0.2, 0.2),
+        ceiling_per_task=(0.8, 0.8, 0.8, 0.8),
+        pool_ceiling=1,
+        anchor_repeats=3,
+        config=PowerConfig(repeat_cap=1, trials=1),
+    )
+
+    assert result.decomposition.between_task_var == 0.0
+
+
+def test_midpoint_and_interaction_measurement_noise_corrections() -> None:
+    result = analyze_power(
+        naive_per_task=(0.1, 0.2, 0.7, 0.8),
+        ceiling_per_task=(0.1, 0.8, 0.7, 1.0),
+        pool_ceiling=1,
+        anchor_repeats=100,
+        config=PowerConfig(repeat_cap=1, trials=1),
+    )
+
+    # Midpoint sample variance is 0.116666..., and within_obs is 0.135.
+    # A midpoint averages two arm means, so the subtraction is 0.135/(2*100).
+    assert result.decomposition.between_task_var == pytest.approx(
+        0.11599166666666669
+    )
+    # The arm difference keeps its independent two-arm correction:
+    # raw variance 0.08 - 2*0.135/100.
+    assert result.decomposition.interaction_var == pytest.approx(0.0773)
+
+
+def test_simulation_allocates_one_trials_vector_for_large_task_count() -> None:
+    recorder = _RecordingRng()
+    decomposition = power.VarianceDecomposition(
+        base_rate=0.5,
+        within_repeat_var=0.25,
+        interaction_var=0.1,
+        between_task_var=0.0,
+        anchor_repeats=3,
+        n_tasks_observed=10,
+    )
+
+    power._simulate_ranking_prob(
+        decomposition,
+        n_tasks=10_000,
+        repeats=3,
+        delta=0.1,
+        trials=37,
+        rng=cast(np.random.Generator, recorder),
+    )
+
+    assert recorder.sizes == [37]
+
+
+def test_full_surface_draw_count_is_linear_in_grid_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _RecordingRng()
+    monkeypatch.setattr(
+        power.np.random,
+        "default_rng",
+        lambda _seed: cast(np.random.Generator, recorder),
+    )
+    pool_ceiling = 7
+    repeat_cap = 4
+    trials = 11
+
+    analyze_power(
+        naive_per_task=(0.2, 0.4),
+        ceiling_per_task=(0.6, 0.8),
+        pool_ceiling=pool_ceiling,
+        anchor_repeats=3,
+        config=PowerConfig(
+            repeat_cap=repeat_cap,
+            trials=trials,
+        ),
+    )
+
+    assert recorder.sizes == [trials] * pool_ceiling * repeat_cap
+    assert sum(cast(int, size) for size in recorder.sizes) == (
+        trials * pool_ceiling * repeat_cap
+    )

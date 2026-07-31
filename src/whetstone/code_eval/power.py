@@ -87,18 +87,28 @@ class PowerConfig:
     per_call_usd: float | None = None
 
     def __post_init__(self) -> None:
-        if not 0.0 < self.alpha <= 1.0:
+        if not math.isfinite(self.alpha) or not 0.0 < self.alpha <= 1.0:
             raise ValueError("alpha must be in (0, 1]")
-        if not 0.0 < self.target_prob < 1.0:
-            raise ValueError("target_prob must be in (0, 1)")
+        if (
+            not math.isfinite(self.target_prob)
+            or not 0.5 < self.target_prob < 1.0
+        ):
+            raise ValueError("target_prob must be in (0.5, 1)")
         if self.repeat_cap < 1:
             raise ValueError("repeat_cap must be at least 1")
-        if self.mdd_plateau_epsilon < 0.0:
-            raise ValueError("mdd_plateau_epsilon cannot be negative")
+        if (
+            not math.isfinite(self.mdd_plateau_epsilon)
+            or self.mdd_plateau_epsilon < 0.0
+        ):
+            raise ValueError(
+                "mdd_plateau_epsilon must be finite and non-negative"
+            )
         if self.trials < 1:
             raise ValueError("trials must be at least 1")
-        if self.per_call_usd is not None and self.per_call_usd < 0.0:
-            raise ValueError("per_call_usd cannot be negative")
+        if self.per_call_usd is not None and (
+            not math.isfinite(self.per_call_usd) or self.per_call_usd < 0.0
+        ):
+            raise ValueError("per_call_usd must be finite and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,11 +216,11 @@ def _decompose_variance(
       ``base(1-base)`` -- the repeat noise that shrinks with r, anchored to the
       operating rate the candidates actually sit at (NOT the anchor extremes,
       where 0/1 saturation would understate it).
-    * ``between_task_var`` = the sample variance of the per-task means across
-      BOTH arms' tasks, ANOVA-corrected by subtracting the measurement-noise
-      inflation ``within_obs/anchor_repeats`` (floored at 0). This is the true
-      task-to-task heterogeneity, which CANCELS in a paired comparison; it is
-      reported only for the within-vs-between verdict.
+    * ``between_task_var`` = the sample variance of the taskwise arm
+      midpoints, ANOVA-corrected by subtracting their measurement-noise
+      inflation ``within_obs/(2*anchor_repeats)`` (floored at 0). This is the
+      true task-to-task heterogeneity, which CANCELS in a paired comparison; it
+      is reported only for the within-vs-between verdict.
     * ``interaction_var`` = the variance of the per-task naive->ceiling
       DIFFERENCE across tasks, corrected for its own measurement noise
       (``2*within_obs/anchor_repeats``), floored at 0. This is the
@@ -231,9 +241,13 @@ def _decompose_variance(
     # the
     # observed dispersions for the anchor measurement noise.
     within_obs = float(np.mean(both * (1.0 - both)))
-    # Between-task main effect (ANOVA-corrected for anchor measurement noise).
-    raw_between = float(np.var(both, ddof=1)) if both.size > 1 else 0.0
-    between = max(0.0, raw_between - within_obs / r)
+    # Between-task main effect from arm midpoints. Averaging two independent
+    # arm means halves the anchor measurement-noise contribution.
+    midpoints = (naive_per_task + ceiling_per_task) / 2.0
+    raw_between = (
+        float(np.var(midpoints, ddof=1)) if midpoints.size > 1 else 0.0
+    )
+    between = max(0.0, raw_between - within_obs / (2.0 * r))
     # Task-x-candidate interaction from the per-task PAIRED difference variance
     # (corrected for the difference's measurement noise 2*within_obs/r), with a
     # floor so a noisy r=3 near-zero estimate cannot fabricate a trivial
@@ -296,8 +310,8 @@ def _normal_ppf(p: float) -> float:
     Turns the target ranking probability into the z-multiplier for the MDD
     (``MDD = z * SE``). Pure stdlib -- no scipy.
     """
-    if not 0.0 < p < 1.0:
-        raise ValueError("target_prob must be in (0, 1)")
+    if not math.isfinite(p) or not 0.5 < p < 1.0:
+        raise ValueError("target_prob must be in (0.5, 1)")
     from statistics import NormalDist
 
     return NormalDist().inv_cdf(p)
@@ -328,10 +342,13 @@ def _simulate_ranking_prob(
     sd = math.sqrt(max(diff_var, 0.0))
     if sd == 0.0:
         return 1.0 if delta > 0 else 0.5
-    # trials x n_tasks per-task observed differences ~ Normal(delta, sd).
-    draws = rng.normal(loc=delta, scale=sd, size=(trials, n_tasks))
-    means = draws.mean(axis=1)
-    return float(np.mean(means > 0.0))
+    # The mean of n_tasks independent normal differences is itself normal.
+    draws = rng.normal(
+        loc=delta,
+        scale=sd / math.sqrt(n_tasks),
+        size=trials,
+    )
+    return float(np.mean(draws > 0.0))
 
 
 def analyze_power(
@@ -360,9 +377,19 @@ def analyze_power(
         raise ValueError("anchor_repeats must be at least 1")
     naive = np.asarray(naive_per_task, dtype=float)
     ceiling = np.asarray(ceiling_per_task, dtype=float)
-    if naive.size == 0 or naive.size != ceiling.size:
+    if (
+        naive.ndim != 1
+        or ceiling.ndim != 1
+        or naive.size == 0
+        or naive.shape != ceiling.shape
+        or not np.all(np.isfinite(naive))
+        or not np.all(np.isfinite(ceiling))
+        or not np.all((0.0 <= naive) & (naive <= 1.0))
+        or not np.all((0.0 <= ceiling) & (ceiling <= 1.0))
+    ):
         raise ValueError(
-            "naive/ceiling per-task vectors must be non-empty and aligned"
+            "naive/ceiling per-task scores must be one-dimensional, "
+            "finite probabilities in [0, 1]"
         )
     naive_mean = float(naive.mean())
     ceiling_mean = float(ceiling.mean())

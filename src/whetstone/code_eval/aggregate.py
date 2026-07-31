@@ -7,17 +7,13 @@ over an explicitly complete tuple of inputs. Whetstone binds that value into a
 and the stated Evaluation Context. Whetstone owns provenance/context; dr-code
 owns the numeric reduction.
 
-Two Rollout Aggregate forms are derived here:
+The canonical Rollout Aggregate is an **Unweighted Task Mean**: the mean
+caller-derived scalar across Repeat IDs *per Task*, followed by the configured
+**unweighted** mean across the **complete** Task Set. The caller supplies the
+durable aggregate name. The per-task mean is a first reduction; the cross-task
+mean is the second. Every planned cell is accounted for.
 
-* **Unweighted Task Mean** — the mean caller-derived scalar across Repeat IDs
-  *per Task*, followed by the configured **unweighted** mean across the
-  **complete** Task Set. The caller supplies the durable aggregate name. The
-  per-task mean is a first reduction; the cross-task mean is the second. Every
-  planned cell is accounted for.
-* **Mean Compression Ratio** — the configured complete-matrix mean of measured
-  Compression Ratios.
-
-Both handle failed rows, missing rows, and invalid (zero-denominator)
+It handles failed rows, missing rows, and invalid (zero-denominator)
 Compression Ratios **explicitly** via the declared :class:`RowPolicy`: rows are
 never silently dropped. Under ``PROPAGATE`` an incomplete or failed cell makes
 the whole aggregate ``MISSING_DATA``; invalid cells are explicit
@@ -38,11 +34,15 @@ from dr_code.eval import (
     AggregationInput,
     AggregationOutput,
     AggregationStatus,
+    EvalConfig,
+    RepeatPlan,
+    SamplingConfig,
+    TaskSet,
     VariableSpec,
     aggregate,
 )
 
-from whetstone.result.schema import require_full_hash
+from whetstone.identity import require_full_hash
 
 
 class RowPolicy(StrEnum):
@@ -98,10 +98,12 @@ class CompletenessPolicy:
     def skip_fraction_token(self) -> str:
         """The canonical, identity-bearing string form of the tolerance.
 
-        A fixed 4-decimal token so ``0.02`` and ``0.0200`` are one identity
-        and float formatting never perturbs the config hash.
+        Python's shortest round-trippable representation makes this injective
+        over accepted binary floats. Signed zero is normalized because it has
+        the same threshold behavior as positive zero.
         """
-        return f"{self.max_skip_fraction:.4f}"
+        value = float(self.max_skip_fraction)
+        return "0.0" if value == 0.0 else repr(value)
 
     def within_tolerance(self, *, skipped: int, planned: int) -> bool:
         """Whether ``skipped`` of ``planned`` rows is within the bound.
@@ -115,7 +117,79 @@ class CompletenessPolicy:
         return (skipped / planned) <= self.max_skip_fraction
 
 
-_PROPAGATE_POLICY = CompletenessPolicy()
+@dataclass(frozen=True, slots=True)
+class EvaluationMatrixPlan:
+    """Validated composite authority for one complete evaluation matrix."""
+
+    eval_config: EvalConfig
+    sampling_config: SamplingConfig
+    task_set: TaskSet
+    repeat_plan: RepeatPlan
+    aggregation_config: AggregationConfig
+
+    def __post_init__(self) -> None:
+        expected_types = (
+            ("eval_config", self.eval_config, EvalConfig),
+            ("sampling_config", self.sampling_config, SamplingConfig),
+            ("task_set", self.task_set, TaskSet),
+            ("repeat_plan", self.repeat_plan, RepeatPlan),
+            (
+                "aggregation_config",
+                self.aggregation_config,
+                AggregationConfig,
+            ),
+        )
+        for field, value, expected_type in expected_types:
+            if not isinstance(value, expected_type):
+                raise TypeError(
+                    f"{field} must be a dr-code {expected_type.__name__}"
+                )
+
+        if (
+            self.eval_config.sampling_config_hash
+            != self.sampling_config.config_identity_hash
+        ):
+            raise ValueError(
+                "eval_config sampling_config_hash does not match "
+                "sampling_config"
+            )
+        if (
+            self.eval_config.aggregation_config_hash
+            != self.aggregation_config.config_identity_hash
+        ):
+            raise ValueError(
+                "eval_config aggregation_config_hash does not match "
+                "aggregation_config"
+            )
+
+        sampling = self.sampling_config.assignment_dict()
+        if sampling.get("task_set_hash") != self.task_set.identity_hash():
+            raise ValueError(
+                "sampling_config task_set_hash does not match task_set"
+            )
+        if (
+            sampling.get("repeat_plan_hash")
+            != self.repeat_plan.identity_hash()
+        ):
+            raise ValueError(
+                "sampling_config repeat_plan_hash does not match repeat_plan"
+            )
+        if self.task_set.selection_rule is not None:
+            raise ValueError(
+                "task_set must be an explicit task identity manifest"
+            )
+        if self.task_set.task_identities != self.repeat_plan.task_identities:
+            raise ValueError(
+                "task_set and repeat_plan task identities do not match"
+            )
+
+        _policy_from_aggregation_config(self.aggregation_config)
+
+    @property
+    def policy(self) -> CompletenessPolicy:
+        """Completeness behavior from the validated Aggregation Config."""
+
+        return _policy_from_aggregation_config(self.aggregation_config)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,25 +254,23 @@ class RowValue:
 class TaskRows:
     """All planned Repeat-ID rows for one Task.
 
-    ``expected_repeats`` is the planned repeat count; a row list shorter than
-    it declares the shortfall as ``missing`` rows so the per-task mean sees the
-    full planned denominator.
+    The :class:`EvaluationMatrixPlan` owns the repeat count. A row list shorter
+    than that count declares the shortfall as ``missing`` rows so the per-task
+    mean sees the full planned denominator.
     """
 
     task_identity: str
-    expected_repeats: int
     rows: tuple[RowValue, ...]
 
-    def __post_init__(self) -> None:
-        if self.expected_repeats < 1:
-            raise ValueError("expected_repeats must be at least 1")
-        if len(self.rows) > self.expected_repeats:
-            raise ValueError("more rows than the planned expected_repeats")
+    def completed_rows(self, repeat_count: int) -> tuple[RowValue, ...]:
+        """Rows padded to the plan repeat count with explicit missing rows."""
 
-    def completed_rows(self) -> tuple[RowValue, ...]:
-        """Rows padded to ``expected_repeats`` with explicit missing rows."""
-
-        shortfall = self.expected_repeats - len(self.rows)
+        if len(self.rows) > repeat_count:
+            raise ValueError(
+                f"task {self.task_identity} has {len(self.rows)} rows, "
+                f"more than plan repeat_count {repeat_count}"
+            )
+        shortfall = repeat_count - len(self.rows)
         return self.rows + tuple(
             RowValue(missing=True) for _ in range(shortfall)
         )
@@ -282,7 +354,7 @@ def tolerance_variable_spec() -> VariableSpec:
     """
     return VariableSpec(
         name=SKIP_TOLERANCE_VARIABLE,
-        default="0.0000",
+        default="0.0",
         has_default=True,
     )
 
@@ -300,22 +372,46 @@ def aggregation_definition(definition_id: str) -> AggregationDefinition:
     )
 
 
-def _aggregation_config(
-    reduction: str, policy: CompletenessPolicy
-) -> AggregationConfig:
-    if not isinstance(policy, CompletenessPolicy):
-        raise TypeError(
-            "policy must be a CompletenessPolicy with a declared "
-            "max_skip_fraction"
+def _policy_from_aggregation_config(
+    config: AggregationConfig,
+) -> CompletenessPolicy:
+    assignment = config.assignment_dict()
+    if assignment.get("reduction") != "mean":
+        raise ValueError("aggregation_config reduction must be 'mean'")
+    if assignment.get("zero_denominator") != "not_applicable":
+        raise ValueError(
+            "aggregation_config zero_denominator must be 'not_applicable'"
         )
-    return aggregation_definition("whetstone.rollout_aggregate").materialize(
-        {
-            "reduction": reduction,
-            "missing_data": policy.missing_data,
-            "zero_denominator": "not_applicable",
-            SKIP_TOLERANCE_VARIABLE: policy.skip_fraction_token(),
-        }
-    )
+
+    missing_data = assignment.get("missing_data")
+    try:
+        row_policy = RowPolicy(missing_data)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "aggregation_config missing_data must be 'propagate' or 'skip'"
+        ) from error
+
+    token = assignment.get(SKIP_TOLERANCE_VARIABLE)
+    if not isinstance(token, str):
+        raise ValueError(
+            "aggregation_config max_skip_fraction must be a canonical string"
+        )
+    try:
+        policy = CompletenessPolicy(
+            row_policy=row_policy,
+            max_skip_fraction=float(token),
+        )
+    except ValueError as error:
+        raise ValueError(
+            "aggregation_config max_skip_fraction must be a finite float "
+            "in [0.0, 1.0]"
+        ) from error
+    if token != policy.skip_fraction_token():
+        raise ValueError(
+            "aggregation_config max_skip_fraction must use its exact "
+            "round-trippable token"
+        )
+    return policy
 
 
 def enforce_skip_tolerance(
@@ -348,11 +444,9 @@ def unweighted_task_mean(
     *,
     aggregate_name: str,
     graph_hash: str,
-    eval_config_hash: str,
     evaluation_context_id: str,
     task_rows: tuple[TaskRows, ...],
-    repeat_count: int,
-    policy: CompletenessPolicy = _PROPAGATE_POLICY,
+    plan: EvaluationMatrixPlan,
 ) -> RolloutAggregate:
     """Unweighted mean of caller-derived scalars over the complete Task Set.
 
@@ -365,33 +459,52 @@ def unweighted_task_mean(
        per-task means.
 
     ``aggregate_name`` is the caller-owned durable name bound to the result.
-    ``policy`` governs failed / missing rows. Under ``PROPAGATE`` any such row
-    makes a task's mean (and hence the aggregate) ``MISSING_DATA``. Under
-    ``SKIP`` those rows are excluded from the per-task denominator, and a task
-    with no usable rows contributes a not-applicable slot to the cross-task
-    mean. No row is silently dropped: all are counted in the aggregate's
-    provenance.
+    The plan's Aggregation Config governs failed / missing rows. Under
+    ``PROPAGATE`` any such row makes a task's mean (and hence the aggregate)
+    ``MISSING_DATA``. Under ``SKIP`` those rows are excluded from the per-task
+    denominator, and a task with no usable rows contributes a not-applicable
+    slot to the cross-task mean. No row is silently dropped: all are counted
+    in the aggregate's provenance.
     """
 
     if not isinstance(aggregate_name, str):
         raise TypeError("aggregate_name must be a string")
     if not aggregate_name.strip():
         raise ValueError("aggregate_name must be nonblank")
+    if not isinstance(plan, EvaluationMatrixPlan):
+        raise TypeError("plan must be an EvaluationMatrixPlan")
 
-    per_task_config = _aggregation_config("mean", policy)
+    policy = plan.policy
+    repeat_count = plan.repeat_plan.repeat_count
+    planned_task_identities = plan.repeat_plan.task_identities
+
+    observed_by_identity: dict[str, TaskRows] = {}
+    for task in task_rows:
+        if task.task_identity in observed_by_identity:
+            raise ValueError(
+                f"duplicate observed task identity: {task.task_identity}"
+            )
+        observed_by_identity[task.task_identity] = task
+    extra_identities = set(observed_by_identity) - set(planned_task_identities)
+    if extra_identities:
+        extras = ", ".join(sorted(extra_identities))
+        raise ValueError(f"observed unplanned task identities: {extras}")
+
+    reconciled = tuple(
+        observed_by_identity.get(
+            task_identity,
+            TaskRows(task_identity=task_identity, rows=()),
+        )
+        for task_identity in planned_task_identities
+    )
 
     all_rows: list[RowValue] = []
     per_task_inputs: list[AggregationInput] = []
-    for task in task_rows:
-        if task.expected_repeats != repeat_count:
-            raise ValueError(
-                f"task {task.task_identity} expected_repeats "
-                f"{task.expected_repeats} != plan repeat_count {repeat_count}"
-            )
-        completed = task.completed_rows()
+    for task in reconciled:
+        completed = task.completed_rows(repeat_count)
         all_rows.extend(completed)
         task_output = aggregate(
-            per_task_config,
+            plan.aggregation_config,
             tuple(row.to_aggregation_input() for row in completed),
         )
         # The per-task mean feeds the cross-task reduction. A non-OK per-task
@@ -413,8 +526,7 @@ def unweighted_task_mean(
                 AggregationInput(value=None, applicable=True)
             )
 
-    cross_task_config = _aggregation_config("mean", policy)
-    output = aggregate(cross_task_config, tuple(per_task_inputs))
+    output = aggregate(plan.aggregation_config, tuple(per_task_inputs))
 
     present, missing, failed, invalid = _row_counts(tuple(all_rows))
     output = enforce_skip_tolerance(
@@ -426,66 +538,9 @@ def unweighted_task_mean(
     return RolloutAggregate(
         name=aggregate_name,
         graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
+        eval_config_hash=plan.eval_config.config_identity_hash,
         evaluation_context_id=evaluation_context_id,
-        task_count=len(task_rows),
-        repeat_count=repeat_count,
-        aggregation_output=output,
-        rows_present=present,
-        rows_missing=missing,
-        rows_failed=failed,
-        rows_invalid=invalid,
-    )
-
-
-def mean_compression_ratio(
-    *,
-    graph_hash: str,
-    eval_config_hash: str,
-    evaluation_context_id: str,
-    rows: tuple[RowValue, ...],
-    task_count: int,
-    repeat_count: int,
-    policy: CompletenessPolicy = _PROPAGATE_POLICY,
-) -> RolloutAggregate:
-    """Mean Compression Ratio over the complete planned matrix.
-
-    A single configured complete-matrix mean over measured Compression Ratios.
-    ``rows`` MUST be the complete ``task_count`` by ``repeat_count`` matrix,
-    each cell an explicit :class:`RowValue` (present value, or an explicit
-    ``missing`` / ``failed`` / ``invalid`` — the last being a zero-denominator
-    Compression Ratio). Under ``PROPAGATE`` any non-present cell makes the
-    aggregate ``MISSING_DATA``; under ``SKIP`` invalid cells are excluded as
-    not-applicable and missing/failed as applicable-but-absent, and a wholly
-    empty reduction is an explicit non-OK status. No cell is silently dropped.
-    """
-
-    planned = task_count * repeat_count
-    if len(rows) != planned:
-        raise ValueError(
-            "mean_compression_ratio requires the complete planned matrix: "
-            f"{len(rows)} rows != {planned}"
-        )
-
-    config = _aggregation_config("mean", policy)
-    output = aggregate(
-        config,
-        tuple(row.to_aggregation_input() for row in rows),
-    )
-
-    present, missing, failed, invalid = _row_counts(rows)
-    output = enforce_skip_tolerance(
-        output,
-        policy=policy,
-        skipped=missing + failed + invalid,
-        planned=len(rows),
-    )
-    return RolloutAggregate(
-        name="mean_compression_ratio",
-        graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=evaluation_context_id,
-        task_count=task_count,
+        task_count=len(planned_task_identities),
         repeat_count=repeat_count,
         aggregation_output=output,
         rows_present=present,
@@ -497,13 +552,13 @@ def mean_compression_ratio(
 
 __all__ = [
     "CompletenessPolicy",
+    "EvaluationMatrixPlan",
     "RolloutAggregate",
     "RowPolicy",
     "RowValue",
     "TaskRows",
     "aggregation_definition",
     "enforce_skip_tolerance",
-    "mean_compression_ratio",
     "tolerance_variable_spec",
     "unweighted_task_mean",
 ]

@@ -15,8 +15,8 @@ Deliverables:
   experiment rule selecting ``task.gt_code_wo_comments`` bytes onto a generic
   dr-code Compression Reference Key.
 * **Rollout Aggregate** (``aggregate``) — provenance-bearing binding of pure
-  dr-code aggregation output; caller-named Unweighted Task Mean and Mean
-  Compression Ratio with explicit missing/failed-row policy.
+  dr-code aggregation output; one caller-named Unweighted Task Mean over a
+  validated evaluation matrix with explicit missing/failed-row policy.
 * **Bootstrap Statistics** (``statistics``) — reproducible percentile
   confidence intervals with tasks as the resampling unit.
 * **Power Analysis** (``power``) — deterministic paired sample-size
@@ -25,13 +25,13 @@ Deliverables:
 
 from whetstone.code_eval.aggregate import (
     CompletenessPolicy,
+    EvaluationMatrixPlan,
     RolloutAggregate,
     RowPolicy,
     RowValue,
     TaskRows,
     aggregation_definition,
     enforce_skip_tolerance,
-    mean_compression_ratio,
     unweighted_task_mean,
 )
 from whetstone.code_eval.compression_selection import (
@@ -91,6 +91,7 @@ __all__ = [
     "ZSTD_LEVEL",
     "BootstrapCI",
     "CompletenessPolicy",
+    "EvaluationMatrixPlan",
     "ExperimentTaskView",
     "PowerConfig",
     "PowerRecommendation",
@@ -115,7 +116,6 @@ __all__ = [
     "compression_reference_key",
     "enforce_skip_tolerance",
     "mean",
-    "mean_compression_ratio",
     "resample_indices",
     "select_compression_reference",
     "submission_text",
