@@ -42,7 +42,9 @@ def test_reward_output_always_in_unit_interval() -> None:
     cfg = _cfg(weight=0.5)
     for pr in (0.0, 0.25, 0.5, 0.75, 1.0):
         for cr in (None, 0.0, 0.5, 1.0, 2.0, 4.0, 100.0):
-            r = blended_reward(pass_rate=pr, compression_ratio=cr, config=cfg)
+            r = blended_reward(
+                primary_score=pr, compression_ratio=cr, config=cfg
+            )
             assert 0.0 <= r <= 1.0
 
 
@@ -50,7 +52,7 @@ def test_pass_zero_gives_zero_regardless_of_compression() -> None:
     cfg = _cfg(weight=0.9)
     for cr in (None, 0.0, 0.5, 4.0, 100.0):
         assert blended_reward(
-            pass_rate=0.0, compression_ratio=cr, config=cfg
+            primary_score=0.0, compression_ratio=cr, config=cfg
         ) == pytest.approx(0.0)
 
 
@@ -59,14 +61,14 @@ def test_pass_one_lands_in_one_minus_w_to_one() -> None:
     cfg = _cfg(weight=w)
     # Worst compression (ratio at max) -> reward == 1 - w.
     assert blended_reward(
-        pass_rate=1.0, compression_ratio=4.0, config=cfg
+        primary_score=1.0, compression_ratio=4.0, config=cfg
     ) == pytest.approx(1.0 - w)
     # Best compression (ratio at min) -> reward == 1.
     assert blended_reward(
-        pass_rate=1.0, compression_ratio=0.01, config=cfg
+        primary_score=1.0, compression_ratio=0.01, config=cfg
     ) == pytest.approx(1.0)
     # A mid ratio lands strictly inside (1-w, 1).
-    mid = blended_reward(pass_rate=1.0, compression_ratio=1.0, config=cfg)
+    mid = blended_reward(primary_score=1.0, compression_ratio=1.0, config=cfg)
     assert (1.0 - w) < mid < 1.0
 
 
@@ -75,15 +77,15 @@ def test_weight_zero_degenerates_to_pure_pass_rate() -> None:
     for pr in (0.0, 0.4, 1.0):
         for cr in (None, 0.0, 2.0, 4.0):
             assert blended_reward(
-                pass_rate=pr, compression_ratio=cr, config=cfg
+                primary_score=pr, compression_ratio=cr, config=cfg
             ) == pytest.approx(pr)
 
 
 def test_missing_compression_falls_back_to_pass_only() -> None:
     cfg = _cfg(weight=0.5)
-    # No compression sample -> pass-only (no fabricated credit, no zeroing).
+    # No compression sample -> primary score only.
     assert blended_reward(
-        pass_rate=0.8, compression_ratio=None, config=cfg
+        primary_score=0.8, compression_ratio=None, config=cfg
     ) == pytest.approx(0.8)
 
 
@@ -92,7 +94,7 @@ def test_degenerate_bounds_give_no_compression_credit() -> None:
     assert compression_score(1.0, cfg) == pytest.approx(0.0)
     # reward = pass * ((1-w) + w*0) = pass * (1-w)
     assert blended_reward(
-        pass_rate=1.0, compression_ratio=1.0, config=cfg
+        primary_score=1.0, compression_ratio=1.0, config=cfg
     ) == pytest.approx(0.5)
 
 
@@ -101,9 +103,9 @@ def test_degenerate_bounds_give_no_compression_credit() -> None:
 
 def test_blend_per_task_composes_per_task() -> None:
     cfg = _cfg(weight=0.5)
-    per_task_pass = (1.0, 0.5, 0.0)
+    per_task_primary = (1.0, 0.5, 0.0)
     per_task_comp = (0.01, 2.0, 0.5)  # best, mid, mid
-    blended = blend_per_task(per_task_pass, per_task_comp, cfg)
+    blended = blend_per_task(per_task_primary, per_task_comp, cfg)
     assert len(blended) == 3
     # Task 0: pass 1.0, best compression -> 1.0.
     assert blended[0] == pytest.approx(1.0)
@@ -118,7 +120,7 @@ def test_blend_per_task_composes_per_task() -> None:
 def test_blend_per_task_missing_compression_is_pass_only() -> None:
     cfg = _cfg(weight=0.5)
     blended = blend_per_task((1.0, 0.6), (None, 0.01), cfg)
-    assert blended[0] == pytest.approx(1.0)  # pass-only fallback
+    assert blended[0] == pytest.approx(1.0)  # primary-score fallback
     assert blended[1] == pytest.approx(0.6)  # pass 0.6, best compression
 
 
@@ -171,9 +173,9 @@ def test_retro_compute_matches_live_blend() -> None:
     # components under any weight -- so past rows are comparable without
     # re-driving.
     cfg = _cfg(weight=0.2, lo=0.01, hi=4.0)
-    live = blended_reward(pass_rate=0.9, compression_ratio=1.3, config=cfg)
+    live = blended_reward(primary_score=0.9, compression_ratio=1.3, config=cfg)
     derived = blended_reward_from_components(
-        pass_rate=0.9,
+        primary_score=0.9,
         compression_ratio=1.3,
         weight=0.2,
         min_compression_ratio=0.01,
@@ -185,7 +187,7 @@ def test_retro_compute_matches_live_blend() -> None:
 def test_retro_compute_varies_with_weight() -> None:
     # A recorded (pass, compression) row scores differently under different
     # weights -- the point of the retro-compute (comparable under any weight).
-    row = dict(pass_rate=0.8, compression_ratio=2.0)
+    row = dict(primary_score=0.8, compression_ratio=2.0)
     w0 = blended_reward_from_components(**row, weight=0.0)
     w1 = blended_reward_from_components(**row, weight=0.5)
     assert w0 == pytest.approx(0.8)  # weight 0 -> pure pass
@@ -199,10 +201,10 @@ def test_retro_blend_recorded_rows() -> None:
     from whetstone.envs.ed1_blended import retro_blend_recorded_rows
 
     rows: list[dict[str, object]] = [
-        {"pass_rate": 1.0, "compression_ratio": 0.01},  # best comp
-        {"pass_rate": 0.0, "compression_ratio": 0.5},  # pass 0 -> 0
-        {"pass_rate": 0.5, "compression_ratio": None},  # pass-only fallback
-        {"pass_rate": None, "compression_ratio": 1.0},  # skipped (no pass)
+        {"primary_score": 1.0, "compression_ratio": 0.01},
+        {"primary_score": 0.0, "compression_ratio": 0.5},
+        {"primary_score": 0.5, "compression_ratio": None},
+        {"primary_score": None, "compression_ratio": 1.0},
     ]
     out = retro_blend_recorded_rows(rows, weight=0.5)
     assert out["derived"] is True
@@ -212,7 +214,7 @@ def test_retro_blend_recorded_rows() -> None:
     assert isinstance(blends, list)
     assert blends[0] == pytest.approx(1.0)  # pass 1, best comp
     assert blends[1] == pytest.approx(0.0)  # pass 0
-    assert blends[2] == pytest.approx(0.5)  # pass-only
+    assert blends[2] == pytest.approx(0.5)  # primary-score fallback
     assert out["mean_blended"] == pytest.approx((1.0 + 0.0 + 0.5) / 3)
 
 
@@ -220,7 +222,7 @@ def test_retro_blend_varies_with_weight() -> None:
     from whetstone.envs.ed1_blended import retro_blend_recorded_rows
 
     rows: list[dict[str, object]] = [
-        {"pass_rate": 1.0, "compression_ratio": 2.0}
+        {"primary_score": 1.0, "compression_ratio": 2.0}
     ]
     w0 = retro_blend_recorded_rows(rows, weight=0.0)["mean_blended"]
     w5 = retro_blend_recorded_rows(rows, weight=0.5)["mean_blended"]

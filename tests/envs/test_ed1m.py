@@ -227,8 +227,13 @@ def test_oracle_failure_is_infrastructure_unknown() -> None:
 def test_build_uses_content_and_dataset_identities(
     mutant_dataset_dir: Path,
 ) -> None:
+    from whetstone.envs.ed1 import build_ed1_procedure_config
     from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-    from whetstone.envs.ed1m import Ed1mExperiment, build_ed1m_experiment
+    from whetstone.envs.ed1m import (
+        Ed1mExperiment,
+        build_ed1m_experiment,
+        build_ed1m_procedure_config,
+    )
 
     loaded = load_dataset(mutant_dataset_dir)
     record = loaded.records[0]
@@ -256,6 +261,14 @@ def test_build_uses_content_and_dataset_identities(
         loaded.manifest.dataset_identity
     )
     assert experiment.blend_config is not None
+    ed1m_procedure = build_ed1m_procedure_config()
+    assert rollout.procedure_config_hash == ed1m_procedure.config_identity_hash
+    assert ed1m_procedure.definition_ref.definition_id == (
+        "whetstone.ed1m.procedure"
+    )
+    assert ed1m_procedure.config_identity_hash != (
+        build_ed1_procedure_config().config_identity_hash
+    )
 
 
 def test_ed1m_eval_rewards_fidelity_reports_attractor(
@@ -263,9 +276,11 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
 ) -> None:
     from tests.envs.support import FakeTransport, execution_policy
     from whetstone.envs.ed1 import ed1_initial_candidate
-    from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
     from whetstone.envs.ed1_eval import run_ed1_eval
-    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.envs.ed1m import (
+        ED1M_FIDELITY_NAME,
+        build_ed1m_experiment,
+    )
     from whetstone.optimization.mutation import MUTATION_FIELD
 
     record = load_dataset(mutant_dataset_dir).records[0]
@@ -274,7 +289,6 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
         internal_n=1,
         official_n=1,
         repeats=1,
-        blend_config=BoundedCompressionMetricConfig(weight=0.1),
     )
 
     def reply(prompt: str) -> str:
@@ -296,4 +310,10 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
 
     assert evaluation.per_task_scores[0] >= 0.9
     assert evaluation.per_task_attractor == pytest.approx((0.0,))
+    assert evaluation.primary_aggregate.name == ED1M_FIDELITY_NAME
+    assert (
+        evaluation.primary_aggregate.aggregation_output.value
+        == pytest.approx(1.0)
+    )
     assert evaluation.reward is not None
+    assert evaluation.reward.input_citations[0].name == ED1M_FIDELITY_NAME

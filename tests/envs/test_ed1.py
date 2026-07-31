@@ -30,6 +30,7 @@ from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_ENV_NAME,
     ED1_INVALID_BODY,
+    ED1_SUBMISSION_SCORE_NAME,
     ENCODER_BODY_A,
     Ed1BodyError,
     build_ed1_experiment,
@@ -90,6 +91,7 @@ def _evaluate(
     scorer=_passing_scorer,
     cache: PromptResultCache | None = None,
     partial_log: PartialLog | None = None,
+    apply_reward: bool = False,
 ):
     selected = tasks or _tasks()
     experiment = build_ed1_experiment(
@@ -109,7 +111,7 @@ def _evaluate(
         execution_policy=execution_policy(max_attempts=1),
         transport=transport or _encdec_transport(selected),
         scorer=scorer,
-        apply_reward=False,
+        apply_reward=apply_reward,
         cache=cache,
         partial_log=partial_log,
     )
@@ -249,14 +251,22 @@ def test_no_budget_frame_omits_budget_instruction() -> None:
 
 
 def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
-    experiment, result = _evaluate(repeats=2)
-    assert result.pass_aggregate.aggregation_output.value == pytest.approx(1)
+    experiment, result = _evaluate(repeats=2, apply_reward=True)
+    assert result.primary_aggregate.name == ED1_SUBMISSION_SCORE_NAME
+    assert result.primary_aggregate.aggregation_output.value == pytest.approx(
+        1
+    )
     compression = result.compression_aggregate.aggregation_output.value
     assert compression is not None and compression > 0
-    assert result.pass_aggregate.eval_config_hash == (
+    assert result.primary_aggregate.eval_config_hash == (
         experiment.eval_configs.internal.eval_config.config_identity_hash
     )
-    assert result.pass_aggregate.repeat_count == 2
+    assert result.primary_aggregate.repeat_count == 2
+    assert {row.metric_name for row in result.row_diags} == {
+        ED1_SUBMISSION_SCORE_NAME
+    }
+    assert result.reward is not None
+    assert result.reward.input_citations[0].name == ED1_SUBMISSION_SCORE_NAME
     assert len(result.outputs) == len(_tasks()) * 2
     assert all("ENCODER:" in (row.output_text or "") for row in result.outputs)
     assert experiment.dataset_revision == ED1_DATASET_REVISION
@@ -294,7 +304,7 @@ def test_all_failed_diagnostics_name_dominant_failure() -> None:
         )
 
     _, result = _evaluate(scorer=failed)
-    assert result.pass_aggregate.aggregation_output.value is None
+    assert result.primary_aggregate.aggregation_output.value is None
     assert result.diagnostics.present_rows == 0
     assert result.diagnostics.failed_rows == 3
     assert result.diagnostics.none_reason is not None
@@ -322,9 +332,11 @@ def test_bounded_skip_certifies_retained_scores_and_accounting() -> None:
         max_skip_fraction=0.30,
         scorer=scorer,
     )
-    assert result.pass_aggregate.rows_failed == 1
-    assert result.pass_aggregate.rows_present == 3
-    assert result.pass_aggregate.aggregation_output.value == pytest.approx(1)
+    assert result.primary_aggregate.rows_failed == 1
+    assert result.primary_aggregate.rows_present == 3
+    assert result.primary_aggregate.aggregation_output.value == pytest.approx(
+        1
+    )
     assert result.per_task_counts == (1, 1, 1, 1)
 
 
@@ -351,7 +363,7 @@ def test_streaming_resume_restores_rows_without_transport(
         apply_reward=False,
         partial_log=log,
     )
-    assert resumed.pass_aggregate == first.pass_aggregate
+    assert resumed.primary_aggregate == first.primary_aggregate
     assert resumed.compression_aggregate == first.compression_aggregate
 
 
@@ -377,7 +389,7 @@ def test_prompt_cache_reuses_both_calls_with_provenance(
         apply_reward=False,
         cache=cache,
     )
-    assert second.pass_aggregate == first.pass_aggregate
+    assert second.primary_aggregate == first.primary_aggregate
     assert cache.counters()["hits"] == 2
 
 
@@ -431,5 +443,7 @@ def test_transient_encoder_failure_is_redriven_to_success() -> None:
     transport = _TransientEncoderOnce()
     _, result = _evaluate(transport=transport)
     assert transport.failures == 3
-    assert result.pass_aggregate.rows_failed == 0
-    assert result.pass_aggregate.aggregation_output.value == pytest.approx(1)
+    assert result.primary_aggregate.rows_failed == 0
+    assert result.primary_aggregate.aggregation_output.value == pytest.approx(
+        1
+    )

@@ -6,9 +6,9 @@ oracle),
 ed1's rollout is a three-node Encoder -> Decoder -> Eval graph
 (:mod:`whetstone.envs.encdec_rollout`) whose Eval Node runs the dr-code
 HumanEval
-test sandbox (Binary Test Pass Score on the DECODER output) plus the whetstone
-zstd-19 compression scoring (Compression Ratio on the ENCODER output vs the
-ground-truth code).
+test sandbox (HumanEval Submission Score on the DECODER output) plus the
+whetstone zstd-19 compression scoring (Compression Ratio on the ENCODER output
+vs the ground-truth code).
 
 This module owns the ed1 experiment binding that plugs into the runner:
 
@@ -32,9 +32,10 @@ into ``graph_hash``. ``budget_ratio`` (default 0.5) is CLI-visible
 (``--budget-ratio``) and folds into ``graph_hash`` via the Character Budget
 rule.
 
-Optimizer Reward = pass-rate ONLY for now; the Mean Compression Ratio is
-REPORTED alongside (dual scores in the cell line + traces + sidecars). Full
-dual-objective / Pareto selection is a FLAGGED follow-up, not built here.
+Optimizer Reward = HumanEval Submission Score ONLY for now; the Mean
+Compression Ratio is REPORTED alongside (dual scores in the cell line + traces
++ sidecars). Full dual-objective / Pareto selection is a FLAGGED follow-up,
+not built here.
 """
 
 from __future__ import annotations
@@ -105,12 +106,12 @@ ED1_DEFAULT_BUDGET_RATIO = 0.5
 ED1_DATASET_REVISION = HF_REVISION
 ED1_DATASET_ID = "evalplus/humanevalplus"
 
-#: The reward-term / internal aggregate name: the Binary Test Pass rate. The
-#: optimizer Reward is pass-rate ONLY; compression is reported, not rewarded.
-ED1_PASS_RATE_NAME = "binary_test_pass"
+#: The per-row metric, aggregate, and Reward-term identity for ED1 correctness.
+#: Each row projects dr-code's typed submission outcome to 0.0 or 1.0; the
+#: aggregate is the unweighted task mean of those values.
+ED1_SUBMISSION_SCORE_NAME = "humaneval_submission_score"
 
-#: The blended-reward term name (task 22): pass rate blended with the bounded
-#: compression score. The optimizer's reward-bearing metric when blending.
+#: The blended-reward term name: primary score with bounded compression.
 ED1_BLENDED_REWARD_NAME = "blended_reward"
 #: The compression aggregate name reported alongside (never the Reward).
 ED1_COMPRESSION_NAME = "compression_ratio"
@@ -333,35 +334,28 @@ def load_ed1_tasks(
     return tuple(instances)
 
 
-def _ed1_metric_extraction_config() -> MetricExtractionConfig:
-    """The ed1 code-eval Metric Extraction Config (folds in the eval wiring).
+def build_code_eval_procedure_config(
+    *,
+    env_name: str,
+    primary_metric_name: str,
+    primary_metric_settings: tuple[tuple[str, str], ...],
+    zero_denominator: str = "not_applicable",
+) -> EvaluationProcedureConfig:
+    """Build one enc-dec code-eval procedure with a concrete primary metric.
 
-    Two Metric Questions -- the Binary Test Pass Score on the DECODER output
-    and
-    the Compression Ratio on the ENCODER output -- naming the ed1 code-eval
-    operator. The identity folds the operator name/version so a change of the
-    eval wiring is visible in ``eval_config_hash`` / ``graph_hash``.
+    ED1 and ED1M share the compression question and procedure shape, but their
+    primary row metrics are different contracts. ``env_name`` keeps their
+    preprocessing, extraction, procedure, and resolved-operator identities
+    distinct while ``primary_metric_name`` makes the row metric explicit.
     """
     definition = MetricExtractionDefinition(
-        definition_id="whetstone.ed1.code_eval",
+        definition_id=f"whetstone.{env_name}.code_eval",
         version=_DEFINITION_VERSION,
         questions=(
             MetricQuestionBinding(
-                metric="whetstone.ed1.binary_test_pass",
+                metric=primary_metric_name,
                 on="submission",
-                settings=(
-                    ("dataset", ED1_DATASET_ID),
-                    ("revision", ED1_DATASET_REVISION),
-                    ("scorer", "dr_code.humaneval.score_humaneval_submission"),
-                    (
-                        "parser_profile_id",
-                        ED1_PARSER_PROFILE.profile_id,
-                    ),
-                    (
-                        "parser_profile_version",
-                        ED1_PARSER_PROFILE.version,
-                    ),
-                ),
+                settings=primary_metric_settings,
             ),
             MetricQuestionBinding(
                 metric="whetstone.ed1.compression_ratio",
@@ -373,32 +367,20 @@ def _ed1_metric_extraction_config() -> MetricExtractionConfig:
             ),
         ),
     )
-    return MetricExtractionConfig._create(
+    metric_extraction = MetricExtractionConfig._create(
         definition=definition,
         assignment={},
-        resolved_operators=(("whetstone.ed1.code_eval_operator", "1"),),
+        resolved_operators=(
+            (f"whetstone.{env_name}.code_eval_operator", "1"),
+        ),
     )
-
-
-def build_ed1_procedure_config(
-    *, zero_denominator: str = "not_applicable"
-) -> EvaluationProcedureConfig:
-    """The ed1 code-eval Evaluation Procedure Config (Eval Node Variable).
-
-    Empty preprocessing (the sandbox owns extraction) + the ed1 code-eval
-    Metric
-    Extraction Config. Its ``config_identity_hash`` is the Procedure identity
-    the
-    enc-dec Eval Node references and both Eval Configs fold in.
-    """
     preprocessing = PreprocessingDefinition(
-        definition_id="whetstone.ed1.preprocess",
+        definition_id=f"whetstone.{env_name}.preprocess",
         version=_DEFINITION_VERSION,
         steps=(),
     ).materialize()
-    metric_extraction = _ed1_metric_extraction_config()
     return EvaluationProcedureDefinition(
-        definition_id="whetstone.ed1.procedure",
+        definition_id=f"whetstone.{env_name}.procedure",
         version=_DEFINITION_VERSION,
     ).materialize(
         preprocessing=preprocessing,
@@ -407,8 +389,27 @@ def build_ed1_procedure_config(
     )
 
 
+def build_ed1_procedure_config(
+    *, zero_denominator: str = "not_applicable"
+) -> EvaluationProcedureConfig:
+    """The canonical ED1 HumanEval-submission evaluation procedure."""
+    return build_code_eval_procedure_config(
+        env_name=ED1_ENV_NAME,
+        primary_metric_name=ED1_SUBMISSION_SCORE_NAME,
+        primary_metric_settings=(
+            ("dataset", ED1_DATASET_ID),
+            ("revision", ED1_DATASET_REVISION),
+            ("scorer", "dr_code.humaneval.score_humaneval_submission"),
+            ("parser_profile_id", ED1_PARSER_PROFILE.profile_id),
+            ("parser_profile_version", ED1_PARSER_PROFILE.version),
+        ),
+        zero_denominator=zero_denominator,
+    )
+
+
 def _ed1_split(
     *,
+    env_name: str = ED1_ENV_NAME,
     dataset_revision: str,
     split_role: str,
     instances: tuple[Instance, ...],
@@ -420,7 +421,7 @@ def _ed1_split(
 ) -> EnvSplitSampling:
     policy = completeness.to_policy(max_skip_fraction=max_skip_fraction)
     aggregation = aggregation_definition(
-        "whetstone.ed1.aggregation"
+        f"whetstone.{env_name}.aggregation"
     ).materialize(
         {
             "reduction": "mean",
@@ -429,7 +430,7 @@ def _ed1_split(
             "max_skip_fraction": policy.skip_fraction_token(),
         }
     )
-    namespace = "whetstone.ed1"
+    namespace = f"whetstone.{env_name}"
     if manifest_tag is not None:
         namespace = f"{namespace}.{manifest_tag}"
     return derive_split_sampling(
@@ -469,67 +470,64 @@ def ed1_ceiling_candidate() -> Candidate:
 
 
 def build_ed1_reward_policy() -> RewardPolicy:
-    """The ed1 Reward Policy: MAXIMIZE the internal Binary Test Pass rate ONLY.
+    """The ED1 Reward Policy: maximize HumanEval Submission Score only.
 
-    One unit-weight, maximize term over the ``binary_test_pass`` internal
-    aggregate. Compression is REPORTED alongside but is NOT a Reward term (the
-    dual-objective / Pareto selection is a flagged follow-up). ``missing_data =
-    FAIL`` matches the QA envs (a missing internal aggregate is not scorable).
+    Compression is reported alongside but is not a Reward term.
     """
     return RewardPolicy(
         policy_name=f"whetstone.env.{ED1_ENV_NAME}.reward",
         reward_name="reward",
         terms=(
-            RewardTerm(name=ED1_PASS_RATE_NAME, weight=1.0, maximize=True),
+            RewardTerm(
+                name=ED1_SUBMISSION_SCORE_NAME,
+                weight=1.0,
+                maximize=True,
+            ),
         ),
         missing_data=MissingDataPolicy.FAIL,
     )
 
 
-def ed1_reward_from_pass_rate(
-    policy: RewardPolicy, *, pass_rate: float | None
+def reward_from_primary_score(
+    policy: RewardPolicy, *, primary_score: float | None
 ) -> Reward:
-    """Apply the ed1 Reward Policy to the internal Binary Test Pass rate.
-
-    Names the aggregate under the ed1 pass-rate term
-    (:data:`ED1_PASS_RATE_NAME`)
-    -- distinct from the QA ``env_exact_match`` term -- and pins the evidence
-    role to ``internal``. A missing pass rate under ``FAIL`` surfaces as a
-    typed
-    :class:`~whetstone.envs.reward.CandidateEvaluationFailure` the optimizer
-    loop
-    handles (candidate marked failed), never a bare ``ValueError``.
-    """
+    """Apply a one-term environment policy to its internal primary score."""
     from whetstone.envs.reward import CandidateEvaluationFailure
 
+    if len(policy.terms) != 1:
+        raise ValueError(
+            "primary-score Reward Policy must have exactly one term"
+        )
+    metric_name = policy.terms[0].name
     try:
         return apply_reward_policy(
             policy,
-            aggregates={ED1_PASS_RATE_NAME: pass_rate},
+            aggregates={metric_name: primary_score},
             evidence_role=EvaluationRole.INTERNAL,
         )
     except ValueError as exc:
         raise CandidateEvaluationFailure(
-            "ed1 internal candidate has no computable Reward: the "
-            f"{ED1_PASS_RATE_NAME!r} aggregate is missing/incomplete under "
-            f"the FAIL missing-data policy (pass_rate={pass_rate!r})"
+            "internal candidate has no computable Reward: the "
+            f"{metric_name!r} aggregate is missing/incomplete under the "
+            f"FAIL missing-data policy (primary_score={primary_score!r})"
         ) from exc
 
 
 def build_ed1_blended_reward_policy(
     blend_config: BoundedCompressionMetricConfig,
+    *,
+    env_name: str = ED1_ENV_NAME,
 ) -> RewardPolicy:
-    """The ed1 BLENDED Reward Policy (task 22): one blended-reward term.
+    """An ED1-family blended Reward Policy with one blended-reward term.
 
     A single unit-weight, maximize term over the pre-computed per-task-blended
     aggregate (:data:`ED1_BLENDED_REWARD_NAME`). The blend config's id key
-    folds into the policy name, so a different weight/bounds is a DISTINCT,
-    visibly-comparable Reward Policy identity (task 22.2). ``missing_data =
-    FAIL`` matches the pass-only policy.
+    and concrete environment fold into the policy name, so ED1 and ED1M never
+    share a policy identity.
     """
     return RewardPolicy(
         policy_name=(
-            f"whetstone.env.{ED1_ENV_NAME}.blended_reward"
+            f"whetstone.env.{env_name}.blended_reward"
             f"|{blend_config.identity_key()}"
         ),
         reward_name="reward",
@@ -543,7 +541,10 @@ def build_ed1_blended_reward_policy(
 
 
 def ed1_reward_from_blended(
-    blend_config: BoundedCompressionMetricConfig, *, blended: float | None
+    blend_config: BoundedCompressionMetricConfig,
+    *,
+    env_name: str,
+    blended: float | None,
 ) -> Reward:
     """Apply the blended Reward Policy to the mean per-task blended reward.
 
@@ -553,7 +554,10 @@ def ed1_reward_from_blended(
     """
     from whetstone.envs.reward import CandidateEvaluationFailure
 
-    policy = build_ed1_blended_reward_policy(blend_config)
+    policy = build_ed1_blended_reward_policy(
+        blend_config,
+        env_name=env_name,
+    )
     try:
         return apply_reward_policy(
             policy,
@@ -592,11 +596,13 @@ class Ed1Experiment(EnvExperiment):
     #: uses the production dr-code container sandbox; tests / dry-runs inject a
     #: local no-container runner so no Docker/network is needed.
     scorer: Callable[..., CodeScore] | None = None
-    #: The weighted-blend reward config (task 22), OR ``None`` for pass-only.
+    #: The weighted-blend reward config (task 22), OR ``None`` for primary
+    #: score only.
     #: When set, the official certification metric + internal selection use the
-    #: PER-TASK blended reward; pass rate + compression are ALWAYS reported
-    #: separately. Optimizer cells REQUIRE this (the guard rail); eval anchors
-    #: set it so anchors pair with optimizer cells on the same metric.
+    #: PER-TASK blended reward; primary score + compression are ALWAYS
+    #: reported separately. Optimizer cells REQUIRE this (the guard rail);
+    #: eval anchors set it so anchors pair with optimizer cells on the same
+    #: metric.
     blend_config: BoundedCompressionMetricConfig | None = None
 
 
@@ -623,7 +629,7 @@ def build_ed1_experiment(
     splits it into internal/official (first-N ordered), builds the 3-node
     enc-dec rollout at ``budget_ratio`` (folded into ``graph_hash``), the naive
     (A) + ceiling (B) encoder candidates, the two Eval Configs (sharing the
-    code-eval Procedure identity), and the pass-rate-only Reward Policy.
+    code-eval Procedure identity), and the primary-score-only Reward Policy.
 
     ``exclude_task_ids`` DROPS those task ids from the pool BEFORE the split
     (the task-screen pool filter, task 17 Part 2): a task that is 100% correct
@@ -751,13 +757,14 @@ __all__ = [
     "ED1_DEFAULT_BUDGET_RATIO",
     "ED1_ENV_NAME",
     "ED1_INVALID_BODY",
-    "ED1_PASS_RATE_NAME",
+    "ED1_SUBMISSION_SCORE_NAME",
     "ENCODER_BODY_A",
     "ENCODER_BODY_B",
     "ENCODER_FRAME",
     "Ed1BodyError",
     "Ed1Experiment",
     "Ed1Instance",
+    "build_code_eval_procedure_config",
     "build_ed1_experiment",
     "build_ed1_procedure_config",
     "build_ed1_reward_policy",
@@ -768,5 +775,6 @@ __all__ = [
     "humaneval_task_from_instance",
     "load_ed1_tasks",
     "render_encoder_frame",
+    "reward_from_primary_score",
     "validate_ed1_body",
 ]

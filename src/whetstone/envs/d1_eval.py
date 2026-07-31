@@ -1,4 +1,4 @@
-"""The d1 direct-generation code-eval drive (single LLM call, pass-rate).
+"""The D1 direct-generation HumanEval Submission Score drive.
 
 Drives one candidate over a d1 split through the injected transport, running a
 SINGLE LLM Call per (task, repeat):
@@ -12,10 +12,10 @@ SINGLE LLM Call per (task, repeat):
    sandbox ed1 uses (the ``renamed`` arm scores against the RENAMED entry
    point -- the amendment-2 scoring trap, never the leaked canonical name).
 
-It reduces to one aggregate -- the Average Binary Test Pass Rate -- using the
-same two-stage mean as the QA and ED1 paths. The frozen input-arm construction
-is owned by :mod:`whetstone.envs.input_transform`. Nothing here makes a live
-paid call by itself: the transport and code-eval scorer are injected.
+It reduces to one ``humaneval_submission_score`` aggregate using the shared
+two-stage unweighted task mean. The frozen input-arm construction is owned by
+:mod:`whetstone.envs.input_transform`. Nothing here makes a live paid call by
+itself: the transport and code-eval scorer are injected.
 """
 
 from __future__ import annotations
@@ -36,17 +36,18 @@ from whetstone_envs.core import Instance
 from whetstone.code_eval.aggregate import (
     RolloutAggregate,
     RowValue,
+    TaskRows,
+    unweighted_task_mean,
 )
 from whetstone.envs.d1 import (
-    D1_PASS_RATE_NAME,
+    D1_SUBMISSION_SCORE_NAME,
     D1Experiment,
     render_d1_frame,
 )
 from whetstone.envs.ed1 import (
-    ed1_reward_from_pass_rate,
+    reward_from_primary_score,
     validate_ed1_body,
 )
-from whetstone.envs.ed1_eval import _aggregate_metric
 from whetstone.envs.ed1_scoring import CodeScore, score_ed1_submission
 from whetstone.envs.input_transform import (
     direct_body,
@@ -75,14 +76,14 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 @dataclass(frozen=True, slots=True)
 class D1EvalResult:
-    """One candidate's d1 evaluation over a split (single pass-rate aggregate).
+    """One candidate's D1 evaluation over a split.
 
-    ``pass_aggregate`` is the Average Binary Test Pass Rate (the plain Reward-
-    bearing metric). ``reward`` is derived from it (when ``apply_reward``).
-    Per-task vectors + outputs feed the CI / ledger / sidecar.
+    ``submission_score_aggregate`` is the reward-bearing HumanEval Submission
+    Score. ``reward`` is derived from it when requested. Per-task vectors and
+    outputs feed the CI, ledger, and sidecar.
     """
 
-    pass_aggregate: RolloutAggregate
+    submission_score_aggregate: RolloutAggregate
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
@@ -93,7 +94,7 @@ class D1EvalResult:
 class _D1RowOutcome:
     """One (task, repeat) direct rollout's result + provenance."""
 
-    pass_value: float | None
+    submission_score: float | None
     output_text: str | None
     failed: bool
     failure_code: str = ""
@@ -168,7 +169,7 @@ def _drive_row(
         prompt = render_d1_frame(candidate_body, input_arm=input_arm)
     except (KeyError, IndexError, ValueError):
         return _D1RowOutcome(
-            pass_value=None,
+            submission_score=None,
             output_text=None,
             failed=True,
             failure_code="d1_wrapper_render_error",
@@ -186,7 +187,7 @@ def _drive_row(
     result = execution.result
     if not result.succeeded or result.generation is None:
         return _D1RowOutcome(
-            pass_value=None,
+            submission_score=None,
             output_text=None,
             failed=True,
             failure_code=failure_code_of(result),
@@ -199,7 +200,7 @@ def _drive_row(
     code_score = scorer(raw_submission=output_text, task=score_task)
     if code_score.infrastructure_unknown:
         return _D1RowOutcome(
-            pass_value=None,
+            submission_score=None,
             output_text=output_text,
             failed=True,
             failure_code="code_eval_infrastructure_unknown",
@@ -212,7 +213,7 @@ def _drive_row(
             execution=execution,
         )
     return _D1RowOutcome(
-        pass_value=code_score.row_value,
+        submission_score=code_score.row_value,
         output_text=output_text,
         failed=False,
         prompt_tokens=tel.prompt_tokens,
@@ -269,7 +270,7 @@ def _drive_and_persist(
                 instance_id=str(instance.id),
                 unit=candidate_id,
                 repeat_id=index,
-                score=outcome.pass_value,
+                score=outcome.submission_score,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
                 split_role=split_role,
@@ -304,7 +305,7 @@ def _restore_recorded(
         if record.phase != split_role or record.unit != candidate_id:
             continue
         restored[(record.instance_id, record.repeat_id)] = _D1RowOutcome(
-            pass_value=record.score,
+            submission_score=record.score,
             output_text=None,
             failed=record.failed,
             failure_code=record.failure_code,
@@ -339,14 +340,14 @@ def run_d1_eval(
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
 ) -> D1EvalResult:
-    """Drive ``candidate_body`` over a d1 split -> the pass-rate aggregate.
+    """Drive ``candidate_body`` over a D1 split.
 
     Fans out one direct generate->score rollout per (task, repeat) through the
-    injected transport + code scorer, reduces to the pass-rate aggregate,
-    derives the plain pass-rate Reward (when ``apply_reward``), and collects
-    per-row outputs. Incremental persistence + resume mirror the ed1 drive:
-    each completed row appends its record when it finishes; a resumed drive
-    restores already-recorded rows instead of re-paying.
+    injected transport + code scorer, reduces to the HumanEval Submission
+    Score aggregate, derives its Reward when requested, and collects per-row
+    outputs. Incremental persistence + resume mirror the ED1 drive: each
+    completed row appends its record when it finishes; a resumed drive restores
+    already-recorded rows instead of re-paying.
     """
     validate_ed1_body(candidate_body)
     fanout = fanout or FanoutConfig()
@@ -406,7 +407,7 @@ def run_d1_eval(
                 out[res.key] = res.value
             else:
                 out[res.key] = _D1RowOutcome(
-                    pass_value=None,
+                    submission_score=None,
                     output_text=None,
                     failed=True,
                     failure_code="runner_timeout",
@@ -433,19 +434,21 @@ def run_d1_eval(
     if redrive_specs:
         driven.update(_drive(redrive_specs))
 
-    pass_rows: list[tuple[str, list[RowValue]]] = []
+    submission_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
     for instance in instances:
         task_id = str(instance.id)
-        p_rows: list[RowValue] = []
+        task_submission_rows: list[RowValue] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
-            if outcome.failed or outcome.pass_value is None:
-                p_rows.append(RowValue(failed=True))
+            if outcome.failed or outcome.submission_score is None:
+                task_submission_rows.append(RowValue(failed=True))
             else:
-                p_rows.append(RowValue(value=float(outcome.pass_value)))
+                task_submission_rows.append(
+                    RowValue(value=float(outcome.submission_score))
+                )
             outputs.append(
                 RolloutOutput(
                     candidate_id=candidate_id,
@@ -454,39 +457,52 @@ def run_d1_eval(
                     output_text=outcome.output_text,
                     score=(
                         None
-                        if outcome.pass_value is None
-                        else float(outcome.pass_value)
+                        if outcome.submission_score is None
+                        else float(outcome.submission_score)
                     ),
                     failure_code=outcome.failure_code,
                     finish_reason=outcome.finish_reason,
                     provider_error=outcome.provider_error,
                 )
             )
-        pass_rows.append((task_id, p_rows))
-        # Per-task pass mean + planned-repeat weight (IDENTICAL to ed1/QA): an
-        # absent/failed row counts 0, the weight is the planned repeat count.
+        submission_rows.append((task_id, task_submission_rows))
+        # Per-task submission-score mean + planned-repeat weight. As in ED1/QA,
+        # an absent/failed row counts 0 and weight is the repeat count.
         total = sum(
-            float(r.value or 0.0) if r.is_present else 0.0 for r in p_rows
+            float(r.value or 0.0) if r.is_present else 0.0
+            for r in task_submission_rows
         )
-        per_task_scores.append(total / len(p_rows) if p_rows else 0.0)
-        per_task_counts.append(len(p_rows))
+        per_task_scores.append(
+            total / len(task_submission_rows) if task_submission_rows else 0.0
+        )
+        per_task_counts.append(len(task_submission_rows))
 
-    pass_aggregate = _aggregate_metric(
-        name=D1_PASS_RATE_NAME,
+    submission_score_aggregate = unweighted_task_mean(
+        aggregate_name=D1_SUBMISSION_SCORE_NAME,
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,
-        per_task_rows=pass_rows,
-        repeats=repeats,
+        evaluation_context_id=eval_config_hash,
+        task_rows=tuple(
+            TaskRows(
+                task_identity=task_identity,
+                expected_repeats=repeats,
+                rows=tuple(rows),
+            )
+            for task_identity, rows in submission_rows
+        ),
+        repeat_count=repeats,
         policy=completeness,
     )
     reward: Reward | None = None
     if apply_reward:
-        reward = ed1_reward_from_pass_rate(
+        reward = reward_from_primary_score(
             experiment.reward_policy,
-            pass_rate=pass_aggregate.aggregation_output.value,
+            primary_score=(
+                submission_score_aggregate.aggregation_output.value
+            ),
         )
     return D1EvalResult(
-        pass_aggregate=pass_aggregate,
+        submission_score_aggregate=submission_score_aggregate,
         reward=reward,
         per_task_scores=tuple(per_task_scores),
         per_task_counts=tuple(per_task_counts),

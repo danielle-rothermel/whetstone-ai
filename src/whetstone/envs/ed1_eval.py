@@ -10,15 +10,15 @@ the three-node rollout per (task, repeat):
 2. call the encoder (the shared enc/dec route);
 3. render the fixed DECODER template against the ENCODER output and call the
    decoder;
-4. score the DECODER output for correctness (dr-code HumanEval sandbox ->
-Binary
-   Test Pass Score) and the ENCODER output for compression (whetstone zstd-19
-   Compression Ratio vs ``gt_code_wo_comments``).
+4. score the DECODER output for the environment's primary metric (ED1:
+   HumanEval Submission Score; ED1M: Fidelity to Mutant) and the ENCODER output
+   for compression (whetstone zstd-19 Compression Ratio vs
+   ``gt_code_wo_comments``).
 
-It reduces to two aggregates -- the Average Binary Test Pass Rate and the Mean
-Compression Ratio -- using the same two-stage mean as the QA path, and returns
-both with per-row outputs. Nothing here makes a live paid call by itself: the
-transport and code-eval scorer are injected.
+It reduces to the environment's primary aggregate plus Mean Compression Ratio
+using the shared two-stage unweighted task mean, and returns both with per-row
+outputs. Nothing here makes a live paid call by itself: the transport and
+code-eval scorer are injected.
 """
 
 from __future__ import annotations
@@ -28,11 +28,6 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from dr_code.eval import (
-    AggregationInput,
-    AggregationStatus,
-    aggregate,
-)
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -43,12 +38,10 @@ from dr_providers import (
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
-    CompletenessPolicy,
     RolloutAggregate,
     RowValue,
     TaskRows,
-    aggregation_definition,
-    enforce_skip_tolerance,
+    unweighted_task_mean,
 )
 from whetstone.code_eval.compression_selection import (
     select_compression_reference,
@@ -60,12 +53,12 @@ from whetstone.code_eval.scoring import (
 from whetstone.envs.ed1 import (
     DECODER_TEMPLATE,
     ED1_COMPRESSION_NAME,
-    ED1_PASS_RATE_NAME,
+    ED1_SUBMISSION_SCORE_NAME,
     Ed1Experiment,
     ed1_reward_from_blended,
-    ed1_reward_from_pass_rate,
     humaneval_task_from_instance,
     render_encoder_frame,
+    reward_from_primary_score,
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import blend_per_task
@@ -92,7 +85,7 @@ class Ed1RowDiag:
     """One (task, repeat) row's diagnostic record for the pilot artifact.
 
     Explains an arm-level ``None`` from disk: the typed ``failure_code`` (empty
-    when the row succeeded), the pass/compression scalars, the per-task
+    when the row succeeded), the primary/compression scalars, the per-task
     ``max_budget`` the encoder was told to respect, the actual encoder-output
     length, and the derived ``over_budget`` flag (an over-budget row is NEVER
     clipped or failed -- the budget only steers, so this is diagnostic only).
@@ -100,7 +93,8 @@ class Ed1RowDiag:
 
     instance_id: str
     repeat: int
-    passed: float | None
+    metric_name: str
+    metric_value: float | None
     compression: float | None
     failed: bool
     failure_code: str
@@ -112,7 +106,8 @@ class Ed1RowDiag:
         return {
             "instance_id": self.instance_id,
             "repeat": self.repeat,
-            "passed": self.passed,
+            "metric_name": self.metric_name,
+            "metric_value": self.metric_value,
             "compression": self.compression,
             "failed": self.failed,
             "failure_code": self.failure_code,
@@ -133,27 +128,26 @@ class Ed1EvalDiagnostics:
 
 @dataclass(frozen=True, slots=True)
 class Ed1EvalResult:
-    """One candidate's ed1 evaluation over a split (dual aggregates).
+    """One candidate's ED1-family evaluation over a split (dual aggregates).
 
-    ``pass_aggregate`` is the Average Binary Test Pass Rate (the reward-bearing
-    metric); ``compression_aggregate`` is the Mean Compression Ratio (reported,
-    never the Reward). ``reward`` is derived from the pass aggregate only (when
-    ``apply_reward``). Per-task vectors + outputs feed the CI / ledger /
-    sidecar; ``row_diags`` explains arm-level Nones (the pilot artifact).
+    ``primary_aggregate`` is HumanEval Submission Score for ED1 and Fidelity to
+    Mutant for ED1M. ``compression_aggregate`` is Mean Compression Ratio
+    (reported, never the Reward). ``reward`` is derived from the primary
+    aggregate when unblended. Per-task vectors + outputs feed the CI / ledger /
+    sidecar; ``row_diags`` explains arm-level Nones.
     """
 
-    pass_aggregate: RolloutAggregate
+    primary_aggregate: RolloutAggregate
     compression_aggregate: RolloutAggregate
     reward: Reward | None
-    #: The CI vector: the PER-TASK BLENDED reward when a blend config is set,
-    #: else the per-task pass mean (task 22). The paired bootstrap uses this.
+    #: The CI vector: the PER-TASK BLENDED reward when a blend config is set;
+    #: otherwise the per-task primary mean. The paired bootstrap uses this.
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     per_task_compression: tuple[float | None, ...]
-    #: The raw per-task pass mean, ALWAYS reported separately (even when
-    #: per_task_scores carries the blend), so pass rate + compression stay
-    #: visible components in traces/sidecars/cells.
-    per_task_pass: tuple[float, ...] = ()
+    #: The raw per-task primary mean, always reported separately even when
+    #: ``per_task_scores`` carries the blend.
+    per_task_primary: tuple[float, ...] = ()
     #: ed1m only: the per-task REPORTED attractor pull (fraction of
     #: discriminating inputs that snapped to canonical); ``None`` per task with
     #: no attractor sample; empty for ed1/QA.
@@ -164,8 +158,8 @@ class Ed1EvalResult:
     @property
     def diagnostics(self) -> Ed1EvalDiagnostics:
         """Summarize whether the evaluation produced usable rows."""
-        present = self.pass_aggregate.rows_present
-        failed = self.pass_aggregate.rows_failed
+        present = self.primary_aggregate.rows_present
+        failed = self.primary_aggregate.rows_failed
         none_reason: str | None = None
         if present == 0:
             codes = Counter(
@@ -188,12 +182,12 @@ class Ed1EvalResult:
 class _Ed1RowOutcome:
     """One (task, repeat) rollout's dual result + provenance.
 
-    ``pass_value`` is the reward-bearing per-row score (ed1: binary test pass;
-    ed1m: fractional fidelity-to-mutant). ``attractor_pull`` is the ed1m
-    REPORTED contamination measurement (``None`` for ed1/QA).
+    ``primary_value`` is ED1's HumanEval Submission Score or ED1M's fractional
+    Fidelity to Mutant. ``attractor_pull`` is the ED1M reported contamination
+    measurement (``None`` for ED1).
     """
 
-    pass_value: float | None
+    primary_value: float | None
     compression_value: float | None
     encoder_text: str | None
     decoder_text: str | None
@@ -344,7 +338,7 @@ def _drive_row(
         )
     except (KeyError, IndexError, ValueError):
         return _Ed1RowOutcome(
-            pass_value=None,
+            primary_value=None,
             compression_value=None,
             encoder_text=None,
             decoder_text=None,
@@ -371,7 +365,7 @@ def _drive_row(
         )
 
         return _Ed1RowOutcome(
-            pass_value=None,
+            primary_value=None,
             compression_value=None,
             encoder_text=None,
             decoder_text=None,
@@ -407,7 +401,7 @@ def _drive_row(
         )
 
         return _Ed1RowOutcome(
-            pass_value=None,
+            primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
             decoder_text=None,
@@ -429,7 +423,7 @@ def _drive_row(
     code_score = _score_row(experiment, instance, decoder_text, scorer)
     if code_score.infrastructure_unknown:
         return _Ed1RowOutcome(
-            pass_value=None,
+            primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
             decoder_text=decoder_text,
@@ -448,7 +442,7 @@ def _drive_row(
         )
     compression = _compression_ratio(encoder_text, input_code)
     return _Ed1RowOutcome(
-        pass_value=code_score.row_value,
+        primary_value=code_score.row_value,
         compression_value=compression,
         encoder_text=encoder_text,
         decoder_text=decoder_text,
@@ -478,7 +472,7 @@ def _score_row(
     ed1m (an ``Ed1mExperiment``) scores the decoder output against the
     instance's mutant per-input oracle (fractional fidelity + reported
     attractor pull). Every other ed1 experiment scores the HumanEval test suite
-    via the injected binary ``scorer``.
+    via the injected HumanEval submission scorer.
     """
     from whetstone.envs.ed1m import Ed1mExperiment, score_ed1m_row
 
@@ -538,7 +532,7 @@ def _drive_and_persist(
                 instance_id=str(instance.id),
                 unit=candidate_id,
                 repeat_id=index,
-                score=outcome.pass_value,
+                score=outcome.primary_value,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
                 split_role=split_role,
@@ -584,7 +578,7 @@ def _restore_ed1_recorded(
     Restores only records for THIS phase (``split_role``) + unit
     (``candidate_id``), keyed ``(instance_id, repeat)`` to match the driven
     keys. The dual extras are decoded from ``raw_response``; a record missing
-    that blob (e.g. a QA-shaped record) restores a pass-only failed/value row.
+    that blob (e.g. a QA-shaped record) restores a primary failed/value row.
     """
     if partial_log is None:
         return {}
@@ -603,7 +597,7 @@ def _restore_ed1_recorded(
         comp = extras.get("compression_value")
         comp_value = float(comp) if isinstance(comp, int | float) else None
         restored[(record.instance_id, record.repeat_id)] = _Ed1RowOutcome(
-            pass_value=record.score,
+            primary_value=record.score,
             compression_value=comp_value,
             encoder_text=_opt_str(extras.get("encoder_text")),
             decoder_text=_opt_str(extras.get("decoder_text")),
@@ -642,84 +636,16 @@ class _RefView:
     gt_code_wo_comments: str
 
 
-def _mean_aggregation_config(policy: CompletenessPolicy):
-    return aggregation_definition(
-        "whetstone.ed1.eval.aggregation"
-    ).materialize(
-        {
-            "reduction": "mean",
-            "missing_data": policy.missing_data,
-            "zero_denominator": "not_applicable",
-            "max_skip_fraction": policy.skip_fraction_token(),
-        }
+def _primary_metric_name(experiment: Ed1Experiment) -> str:
+    """Return the concrete primary metric identity for this ED1-family env."""
+    from whetstone.envs.ed1m import (
+        ED1M_FIDELITY_NAME,
+        Ed1mExperiment,
     )
 
-
-def _aggregate_metric(
-    *,
-    name: str,
-    graph_hash: str,
-    eval_config_hash: str,
-    per_task_rows: list[tuple[str, list[RowValue]]],
-    repeats: int,
-    policy: CompletenessPolicy,
-) -> RolloutAggregate:
-    """Two-stage-mean aggregate over per-task RowValue lists (QA-identical)."""
-    per_task_config = _mean_aggregation_config(policy)
-    all_rows: list[RowValue] = []
-    per_task_inputs: list[AggregationInput] = []
-    task_rows_objs: list[TaskRows] = []
-    for task_identity, rows in per_task_rows:
-        completed = [r for r in rows]
-        all_rows.extend(completed)
-        task_rows_objs.append(
-            TaskRows(
-                task_identity=task_identity,
-                expected_repeats=repeats,
-                rows=tuple(rows),
-            )
-        )
-        task_output = aggregate(
-            per_task_config,
-            tuple(r.to_aggregation_input() for r in completed),
-        )
-        if task_output.status is AggregationStatus.OK:
-            per_task_inputs.append(
-                AggregationInput(value=task_output.value, applicable=True)
-            )
-        elif task_output.status is AggregationStatus.NOT_APPLICABLE:
-            per_task_inputs.append(
-                AggregationInput(value=None, applicable=False)
-            )
-        else:
-            per_task_inputs.append(
-                AggregationInput(value=None, applicable=True)
-            )
-    cross_task_config = _mean_aggregation_config(policy)
-    output = aggregate(cross_task_config, tuple(per_task_inputs))
-    present = sum(1 for r in all_rows if r.is_present)
-    missing = sum(1 for r in all_rows if r.missing)
-    failed = sum(1 for r in all_rows if r.failed)
-    invalid = sum(1 for r in all_rows if r.invalid)
-    output = enforce_skip_tolerance(
-        output,
-        policy=policy,
-        skipped=missing + failed + invalid,
-        planned=len(all_rows),
-    )
-    return RolloutAggregate(
-        name=name,
-        graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=eval_config_hash,
-        task_count=len(per_task_rows),
-        repeat_count=repeats,
-        aggregation_output=output,
-        rows_present=present,
-        rows_missing=missing,
-        rows_failed=failed,
-        rows_invalid=invalid,
-    )
+    if isinstance(experiment, Ed1mExperiment):
+        return ED1M_FIDELITY_NAME
+    return ED1_SUBMISSION_SCORE_NAME
 
 
 def run_ed1_eval(
@@ -740,9 +666,9 @@ def run_ed1_eval(
 
     Fans out one enc->dec->score rollout per (task, repeat) through the
     injected
-    transport + code scorer, reduces to the pass-rate + compression aggregates,
-    derives the pass-rate Reward (when ``apply_reward``), and collects per-row
-    outputs (encoder + decoder text) for the dual-score sidecar.
+    transport + code scorer, reduces to the primary + compression aggregates,
+    derives Reward from the primary aggregate when unblended, and collects
+    per-row outputs (encoder + decoder text) for the dual-score sidecar.
 
     Incremental persistence: when a ``partial_log`` is given, each (task,
     repeat) row appends its OWN dual-result record the instant it completes
@@ -761,6 +687,7 @@ def run_ed1_eval(
     rd = experiment.encdec_rollout
     assert rd is not None
     graph_hash = rd.graph_hash
+    primary_metric_name = _primary_metric_name(experiment)
     if (
         sampling.eval_config.evaluation_procedure_config_hash
         != rd.procedure_config_hash
@@ -814,7 +741,7 @@ def run_ed1_eval(
                 # before it lands as a failed row (a single hung row must not
                 # kill an anchor arm under the FAIL policy).
                 out[res.key] = _Ed1RowOutcome(
-                    pass_value=None,
+                    primary_value=None,
                     compression_value=None,
                     encoder_text=None,
                     decoder_text=None,
@@ -849,9 +776,9 @@ def run_ed1_eval(
     if redrive_specs:
         driven.update(_drive(redrive_specs))
 
-    # Assemble per-task rows (pass + compression) + outputs, instance/repeat
+    # Assemble per-task rows (primary + compression) + outputs, instance/repeat
     # order.
-    pass_rows: list[tuple[str, list[RowValue]]] = []
+    primary_rows: list[tuple[str, list[RowValue]]] = []
     comp_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
     row_diags: list[Ed1RowDiag] = []
@@ -861,7 +788,7 @@ def run_ed1_eval(
     per_task_attractor: list[float | None] = []
     for instance in instances:
         task_id = str(instance.id)
-        p_rows: list[RowValue] = []
+        task_primary_rows: list[RowValue] = []
         c_rows: list[RowValue] = []
         comp_vals: list[float] = []
         attr_vals: list[float] = []
@@ -873,7 +800,8 @@ def run_ed1_eval(
                 Ed1RowDiag(
                     instance_id=task_id,
                     repeat=index,
-                    passed=outcome.pass_value,
+                    metric_name=primary_metric_name,
+                    metric_value=outcome.primary_value,
                     compression=outcome.compression_value,
                     failed=outcome.failed,
                     failure_code=outcome.failure_code,
@@ -882,10 +810,12 @@ def run_ed1_eval(
                     over_budget=outcome.over_budget,
                 )
             )
-            if outcome.failed or outcome.pass_value is None:
-                p_rows.append(RowValue(failed=True))
+            if outcome.failed or outcome.primary_value is None:
+                task_primary_rows.append(RowValue(failed=True))
             else:
-                p_rows.append(RowValue(value=float(outcome.pass_value)))
+                task_primary_rows.append(
+                    RowValue(value=float(outcome.primary_value))
+                )
             if outcome.compression_value is None:
                 c_rows.append(
                     RowValue(failed=True)
@@ -903,8 +833,8 @@ def run_ed1_eval(
                     output_text=_row_output_text(outcome),
                     score=(
                         None
-                        if outcome.pass_value is None
-                        else float(outcome.pass_value)
+                        if outcome.primary_value is None
+                        else float(outcome.primary_value)
                     ),
                     failure_code=outcome.failure_code,
                     finish_reason=outcome.finish_reason,
@@ -913,20 +843,24 @@ def run_ed1_eval(
                     over_budget=outcome.over_budget,
                 )
             )
-        pass_rows.append((task_id, p_rows))
+        primary_rows.append((task_id, task_primary_rows))
         comp_rows.append((task_id, c_rows))
-        # Per-task pass mean + observation weight for the paired CI. Computed
-        # IDENTICALLY to the QA lane (``internal_eval._per_task_score`` /
-        # ``_per_task_count``) so ed1 skipped rows feed the paired/pooled
+        # Per-task primary mean + observation weight for the paired CI,
+        # computed identically to the QA lane
+        # (``internal_eval._per_task_score`` / ``_per_task_count``), so ED1
+        # skipped rows feed the paired/pooled
         # bootstrap exactly as c18's SKIP lane does: the mean divides by the
         # planned repeats (an absent/failed row counts 0), and the weight is
         # the planned repeat count -- not the present-only count, which would
         # mis-weight a task with skipped rows when escalation pools repeats.
         total = sum(
-            float(r.value or 0.0) if r.is_present else 0.0 for r in p_rows
+            float(r.value or 0.0) if r.is_present else 0.0
+            for r in task_primary_rows
         )
-        per_task_scores.append(total / len(p_rows) if p_rows else 0.0)
-        per_task_counts.append(len(p_rows))
+        per_task_scores.append(
+            total / len(task_primary_rows) if task_primary_rows else 0.0
+        )
+        per_task_counts.append(len(task_primary_rows))
         per_task_compression.append(
             sum(comp_vals) / len(comp_vals) if comp_vals else None
         )
@@ -934,68 +868,86 @@ def run_ed1_eval(
             sum(attr_vals) / len(attr_vals) if attr_vals else None
         )
 
-    pass_aggregate = _aggregate_metric(
-        name=ED1_PASS_RATE_NAME,
+    primary_aggregate = unweighted_task_mean(
+        aggregate_name=primary_metric_name,
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,
-        per_task_rows=pass_rows,
-        repeats=repeats,
+        evaluation_context_id=eval_config_hash,
+        task_rows=tuple(
+            TaskRows(
+                task_identity=task_identity,
+                expected_repeats=repeats,
+                rows=tuple(rows),
+            )
+            for task_identity, rows in primary_rows
+        ),
+        repeat_count=repeats,
         policy=completeness,
     )
-    compression_aggregate = _aggregate_metric(
-        name=ED1_COMPRESSION_NAME,
+    compression_aggregate = unweighted_task_mean(
+        aggregate_name=ED1_COMPRESSION_NAME,
         graph_hash=graph_hash,
         eval_config_hash=eval_config_hash,
-        per_task_rows=comp_rows,
-        repeats=repeats,
+        evaluation_context_id=eval_config_hash,
+        task_rows=tuple(
+            TaskRows(
+                task_identity=task_identity,
+                expected_repeats=repeats,
+                rows=tuple(rows),
+            )
+            for task_identity, rows in comp_rows
+        ),
+        repeat_count=repeats,
         policy=completeness,
     )
 
     # Task 22: the weighted-blend reward. When a blend config is set, the
     # CERTIFICATION metric + the per-task CI vector are the PER-TASK blended
-    # reward (pass rate + compression ALWAYS also reported separately). The
-    # blend is composed PER TASK, so the paired bootstrap operates on blended
-    # rewards exactly as env_exact_match does for QA. Pass-only (blend None)
-    # keeps the historical per_task_scores = per-task pass mean.
+    # reward (primary score + compression are always reported separately). The
+    # blend is composed per task, so the paired bootstrap operates on blended
+    # rewards exactly as env_exact_match does for QA. With no blend,
+    # ``per_task_scores`` is the per-task primary mean.
     blend_config = experiment.blend_config
-    pass_scores = tuple(per_task_scores)
+    primary_scores = tuple(per_task_scores)
     if blend_config is not None:
         reward_scores = blend_per_task(
-            pass_scores, tuple(per_task_compression), blend_config
+            primary_scores, tuple(per_task_compression), blend_config
         )
     else:
-        reward_scores = pass_scores
+        reward_scores = primary_scores
 
     if apply_reward:
         if blend_config is not None:
             # The aggregate blended reward = MEAN over tasks of the per-task
             # blended rewards (unweighted mean over the tasks with a present
-            # pass mean; a fully-failed task (pass mean 0) still counts,
-            # matching the pass-aggregate's completeness handling).
+            # primary mean; a fully-failed task with mean 0 still counts,
+            # matching the primary aggregate's completeness handling).
             mean_blended = (
                 sum(reward_scores) / len(reward_scores)
                 if reward_scores
                 else None
             )
             reward = ed1_reward_from_blended(
-                blend_config, blended=mean_blended
+                blend_config,
+                env_name=experiment.env_name,
+                blended=mean_blended,
             )
         else:
-            reward = ed1_reward_from_pass_rate(
+            reward = reward_from_primary_score(
                 experiment.reward_policy,
-                pass_rate=pass_aggregate.aggregation_output.value,
+                primary_score=primary_aggregate.aggregation_output.value,
             )
     else:
         reward = None
     return Ed1EvalResult(
-        pass_aggregate=pass_aggregate,
+        primary_aggregate=primary_aggregate,
         compression_aggregate=compression_aggregate,
         reward=reward,
-        # The CI vector: blended reward per task when blending, else pass mean.
+        # The CI vector: blended reward per task when blending, else primary.
         per_task_scores=reward_scores,
         per_task_counts=tuple(per_task_counts),
         per_task_compression=tuple(per_task_compression),
-        per_task_pass=pass_scores,
+        per_task_primary=primary_scores,
         per_task_attractor=tuple(per_task_attractor),
         outputs=tuple(outputs),
         row_diags=tuple(row_diags),

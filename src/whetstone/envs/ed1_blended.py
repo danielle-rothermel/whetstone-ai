@@ -1,15 +1,15 @@
-"""The ed1 weighted-blend reward: pass rate with a bounded compression penalty.
+"""The ED1-family primary score with a bounded compression penalty.
 
 The USER's standing rule (task 22) for ALL enc-dec optimization: the ed1/ed1m
-optimizer's reward is a weighted blend of the Binary Test Pass rate and a
-bounded compression score, not pass rate alone. Environment evaluation
-computes and records the blend for both probes so comparisons use one metric.
+optimizer's reward is a weighted blend of its concrete primary score and a
+bounded compression score. ED1's primary score is HumanEval Submission Score;
+ED1M's is Fidelity to Mutant.
 
 SPEC (verbatim semantics)::
 
     clamped = clamp(compression_ratio, min_ratio, max_ratio)
     compression_score = (max_ratio - clamped) / (max_ratio - min_ratio)
-    reward = test_pass_rate * ((1 - weight) + weight * compression_score)
+    reward = primary_score * ((1 - weight) + weight * compression_score)
 
 ``compression_ratio`` is the EXISTING recorded metric: the whetstone zstd-19
 Compression Ratio (compressed encoder-output bytes / ``gt_code_wo_comments``
@@ -17,18 +17,16 @@ bytes). Definitional continuity with everything already recorded -- her spec
 said "or similar", and reusing the recorded metric keeps every past screen/
 anchor row retro-computable (:func:`blended_reward_from_components`).
 
-PROPERTIES (tested): output always in [0, 1]; ``pass=0 -> 0`` regardless of
-compression; ``pass=1 -> [1-weight, 1]``; ``weight=0`` degenerates to pure pass
-rate. A LOWER compression_ratio (fewer bytes) -> a HIGHER compression_score ->
-a higher reward, so the blend rewards tighter compression.
+PROPERTIES (tested): output always in [0, 1]; ``primary_score=0 -> 0``
+regardless of compression; ``primary_score=1 -> [1-weight, 1]``; ``weight=0``
+degenerates to the primary score.
 
 COMPOSITION (task 22.1): the blend is computed PER TASK -- a task's
-repeats-mean pass rate times that task's compression score -- then averaged
+repeats-mean primary score times that task's compression score -- then averaged
 over tasks. So the paired-bootstrap machinery (internal selection + official
 CIs) operates on per-task blended rewards exactly as ``env_exact_match`` does
-for QA. A task with NO compression sample (every row failed) falls back to
-PASS-ONLY for that task (:func:`blend_per_task`): a missing channel never
-fabricates compression credit and never zeroes a passing task.
+for QA. A task with NO compression sample uses its primary score: a missing
+channel never fabricates compression credit or erases a measured score.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BLENDED_METRIC_ID = "pass_rate_with_bounded_compression_penalty"
+BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
 
 #: The starting weight the user named (start at 0.05 or 0.10); the CLI default.
 DEFAULT_COMPRESSION_WEIGHT = 0.10
@@ -49,12 +47,12 @@ class BoundedCompressionMetricConfig(BaseModel):
     ``metric_id`` + ``weight`` + clamp bounds fold into the eval/reward config
     identity via :meth:`identity_key`, so a different weight is a distinct
     comparable-or-not config (visible in traces/cells). ``weight`` in [0, 1];
-    ``weight=0`` degenerates to pure pass rate.
+    ``weight=0`` degenerates to the primary score.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    metric_id: Literal["pass_rate_with_bounded_compression_penalty"] = (
+    metric_id: Literal["primary_score_with_bounded_compression_penalty"] = (
         BLENDED_METRIC_ID
     )
     weight: float = Field(ge=0.0, le=1.0, default=DEFAULT_COMPRESSION_WEIGHT)
@@ -95,50 +93,50 @@ def compression_score(
 
 def blended_reward(
     *,
-    pass_rate: float,
+    primary_score: float,
     compression_ratio: float | None,
     config: BoundedCompressionMetricConfig,
 ) -> float:
     """The blended reward for one unit (task or arm), in [0, 1].
 
-    ``reward = pass_rate * ((1 - w) + w * compression_score)``. A ``None``
-    compression (no sample survived) falls back to PASS-ONLY for that unit --
-    a missing channel never fabricates compression credit and never zeroes a
-    passing unit. ``pass=0 -> 0`` regardless of compression;
-    ``weight=0 -> pass_rate`` exactly.
+    ``reward = primary_score * ((1 - w) + w * compression_score)``. A ``None``
+    compression (no sample survived) uses the primary score for that unit --
+    a missing channel never fabricates compression credit or erases a measured
+    value. ``primary_score=0 -> 0`` regardless of compression;
+    ``weight=0 -> primary_score`` exactly.
     """
     w = config.weight
     if compression_ratio is None or w == 0.0:
-        return pass_rate
+        return primary_score
     cs = compression_score(compression_ratio, config)
-    return pass_rate * ((1.0 - w) + w * cs)
+    return primary_score * ((1.0 - w) + w * cs)
 
 
 def blend_per_task(
-    per_task_pass: tuple[float, ...],
+    per_task_primary: tuple[float, ...],
     per_task_compression: tuple[float | None, ...],
     config: BoundedCompressionMetricConfig,
 ) -> tuple[float, ...]:
     """Per-task blended rewards (task 22.1 composition).
 
-    Each task's blend = its repeats-mean pass rate times its own compression
+    Each task's blend is its repeats-mean primary score times its compression
     score, so the paired bootstrap operates on per-task blended rewards. The
     two input vectors are aligned by task (same order the eval produced). A
-    task with no compression sample falls back to pass-only (documented).
+    task with no compression sample falls back to its primary score.
     """
-    if len(per_task_pass) != len(per_task_compression):
+    if len(per_task_primary) != len(per_task_compression):
         raise ValueError(
-            "per-task pass and compression vectors must be aligned"
+            "per-task primary and compression vectors must be aligned"
         )
     return tuple(
-        blended_reward(pass_rate=p, compression_ratio=c, config=config)
-        for p, c in zip(per_task_pass, per_task_compression, strict=True)
+        blended_reward(primary_score=p, compression_ratio=c, config=config)
+        for p, c in zip(per_task_primary, per_task_compression, strict=True)
     )
 
 
 def blended_reward_from_components(
     *,
-    pass_rate: float,
+    primary_score: float,
     compression_ratio: float | None,
     weight: float = DEFAULT_COMPRESSION_WEIGHT,
     min_compression_ratio: float = 0.01,
@@ -158,7 +156,7 @@ def blended_reward_from_components(
         max_compression_ratio=max_compression_ratio,
     )
     return blended_reward(
-        pass_rate=pass_rate,
+        primary_score=primary_score,
         compression_ratio=compression_ratio,
         config=config,
     )
@@ -170,18 +168,18 @@ def retro_blend_recorded_rows(
     weight: float = DEFAULT_COMPRESSION_WEIGHT,
     min_compression_ratio: float = 0.01,
     max_compression_ratio: float = 4.0,
-    pass_key: str = "pass_rate",
+    primary_key: str = "primary_score",
     compression_key: str = "compression_ratio",
 ) -> dict[str, object]:
     """DERIVED retro-compute of the blend over already-recorded rows (22.5).
 
     Reads recorded per-task/per-arm rows -- each a mapping carrying the two
-    RECORDED components (``pass_rate`` + ``compression_ratio``, from any screen
+    recorded components (``primary_score`` + ``compression_ratio``, from any
     /anchor artifact) -- and recomputes the blended reward per row under the
     given weight/bounds, WITHOUT re-driving. Returns the per-row blends + their
     mean, so a past measurement is comparable under any weight. CLEARLY LABELED
     DERIVED: it never drives a call; a row missing a pass value is skipped
-    (reported in ``skipped``), a missing compression falls back to pass-only.
+    (reported in ``skipped``), a missing compression uses the primary score.
     """
     config = BoundedCompressionMetricConfig(
         weight=weight,
@@ -191,7 +189,7 @@ def retro_blend_recorded_rows(
     blends: list[float] = []
     skipped = 0
     for row in rows:
-        pr = row.get(pass_key)
+        pr = row.get(primary_key)
         if pr is None or not isinstance(pr, int | float):
             skipped += 1
             continue
@@ -199,7 +197,9 @@ def retro_blend_recorded_rows(
         cr_val = float(cr) if isinstance(cr, int | float) else None
         blends.append(
             blended_reward(
-                pass_rate=float(pr), compression_ratio=cr_val, config=config
+                primary_score=float(pr),
+                compression_ratio=cr_val,
+                config=config,
             )
         )
     return {

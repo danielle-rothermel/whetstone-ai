@@ -33,8 +33,7 @@ from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import (
     Ed1Experiment,
-    build_ed1_procedure_config,
-    build_ed1_reward_policy,
+    build_code_eval_procedure_config,
     ed1_ceiling_candidate,
     ed1_initial_candidate,
 )
@@ -44,14 +43,52 @@ from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 from whetstone.envs.encdec_rollout import build_encdec_rollout_definition
 from whetstone.envs.factory import EnvEvalConfigs
 from whetstone.envs.sampling import Completeness
+from whetstone.optimization.reward import (
+    MissingDataPolicy,
+    RewardPolicy,
+    RewardTerm,
+)
 
 ED1M_ENV_NAME = "ed1m"
 #: ed1m uses the same task model as ed1 (deepseek), a distinct provider Config.
 ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
+#: The per-row metric, aggregate, and Reward-term identity for ED1M fidelity.
+ED1M_FIDELITY_NAME = "fidelity_to_mutant"
 
 #: The ed1m stratum tag (single stratum; the mutant families are recorded but
 #: not stratified for the first pass).
 _ED1M_STRATUM = "ed1m"
+
+
+def build_ed1m_procedure_config():
+    """The canonical ED1M fidelity-to-mutant evaluation procedure."""
+    return build_code_eval_procedure_config(
+        env_name=ED1M_ENV_NAME,
+        primary_metric_name=ED1M_FIDELITY_NAME,
+        primary_metric_settings=(
+            (
+                "scorer",
+                "whetstone.envs.ed1m_oracle.score_ed1m_reconstruction",
+            ),
+            ("reference", "authenticated_mutant_record"),
+        ),
+    )
+
+
+def build_ed1m_reward_policy() -> RewardPolicy:
+    """The ED1M Reward Policy: maximize fidelity to the mutant."""
+    return RewardPolicy(
+        policy_name=f"whetstone.env.{ED1M_ENV_NAME}.reward",
+        reward_name="reward",
+        terms=(
+            RewardTerm(
+                name=ED1M_FIDELITY_NAME,
+                weight=1.0,
+                maximize=True,
+            ),
+        ),
+        missing_data=MissingDataPolicy.FAIL,
+    )
 
 
 def _mutant_to_instance(mutant: MutantRecord) -> Instance:
@@ -96,9 +133,9 @@ def score_ed1m_row(
 ) -> CodeScore:
     """Score one ed1m reconstruction via the instance's mutant dual oracle.
 
-    Returns a :class:`CodeScore` whose ``fidelity`` (fractional, rewarded)
-    + ``attractor_pull`` (reported) come from the per-input oracle. An
-    infrastructure-unknown oracle failure fails the row (never scores 0),
+    Returns a :class:`CodeScore` whose ``fidelity_to_mutant`` (fractional,
+    rewarded) + ``attractor_pull`` (reported) come from the per-input oracle.
+    An infrastructure-unknown oracle failure fails the row (never scores 0),
     matching the ed1 invariant.
     """
     mutant = experiment.mutants.get(str(instance.id))
@@ -126,7 +163,7 @@ def score_ed1m_row(
         passed=score.fidelity_to_mutant >= 1.0,
         infrastructure_unknown=False,
         outcome="ed1m_scored",
-        fidelity=score.fidelity_to_mutant,
+        fidelity_to_mutant=score.fidelity_to_mutant,
         attractor_pull=score.attractor_pull,
     )
 
@@ -168,7 +205,7 @@ def build_ed1m_experiment(
     if not pool:
         raise ValueError("ed1m mutant pool is empty")
 
-    procedure = build_ed1_procedure_config()
+    procedure = build_ed1m_procedure_config()
     rollout = build_encdec_rollout_definition(
         ED1M_ENV_NAME,
         model=model,
@@ -189,6 +226,7 @@ def build_ed1m_experiment(
     from whetstone.envs.ed1 import _ed1_split
 
     internal_split = _ed1_split(
+        env_name=ED1M_ENV_NAME,
         dataset_revision=loaded.manifest.dataset_identity,
         split_role="internal_eval",
         instances=internal_instances,
@@ -198,6 +236,7 @@ def build_ed1m_experiment(
         repeats=repeats,
     )
     official_split = _ed1_split(
+        env_name=ED1M_ENV_NAME,
         dataset_revision=loaded.manifest.dataset_identity,
         split_role="official",
         instances=official_instances,
@@ -219,7 +258,7 @@ def build_ed1m_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=build_ed1_reward_policy(),
+        reward_policy=build_ed1m_reward_policy(),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),
@@ -236,7 +275,10 @@ def build_ed1m_experiment(
 __all__ = [
     "ED1M_CANONICAL_MODEL",
     "ED1M_ENV_NAME",
+    "ED1M_FIDELITY_NAME",
     "Ed1mExperiment",
     "build_ed1m_experiment",
+    "build_ed1m_procedure_config",
+    "build_ed1m_reward_policy",
     "score_ed1m_row",
 ]

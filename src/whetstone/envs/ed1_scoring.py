@@ -3,8 +3,9 @@
 This module binds ed1 to one explicit dr-code parser profile and the canonical
 bounded Python execution API. It projects dr-code's typed score into the small
 :class:`CodeScore` contract consumed by the ed1 evaluation drive:
-``passed`` is the Binary Test Pass Score and ``infrastructure_unknown`` marks
-an execution result that cannot be treated as a definitive zero.
+``passed`` is the typed boolean projection of dr-code's SubmissionOutcome and
+``infrastructure_unknown`` marks an execution result that cannot be treated as
+a definitive zero.
 """
 
 from __future__ import annotations
@@ -41,31 +42,38 @@ _INFRASTRUCTURE_UNKNOWN_OUTCOMES = frozenset(
 class CodeScore:
     """The ed1 correctness outcome for one decoder submission.
 
-    ``passed`` is the Binary Test Pass Score (the submission passes all tests).
-    ``infrastructure_unknown`` is True when dr-code could not deliver a
-    definitive verdict (harness failure / evaluation incomplete / timeout) --
-    the
-    rollout must fail, never score 0. ``outcome`` retains the dr-code label.
+    ``passed`` is the natural typed boolean projection of dr-code's
+    :class:`SubmissionOutcome`: it is true exactly for ``PASSED``.
+    ``infrastructure_unknown`` is true when dr-code could not deliver a
+    definitive verdict (harness failure / evaluation incomplete / timeout);
+    the rollout must fail, never score 0. ``outcome`` retains the dr-code
+    label.
 
-    ed1m (behavioral-mutant) extension: ``fidelity`` is the FRACTIONAL
-    reward-bearing per-row score (fraction of inputs matching the mutant), used
-    IN PLACE of the binary ``passed`` when present; ``attractor_pull`` is the
-    REPORTED contamination measurement (fraction of discriminating inputs that
-    snapped to canonical), never a reward. Both ``None`` for the QA/ed1 binary
-    scorer, where ``passed`` is the sole score.
+    ED1M extends the projection with ``fidelity_to_mutant``, the fractional
+    reward-bearing row value (fraction of inputs matching the mutant).
+    ``attractor_pull`` is the reported contamination measurement (fraction of
+    discriminating inputs that snapped to canonical), never a reward. Both are
+    ``None`` for ED1/D1, whose HumanEval Submission Score is ``float(passed)``.
     """
 
     passed: bool
     infrastructure_unknown: bool
     outcome: str
-    fidelity: float | None = None
+    fidelity_to_mutant: float | None = None
     attractor_pull: float | None = None
 
     @property
     def row_value(self) -> float:
-        """The per-row reward-bearing score: fractional fidelity, else 0/1."""
+        """The environment's primary row metric value.
+
+        ED1M returns fractional ``fidelity_to_mutant``. ED1/D1 return the
+        HumanEval Submission Score, the 0.0/1.0 numeric projection of
+        ``passed``.
+        """
         return (
-            self.fidelity if self.fidelity is not None else float(self.passed)
+            self.fidelity_to_mutant
+            if self.fidelity_to_mutant is not None
+            else float(self.passed)
         )
 
 

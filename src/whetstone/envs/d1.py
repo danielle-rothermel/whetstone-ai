@@ -27,10 +27,10 @@ The naive d1 wrapper reproduces the canonical direct-arm prompt byte for byte,
 so a D1 evaluation on a given input arm remains comparable to a direct probe
 using the same transformation.
 
-Reward is a PLAIN pass-rate (the Average Binary Test Pass Rate), NOT the
-weighted blend (blended reward is an ed1/ed1m standing rule ONLY -- task 22).
-The full runner stack (power analysis / optimization traces / telemetry /
-reasoning-effort / temperature / partials / resume) rides the SHARED seams.
+Reward is the unblended HumanEval Submission Score, NOT the weighted blend
+(blended reward is an ed1/ed1m standing rule ONLY -- task 22). The full runner
+stack (power analysis / optimization traces / telemetry / reasoning-effort /
+temperature / partials / resume) rides the SHARED seams.
 
 Science framing (respected in naming/docs, not implemented here): d1 is the
 information-floor control (clean models x ablated input arms) and the
@@ -52,9 +52,9 @@ from whetstone_envs.core import Instance
 from whetstone.code_eval.aggregate import aggregation_definition
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
+    ED1_SUBMISSION_SCORE_NAME,
     Ed1Instance,
     build_ed1_procedure_config,
-    build_ed1_reward_policy,
     load_ed1_tasks,
 )
 from whetstone.envs.ed1_scoring import CodeScore
@@ -82,6 +82,11 @@ from whetstone.graph.nodes import (
     llm_call_variable_assignment,
 )
 from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.reward import (
+    MissingDataPolicy,
+    RewardPolicy,
+    RewardTerm,
+)
 from whetstone.optimization.schema import Candidate
 
 #: The d1 env id.
@@ -93,9 +98,8 @@ D1_ENV_NAME = "d1"
 #: d1 anchor pairs with the corresponding ed1 anchor on the same model family.
 D1_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 
-#: The reward-term / aggregate name: the Average Binary Test Pass Rate. d1's
-#: Reward is pass-rate ONLY (NOT blended -- blended is ed1/ed1m per task 22).
-D1_PASS_RATE_NAME = "binary_test_pass"
+#: The per-row metric, aggregate, and Reward-term identity for D1 correctness.
+D1_SUBMISSION_SCORE_NAME = ED1_SUBMISSION_SCORE_NAME
 
 #: The d1 procedure config schema for the direct code-eval Eval Node.
 D1_PROCEDURE_CONFIG_SCHEMA = "whetstone.d1_code_eval_procedure"
@@ -179,6 +183,22 @@ def d1_ceiling_candidate() -> Candidate:
     """The ceiling reference: the explicit-instruction wrapper body."""
     return _d1_candidate(
         candidate_id=f"{D1_ENV_NAME}-ceiling", body=D1_WRAPPER_BODY_CEILING
+    )
+
+
+def build_d1_reward_policy() -> RewardPolicy:
+    """The D1 Reward Policy: maximize HumanEval Submission Score only."""
+    return RewardPolicy(
+        policy_name=f"whetstone.env.{D1_ENV_NAME}.reward",
+        reward_name="reward",
+        terms=(
+            RewardTerm(
+                name=D1_SUBMISSION_SCORE_NAME,
+                weight=1.0,
+                maximize=True,
+            ),
+        ),
+        missing_data=MissingDataPolicy.FAIL,
     )
 
 
@@ -387,7 +407,8 @@ def build_d1_experiment(
     ordered), builds the single-LLM-call direct rollout (arm folded into
     ``graph_hash``), the naive + ceiling wrapper candidates, the two Eval
     Configs (sharing the code-eval Procedure identity; arm folded into each
-    ``eval_config_hash``), and the PLAIN pass-rate Reward Policy.
+    ``eval_config_hash``), and the unblended HumanEval Submission Score Reward
+    Policy.
 
     ``exclude_task_ids`` DROPS those ids from the ordered pool before the split
     (the per-model screen's always-pass exclusion list), exactly as ed1 does.
@@ -481,7 +502,7 @@ def build_d1_experiment(
         initial_candidate=d1_initial_candidate(),
         ceiling_candidate=d1_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=build_ed1_reward_policy(),
+        reward_policy=build_d1_reward_policy(),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),
@@ -497,9 +518,10 @@ def build_d1_procedure_config():
     """The d1 direct code-eval Evaluation Procedure Config.
 
     d1 reuses ed1's code-eval Procedure (the same HumanEval sandbox + zstd
-    compression Metric Questions); d1 does not USE the compression metric (its
-    Reward is pass-only), but sharing the Procedure keeps the identity domain
-    common with ed1 so a d1 vs ed1 comparison is on the same eval wiring.
+    compression Metric Questions); d1 does not use the compression metric (its
+    Reward is submission-score only), but sharing the Procedure keeps the
+    identity domain common with ed1 so a d1 vs ed1 comparison is on the same
+    eval wiring.
     """
     return build_ed1_procedure_config()
 
@@ -512,7 +534,7 @@ __all__ = [
     "D1_DEFAULT_RENAME_TOKEN",
     "D1_ENV_NAME",
     "D1_INPUT_ARMS",
-    "D1_PASS_RATE_NAME",
+    "D1_SUBMISSION_SCORE_NAME",
     "D1_WRAPPER_BODY_CEILING",
     "D1_WRAPPER_BODY_NAIVE",
     "D1_WRAPPER_FRAME",
@@ -520,6 +542,7 @@ __all__ = [
     "D1RolloutDefinition",
     "build_d1_experiment",
     "build_d1_procedure_config",
+    "build_d1_reward_policy",
     "build_d1_rollout_definition",
     "d1_ceiling_candidate",
     "d1_graph_definition",

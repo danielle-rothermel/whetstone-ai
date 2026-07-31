@@ -13,7 +13,7 @@ from tests.envs.support import (
 )
 from whetstone.envs.d1 import (
     D1_INPUT_ARMS,
-    D1_PASS_RATE_NAME,
+    D1_SUBMISSION_SCORE_NAME,
     D1_WRAPPER_BODY_CEILING,
     D1_WRAPPER_BODY_NAIVE,
     build_d1_experiment,
@@ -99,7 +99,7 @@ def test_candidates_and_pass_only_reward_are_explicit() -> None:
     assert naive.payload != ceiling.payload
     experiment = build_d1_experiment(tasks=_tasks())
     assert [term.name for term in experiment.reward_policy.terms] == [
-        D1_PASS_RATE_NAME
+        D1_SUBMISSION_SCORE_NAME
     ]
     assert experiment.dataset_revision == ED1_DATASET_REVISION
 
@@ -149,15 +149,21 @@ def test_direct_evaluator_records_exact_pass_rate(arm: str) -> None:
             reply=lambda _prompt: "def rebuilt():\n    return 1\n"
         ),
         scorer=_passing_scorer,
-        apply_reward=False,
+        apply_reward=True,
     )
-    assert result.pass_aggregate.aggregation_output.value == pytest.approx(1)
-    assert result.pass_aggregate.repeat_count == 2
-    assert result.pass_aggregate.eval_config_hash == (
+    assert result.submission_score_aggregate.name == D1_SUBMISSION_SCORE_NAME
+    assert (
+        result.submission_score_aggregate.aggregation_output.value
+        == pytest.approx(1)
+    )
+    assert result.submission_score_aggregate.repeat_count == 2
+    assert result.submission_score_aggregate.eval_config_hash == (
         experiment.eval_configs.internal.eval_config.config_identity_hash
     )
     assert result.per_task_counts == (2, 2)
     assert len(result.outputs) == 4
+    assert result.reward is not None
+    assert result.reward.input_citations[0].name == D1_SUBMISSION_SCORE_NAME
 
 
 def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
@@ -190,7 +196,9 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
         apply_reward=False,
         partial_log=log,
     )
-    assert resumed.pass_aggregate == first.pass_aggregate
+    assert (
+        resumed.submission_score_aggregate == first.submission_score_aggregate
+    )
 
 
 def test_identifier_rename_is_whole_token_only() -> None:

@@ -18,10 +18,11 @@ terminal Node"):
 * The **decoder** conditions ONLY on the encoder's description (its
   ``prompt_source`` is the encoder Node's Generation output) and reconstructs
   code.
-* The **Eval Node** (terminal) consumes the DECODER Generation, runs the
-  HumanEval test suite (Binary Test Pass Score on the decoder output) and the
-  zstd-19 compression scoring (Compression Ratio on the ENCODER output vs the
-  ground-truth code). The **same Model Route plays both** encoder and decoder.
+* The **Eval Node** (terminal) consumes the DECODER Generation, computes the
+  environment's concrete primary metric (ED1: HumanEval Submission Score;
+  ED1M: Fidelity to Mutant), and runs zstd-19 compression scoring on the
+  ENCODER output against the ground-truth code. The **same Model Route plays
+  both** encoder and decoder.
 
 This composes the existing closed Node primitives (``graph/nodes.py``) and the
 Character Budget binding (``graph/character_budget.py``) -- no new graph
