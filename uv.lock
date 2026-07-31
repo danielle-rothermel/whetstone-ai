@@ -330,7 +330,7 @@ wheels = [
 [[package]]
 name = "dr-code"
 version = "0.1.0"
-source = { git = "https://github.com/danielle-rothermel/dr-code?rev=6448540d5efd70c129bdfa903293794f9e8da673#6448540d5efd70c129bdfa903293794f9e8da673" }
+source = { git = "https://github.com/danielle-rothermel/dr-code?rev=5810f30dede14094fcf1b8f1cce95d73a1055c84#5810f30dede14094fcf1b8f1cce95d73a1055c84" }
 dependencies = [
     { name = "datasets" },
     { name = "dr-serialize" },
@@ -1884,7 +1884,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=6448540d5efd70c129bdfa903293794f9e8da673" },
+    { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=5810f30dede14094fcf1b8f1cce95d73a1055c84" },
     { name = "dr-graph", specifier = ">=0.1.0,<0.2" },
     { name = "dr-platform", git = "https://github.com/danielle-rothermel/dr-platform?rev=3f175698c6e15e807dac4a9721d52e92d273edce" },
     { name = "dr-providers", specifier = ">=0.2.0,<0.3" },
