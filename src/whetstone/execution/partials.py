@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
-import threading
-from dataclasses import dataclass, field
+import math
+import os
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self
@@ -16,17 +19,27 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
+    field_validator,
     model_validator,
 )
 
+from whetstone.execution._file_lock import (
+    FileLock,
+    fsync_file,
+    fsync_parent_directory,
+    open_private_regular_file,
+)
+
 __all__ = [
+    "PARTIAL_FRAME_SCHEMA",
     "PARTIAL_SCHEMA",
     "PartialCallRecord",
     "PartialLog",
     "partial_key",
 ]
 
-PARTIAL_SCHEMA = "whetstone.execution.partial_call/v1"
+PARTIAL_SCHEMA = "whetstone.execution.partial_call/v2"
+PARTIAL_FRAME_SCHEMA = "whetstone.execution.partial_frame/v2"
 
 _PERSISTED_FIELDS = frozenset(
     {
@@ -58,6 +71,7 @@ _PERSISTED_FIELDS = frozenset(
         "cache_source_at",
     }
 )
+_FRAME_FIELDS = frozenset({"schema", "checksum", "record"})
 
 
 class PartialCallRecord(BaseModel):
@@ -87,7 +101,7 @@ class PartialCallRecord(BaseModel):
     provider_error: dict[str, object] | None = None
     split_role: StrictStr | None = None
     at: StrictStr | None = None
-    schema_name: Literal["whetstone.execution.partial_call/v1"] = Field(
+    schema_name: Literal["whetstone.execution.partial_call/v2"] = Field(
         default=PARTIAL_SCHEMA,
         alias="schema",
     )
@@ -97,8 +111,18 @@ class PartialCallRecord(BaseModel):
     cache_source_call_id: StrictStr | None = None
     cache_source_at: StrictStr | None = None
 
+    @field_validator("at")
+    @classmethod
+    def _validate_at(cls, value: str | None) -> str | None:
+        if value is not None:
+            _validate_timestamp(value)
+        return value
+
     @model_validator(mode="after")
     def _validate_current_record(self) -> Self:
+        _reject_non_finite(self.score, path="score")
+        _reject_non_finite(self.latency_s, path="latency_s")
+        _reject_non_finite(self.provider_error, path="provider_error")
         if not self.phase or not self.instance_id or not self.unit:
             raise ValueError("partial identity fields must be non-empty")
         if self.repeat_id < 0:
@@ -181,8 +205,6 @@ class PartialCallRecord(BaseModel):
             raise ValueError("candidate_id must equal unit")
         if data["repeat"] != data["repeat_id"]:
             raise ValueError("repeat must equal repeat_id")
-        if not isinstance(data["at"], str) or not data["at"]:
-            raise ValueError("partial row at must be a non-empty timestamp")
         record_data = {
             key: value
             for key, value in data.items()
@@ -201,63 +223,229 @@ def partial_key(
     return (phase, instance_id, unit, repeat_id)
 
 
-@dataclass(slots=True)
-class PartialLog:
-    """A thread-safe append-only JSONL log of current-schema records."""
+def _validate_timestamp(value: str) -> None:
+    if not value:
+        raise ValueError("partial row at must be a non-empty timestamp")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            "partial row at must be an ISO 8601 timestamp"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("partial row at must include a UTC offset")
 
-    path: Path
-    _lock: threading.Lock = field(
-        default_factory=threading.Lock,
-        repr=False,
-        compare=False,
+
+def _reject_non_finite(value: object, *, path: str) -> None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"{path} must contain only finite numbers")
+        return
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            _reject_non_finite(nested, path=f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            _reject_non_finite(nested, path=f"{path}[{index}]")
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def _encode_frame(record: PartialCallRecord) -> bytes:
+    record_body = record.as_dict()
+    checksum = hashlib.sha256(_canonical_json_bytes(record_body)).hexdigest()
+    # Frame field names and schema are a pinned persisted-format contract.
+    frame = {
+        "schema": PARTIAL_FRAME_SCHEMA,
+        "checksum": checksum,
+        "record": record_body,
+    }
+    return _canonical_json_bytes(frame) + b"\n"
+
+
+class _DuplicateKeyError(ValueError):
+    pass
+
+
+class _NonFiniteJSONNumberError(ValueError):
+    pass
+
+
+def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    decoded: dict[str, object] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise _DuplicateKeyError(f"duplicate JSON key {key!r}")
+        decoded[key] = value
+    return decoded
+
+
+def _reject_json_constant(value: str) -> None:
+    raise _NonFiniteJSONNumberError(
+        f"non-finite JSON number is not allowed: {value}"
     )
 
+
+def _decode_frame(
+    raw: bytes,
+    *,
+    path: Path,
+    line_number: int,
+) -> PartialCallRecord:
+    location = f"{path}:{line_number}"
+    try:
+        decoded = json.loads(
+            raw,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        _DuplicateKeyError,
+        _NonFiniteJSONNumberError,
+    ) as exc:
+        raise ValueError(f"invalid partial JSON at {location}") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(f"partial frame must be an object at {location}")
+    fields = frozenset(decoded)
+    if fields != _FRAME_FIELDS:
+        missing = sorted(_FRAME_FIELDS - fields)
+        unexpected = sorted(fields - _FRAME_FIELDS)
+        raise ValueError(
+            "partial frame does not match the current schema at "
+            f"{location}: missing={missing}, unexpected={unexpected}"
+        )
+    if decoded["schema"] != PARTIAL_FRAME_SCHEMA:
+        raise ValueError(
+            "partial frame schema must be "
+            f"{PARTIAL_FRAME_SCHEMA!r} at {location}, "
+            f"got {decoded['schema']!r}"
+        )
+    checksum = decoded["checksum"]
+    record_body = decoded["record"]
+    if not isinstance(checksum, str) or not isinstance(record_body, dict):
+        raise ValueError(
+            f"partial frame checksum and record are invalid at {location}"
+        )
+    expected = hashlib.sha256(_canonical_json_bytes(record_body)).hexdigest()
+    if not hmac.compare_digest(checksum, expected):
+        raise ValueError(f"partial frame checksum mismatch at {location}")
+    return PartialCallRecord.from_dict(record_body)
+
+
+def _truncate_torn_tail(fd: int) -> None:
+    size = os.fstat(fd).st_size
+    if size == 0 or os.pread(fd, 1, size - 1) == b"\n":
+        return
+    offset = size
+    while offset:
+        start = max(0, offset - 64 * 1024)
+        chunk = os.pread(fd, offset - start, start)
+        newline = chunk.rfind(b"\n")
+        if newline >= 0:
+            os.ftruncate(fd, start + newline + 1)
+            return
+        offset = start
+    os.ftruncate(fd, 0)
+
+
+def _write_all(fd: int, body: bytes) -> None:
+    remaining = memoryview(body)
+    while remaining:
+        try:
+            written = os.write(fd, remaining)
+        except InterruptedError:
+            continue
+        if written == 0:  # pragma: no cover - kernel contract failure
+            raise OSError("partial frame write made no progress")
+        remaining = remaining[written:]
+
+
+@dataclass(slots=True)
+class PartialLog:
+    """A durable checksummed log shared by threads and peer processes."""
+
+    path: Path
+
+    @property
+    def _lock_path(self) -> Path:
+        return self.path.with_name(f".{self.path.name}.lock")
+
     def append(self, record: PartialCallRecord) -> None:
-        """Append and flush one complete current-schema row."""
+        """Durably append one complete current-schema frame."""
         stamped = record
         if record.at is None:
             stamped = record.model_copy(
                 update={"at": datetime.now(UTC).isoformat()}
             )
-        body = json.dumps(
-            stamped.as_dict(),
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, self.path.open("a") as handle:
-            handle.write(body + "\n")
-            handle.flush()
+        assert stamped.at is not None
+        _validate_timestamp(stamped.at)
+        body = _encode_frame(stamped)
+        with FileLock(self._lock_path):
+            try:
+                fd = open_private_regular_file(
+                    self.path,
+                    os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_EXCL,
+                )
+                created = True
+            except FileExistsError:
+                fd = open_private_regular_file(
+                    self.path,
+                    os.O_RDWR | os.O_APPEND,
+                )
+                created = False
+            try:
+                _truncate_torn_tail(fd)
+                _write_all(fd, body)
+                fsync_file(fd)
+            finally:
+                os.close(fd)
+            if created:
+                fsync_parent_directory(self.path)
 
     def load(self) -> list[PartialCallRecord]:
-        """Load current-schema rows, with the latest row winning per key."""
-        if not self.path.exists():
-            return []
-        by_key: dict[tuple[str, str, str, int], PartialCallRecord] = {}
-        for line_number, raw in enumerate(
-            self.path.read_text().splitlines(),
-            start=1,
-        ):
-            line = raw.strip()
-            if not line:
-                continue
+        """Load valid frames, ignoring only a final unterminated fragment."""
+        with FileLock(self._lock_path, shared=True):
             try:
-                decoded = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"invalid partial JSON at {self.path}:{line_number}"
-                ) from exc
-            if not isinstance(decoded, dict):
-                raise ValueError(
-                    "partial row must be an object at "
-                    f"{self.path}:{line_number}"
-                )
-            record = PartialCallRecord.from_dict(decoded)
-            by_key[record.key()] = record
-        return list(by_key.values())
+                fd = open_private_regular_file(self.path, os.O_RDONLY)
+            except FileNotFoundError:
+                return []
+            by_key: dict[tuple[str, str, str, int], PartialCallRecord] = {}
+            with os.fdopen(fd, "rb") as handle:
+                for line_number, raw in enumerate(handle, start=1):
+                    if not raw.endswith(b"\n"):
+                        break
+                    record = _decode_frame(
+                        raw,
+                        path=self.path,
+                        line_number=line_number,
+                    )
+                    by_key[record.key()] = record
+            return list(by_key.values())
 
     def recorded_keys(self) -> set[tuple[str, str, str, int]]:
         return {record.key() for record in self.load()}
 
     def delete(self) -> None:
-        self.path.unlink(missing_ok=True)
+        with FileLock(self._lock_path):
+            try:
+                fd = open_private_regular_file(self.path, os.O_RDONLY)
+            except FileNotFoundError:
+                return
+            else:
+                os.close(fd)
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                return
+            fsync_parent_directory(self.path)

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from whetstone.execution.fanout import GUARD_MARGIN_SECONDS
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.classification import SemanticFailureClass
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = [
+    "GUARD_MARGIN_SECONDS",
     "CallTelemetry",
     "call_telemetry",
     "failure_code_of",
@@ -17,6 +17,8 @@ __all__ = [
     "is_rate_limit_failure",
     "is_transient_transport_failure",
 ]
+
+GUARD_MARGIN_SECONDS = 15.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +137,17 @@ def guard_deadline_seconds(
     *,
     wire_calls_per_unit: int = 1,
 ) -> float:
-    """Return the transport-cap-based deadline for one fanout unit."""
-    cap = policy.transport_policy.timeout_seconds
-    return cap * max(1, wire_calls_per_unit) + GUARD_MARGIN_SECONDS
+    """Return the full legal retry/backoff bound for one fanout unit."""
+    if wire_calls_per_unit < 1:
+        raise ValueError("wire_calls_per_unit must be a positive integer")
+    attempt_timeouts = (
+        policy.max_attempts * policy.transport_policy.timeout_seconds
+    )
+    backoff_seconds = sum(
+        policy.delay_before(attempt_number)
+        for attempt_number in range(1, policy.max_attempts + 1)
+    )
+    return (
+        wire_calls_per_unit * (attempt_timeouts + backoff_seconds)
+        + GUARD_MARGIN_SECONDS
+    )

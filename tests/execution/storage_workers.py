@@ -1,0 +1,223 @@
+"""Importable multiprocessing workers for execution-storage tests."""
+
+from __future__ import annotations
+
+import os
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, NoReturn
+
+from dr_providers import (
+    GenerationControls,
+    MessageRole,
+    PromptMessage,
+    ProviderCallRequest,
+    Transcript,
+    openrouter_chat_config,
+)
+
+from tests.provider import support as s
+from whetstone.execution._file_lock import FileLock
+from whetstone.execution.partials import (
+    PartialCallRecord,
+    PartialLog,
+    _encode_frame,
+)
+from whetstone.execution.prompt_cache import PromptResultCache, execute_call
+
+
+class _CrashAfterPublicationCache(PromptResultCache):
+    def _finalize_accounting_locked(
+        self,
+        key: Any,
+        journal: Any,
+    ) -> NoReturn:
+        os._exit(86)
+
+
+class _CrashAfterPendingCache(PromptResultCache):
+    def _store_entry(self, **kwargs: Any) -> NoReturn:
+        os._exit(87)
+
+
+def cache_request() -> ProviderCallRequest:
+    return ProviderCallRequest(
+        config=openrouter_chat_config(
+            model="x/y",
+            controls=GenerationControls(temperature=0.0),
+        ),
+        transcript=Transcript(
+            messages=(PromptMessage(role=MessageRole.USER, content="hello"),)
+        ),
+    )
+
+
+@dataclass(slots=True)
+class _FileTransport:
+    invocation_path: Path
+    text: str
+    started: Any | None = None
+    block: bool = False
+
+    def __call__(self, request: ProviderCallRequest):
+        body = f"{os.getpid()}:{self.text}\n".encode()
+        fd = os.open(
+            self.invocation_path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT,
+            0o600,
+        )
+        try:
+            os.write(fd, body)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        if self.started is not None:
+            self.started.set()
+        while self.block:
+            time.sleep(0.01)
+        return s.build_evidence(
+            request=request,
+            policy=s.build_transport_policy(),
+            outcome=s.response_outcome(text=self.text),
+        )
+
+
+def execute_cache_worker(
+    root: str,
+    invocation_path: str,
+    worker_id: int,
+    barrier: Any | None,
+    output: Any,
+    *,
+    block: bool = False,
+    started: Any | None = None,
+    crash_after_publication: bool = False,
+    crash_after_pending: bool = False,
+    umask_value: int | None = None,
+) -> None:
+    if umask_value is not None:
+        os.umask(umask_value)
+    request = cache_request()
+    policy = s.build_execution_policy(max_attempts=1)
+    if barrier is not None:
+        barrier.wait()
+    if crash_after_publication:
+        cache = _CrashAfterPublicationCache(root=Path(root))
+    elif crash_after_pending:
+        cache = _CrashAfterPendingCache(root=Path(root))
+    else:
+        cache = PromptResultCache(root=Path(root))
+    execution = execute_call(
+        request=request,
+        policy=policy,
+        transport=_FileTransport(
+            invocation_path=Path(invocation_path),
+            text=f"result-{worker_id}",
+            started=started,
+            block=block,
+        ),
+        logical_call_id=f"call-{worker_id}",
+        repeat_index=0,
+        drive_ordinal=0,
+        cache=cache,
+        phase="worker",
+        unit=f"unit-{worker_id}",
+        clock=s.FakeClock(),
+        sleep=s.SleepRecorder(),
+    )
+    output.put(
+        {
+            "result": execution.result.model_dump(mode="json"),
+            "cache_hit": execution.cache_hit,
+            "provenance": (
+                execution.provenance.model_dump(mode="json")
+                if execution.provenance is not None
+                else None
+            ),
+        }
+    )
+
+
+def append_partial_worker(
+    path: str,
+    worker_id: int,
+    payload_size: int,
+    barrier: Any | None = None,
+    *,
+    exit_immediately: bool = False,
+) -> None:
+    if barrier is not None:
+        barrier.wait()
+    PartialLog(path=Path(path)).append(
+        PartialCallRecord(
+            phase="worker",
+            instance_id=f"task-{worker_id}",
+            unit=f"candidate-{worker_id}",
+            repeat_id=worker_id,
+            output_text=str(worker_id) * payload_size,
+        )
+    )
+    if exit_immediately:
+        os._exit(0)
+
+
+def write_torn_partial_worker(
+    path: str,
+    started: Any,
+) -> None:
+    log = PartialLog(path=Path(path))
+    record = PartialCallRecord(
+        phase="worker",
+        instance_id="torn-task",
+        unit="torn-candidate",
+        repeat_id=99,
+        at="2026-07-31T12:00:00+00:00",
+    )
+    body = _encode_frame(record)
+    with FileLock(log._lock_path):
+        fd = os.open(log.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            os.write(fd, body[: len(body) // 2])
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        started.set()
+        while True:
+            time.sleep(0.01)
+
+
+def hold_partial_lock(
+    path: str,
+    entered: Any,
+    release: Any,
+) -> None:
+    log = PartialLog(path=Path(path))
+    with FileLock(log._lock_path):
+        entered.set()
+        release.wait()
+
+
+def run_partial_operation(
+    path: str,
+    operation: str,
+    output: Any,
+) -> None:
+    log = PartialLog(path=Path(path))
+    if operation == "append":
+        log.append(
+            PartialCallRecord(
+                phase="worker",
+                instance_id="task-operation",
+                unit="candidate-operation",
+                repeat_id=20,
+            )
+        )
+        output.put("appended")
+    elif operation == "load":
+        output.put(len(log.load()))
+    elif operation == "delete":
+        log.delete()
+        output.put("deleted")
+    else:  # pragma: no cover - test fixture misuse
+        raise ValueError(f"unsupported partial operation: {operation}")

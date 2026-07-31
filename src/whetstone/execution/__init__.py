@@ -1,6 +1,7 @@
 """Environment-neutral execution primitives."""
 
 from whetstone.execution.call_support import (
+    GUARD_MARGIN_SECONDS,
     CallTelemetry,
     call_telemetry,
     failure_code_of,
@@ -10,14 +11,13 @@ from whetstone.execution.call_support import (
 )
 from whetstone.execution.fanout import (
     DEFAULT_CONCURRENCY,
-    GUARD_MARGIN_SECONDS,
-    RUNNER_TIMEOUT_CODE,
     CallSpec,
-    FanoutConfig,
     FanoutResult,
+    FanoutStatus,
     PoolOutcome,
-    RateLimitController,
-    RunnerTimeout,
+    ProcessCancellationError,
+    ProcessJob,
+    ProcessWorkerError,
     run_call_pool,
 )
 from whetstone.execution.partials import (
@@ -45,21 +45,21 @@ __all__ = [
     "PARTIAL_SCHEMA",
     "PROMPT_CACHE_ENTRY_SCHEMA",
     "PROMPT_CACHE_KEY_SCHEMA",
-    "RUNNER_TIMEOUT_CODE",
     "CacheProvenance",
     "CallExecution",
     "CallSpec",
     "CallTelemetry",
-    "FanoutConfig",
     "FanoutResult",
+    "FanoutStatus",
     "PartialCacheMarks",
     "PartialCallRecord",
     "PartialLog",
     "PoolOutcome",
+    "ProcessCancellationError",
+    "ProcessJob",
+    "ProcessWorkerError",
     "PromptCacheError",
     "PromptResultCache",
-    "RateLimitController",
-    "RunnerTimeout",
     "call_telemetry",
     "execute_call",
     "failure_code_of",

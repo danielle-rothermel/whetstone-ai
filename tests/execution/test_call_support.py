@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import pytest
 from dr_providers import FailureClass, ProviderKind, policy_for
 
 from tests.provider import support as s
 from whetstone.execution.call_support import (
+    GUARD_MARGIN_SECONDS,
     call_telemetry,
     failure_code_of,
     guard_deadline_seconds,
     is_rate_limit_failure,
     is_transient_transport_failure,
 )
-from whetstone.execution.fanout import GUARD_MARGIN_SECONDS
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import run_provider_call
 from whetstone.provider.policy import BackoffSchedule, ProviderExecutionPolicy
@@ -62,16 +63,35 @@ def _result(
     )
 
 
-def test_guard_deadline_uses_wire_caps_not_semantic_attempts() -> None:
-    policy = _policy(timeout_seconds=600.0, max_attempts=3)
-    assert guard_deadline_seconds(policy) == 600.0 + GUARD_MARGIN_SECONDS
+def test_guard_deadline_covers_attempts_backoff_and_wire_calls() -> None:
+    policy = ProviderExecutionPolicy(
+        transport_policy=policy_for(
+            ProviderKind.OPENROUTER,
+            api_key_env="OPENROUTER_API_KEY",
+            base_url="https://example.test/v1",
+            timeout_seconds=10.0,
+            native_retry_count=0,
+        ),
+        max_attempts=4,
+        backoff=BackoffSchedule(
+            base_seconds=2.0,
+            multiplier=2.0,
+            max_seconds=5.0,
+        ),
+    )
+    per_wire_call = 4 * 10.0 + (0.0 + 2.0 + 4.0 + 5.0)
+    assert guard_deadline_seconds(policy) == (
+        per_wire_call + GUARD_MARGIN_SECONDS
+    )
     assert guard_deadline_seconds(policy, wire_calls_per_unit=2) == (
-        1200.0 + GUARD_MARGIN_SECONDS
+        2 * per_wire_call + GUARD_MARGIN_SECONDS
     )
-    more_attempts = _policy(timeout_seconds=600.0, max_attempts=8)
-    assert guard_deadline_seconds(more_attempts) == (
-        guard_deadline_seconds(policy)
-    )
+
+
+def test_guard_deadline_rejects_nonpositive_wire_call_count() -> None:
+    policy = _policy(timeout_seconds=10.0, max_attempts=1)
+    with pytest.raises(ValueError, match="positive"):
+        guard_deadline_seconds(policy, wire_calls_per_unit=0)
 
 
 def test_only_transient_terminal_failures_are_redrive_eligible() -> None:
