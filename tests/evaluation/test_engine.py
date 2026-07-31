@@ -18,6 +18,7 @@ from whetstone.evaluation import (
     EngineEvaluationService,
     EngineToolEvaluator,
     EvaluationEngine,
+    EvaluationEvidence,
     EvaluationOutputComponentTraceStep,
     EvaluationOutputRow,
     EvaluationOutputsRecord,
@@ -119,6 +120,36 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert evidence.dataset_identity == (
         engine.sampling.task_set.dataset_revision
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "coercible_value"),
+    (
+        ("concurrency_halved", "false"),
+        ("deadline_reached", 0),
+    ),
+)
+def test_evaluation_evidence_rejects_coercible_booleans(
+    tmp_path,
+    field: str,
+    coercible_value: object,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / f"{field}.sqlite"))
+    transport = FakeTransport(reply=constant_reply("wrong"))
+    engine = _engine(tmp_path, store=store, transport=transport)
+    evidence = engine.evaluate(
+        EvaluationRequest(
+            candidate=engine.experiment.initial_candidate,
+            evaluation_role=EvaluationRole.INTERNAL,
+            evaluation_context_id="ctx",
+            purpose="test",
+        )
+    ).evidence
+    record = evidence.record_content()
+    record[field] = coercible_value
+
+    with pytest.raises(ValueError, match="valid boolean"):
+        EvaluationEvidence.model_validate(record)
 
 
 def test_evaluation_outputs_wire_contract_is_exact() -> None:

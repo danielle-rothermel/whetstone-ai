@@ -208,8 +208,8 @@ class EvaluationEvidence(BaseModel):
     aggregate_status: StrictStr
     reward_ref: TypedRef | None = None
     cache: CacheEvidence = Field(default_factory=CacheEvidence)
-    concurrency_halved: bool = False
-    deadline_reached: bool = False
+    concurrency_halved: StrictBool = False
+    deadline_reached: StrictBool = False
     guard_timeouts: StrictInt = 0
 
     @model_validator(mode="after")
