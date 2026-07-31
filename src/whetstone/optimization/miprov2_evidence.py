@@ -49,7 +49,6 @@ from whetstone.optimization.schema import (
 MIPROV2_INTENT_CONTEXT_SCHEMA = "whetstone.miprov2_intent_context"
 MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION = 1
 EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
-EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
 ROLLOUT_AGGREGATE_SCHEMA = "whetstone.rollout_aggregate"
 
 
@@ -310,6 +309,11 @@ def _resolve_miprov2_evidence(
     resolution: IntentResolution,
 ) -> _ResolvedEvidence:
     """Validate one resolution without assigning optimizer semantics."""
+
+    # The evaluation package eagerly imports its engine, which depends back on
+    # optimization through environment construction. Import its contract only
+    # once the module graph is initialized and evidence is actually resolved.
+    from whetstone.evaluation.schema import EVALUATION_OUTPUTS_SCHEMA
 
     context = load_miprov2_intent_context(store, resolution.intent)
     if resolution.outcome is not IntentOutcome.COMPLETED:
@@ -597,6 +601,9 @@ def resolve_miprov2_bootstrap(
 ) -> BootstrapRolloutResult:
     """Map exact single-task evidence/output rows to a bootstrap result."""
 
+    # See the package-cycle constraint in _resolve_miprov2_evidence.
+    from whetstone.evaluation.schema import EvaluationOutputsRecord
+
     resolved = _resolve_miprov2_evidence(store, resolution)
     context = resolved.context
     if context.effect_kind != "bootstrap":
@@ -614,38 +621,29 @@ def resolve_miprov2_bootstrap(
     evidence = resolved.evidence
     if evidence.repeat_count != 1:
         raise ValueError("bootstrap requires repeat_count=1")
-    if evidence.outputs_ref.schema_name != EVALUATION_OUTPUTS_SCHEMA:
-        raise ValueError("bootstrap outputs ref has the wrong schema")
-    output_record = store.get(evidence.outputs_ref.reference)
-    if not isinstance(output_record, dict):
-        raise ValueError("bootstrap output record must be an object")
-    rows = output_record.get("outputs")
-    if not isinstance(rows, list) or len(rows) != 1:
+    output_record = EvaluationOutputsRecord.model_validate(
+        store.get(evidence.outputs_ref.reference)
+    )
+    if len(output_record.outputs) != 1:
         raise ValueError("bootstrap requires exactly one output row")
-    row = rows[0]
-    if not isinstance(row, dict):
-        raise ValueError("bootstrap output row must be an object")
-    rendered_prompt = row.get("rendered_prompt")
-    output_text = row.get("output_text")
-    if (
-        type(rendered_prompt) is not str
-        or type(output_text) is not str
-        or row.get("failure_code") != ""
-    ):
+    row = output_record.outputs[0]
+    output_text = row.output_text
+    if output_text is None or row.failure_code != "":
         raise ValueError("bootstrap output row is not a successful generation")
     expected_candidate_id = context.candidate.record.candidate_id
     if (
-        output_record.get("candidate_id") != expected_candidate_id
-        or row.get("candidate_id") != expected_candidate_id
-        or row.get("repeat") != 0
+        output_record.candidate_id != expected_candidate_id
+        or row.candidate_id != expected_candidate_id
+        or row.task_identity != context.task_batch_identities[0]
+        or row.repeat != 0
     ):
         raise ValueError(
-            "bootstrap output row conflicts with candidate or repeat"
+            "bootstrap output row conflicts with candidate, task, or repeat"
         )
     assert context.bootstrap_attempt is not None
     trace_steps: tuple[ObservedTraceStep, ...]
-    raw_component_traces = row.get("component_trace_steps")
-    if len(context.trace_components) == 1 and not raw_component_traces:
+    component_traces = row.component_trace_steps
+    if len(context.trace_components) == 1 and not component_traces:
         projection = context.trace_components[0]
         trace_steps = (
             ObservedTraceStep(
@@ -656,29 +654,23 @@ def resolve_miprov2_bootstrap(
             ),
         )
     else:
-        if not isinstance(raw_component_traces, list) or len(
-            raw_component_traces
-        ) != len(context.trace_components):
+        if len(component_traces) != len(context.trace_components):
             raise ValueError(
                 "bootstrap output must carry every ordered component trace"
             )
         observed: list[ObservedTraceStep] = []
-        for trace_index, (projection, raw_trace) in enumerate(
+        for trace_index, (projection, trace) in enumerate(
             zip(
                 context.trace_components,
-                raw_component_traces,
+                component_traces,
                 strict=True,
             )
         ):
-            if not isinstance(raw_trace, dict):
-                raise ValueError("bootstrap component trace must be an object")
-            inputs = raw_trace.get("inputs")
-            outputs = raw_trace.get("outputs")
+            inputs = trace.inputs
+            outputs = trace.outputs
             if (
-                raw_trace.get("component_id") != projection.component_id
-                or not isinstance(inputs, dict)
+                trace.component_id != projection.component_id
                 or inputs != projection.inputs
-                or not isinstance(outputs, dict)
                 or tuple(outputs) != (projection.output_field,)
                 or type(outputs[projection.output_field]) is not str
             ):
@@ -697,7 +689,7 @@ def resolve_miprov2_bootstrap(
     row_identity = compute_identity_hash(
         schema="whetstone.miprov2_bootstrap_output_row",
         schema_version=1,
-        payload=row,
+        payload=row.model_dump(mode="json"),
     )
     return BootstrapRolloutResult(
         attempt_identity_hash=context.bootstrap_attempt.identity_hash(),

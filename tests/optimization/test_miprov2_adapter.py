@@ -47,8 +47,8 @@ from whetstone.optimization.miprov2_eval_config import (
 )
 from whetstone.optimization.miprov2_evidence import (
     EVALUATION_EVIDENCE_SCHEMA,
-    EVALUATION_OUTPUTS_SCHEMA,
     ROLLOUT_AGGREGATE_SCHEMA,
+    Miprov2IntentContext,
     Miprov2ResolvedEvaluation,
     load_miprov2_intent_context,
     resolve_miprov2_bootstrap,
@@ -529,6 +529,8 @@ def _resolution(
     score: float,
     output_record: dict[str, Any] | None = None,
 ) -> IntentResolution:
+    from whetstone.evaluation.schema import EVALUATION_OUTPUTS_SCHEMA
+
     # Evaluation rows are represented by the exact ordered task identities in
     # the persisted MIPROv2 context. The context is intentionally reloaded by
     # fold_resolution instead of being accepted from this test helper.
@@ -625,6 +627,62 @@ def _resolution(
         resolved_eval_config=intent.target_eval_config,
         reward_ref=reward_ref,
     )
+
+
+def _plan_bootstrap_intent(
+    store: ObjectStore,
+    *,
+    labeled_trainset: tuple[LabeledTaskDemo, ...] | None = None,
+) -> tuple[EvaluationIntent, Miprov2IntentContext]:
+    driver, state = _start(
+        control=_control(
+            max_bootstrapped_demos=1,
+            max_labeled_demos=0,
+        ),
+        labeled_trainset=labeled_trainset,
+        budget=Miprov2EffectBudget(
+            bootstrap_rollouts=1,
+            proposal_calls=2,
+            evaluations=2,
+        ),
+    )
+    adapter = _adapter(
+        store=store,
+        resolver=_ExactEvalConfigResolver(),
+        executor=_RecordingEffectExecutor(_EffectJournal()),
+        driver=driver,
+    )
+    state = _state(adapter.invoke(_request(state, ordinal=0), ()))
+    rollout = adapter.invoke(_request(state, ordinal=1), ())
+    intent = rollout.evaluation_intents[0]
+    return intent, load_miprov2_intent_context(store, intent)
+
+
+def _bootstrap_output_record(
+    context: Miprov2IntentContext,
+    *,
+    candidate_id: str,
+) -> dict[str, Any]:
+    return {
+        "candidate_id": candidate_id,
+        "outputs": [
+            {
+                "candidate_id": candidate_id,
+                "instance_id": "bootstrap-instance",
+                "task_identity": context.task_batch_identities[0],
+                "repeat": 0,
+                "rendered_prompt": "flattened provider prompt",
+                "output_text": "generated answer",
+                "score": 0.8,
+                "failure_code": "",
+                "component_trace_steps": [],
+                "finish_reason": "stop",
+                "provider_error": None,
+                "max_budget": None,
+                "over_budget": None,
+            }
+        ],
+    }
 
 
 class _ScoredEvaluationService:
@@ -899,45 +957,28 @@ def test_bootstrap_preserves_all_native_inputs_not_rendered_prompt(
         )
         for index, task in enumerate(TASKS[:2])
     )
-    driver, state = _start(
-        control=_control(
-            max_bootstrapped_demos=1,
-            max_labeled_demos=0,
-        ),
+    intent, context = _plan_bootstrap_intent(
+        store,
         labeled_trainset=labeled,
-        budget=Miprov2EffectBudget(
-            bootstrap_rollouts=1,
-            proposal_calls=2,
-            evaluations=2,
-        ),
     )
-    adapter = _adapter(
-        store=store,
-        resolver=_ExactEvalConfigResolver(),
-        executor=_RecordingEffectExecutor(_EffectJournal()),
-        driver=driver,
-    )
-    state = _state(adapter.invoke(_request(state, ordinal=0), ()))
-    rollout = adapter.invoke(_request(state, ordinal=1), ())
-    intent = rollout.evaluation_intents[0]
-    context = load_miprov2_intent_context(store, intent)
     candidate_id = intent.candidate.record.candidate_id
+    output_record = _bootstrap_output_record(
+        context,
+        candidate_id=candidate_id,
+    )
+    projection = context.trace_components[0]
+    output_record["outputs"][0]["component_trace_steps"] = [
+        {
+            "component_id": projection.component_id,
+            "inputs": projection.inputs,
+            "outputs": {projection.output_field: "generated answer"},
+        }
+    ]
     resolution = _resolution(
         store,
         intent,
         score=0.8,
-        output_record={
-            "candidate_id": candidate_id,
-            "outputs": [
-                {
-                    "candidate_id": candidate_id,
-                    "repeat": 0,
-                    "rendered_prompt": "flattened provider prompt",
-                    "output_text": "generated answer",
-                    "failure_code": "",
-                }
-            ],
-        },
+        output_record=output_record,
     )
 
     resolved = resolve_miprov2_bootstrap(store, resolution)
@@ -947,6 +988,149 @@ def test_bootstrap_preserves_all_native_inputs_not_rendered_prompt(
     assert set(trace.inputs) == {"input", "context"}
     assert "rendered_prompt" not in trace.inputs
     assert trace.outputs == {"output": "generated answer"}
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("unknown_field", "Extra inputs are not permitted"),
+        ("coercible_rendered_prompt", "valid string"),
+        ("coercible_output_text", "valid string"),
+        ("coercible_max_budget", "valid integer"),
+        ("malformed_component_trace", "Extra inputs are not permitted"),
+        ("nonfinite_score", "finite number"),
+    ),
+)
+def test_bootstrap_rejects_canonical_output_schema_drift(
+    tmp_path,
+    monkeypatch,
+    case: str,
+    message: str,
+) -> None:
+    from whetstone.evaluation.schema import EVALUATION_OUTPUTS_SCHEMA
+
+    store = ObjectStore(SqliteBackend(tmp_path / f"{case}.sqlite"))
+    intent, context = _plan_bootstrap_intent(store)
+    candidate_id = intent.candidate.record.candidate_id
+    output_record = _bootstrap_output_record(
+        context,
+        candidate_id=candidate_id,
+    )
+    resolution = _resolution(
+        store,
+        intent,
+        score=0.8,
+        output_record=output_record,
+    )
+    row = output_record["outputs"][0]
+    if case == "unknown_field":
+        row["unexpected"] = "drift"
+    elif case == "coercible_rendered_prompt":
+        row["rendered_prompt"] = 1
+    elif case == "coercible_output_text":
+        row["output_text"] = 1
+    elif case == "coercible_max_budget":
+        row["max_budget"] = "100"
+    elif case == "malformed_component_trace":
+        projection = context.trace_components[0]
+        row["component_trace_steps"] = [
+            {
+                "component_id": projection.component_id,
+                "inputs": projection.inputs,
+                "outputs": {projection.output_field: "generated answer"},
+                "unexpected": "drift",
+            }
+        ]
+    elif case == "nonfinite_score":
+        row["score"] = float("nan")
+    else:
+        raise AssertionError(f"unhandled test case: {case}")
+    canonical_get = store.get
+
+    def _get_with_drift(reference):
+        if reference.schema == EVALUATION_OUTPUTS_SCHEMA:
+            return output_record
+        return canonical_get(reference)
+
+    monkeypatch.setattr(store, "get", _get_with_drift)
+
+    with pytest.raises(ValueError, match=message):
+        resolve_miprov2_bootstrap(store, resolution)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    (
+        ("no_rows", "exactly one output row"),
+        ("extra_row", "exactly one output row"),
+        ("candidate", "candidate, task, or repeat"),
+        ("task", "candidate, task, or repeat"),
+        ("repeat", "candidate, task, or repeat"),
+        ("missing_output", "not a successful generation"),
+        ("failure", "not a successful generation"),
+        ("trace_count", "every ordered component trace"),
+        ("trace_component", "component trace conflicts with context"),
+        ("trace_inputs", "component trace conflicts with context"),
+        ("trace_outputs", "component trace conflicts with context"),
+        ("trace_output_type", "component trace conflicts with context"),
+    ),
+)
+def test_bootstrap_rejects_output_semantic_mismatch(
+    tmp_path,
+    case: str,
+    message: str,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / f"{case}.sqlite"))
+    intent, context = _plan_bootstrap_intent(store)
+    candidate_id = intent.candidate.record.candidate_id
+    output_record = _bootstrap_output_record(
+        context,
+        candidate_id=candidate_id,
+    )
+    row = output_record["outputs"][0]
+    projection = context.trace_components[0]
+    trace = {
+        "component_id": projection.component_id,
+        "inputs": projection.inputs,
+        "outputs": {projection.output_field: "generated answer"},
+    }
+    row["component_trace_steps"] = [trace]
+    if case == "no_rows":
+        output_record["outputs"] = []
+    elif case == "extra_row":
+        output_record["outputs"].append({**row, "repeat": 1})
+    elif case == "candidate":
+        output_record["candidate_id"] = "other-candidate"
+        row["candidate_id"] = "other-candidate"
+    elif case == "task":
+        row["task_identity"] = TASKS[1]
+    elif case == "repeat":
+        row["repeat"] = 1
+    elif case == "missing_output":
+        row["output_text"] = None
+    elif case == "failure":
+        row["failure_code"] = "provider_error"
+    elif case == "trace_count":
+        row["component_trace_steps"].append(trace)
+    elif case == "trace_component":
+        trace["component_id"] = "other-component"
+    elif case == "trace_inputs":
+        trace["inputs"] = {"input": "other"}
+    elif case == "trace_outputs":
+        trace["outputs"] = {"other-output": "generated answer"}
+    elif case == "trace_output_type":
+        trace["outputs"] = {projection.output_field: 1}
+    else:
+        raise AssertionError(f"unhandled test case: {case}")
+    resolution = _resolution(
+        store,
+        intent,
+        score=0.8,
+        output_record=output_record,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        resolve_miprov2_bootstrap(store, resolution)
 
 
 def test_evaluations_have_no_direct_scalar_fold_lane() -> None:
