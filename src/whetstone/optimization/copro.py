@@ -16,23 +16,21 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.graph.rollout import EvaluationRole
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.adapters import AdapterOutput
-from whetstone.optimization.copro_control import COPRO_ALGORITHM_VERSION
+from whetstone.optimization.copro_control import CoproControl
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
+    TerminalFailure,
     TypedRef,
     require_full_hash,
-    typed_ref_for_record,
 )
 from whetstone.optimization.mutation import (
     MUTATION_FIELD,
     DiffCheckError,
     candidate_from_draft,
-    invalid_template_placeholders,
-    template_placeholder_fields,
 )
 from whetstone.optimization.proposal_prompts import (
-    COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
     copro_proposal_prompt,
 )
 from whetstone.optimization.proposer import (
@@ -40,12 +38,12 @@ from whetstone.optimization.proposer import (
     ProposerConfig,
     ProposerTransport,
 )
-from whetstone.optimization.reward import REWARD_RECORD_SCHEMA, Reward
+from whetstone.optimization.reward import RewardRef
 from whetstone.optimization.schema import (
     BudgetDelta,
     Candidate,
     CandidateRef,
-    EvalConfigRef,
+    EvaluationBinding,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
@@ -66,7 +64,7 @@ class CoproConfig(BaseModel):
 
     Whetstone binds DSPy's ``prompt_model`` and ``metric`` constructor
     arguments through, respectively, the adapter's exact
-    :class:`ProposerConfig` and the request's exact :class:`EvalConfigRef`.
+    :class:`ProposerConfig` and the control's exact Evaluation Binding.
     They are deliberately not duplicated as loose string hyperparameters.
     """
 
@@ -98,7 +96,9 @@ class CoproRoundPlan(BaseModel):
     proposal_count: StrictInt
     include_initial_candidate: StrictBool
     # DSPy presents the selected best attempts from low score to high score.
-    prompt_history: tuple[dict[str, Any], ...] = Field(default_factory=tuple)
+    prompt_history: tuple[ImmutableJsonObject, ...] = Field(
+        default_factory=tuple
+    )
 
 
 class CoproAttempt(BaseModel):
@@ -112,11 +112,11 @@ class CoproAttempt(BaseModel):
     step_index: StrictInt
     intent_id: StrictStr
     candidate: CandidateRef
-    eval_config: EvalConfigRef
+    evaluation_binding: EvaluationBinding
     reward: float
-    reward_policy_hash: StrictStr
+    expected_reward_policy_hash: StrictStr
     evaluation_evidence_refs: tuple[TypedRef, ...]
-    reward_ref: TypedRef
+    reward_ref: RewardRef
 
     @model_validator(mode="after")
     def _validate(self) -> CoproAttempt:
@@ -133,8 +133,8 @@ class CoproAttempt(BaseModel):
         if not math.isfinite(self.reward):
             raise ValueError("COPRO attempt reward must be finite")
         require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
+            self.expected_reward_policy_hash,
+            field="expected_reward_policy_hash",
         )
         template = self.candidate.record.payload.get(MUTATION_FIELD)
         if not isinstance(template, str) or not template:
@@ -144,6 +144,21 @@ class CoproAttempt(BaseModel):
             )
         if not self.evaluation_evidence_refs:
             raise ValueError("COPRO attempt requires evaluation evidence")
+        reward = self.reward_ref.record
+        if reward.value != self.reward:
+            raise ValueError(
+                "COPRO attempt reward must match its exact Reward"
+            )
+        if reward.reward_policy_hash != self.expected_reward_policy_hash:
+            raise ValueError(
+                "COPRO attempt Reward Policy must match its expected hash"
+            )
+        if reward.evidence_refs != self.evaluation_evidence_refs:
+            raise ValueError(
+                "COPRO attempt evidence must match its exact Reward"
+            )
+        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO attempt requires an internal binding")
         return self
 
     @property
@@ -163,9 +178,8 @@ class CoproAttempt(BaseModel):
         occurrence_ordinal: int,
         round_index: int,
         resolution: IntentResolution,
-        reward: Reward,
         expected_run_id: str,
-        expected_eval_config: EvalConfigRef,
+        expected_evaluation_binding: EvaluationBinding,
         expected_reward_policy_hash: str,
     ) -> CoproAttempt:
         """Bind an externally loaded Reward to one measured resolution."""
@@ -176,24 +190,30 @@ class CoproAttempt(BaseModel):
             raise ValueError("COPRO folds only measured resolution details")
         if resolution.reward_ref is None:
             raise ValueError("COPRO measured resolution requires Reward ref")
-        if resolution.intent.context_role is not EvaluationRole.INTERNAL:
+        if (
+            resolution.intent.evaluation_binding.role
+            is not EvaluationRole.INTERNAL
+        ):
             raise ValueError("COPRO folds only internal evaluation intents")
         if resolution.intent.run_id != expected_run_id:
             raise ValueError("COPRO resolution belongs to another run")
         if resolution.intent.step_index != round_index:
             raise ValueError("COPRO resolution belongs to another round")
-        if resolution.resolved_eval_config != expected_eval_config:
-            raise ValueError("COPRO resolution uses an unexpected Eval Config")
+        if resolution.intent.evaluation_binding != expected_evaluation_binding:
+            raise ValueError(
+                "COPRO resolution uses an unexpected Evaluation Binding"
+            )
+        if (
+            resolution.intent.expected_reward_policy_hash
+            != expected_reward_policy_hash
+        ):
+            raise ValueError(
+                "COPRO resolution expects an unexpected Reward Policy"
+            )
+        reward_ref = resolution.reward_ref
+        reward = reward_ref.record
         if reward.reward_policy_hash != expected_reward_policy_hash:
             raise ValueError("COPRO Reward uses an unexpected Reward Policy")
-        expected_reward_ref = typed_ref_for_record(
-            REWARD_RECORD_SCHEMA,
-            reward.record_content(),
-        )
-        if resolution.reward_ref != expected_reward_ref:
-            raise ValueError(
-                "COPRO supplied Reward does not match resolution reward_ref"
-            )
         return cls(
             occurrence_ordinal=occurrence_ordinal,
             round_index=round_index,
@@ -201,20 +221,22 @@ class CoproAttempt(BaseModel):
             step_index=resolution.intent.step_index,
             intent_id=resolution.intent.intent_id,
             candidate=resolution.intent.candidate,
-            eval_config=resolution.resolved_eval_config,
+            evaluation_binding=resolution.intent.evaluation_binding,
             reward=reward.value,
-            reward_policy_hash=reward.reward_policy_hash,
+            expected_reward_policy_hash=reward.reward_policy_hash,
             evaluation_evidence_refs=resolution.evaluation_evidence_refs,
-            reward_ref=resolution.reward_ref,
+            reward_ref=reward_ref,
         )
 
-    def prompt_entry(self) -> dict[str, Any]:
-        return {
-            "occurrence_ordinal": self.occurrence_ordinal,
-            "candidate_id": self.candidate_id,
-            "template": self.template,
-            "reward": self.reward,
-        }
+    def prompt_entry(self) -> ImmutableJsonObject:
+        return ImmutableJsonObject(
+            {
+                "occurrence_ordinal": self.occurrence_ordinal,
+                "candidate_id": self.candidate_id,
+                "template": self.template,
+                "reward": self.reward,
+            }
+        )
 
 
 class CoproState(BaseModel):
@@ -273,16 +295,16 @@ def attempt_history_entries(
 ) -> tuple[CoproAttempt, ...]:
     """Read the append-only measured-attempt stream from a step request."""
 
-    raw = request.pools.get("attempt_history", [])
-    if not isinstance(raw, list):
+    raw = request.pools.get("attempt_history", ())
+    if type(raw) is not tuple:
         raise ValueError("attempt_history must be a JSON list")
     attempts: list[CoproAttempt] = []
     for ordinal, item in enumerate(raw):
-        if not isinstance(item, dict):
+        if not isinstance(item, ImmutableJsonObject):
             raise ValueError(
                 f"attempt_history[{ordinal}] must be a JSON record"
             )
-        attempts.append(CoproAttempt.model_validate(item))
+        attempts.append(CoproAttempt.model_validate(item.to_json()))
     return tuple(attempts)
 
 
@@ -406,15 +428,15 @@ class CoproDriver:
         expected_run_id = (
             state.attempts[0].run_id if state.attempts else attempts[0].run_id
         )
-        expected_eval_config = (
-            state.attempts[0].eval_config
+        expected_evaluation_binding = (
+            state.attempts[0].evaluation_binding
             if state.attempts
-            else attempts[0].eval_config
+            else attempts[0].evaluation_binding
         )
         expected_reward_policy_hash = (
-            state.attempts[0].reward_policy_hash
+            state.attempts[0].expected_reward_policy_hash
             if state.attempts
-            else attempts[0].reward_policy_hash
+            else attempts[0].expected_reward_policy_hash
         )
         for offset, attempt in enumerate(attempts):
             expected = start + offset
@@ -429,20 +451,20 @@ class CoproDriver:
                 )
             if attempt.run_id != expected_run_id:
                 raise ValueError("COPRO attempts span multiple runs")
-            if attempt.eval_config != expected_eval_config:
-                raise ValueError("COPRO attempts span multiple Eval Configs")
-            if attempt.reward_policy_hash != expected_reward_policy_hash:
+            if attempt.evaluation_binding != expected_evaluation_binding:
+                raise ValueError(
+                    "COPRO attempts span multiple Evaluation Bindings"
+                )
+            if (
+                attempt.expected_reward_policy_hash
+                != expected_reward_policy_hash
+            ):
                 raise ValueError(
                     "COPRO attempts span multiple Reward Policies"
                 )
             if attempt.intent_id in prior_intent_ids:
                 raise ValueError("COPRO attempt intent IDs must be unique")
             prior_intent_ids.add(attempt.intent_id)
-            if (
-                attempt.candidate.record.base_ref
-                != state.initial_candidate.base_ref
-            ):
-                raise ValueError("COPRO attempt changes the initial base_ref")
             initial_fixed = {
                 key: value
                 for key, value in state.initial_candidate.payload.items()
@@ -587,141 +609,33 @@ class CoproDriver:
         )
 
 
-def _eval_config(request: OptimizationStepRequest) -> EvalConfigRef:
-    raw = request.hyperparameters.get("eval_config")
-    if raw is None:
-        raise ValueError("COPRO requires one exact eval_config record")
-    return EvalConfigRef.model_validate(raw)
-
-
-def _copro_config(request: OptimizationStepRequest) -> CoproConfig:
-    expected = {
-        "algorithm_version",
-        "breadth",
-        "depth",
-        "eval_config",
-        "init_temperature",
-        "prompt_adapter_identity_hash",
-        "proposal_prompt_schema_tag",
-        "provider_execution_policy_hash",
-        "reward_policy_hash",
-        "round_index",
-        "track_stats",
-    }
-    actual = set(request.hyperparameters)
-    if actual != expected:
-        raise ValueError(
-            "COPRO requires exact hyperparameters; "
-            f"missing={sorted(expected - actual)}, "
-            f"unexpected={sorted(actual - expected)}"
-        )
-    if request.hyperparameters["algorithm_version"] != COPRO_ALGORITHM_VERSION:
-        raise ValueError("COPRO algorithm_version does not match adapter")
-    if (
-        request.hyperparameters["proposal_prompt_schema_tag"]
-        != COPRO_PROPOSAL_PROMPT_SCHEMA_TAG
-    ):
-        raise ValueError(
-            "COPRO proposal_prompt_schema_tag does not match adapter"
-        )
-    values = {
-        name: request.hyperparameters[name]
-        for name in (
-            "breadth",
-            "depth",
-            "init_temperature",
-            "track_stats",
-        )
-        if name in request.hyperparameters
-    }
-    return CoproConfig.model_validate(values)
-
-
-def _history_base(
-    initial: Candidate,
-    best: CoproAttempt,
-) -> Candidate:
-    """Reconstitute the best prompt over the initial fixed payload."""
-
-    if best.candidate.record.base_ref != initial.base_ref:
-        raise ValueError("COPRO attempt history changes the initial base_ref")
-    return Candidate(
-        candidate_id=best.candidate_id,
-        base_ref=initial.base_ref,
-        payload={**initial.payload, MUTATION_FIELD: best.template},
-    )
-
-
-def _valid_template_keys(
-    request: OptimizationStepRequest,
-) -> tuple[str, ...]:
-    raw = request.pools.get("valid_template_keys")
-    if not isinstance(raw, list):
-        raise ValueError(
-            "COPRO requires explicit valid_template_keys authority"
-        )
-    if any(not isinstance(item, str) or not item for item in raw):
-        raise ValueError("valid_template_keys must contain non-empty strings")
-    if len(raw) != len(set(raw)):
-        raise ValueError("valid_template_keys must not contain duplicates")
-    return tuple(raw)
-
-
 def _normalize_initial_candidate(
     candidate: Candidate,
-    valid_template_keys: tuple[str, ...],
+    request: OptimizationStepRequest,
 ) -> Candidate:
     raw = candidate.payload.get(MUTATION_FIELD)
     if not isinstance(raw, str):
         raise ValueError(
             "COPRO initial candidate requires user_prompt_template"
         )
-    template = raw.strip('"').strip()
-    if not template:
-        raise ValueError("COPRO initial template is empty after normalization")
-    invalid = invalid_template_placeholders(template, valid_template_keys)
-    if invalid:
-        raise ValueError(
-            "COPRO initial template contains unavailable placeholders: "
-            + ", ".join(invalid)
-        )
-    return candidate.model_copy(
-        update={
-            "payload": {
-                **candidate.payload,
-                MUTATION_FIELD: template,
-            }
-        }
-    )
+    request.run.record.template_render_contract.validate_template(raw)
+    return candidate
 
 
 def _validate_attempt_placeholders(
     attempts: tuple[CoproAttempt, ...],
-    valid_template_keys: tuple[str, ...],
-    required_template_keys: tuple[str, ...],
+    request: OptimizationStepRequest,
 ) -> None:
     for attempt in attempts:
-        invalid = invalid_template_placeholders(
-            attempt.template, valid_template_keys
-        )
-        if invalid:
-            raise ValueError(
-                "COPRO history contains unavailable placeholders at "
-                f"occurrence {attempt.occurrence_ordinal}: "
-                + ", ".join(invalid)
+        try:
+            request.run.record.template_render_contract.validate_template(
+                attempt.template
             )
-        fields = template_placeholder_fields(attempt.template)
-        missing = [
-            required
-            for required in required_template_keys
-            if fields.count(required) < required_template_keys.count(required)
-        ]
-        if missing:
+        except ValueError as error:
             raise ValueError(
-                "COPRO history removes required placeholders at "
-                f"occurrence {attempt.occurrence_ordinal}: "
-                + ", ".join(dict.fromkeys(missing))
-            )
+                "COPRO history violates the run Template Render Contract at "
+                f"occurrence {attempt.occurrence_ordinal}: {error}"
+            ) from error
 
 
 class CoproAdapter:
@@ -730,10 +644,10 @@ class CoproAdapter:
     def __init__(
         self,
         *,
-        proposer_config: ProposerConfig,
+        control: CoproControl,
         transport: ProposerTransport,
     ) -> None:
-        self._proposer_config = proposer_config
+        self._control = control
         self._transport = transport
         self.invocations = 0
 
@@ -747,7 +661,11 @@ class CoproAdapter:
 
     @property
     def proposer_config(self) -> ProposerConfig:
-        return self._proposer_config
+        return self._control.prompt_model
+
+    @property
+    def control(self) -> CoproControl:
+        return self._control
 
     @property
     def provider_execution_policy_hash(self) -> str:
@@ -766,21 +684,28 @@ class CoproAdapter:
         if handles:
             raise ValueError("COPRO receives no Runtime Tool Handles")
 
-        config = _copro_config(request)
-        expected_policy_hash = request.hyperparameters[
-            "provider_execution_policy_hash"
-        ]
-        require_full_hash(
-            expected_policy_hash,
-            field="provider_execution_policy_hash",
+        if request.run.record.optimizer_config != self._control.reference():
+            raise ValueError(
+                "COPRO run optimizer_config does not bind the exact control"
+            )
+        iteration = request.hyperparameters.get("round_index")
+        if type(iteration) is not int:
+            raise ValueError("COPRO round_index must be an integer")
+        expected_hyperparameters = ImmutableJsonObject(
+            self._control.step_hyperparameters(iteration=iteration)
         )
-        expected_adapter_hash = request.hyperparameters[
-            "prompt_adapter_identity_hash"
-        ]
-        require_full_hash(
-            expected_adapter_hash,
-            field="prompt_adapter_identity_hash",
+        if request.hyperparameters != expected_hyperparameters:
+            raise ValueError(
+                "COPRO step hyperparameters do not match the exact control"
+            )
+        config = CoproConfig(
+            breadth=self._control.breadth,
+            depth=self._control.depth,
+            init_temperature=self._control.init_temperature,
+            track_stats=self._control.track_stats,
         )
+        expected_policy_hash = self._control.provider_execution_policy_hash
+        expected_adapter_hash = self._control.prompt_adapter_identity_hash
         if self.provider_execution_policy_hash != expected_policy_hash:
             raise ValueError(
                 "COPRO provider execution policy conflicts with request"
@@ -789,49 +714,36 @@ class CoproAdapter:
             raise ValueError(
                 "COPRO prompt adapter identity conflicts with request"
             )
-        expected_reward_policy_hash = request.hyperparameters[
-            "reward_policy_hash"
-        ]
-        require_full_hash(
-            expected_reward_policy_hash,
-            field="reward_policy_hash",
-        )
-        eval_config = _eval_config(request)
-        if self._proposer_config.temperature != config.init_temperature:
+        expected_reward_policy_hash = self._control.expected_reward_policy_hash
+        run_reward_policy = request.run.record.reward_policy
+        if run_reward_policy is None:
+            raise ValueError("COPRO requires the exact run Reward Policy")
+        if run_reward_policy.identity_hash() != expected_reward_policy_hash:
             raise ValueError(
-                "COPRO Proposer Config temperature must equal init_temperature"
+                "COPRO expected Reward Policy conflicts with the exact run"
             )
-        iteration = request.hyperparameters["round_index"]
-        if type(iteration) is not int:
-            raise ValueError("COPRO round_index must be an integer")
-        valid_template_keys = _valid_template_keys(request)
+        evaluation_binding = self._control.evaluation_binding
         if len(request.candidates) != 1:
             raise ValueError(
                 "single-prompt COPRO requires exactly one initial candidate"
             )
-        initial = _normalize_initial_candidate(
-            request.candidates[0], valid_template_keys
-        )
-        required_template_keys = template_placeholder_fields(
-            str(initial.payload[MUTATION_FIELD])
-        )
+        initial = _normalize_initial_candidate(request.candidates[0], request)
         history = attempt_history_entries(request)
         for attempt in history:
             if attempt.run_id != request.run_id:
                 raise ValueError("COPRO history belongs to another run")
-            if attempt.eval_config != eval_config:
+            if attempt.evaluation_binding != evaluation_binding:
                 raise ValueError(
-                    "COPRO history uses an unexpected Eval Config"
+                    "COPRO history uses an unexpected Evaluation Binding"
                 )
-            if attempt.reward_policy_hash != expected_reward_policy_hash:
+            if (
+                attempt.expected_reward_policy_hash
+                != expected_reward_policy_hash
+            ):
                 raise ValueError(
                     "COPRO history uses an unexpected Reward Policy"
                 )
-        _validate_attempt_placeholders(
-            history,
-            valid_template_keys,
-            required_template_keys,
-        )
+        _validate_attempt_placeholders(history, request)
         driver = CoproDriver(config)
         state = driver.restore_state(
             initial_candidate=initial,
@@ -843,9 +755,21 @@ class CoproAdapter:
             )
         plan = driver.advance(state)
         remaining = request.budget.remaining.get("proposal_calls")
+        if remaining is not None and type(remaining) is not int:
+            raise TypeError(
+                "validated proposal_calls budget is not an integer"
+            )
         if remaining is not None and remaining < plan.proposal_count:
             return AdapterOutput(
                 proposed_status=StepStatus.FAILED,
+                terminal_failure=TerminalFailure(
+                    code="copro_proposal_budget_exhausted",
+                    message="COPRO proposal budget is exhausted",
+                    details={
+                        "required": plan.proposal_count,
+                        "remaining": remaining,
+                    },
+                ),
                 state_delta={
                     "reason": "proposal budget exhausted",
                     "required": plan.proposal_count,
@@ -854,29 +778,25 @@ class CoproAdapter:
             )
 
         ranked = driver.terminal_ranking(history)
-        base = (
-            initial
-            if plan.proposal_mode == SEED_PROPOSAL
-            else _history_base(initial, ranked[0])
-        )
+        base = initial
         context: dict[str, Any] = {
-            "prompt_history": [dict(item) for item in plan.prompt_history],
+            "prompt_history": [item.to_json() for item in plan.prompt_history],
         }
         proposal_request = ProposalRequest(
             proposal_mode=plan.proposal_mode,
             request_ordinal=iteration,
-            base_ref=base.base_ref,
-            base_template=str(base.payload.get(MUTATION_FIELD, "")),
-            run_id=request.run_id,
-            step_index=request.step_index,
+            base_candidate=candidate_reference(base),
             context=context,
         )
         prompt = copro_proposal_prompt(proposal_request)
-        proposal_request = proposal_request.model_copy(
-            update={"context": {**context, "proposal_prompt": prompt}}
+        proposal_request = ProposalRequest(
+            proposal_mode=proposal_request.proposal_mode,
+            request_ordinal=proposal_request.request_ordinal,
+            base_candidate=proposal_request.base_candidate,
+            context={**context, "proposal_prompt": prompt},
         )
         drafts = self._transport.draft(
-            self._proposer_config,
+            self._control.prompt_model,
             proposal_request,
             plan.proposal_count,
         )
@@ -907,8 +827,7 @@ class CoproAdapter:
                     base=base,
                     candidate_id=candidate_id,
                     draft=normalized_draft,
-                    valid_template_keys=valid_template_keys,
-                    required_template_keys=required_template_keys,
+                    run=request.run,
                 )
             except DiffCheckError as exc:
                 disposition = "provider_failed" if draft.failed else "rejected"
@@ -929,9 +848,9 @@ class CoproAdapter:
                     "candidate_id": candidate_id,
                     "disposition": disposition,
                     "reason": reason,
-                    "request": draft.request_evidence,
-                    "response": draft.response_evidence,
-                    "usage": draft.usage,
+                    "request": draft.request_evidence.to_json(),
+                    "response": draft.response_evidence.to_json(),
+                    "usage": draft.usage.to_json(),
                     "cost": draft.cost,
                 }
             )
@@ -954,14 +873,26 @@ class CoproAdapter:
                     "cost": None,
                 }
             )
-        proposed = [candidate for _, candidate in occurrences]
+        proposed = [
+            candidate
+            for _, candidate in occurrences
+            if candidate is not initial
+        ]
         if (
             len(drafts) != plan.proposal_count
-            or len(proposed) != config.breadth
+            or len(occurrences) != config.breadth
         ):
             return AdapterOutput(
                 proposed_candidates=tuple(proposed),
                 proposed_status=StepStatus.FAILED,
+                terminal_failure=TerminalFailure(
+                    code="copro_proposal_cardinality",
+                    message="COPRO proposer failed to fill its round",
+                    details={
+                        "expected_occurrences": config.breadth,
+                        "actual_occurrences": len(occurrences),
+                    },
+                ),
                 budget_delta=BudgetDelta(
                     consumed={"proposal_calls": plan.proposal_count}
                 ),
@@ -983,11 +914,12 @@ class CoproAdapter:
                         f"{occurrence_ordinal}:{candidate_ref.identity_hash}"
                     ),
                     candidate=candidate_ref,
-                    target_eval_config=eval_config,
-                    context_role=EvaluationRole.INTERNAL,
+                    target_eval_config=evaluation_binding.eval_config,
+                    evaluation_binding=evaluation_binding,
                     purpose=plan.proposal_mode,
                     run_id=request.run_id,
                     step_index=request.step_index,
+                    expected_reward_policy_hash=(expected_reward_policy_hash),
                 )
             )
         return AdapterOutput(

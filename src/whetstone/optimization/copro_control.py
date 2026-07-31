@@ -14,10 +14,13 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.lm.boundary import PlainPromptAdapter
 from whetstone.optimization.identity import (
+    IdentityRef,
     compute_identity_hash,
     require_full_hash,
+    typed_ref_for_record,
 )
 from whetstone.optimization.proposal_prompts import (
     COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
@@ -26,7 +29,7 @@ from whetstone.optimization.proposer import (
     ProposerConfig,
     prompt_adapter_identity_hash,
 )
-from whetstone.optimization.schema import EvalConfigRef
+from whetstone.optimization.schema import EvalConfigRef, EvaluationBinding
 
 COPRO_ALGORITHM_VERSION = "dspy_copro_single_prompt/v1"
 COPRO_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
@@ -40,21 +43,23 @@ class CoproInjectedDefaults(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: ProposerConfig
-    metric: EvalConfigRef
-    reward_policy_hash: StrictStr
+    evaluation_binding: EvaluationBinding
+    expected_reward_policy_hash: StrictStr
     provider_execution_policy_hash: StrictStr
     prompt_adapter: PlainPromptAdapter
 
     @model_validator(mode="after")
     def _validate(self) -> CoproInjectedDefaults:
         require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
+            self.expected_reward_policy_hash,
+            field="expected_reward_policy_hash",
         )
         require_full_hash(
             self.provider_execution_policy_hash,
             field="provider_execution_policy_hash",
         )
+        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO requires an internal Evaluation Binding")
         return self
 
 
@@ -71,8 +76,8 @@ class CoproControl(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: ProposerConfig
-    metric: EvalConfigRef
-    reward_policy_hash: StrictStr
+    evaluation_binding: EvaluationBinding
+    expected_reward_policy_hash: StrictStr
     breadth: StrictInt = 10
     depth: StrictInt = 3
     init_temperature: float = 1.4
@@ -95,8 +100,8 @@ class CoproControl(BaseModel):
                 "prompt_model temperature conflicts with init_temperature"
             )
         require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
+            self.expected_reward_policy_hash,
+            field="expected_reward_policy_hash",
         )
         require_full_hash(
             self.provider_execution_policy_hash,
@@ -106,6 +111,8 @@ class CoproControl(BaseModel):
             self.prompt_adapter_identity_hash,
             field="prompt_adapter_identity_hash",
         )
+        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO requires an internal Evaluation Binding")
         if self.algorithm_version != COPRO_ALGORITHM_VERSION:
             raise ValueError("COPRO algorithm_version is fixed")
         if self.proposal_prompt_schema_tag != COPRO_PROPOSAL_PROMPT_SCHEMA_TAG:
@@ -128,11 +135,11 @@ class CoproControl(BaseModel):
                 "identity_hash": self.prompt_model.identity_hash(),
                 "config": self.prompt_model.identity_payload(),
             },
-            "metric": {
-                "identity_hash": self.metric.identity_hash,
-                "record_ref": self.metric.record_ref.model_dump(mode="json"),
+            "evaluation_binding": {
+                "identity_hash": self.evaluation_binding.identity_hash(),
+                "record": self.evaluation_binding.model_dump(mode="json"),
             },
-            "reward_policy_hash": self.reward_policy_hash,
+            "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "breadth": self.breadth,
             "depth": self.depth,
             "init_temperature": self.init_temperature,
@@ -144,6 +151,20 @@ class CoproControl(BaseModel):
             schema=COPRO_CONTROL_SCHEMA,
             schema_version=COPRO_CONTROL_SCHEMA_VERSION,
             payload=self.identity_payload(),
+        )
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    def reference(self) -> IdentityRef:
+        """Return the exact content and identity binding for this control."""
+
+        return IdentityRef(
+            record_ref=typed_ref_for_record(
+                COPRO_CONTROL_SCHEMA,
+                self.record_content(),
+            ),
+            identity_hash=self.identity_hash(),
         )
 
     def require_identity_hash(self, persisted_hash: str) -> None:
@@ -166,8 +187,10 @@ class CoproControl(BaseModel):
             "init_temperature": self.init_temperature,
             "track_stats": self.track_stats,
             "round_index": iteration,
-            "eval_config": self.metric.model_dump(mode="json"),
-            "reward_policy_hash": self.reward_policy_hash,
+            "evaluation_binding": self.evaluation_binding.model_dump(
+                mode="json"
+            ),
+            "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "algorithm_version": self.algorithm_version,
             "proposal_prompt_schema_tag": self.proposal_prompt_schema_tag,
             "provider_execution_policy_hash": (
@@ -200,11 +223,20 @@ def configure_copro(
     resolved_prompt_model = (
         defaults.prompt_model if prompt_model is None else prompt_model
     )
-    resolved_metric = defaults.metric if metric is None else metric
+    resolved_binding = (
+        defaults.evaluation_binding
+        if metric is None
+        else EvaluationBinding.model_validate(
+            {
+                **defaults.evaluation_binding.model_dump(mode="json"),
+                "eval_config": metric.model_dump(mode="json"),
+            }
+        )
+    )
     return CoproControl(
         prompt_model=resolved_prompt_model,
-        metric=resolved_metric,
-        reward_policy_hash=defaults.reward_policy_hash,
+        evaluation_binding=resolved_binding,
+        expected_reward_policy_hash=defaults.expected_reward_policy_hash,
         breadth=breadth,
         depth=depth,
         init_temperature=init_temperature,

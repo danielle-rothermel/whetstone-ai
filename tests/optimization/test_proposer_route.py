@@ -211,7 +211,11 @@ def test_proposal_context_evidence_and_usage_are_deeply_immutable() -> None:
 
     evidence = {"request": {"messages": ["a"]}}
     usage = {"tokens": {"input": 10}}
-    draft = FakeProposerTransport({}).draft(
+    draft = FakeProposerTransport(
+        {},
+        execution_policy_hash="a" * 64,
+        prompt_adapter_identity_hash="b" * 64,
+    ).draft(
         _pc("pcc://proposer"),
         request,
         0,

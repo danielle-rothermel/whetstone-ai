@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from whetstone.optimization.identity import ImmutableJsonObject
 from whetstone.optimization.proposer import ProposalRequest
 
 COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION = 1
@@ -46,12 +47,12 @@ def copro_proposal_prompt(request: ProposalRequest) -> str:
             f"unsupported COPRO proposal mode {request.proposal_mode!r}"
         )
 
-    raw_history = request.context.get("prompt_history", [])
-    if not isinstance(raw_history, list) or not raw_history:
+    raw_history = request.context.get("prompt_history", ())
+    if type(raw_history) is not tuple or not raw_history:
         raise ValueError("COPRO history prompt requires selected attempts")
     lines = [COPRO_HISTORY_ROLE, ""]
     for index, entry in enumerate(raw_history, start=1):
-        if not isinstance(entry, dict):
+        if not isinstance(entry, ImmutableJsonObject):
             raise ValueError("COPRO prompt history entries must be records")
         lines.extend(
             [

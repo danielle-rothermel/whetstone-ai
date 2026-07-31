@@ -26,7 +26,7 @@
 
 <div class="section-head"><h2>Algorithm boundary</h2></div>
 <div class="grid-2">
-  <section class="card"><h3>COPRO owns</h3><p>Prompt candidate construction, required placeholders, ordered proposal rounds, score feedback, candidate deduplication, and terminal selection.</p></section>
+  <section class="card"><h3>COPRO owns</h3><p>Prompt candidate construction under the run's exact Template Render Contract, ordered proposal rounds, score feedback, candidate deduplication, and terminal selection.</p></section>
   <section class="card"><h3>Shared services own</h3><p>Provider request execution, physical-attempt identity, retries, evaluation intent, task-matrix execution, evidence persistence, and viewer publication.</p></section>
 </div>
 
@@ -35,7 +35,7 @@
   <li>COPRO persists the semantic request for the round and each batch slot.</li>
   <li>The shared proposal-effect executor derives a stable physical-attempt identity.</li>
   <li>Provider evidence is accepted only for the exact request and policy.</li>
-  <li>COPRO parses and validates each proposal, including required template placeholders.</li>
+  <li>COPRO parses each proposal and validates it through the exact Template Render Contract composed into the Optimization Run.</li>
   <li>Each accepted candidate is evaluated through the canonical evaluation service.</li>
   <li>The next round consumes resolved Evaluation Evidence, never an unbound score scalar.</li>
 </ol>
@@ -106,7 +106,7 @@
   <div class="card">
     <h3>Official Evaluation</h3>
     <ul>
-      <li>Same ordinary Eval Config as the eval experiment, bound through an Evaluation Context carrying the <code>official</code> role: HumanEval+ (164 tasks) @ pinned revision · 3 repeats · zstd-19</li>
+      <li>Same ordinary Eval Config as the eval experiment, composed into an exact Evaluation Binding carrying authorized <code>official</code> authority: HumanEval+ (164 tasks) @ pinned revision · 3 repeats · zstd-19</li>
       <li><b>Selection:</b> official-evaluate top 2 returned candidates, each across the 4 budget ratios</li>
     </ul>
     <p class="small muted space-top">Per Model Route: <code>evaluated_occurrence_count=8</code> → <code>internal_rollout_count=160</code>; after exact-template deduplication, the complete ranked set contains <code>U≤8</code> candidates. Official selection still yields <code>D≤8</code> graph slots and at most 3,936 official Rollouts.</p>
@@ -123,7 +123,7 @@
     <div class="comp node"><b>Candidate Variable</b><span class="note"><code>{user_prompt_template}</code> = Template A initially<hr>the one original prompt; every other variable is fixed for the run</span></div>
     <div class="comp node"><b>Fixed Provider Call Config Assignment</b><span class="note">encoder Provider Call Config ref/hash and decoder Provider Call Config ref/hash are fixed. Each complete identity includes Provider Service <code>openrouter</code>, protocol, requested Model <code>deepseek/deepseek-v4-flash</code>, temperature <code>1.0</code>, every sampling control and provider extension<hr>decoder prompt is fixed as in the eval experiment</span></div>
     <div class="comp node"><b>Variance Source</b><span class="note"><code>budget_ratio</code> ∈ {0.25, 0.5, 0.75, 1.0}<hr>spreads each candidate into 4 Graph Config materializations — its curve on the plot</span></div>
-    <div class="comp node"><b>Independent Eval Configs</b><span class="note"><code>step_eval_config_ref</code> binds <code>step_task_count=20</code> and <code>step_repeat_count=1</code> through a context carrying the <code>internal</code> <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Role</a>; <code>official_eval_config_ref</code> binds <code>official_task_count=164</code> and <code>official_repeat_count=3</code> through an authorized context carrying the <code>official</code> role. Both reference the identical facts-first Evaluation Procedure Config assigned on the Graph's Eval Node<hr>Sampling/Aggregation produce separate Eval Config identities, while the shared Procedure Config is already included in <code>graph_hash</code></span></div>
+    <div class="comp node"><b>Exact Evaluation Bindings</b><span class="note"><code>step_evaluation_binding</code> composes the exact Eval Config for <code>step_task_count=20</code> and <code>step_repeat_count=1</code> with the <code>internal</code> <a class="term-ref" href="vocab_and_defs.html#term-evaluation-role">Evaluation Role</a>, campaign, policies, and realized environment; <code>official_evaluation_binding</code> composes the 164-task, three-repeat Eval Config with authorized <code>official</code> authority. Both bind the identical facts-first Evaluation Procedure Config assigned on the Graph's Eval Node<hr>Sampling/Aggregation produce separate Eval Config identities, while the shared Procedure Config is already included in <code>graph_hash</code></span></div>
   </div>
 </div>
 
@@ -135,7 +135,7 @@
   </div>
 </div>
 
-<div class="callout"><b>Measurement and Reward.</b> <code>step_eval_config_ref</code> fixes Sampling = <code>step_task_count=20</code> named tasks × <code>step_repeat_count=1</code> + Evaluation Procedure + complete task Aggregation and references the identical canonical Evaluation Procedure Config assigned statically to the Graph's Eval Node. Whetstone validates and materializes every returned candidate, runs this evaluation outside the COPRO invocation, and applies <code>step_reward_policy_ref</code> to create Reward and the next immutable Attempt History. The ordinary Eval Config bound under the <code>official</code> Evaluation Role changes Sampling/Aggregation only, so matching Graph Configs retain the same <code>graph_hash</code> while their <code>eval_config_hash</code> values differ; a Procedure Config change would change both hashes. Authority and realized-environment attestation remain in Evaluation Context; an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward.</div>
+<div class="callout"><b>Measurement and Reward.</b> The exact internal Evaluation Binding fixes Sampling = <code>step_task_count=20</code> named tasks × <code>step_repeat_count=1</code> + Evaluation Procedure + complete task Aggregation and references the identical canonical Evaluation Procedure Config assigned statically to the Graph's Eval Node. Whetstone validates and materializes every returned candidate, runs this evaluation outside the COPRO invocation, and applies the exact Reward Policy composed into the Optimization Run to create an exact Reward Ref and the next immutable Attempt History. The ordinary Eval Config bound under the <code>official</code> Evaluation Role changes Sampling/Aggregation only, so matching Graph Configs retain the same <code>graph_hash</code> while their <code>eval_config_hash</code> values differ; a Procedure Config change would change both hashes. Authority and realized-environment attestation are part of the Evaluation Binding; an <a class="term-ref" href="vocab_and_defs.html#term-official-evaluation-record">Official Evaluation Record</a> certifies referenced ordinary results. Official evaluation computes Objective Vectors/Rollout Aggregates, never Reward.</div>
 
 <div class="section-head" id="system"><h2>Run COPRO as Externally Evaluated Proposal Steps</h2></div>
 
@@ -212,7 +212,7 @@
 <div class="run">
   <div class="tick">
     <div class="who designer">Designer</div>
-    <div class="what"><p>Freezes the registry values, starting candidates, mutation surface, ordinary Eval Configs for the step and official-role contexts, Reward Policy, materialization axis, and Selection Policy. No evaluation interface is granted to COPRO.</p></div>
+    <div class="what"><p>Freezes the registry values, starting candidates, mutation surface, exact Evaluation Bindings for the step and official role, the run's exact Reward Policy, materialization axis, and Selection Policy. No evaluation interface is granted to COPRO.</p></div>
   </div>
   <div class="tick optim">
     <div class="who env">Whetstone</div>
@@ -242,7 +242,7 @@
   </div>
   <div class="tick">
     <div class="who env">Whetstone</div>
-    <div class="what"><p>Runs the second external 80-Rollout batch, then creates H<sub>2</sub> and S<sub>2</sub>. All <code>evaluated_occurrence_count=8</code> observations are now comparable under one step Eval Config and Reward Policy.</p>
+    <div class="what"><p>Runs the second external 80-Rollout batch, then creates H<sub>2</sub> and S<sub>2</sub>. All <code>evaluated_occurrence_count=8</code> observations are now comparable under one exact internal Evaluation Binding and the run's exact Reward Policy.</p>
       <div class="ledger"><b>output</b><code>internal_rollout_count=80+80=160</code>; eight-entry occurrence history H<sub>2</sub>; immutable S<sub>2</sub></div>
     </div>
   </div>
@@ -292,7 +292,7 @@
   <div class="card">
     <h3>Internal and official measurement stay separate</h3>
     <ul>
-      <li><code>step_eval_config_ref</code> and <code>official_eval_config_ref</code> have independent Eval Config hashes and Evaluation Contexts</li>
+      <li><code>step_evaluation_binding</code> and <code>official_evaluation_binding</code> carry independent exact Eval Configs and role-specific authority</li>
       <li>Their shared Evaluation Procedure Config remains in Graph Config identity; Sampling and Aggregation distinguish measurement regimes</li>
       <li>Only ordinary Results referenced and certified by an authority-issued Official Evaluation Record are plot-eligible</li>
     </ul>

@@ -11,12 +11,14 @@ from dr_providers import (
 )
 
 from tests.provider import support as provider_support
+from whetstone.optimization.identity import IdentityRef, typed_ref_for_record
 from whetstone.optimization.proposer import (
     FakeProposerTransport,
     ProposalRequest,
     ProposerConfig,
     ProviderProposerTransport,
 )
+from whetstone.optimization.schema import Candidate, candidate_reference
 
 
 def _proposal_request(
@@ -25,8 +27,15 @@ def _proposal_request(
     return ProposalRequest(
         proposal_mode="seed_proposal",
         request_ordinal=0,
-        base_ref="route-a",
-        base_template="Initial {input}",
+        base_candidate=candidate_reference(
+            Candidate(
+                candidate_id="base",
+                base_ref=typed_ref_for_record(
+                    "test.candidate_parent", {"id": "parent"}
+                ),
+                payload={"user_prompt_template": "Initial {input}"},
+            )
+        ),
         context={"proposal_prompt": prompt},
     )
 
@@ -43,9 +52,9 @@ def _transport(
         transport_policy=transport_policy,
         outcomes=list(outcomes),
     )
-    resolved_refs: list[str] = []
+    resolved_refs: list[IdentityRef] = []
 
-    def resolve(ref: str):
+    def resolve(ref: IdentityRef):
         resolved_refs.append(ref)
         return provider_config
 
@@ -60,8 +69,13 @@ def _transport(
         sleep=provider_support.SleepRecorder(),
     )
     config = ProposerConfig(
-        provider_call_config_ref="provider://proposal",
-        provider_call_config_hash=provider_config.identity_hash,
+        provider_call_config=IdentityRef(
+            record_ref=typed_ref_for_record(
+                "dr_providers.provider_call_config",
+                provider_config.model_dump(mode="json"),
+            ),
+            identity_hash=provider_config.identity_hash,
+        ),
         temperature=temperature,
     )
     return proposer, config, recording, resolved_refs
@@ -84,7 +98,7 @@ def test_exact_batch_uses_identical_prompt_and_temperature() -> None:
         "candidate three",
     ]
     assert len(recording.served) == 3
-    assert resolved_refs == ["provider://proposal"]
+    assert resolved_refs == [config.provider_call_config]
     assert all(
         served.config.controls.temperature == 1.4
         for served in recording.served
@@ -124,12 +138,8 @@ def test_preserves_provider_response_usage_cost_and_attempt_evidence() -> None:
     assert draft.template == "one instruction"
     assert draft.usage == {"total_tokens": 17}
     assert draft.cost == 0.031
-    assert draft.request_evidence["provider_call_config_ref"] == (
-        "provider://proposal"
-    )
-    assert (
-        draft.request_evidence["base_provider_call_config_hash"]
-        == config.provider_call_config_hash
+    assert draft.request_evidence["provider_call_config"] == (
+        config.provider_call_config.model_dump(mode="json")
     )
     assert (
         draft.request_evidence["materialized_provider_call_config_hash"]
@@ -162,7 +172,8 @@ def test_invalid_generation_is_an_explicit_failed_slot_not_an_underfill() -> (
     assert not drafts[0].failed
     assert drafts[1].failed
     assert drafts[1].template == ""
-    assert "blank-generation" in (drafts[1].failure_detail or "")
+    assert drafts[1].terminal_failure is not None
+    assert "blank-generation" in drafts[1].terminal_failure.message
     assert len(recording.served) == 2
     assert (
         drafts[1].response_evidence["provider_call_result"][
@@ -195,7 +206,11 @@ def test_resolved_provider_config_hash_must_match_proposer_identity() -> None:
         provider_support.response_outcome(text="unused")
     )
     mismatched = config.model_copy(
-        update={"provider_call_config_hash": "f" * 64}
+        update={
+            "provider_call_config": config.provider_call_config.model_copy(
+                update={"identity_hash": "f" * 64}
+            )
+        }
     )
 
     with pytest.raises(ValueError, match="hash does not match"):
@@ -251,11 +266,17 @@ def test_logical_call_identity_binds_full_proposal_request() -> None:
     )
 
 
-def test_proposal_request_optionally_binds_run_and_step_identity() -> None:
-    first = _proposal_request().model_copy(
-        update={"run_id": "run-a", "step_index": 0}
+def test_proposal_request_binds_exact_base_candidate() -> None:
+    first = _proposal_request()
+    other_base = first.base_candidate.record.model_copy(
+        update={"candidate_id": "other"}
     )
-    second = first.model_copy(update={"run_id": "run-b"})
+    second = ProposalRequest(
+        proposal_mode=first.proposal_mode,
+        request_ordinal=first.request_ordinal,
+        base_candidate=candidate_reference(other_base),
+        context=first.context.to_json(),
+    )
 
     assert first.identity_hash() != second.identity_hash()
 
@@ -268,8 +289,12 @@ def test_fake_transport_strict_mode_never_invents_padding_candidates() -> None:
         strict=True,
     )
     config = ProposerConfig(
-        provider_call_config_ref="provider://proposal",
-        provider_call_config_hash="a" * 64,
+        provider_call_config=IdentityRef(
+            record_ref=typed_ref_for_record(
+                "dr_providers.provider_call_config", {"route": "proposal"}
+            ),
+            identity_hash="a" * 64,
+        ),
         temperature=1.4,
     )
 
@@ -278,4 +303,5 @@ def test_fake_transport_strict_mode_never_invents_padding_candidates() -> None:
     assert drafts[0].template == "only one"
     assert drafts[1].failed
     assert drafts[1].template == ""
-    assert "underfilled strict batch" in (drafts[1].failure_detail or "")
+    assert drafts[1].terminal_failure is not None
+    assert "underfilled strict batch" in drafts[1].terminal_failure.message
