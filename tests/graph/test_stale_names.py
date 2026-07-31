@@ -41,6 +41,18 @@ RETIRED_NAMES = (
     "rollout_config_schema",
     # No standalone Character Budget policy artifact.
     "CharacterBudgetPolicy",
+    # Retired rollout/materialization/result/orchestration island.
+    "MaterializationRecord",
+    "RolloutKey",
+    "RolloutExecutionKey",
+    "EvaluationContext",
+    "EnvironmentAttestation",
+    "RolloutResult",
+    "ResultStore",
+    "RolloutWorkRequest",
+    "ExecutorContext",
+    "orchestration_pipeline",
+    "OperatorRetry",
 )
 
 _SRC = Path(__file__).resolve().parents[2] / "src"

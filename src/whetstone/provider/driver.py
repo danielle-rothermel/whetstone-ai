@@ -13,12 +13,9 @@ Every decision is deterministic:
   exhausted;
 * the pre-attempt backoff delay is a pure function of the attempt number.
 
-The driver is DBOS-free: the DBOS-durable executor lands in the next stage and
-wraps this exact loop (one ``@DBOS.step(retries_allowed=False)`` per call to
-the transport callable, durable sleep in place of the injected sleep hook).
-Both a
-clock hook and a sleep hook are injectable so tests can drive deterministic
-timing without wall-clock or real sleeping.
+The driver is infrastructure-free. Both a clock hook and a sleep hook are
+injectable so callers and tests can drive deterministic timing without
+hard-coding wall-clock access or real sleeping.
 
 Replay determinism: given the same recorded transport outcomes (the same
 sequence of Provider Invocation Evidence returned by the transport callable),
@@ -51,7 +48,7 @@ TransportCall = Callable[[ProviderCallRequest], ProviderInvocationEvidence]
 Clock = Callable[[], float]
 
 #: Injectable sleep hook. Defaults to no-op (the pure driver never blocks);
-#: the durable executor injects DBOS durable sleep; tests inject a recorder.
+#: callers may inject their own scheduling mechanism.
 Sleep = Callable[[float], None]
 
 
@@ -85,6 +82,26 @@ class _Driver:
 
             started_at = self.clock()
             evidence = self.transport(self.request)
+            evidence_identities = evidence.model_dump(
+                mode="json",
+                include={"request_identity", "policy_identity"},
+            )
+            if (
+                evidence_identities["request_identity"]
+                != self.request.identity_payload()
+            ):
+                raise ValueError(
+                    "transport evidence request identity does not match the "
+                    "invoked request"
+                )
+            if (
+                evidence_identities["policy_identity"]
+                != self.policy.transport_policy.identity_payload()
+            ):
+                raise ValueError(
+                    "transport evidence policy identity does not match the "
+                    "invoked transport policy"
+                )
             ended_at = self.clock()
 
             classification = classify_outcome(evidence.outcome)
@@ -161,8 +178,7 @@ def run_provider_call(
             Invocation Evidence per physical invocation.
         logical_call_id: stable identity of the logical call.
         clock: injectable monotonic clock hook (seconds). Defaults to real.
-        sleep: injectable sleep hook for backoff. Defaults to no-op; the
-            durable executor injects DBOS durable sleep.
+        sleep: injectable sleep hook for backoff. Defaults to no-op.
     """
     if not logical_call_id:
         raise ValueError("logical_call_id must be non-empty")

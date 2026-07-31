@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from dr_providers import FailureClass
+from dr_providers import (
+    FailureClass,
+    ProviderCallRequest,
+    ProviderTransportPolicy,
+)
 
 from tests.provider import support as s
 from whetstone.provider.attempt import (
@@ -19,11 +23,13 @@ def _attempt(
     outcome,
     policy_hash: str,
     logical_call_id: str = "lc-1",
+    request: ProviderCallRequest | None = None,
+    transport_policy: ProviderTransportPolicy | None = None,
 ) -> ProviderCallAttempt:
-    request = s.build_request()
+    request = request or s.build_request()
     evidence = s.build_evidence(
         request=request,
-        policy=s.build_transport_policy(),
+        policy=transport_policy or s.build_transport_policy(),
         outcome=outcome,
     )
     classification = classify_outcome(outcome)
@@ -88,6 +94,18 @@ class TestProviderCallAttempt:
                 policy_hash="abc",
             )
 
+    @pytest.mark.parametrize(
+        "policy_hash",
+        ["g" * 64, "A" * 64],
+    )
+    def test_rejects_noncanonical_policy_hash(self, policy_hash: str) -> None:
+        with pytest.raises(ValueError, match="lowercase SHA-256"):
+            _attempt(
+                number=1,
+                outcome=s.response_outcome(text="ok"),
+                policy_hash=policy_hash,
+            )
+
     def test_rejects_backwards_timing(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         evidence = s.build_evidence(
@@ -104,6 +122,75 @@ class TestProviderCallAttempt:
                 ended_at=1.0,
                 evidence=evidence,
                 generation=classify_outcome(s.response_outcome(text="ok")),
+            )
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("started_at", float("nan")),
+            ("started_at", float("inf")),
+            ("started_at", float("-inf")),
+            ("ended_at", float("nan")),
+            ("ended_at", float("inf")),
+            ("ended_at", float("-inf")),
+        ],
+    )
+    def test_rejects_nonfinite_timing(self, field: str, value: float) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        response = s.response_outcome(text="ok")
+        kwargs = {"started_at": 0.0, "ended_at": 1.0, field: value}
+        with pytest.raises(ValueError, match=rf"{field} must be finite"):
+            ProviderCallAttempt(
+                logical_call_id="lc-1",
+                attempt_number=1,
+                execution_policy_hash=policy_hash,
+                evidence=s.build_evidence(
+                    request=s.build_request(),
+                    policy=s.build_transport_policy(),
+                    outcome=response,
+                ),
+                generation=classify_outcome(response),
+                **kwargs,
+            )
+
+    def test_success_evidence_rejects_failure_classification(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        response = s.response_outcome(text="ok")
+        failure = classify_outcome(
+            s.failure_outcome(failure_class=FailureClass.TRANSIENT)
+        )
+        with pytest.raises(ValueError, match="exactly reclassify"):
+            ProviderCallAttempt(
+                logical_call_id="lc-1",
+                attempt_number=1,
+                execution_policy_hash=policy_hash,
+                started_at=0.0,
+                ended_at=1.0,
+                evidence=s.build_evidence(
+                    request=s.build_request(),
+                    policy=s.build_transport_policy(),
+                    outcome=response,
+                ),
+                semantic_failure=failure,  # type: ignore[arg-type]
+            )
+
+    def test_failure_evidence_rejects_generation(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        failure = s.failure_outcome(failure_class=FailureClass.TRANSIENT)
+        generation = classify_outcome(s.response_outcome(text="ok"))
+        with pytest.raises(ValueError, match="exactly reclassify"):
+            ProviderCallAttempt(
+                logical_call_id="lc-1",
+                attempt_number=1,
+                execution_policy_hash=policy_hash,
+                started_at=0.0,
+                ended_at=1.0,
+                evidence=s.build_evidence(
+                    request=s.build_request(),
+                    policy=s.build_transport_policy(),
+                    outcome=failure,
+                ),
+                generation=generation,  # type: ignore[arg-type]
             )
 
 
@@ -129,6 +216,11 @@ class TestProviderCallResult:
         )
         assert result.succeeded
         assert result.attempt_count == 2
+
+        rebuilt = ProviderCallResult.model_validate(
+            result.model_dump(mode="json")
+        )
+        assert rebuilt == result
 
     def test_requires_contiguous_attempt_numbers(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
@@ -179,4 +271,46 @@ class TestProviderCallResult:
                 semantic_failure=classify_outcome(
                     s.failure_outcome(failure_class=FailureClass.TRANSIENT)
                 ),
+            )
+
+    def test_request_identity_must_match_every_attempt_evidence(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        attempt = _attempt(
+            number=1,
+            outcome=s.response_outcome(text="ok"),
+            policy_hash=policy_hash,
+        )
+        with pytest.raises(ValueError, match="request identity"):
+            ProviderCallResult(
+                logical_call_id="lc-1",
+                request_identity=s.build_request(
+                    content="foreign"
+                ).identity_payload(),
+                execution_policy_hash=policy_hash,
+                attempts=(attempt,),
+                generation=attempt.generation,
+            )
+
+    def test_attempt_evidence_policy_identities_must_agree(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        a1 = _attempt(
+            number=1,
+            outcome=s.failure_outcome(failure_class=FailureClass.TRANSIENT),
+            policy_hash=policy_hash,
+        )
+        a2 = _attempt(
+            number=2,
+            outcome=s.response_outcome(text="ok"),
+            policy_hash=policy_hash,
+            transport_policy=s.build_transport_policy(
+                base_url="https://foreign.example/v1"
+            ),
+        )
+        with pytest.raises(ValueError, match="policy identity"):
+            ProviderCallResult(
+                logical_call_id="lc-1",
+                request_identity=s.build_request().identity_payload(),
+                execution_policy_hash=policy_hash,
+                attempts=(a1, a2),
+                generation=a2.generation,
             )

@@ -23,6 +23,7 @@ Attempt references.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from dr_providers import ProviderTransportPolicy
@@ -88,6 +89,12 @@ class BackoffSchedule(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> BackoffSchedule:
+        if not math.isfinite(self.base_seconds):
+            raise ValueError("base_seconds must be finite")
+        if not math.isfinite(self.multiplier):
+            raise ValueError("multiplier must be finite")
+        if not math.isfinite(self.max_seconds):
+            raise ValueError("max_seconds must be finite")
         if self.base_seconds < 0:
             raise ValueError("base_seconds cannot be negative")
         if self.multiplier < 1:
@@ -102,7 +109,19 @@ class BackoffSchedule(BaseModel):
             raise ValueError("attempt_number must be a positive integer")
         if attempt_number == 1:
             return 0.0
-        delay = self.base_seconds * (self.multiplier ** (attempt_number - 2))
+        if (
+            self.base_seconds == 0
+            or self.multiplier == 1
+            or self.base_seconds == self.max_seconds
+        ):
+            return self.base_seconds
+
+        try:
+            delay = self.base_seconds * self.multiplier ** (attempt_number - 2)
+        except OverflowError:
+            return self.max_seconds
+        if not math.isfinite(delay):
+            return self.max_seconds
         return min(delay, self.max_seconds)
 
     def identity_payload(self) -> dict[str, Any]:

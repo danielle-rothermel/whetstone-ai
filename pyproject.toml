@@ -1,7 +1,7 @@
 [project]
 name = "whetstone-ai"
 version = "0.1.0"
-description = "Evaluation core being rebuilt on the dr-* libraries: failure classification and the LM provider boundary"
+description = "Typed graph, provider-execution, language-model, and evaluation-failure foundations"
 authors = [
     { name = "Danielle Rothermel", email = "danielle.rothermel@gmail.com" }
 ]
@@ -9,7 +9,6 @@ requires-python = ">=3.13, <3.15"
 dependencies = [
     "dr-code",
     "dr-graph>=0.1.0,<0.2",
-    "dr-platform",
     "dr-providers>=0.2.0,<0.3",
     "dr-serialize>=0.1.0,<0.2",
     "dr-store>=0.1.0,<0.2",
@@ -30,7 +29,6 @@ dev = [
 # Unreleased dr-* packages use exact reviewed revisions.
 [tool.uv.sources]
 dr-code = { git = "https://github.com/danielle-rothermel/dr-code", rev = "5810f30dede14094fcf1b8f1cce95d73a1055c84" }
-dr-platform = { git = "https://github.com/danielle-rothermel/dr-platform", rev = "3f175698c6e15e807dac4a9721d52e92d273edce" }
 
 [build-system]
 requires = ["hatchling"]

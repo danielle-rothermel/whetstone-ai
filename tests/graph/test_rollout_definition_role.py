@@ -66,10 +66,13 @@ def test_rollout_variant_identity_is_the_native_graph_hash() -> None:
     assert len(graph_hash(config)) == 64
 
 
-def test_whetstone_defines_no_parallel_graph_config_identity() -> None:
-    # Whetstone owns no generic Graph Config identity payload/document/schema.
-    # The GraphConfig and graph_hash used across whetstone are dr-graph's.
-    import whetstone.graph.materialization as materialization
-
-    assert materialization.GraphConfig.__module__.startswith("dr_graph")
-    assert materialization.graph_hash.__module__.startswith("dr_graph")
+def test_whetstone_uses_native_graph_config_identity() -> None:
+    config = _config(
+        fake_hash("a"),
+        eval_config().evaluation_procedure_config_hash,
+    )
+    assert GraphConfig.__module__.startswith("dr_graph")
+    assert graph_hash.__module__.startswith("dr_graph")
+    assert graph_config_identity_document(config).schema == (
+        "dr_graph.graph_config"
+    )

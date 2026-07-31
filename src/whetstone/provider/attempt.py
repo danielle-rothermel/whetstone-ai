@@ -1,8 +1,7 @@
 """Provider Call Attempt wrapper and terminal Provider Call Result.
 
 A :class:`ProviderCallAttempt` is the serializable Whetstone logical-attempt
-wrapper (the shape the next stage checkpoints in one
-``@DBOS.step(retries_allowed=False)``). It contains:
+wrapper. It contains:
 
 * the logical call identity (stable across attempts of one logical call),
 * the 1-based attempt number,
@@ -24,6 +23,7 @@ never an exception.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from dr_providers import ProviderInvocationEvidence
@@ -35,10 +35,12 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone.identity import require_full_hash
 from whetstone.provider.classification import (
     Generation,
     ProviderSemanticFailure,
     SemanticFailureClass,
+    classify_outcome,
 )
 
 __all__ = [
@@ -61,8 +63,8 @@ class ProviderCallAttempt(BaseModel):
 
     One completed logical attempt: identity, attempt number, execution-policy
     identity, timing, one Provider Invocation Evidence artifact, and its
-    semantic classification. It is the DBOS-checkpoint payload of the next
-    stage, but this type is DBOS-free and fully serializable on its own.
+    semantic classification. This type is infrastructure-free and fully
+    serializable on its own.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -89,10 +91,13 @@ class ProviderCallAttempt(BaseModel):
             raise ValueError("logical_call_id must be non-empty")
         if self.attempt_number < 1:
             raise ValueError("attempt_number must be a positive integer")
-        if len(self.execution_policy_hash) != 64:
-            raise ValueError(
-                "execution_policy_hash must be a full 64-char identity hash"
-            )
+        require_full_hash(
+            self.execution_policy_hash, field="execution_policy_hash"
+        )
+        if not math.isfinite(self.started_at) or self.started_at < 0:
+            raise ValueError("started_at must be finite and non-negative")
+        if not math.isfinite(self.ended_at) or self.ended_at < 0:
+            raise ValueError("ended_at must be finite and non-negative")
         if self.ended_at < self.started_at:
             raise ValueError("ended_at cannot precede started_at")
         # Exactly one classification side is present.
@@ -102,6 +107,15 @@ class ProviderCallAttempt(BaseModel):
             raise ValueError(
                 "a ProviderCallAttempt holds exactly one of generation or "
                 "semantic_failure"
+            )
+        expected = classify_outcome(self.evidence.outcome)
+        if has_generation and self.generation != expected:
+            raise ValueError(
+                "generation must exactly reclassify the evidence outcome"
+            )
+        if has_failure and self.semantic_failure != expected:
+            raise ValueError(
+                "semantic_failure must exactly reclassify the evidence outcome"
             )
         return self
 
@@ -154,6 +168,9 @@ class ProviderCallResult(BaseModel):
             raise ValueError("logical_call_id must be non-empty")
         if not self.attempts:
             raise ValueError("a ProviderCallResult has at least one attempt")
+        require_full_hash(
+            self.execution_policy_hash, field="execution_policy_hash"
+        )
         # Attempts are ordered, contiguous, 1-based, and share identity.
         for index, attempt in enumerate(self.attempts, start=1):
             if attempt.attempt_number != index:
@@ -186,6 +203,31 @@ class ProviderCallResult(BaseModel):
             raise ValueError(
                 "terminal failure must equal the final attempt's failure"
             )
+        first_evidence_identities = self.attempts[0].evidence.model_dump(
+            mode="json",
+            include={"request_identity", "policy_identity"},
+        )
+        expected_policy_identity = first_evidence_identities["policy_identity"]
+        for attempt in self.attempts:
+            evidence_identities = attempt.evidence.model_dump(
+                mode="json",
+                include={"request_identity", "policy_identity"},
+            )
+            if (
+                evidence_identities["request_identity"]
+                != self.request_identity
+            ):
+                raise ValueError(
+                    "every attempt evidence request identity must equal the "
+                    "Result's request_identity"
+                )
+            if (
+                evidence_identities["policy_identity"]
+                != expected_policy_identity
+            ):
+                raise ValueError(
+                    "every attempt evidence policy identity must agree"
+                )
         return self
 
     @property

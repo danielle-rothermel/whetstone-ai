@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from tests.provider import support as s
@@ -77,6 +79,21 @@ class TestBackoff:
         assert schedule.delay_for(5) == 5.0  # capped
         assert schedule.delay_for(6) == 5.0
 
+    def test_large_attempt_number_returns_cap_without_overflow(self) -> None:
+        schedule = BackoffSchedule(
+            base_seconds=1.0, multiplier=2.0, max_seconds=5.0
+        )
+        assert schedule.delay_for(2000) == 5.0
+
+    def test_nearby_cap_does_not_round_up_one_attempt_early(self) -> None:
+        base = 0.1
+        schedule = BackoffSchedule(
+            base_seconds=base,
+            multiplier=math.nextafter(1.0, math.inf),
+            max_seconds=math.nextafter(base, math.inf),
+        )
+        assert schedule.delay_for(2) == base
+
     def test_deterministic_no_jitter(self) -> None:
         schedule = BackoffSchedule()
         assert [schedule.delay_for(n) for n in range(1, 5)] == [
@@ -88,6 +105,26 @@ class TestBackoff:
             BackoffSchedule(multiplier=0.5)
         with pytest.raises(ValueError, match="max_seconds"):
             BackoffSchedule(base_seconds=10.0, max_seconds=1.0)
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("base_seconds", float("nan")),
+            ("base_seconds", float("inf")),
+            ("base_seconds", float("-inf")),
+            ("multiplier", float("nan")),
+            ("multiplier", float("inf")),
+            ("multiplier", float("-inf")),
+            ("max_seconds", float("nan")),
+            ("max_seconds", float("inf")),
+            ("max_seconds", float("-inf")),
+        ],
+    )
+    def test_rejects_nonfinite_schedule_values(
+        self, field: str, value: float
+    ) -> None:
+        with pytest.raises(ValueError, match=rf"{field} must be finite"):
+            BackoffSchedule(**{field: value})
 
 
 class TestIdentity:

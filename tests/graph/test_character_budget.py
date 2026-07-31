@@ -82,6 +82,50 @@ def test_budget_rule_rejects_nonpositive_ratio() -> None:
         CharacterBudgetRule(ratio=0.0)
 
 
+@pytest.mark.parametrize(
+    "ratio",
+    [float("nan"), float("inf"), float("-inf")],
+)
+def test_budget_rule_rejects_nonfinite_ratio(ratio: float) -> None:
+    with pytest.raises(ValueError, match="finite and positive"):
+        CharacterBudgetRule(ratio=ratio)
+
+
+def test_huge_finite_derived_bound_has_stable_error() -> None:
+    rule = CharacterBudgetRule(ratio=1e308)
+    with pytest.raises(ValueError, match="derived character bound"):
+        derive_character_bound(rule, task_length=2)
+
+
+@pytest.mark.parametrize(
+    ("ratio", "task_length", "expected"),
+    [
+        (0.3, 10, 3),
+        (1 / 3, 3, 1),
+        (2 / 3, 3, 2),
+    ],
+)
+def test_derivation_preserves_float_then_truncate_semantics(
+    ratio: float,
+    task_length: int,
+    expected: int,
+) -> None:
+    assert (
+        derive_character_bound(
+            CharacterBudgetRule(ratio=ratio),
+            task_length=task_length,
+        )
+        == expected
+    )
+
+
+def test_zero_length_task_has_zero_bound() -> None:
+    assert (
+        derive_character_bound(CharacterBudgetRule(ratio=1e308), task_length=0)
+        == 0
+    )
+
+
 def test_no_character_budget_policy_artifact_exists() -> None:
     # Absence test: there is no separate character-budget policy artifact
     # type anywhere in the whetstone graph package. The name is built at

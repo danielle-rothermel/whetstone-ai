@@ -16,8 +16,8 @@ of that acceptance decision:
   deterministically to exactly one closed :class:`SemanticFailureClass`. A
   Provider Transport Failure is classified from its transport ``failure_class``
   (and, where informative, its ``status_code``); a blank/whitespace response
-  is classified ``BLANK_GENERATION``; a response that projects no ``text``
-  field at all is ``MALFORMED_RESPONSE``.
+  is classified ``BLANK_GENERATION``; an unknown transport failure is
+  ``MALFORMED_RESPONSE``.
 
 The taxonomy is a *closed* enum: classification is total over the Provider
 Transport Outcome union, so an exhausted retry loop can always name its cause.
@@ -74,9 +74,7 @@ class SemanticFailureClass(StrEnum):
     #: A successful Provider Transport Response whose projected semantic text
     #: is blank or whitespace-only — rejected as a Generation.
     BLANK_GENERATION = "blank-generation"
-    #: A Provider Transport Outcome Whetstone cannot project semantic text
-    #: from: a response missing its ``text`` projection, or a transport failure
-    #: with an unknown/unclassifiable transport class.
+    #: A transport failure with an unknown/unclassifiable transport class.
     MALFORMED_RESPONSE = "malformed-response"
 
 
@@ -99,6 +97,10 @@ class Generation(BaseModel):
         # constructor callers should use, but enforce the invariant here too.
         if is_blank(self.text):
             raise ValueError("Generation text must be nonblank")
+        if self.text != self.response.text:
+            raise ValueError(
+                "Generation text must equal its causal response text"
+            )
 
 
 class ProviderSemanticFailure(BaseModel):
@@ -116,7 +118,7 @@ class ProviderSemanticFailure(BaseModel):
     #: The causal transport failure, when the transport itself failed.
     transport_failure: ProviderTransportFailure | None = None
     #: The rejected transport response, when a response was returned but not
-    #: accepted as a Generation (blank/whitespace or missing text).
+    #: accepted as a Generation (blank or whitespace-only text).
     rejected_response: ProviderTransportResponse | None = None
 
     def model_post_init(self, _context: object) -> None:
@@ -129,9 +131,9 @@ class ProviderSemanticFailure(BaseModel):
             )
 
 
-def is_blank(text: str | None) -> bool:
-    """A projection is blank when it is ``None`` or whitespace-only."""
-    return text is None or not text.strip()
+def is_blank(text: str) -> bool:
+    """A projection is blank when it is empty or whitespace-only."""
+    return not text.strip()
 
 
 def _classify_transport_failure(

@@ -26,7 +26,8 @@ the Graph Config identity payload and changing either changes ``graph_hash``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import Any
 
 from dr_graph import (
     FieldRole,
@@ -35,8 +36,7 @@ from dr_graph import (
     as_node_input_source_ref,
 )
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping
+from whetstone.identity import require_full_hash
 
 # Closed Node Definition versioned type identifiers. These are the only two
 # Node kinds Whetstone defines; the strings are stable identity-bearing
@@ -69,7 +69,14 @@ def _typed_config_ref(
     64-char Identity Hash so changing the referenced config changes
     ``graph_hash``.
     """
-    return {"schema_name": schema_name, "identity_hash": identity_hash}
+    if not isinstance(schema_name, str) or not schema_name.strip():
+        raise ValueError("config reference schema_name must be non-empty")
+    return {
+        "schema_name": schema_name,
+        "identity_hash": require_full_hash(
+            identity_hash, field="config reference identity_hash"
+        ),
+    }
 
 
 def llm_call_node_definition(
@@ -183,11 +190,20 @@ def eval_node_procedure_hash(node_variables: Mapping[str, Any]) -> str:
     Variable, and ``ValueError`` if it is malformed.
     """
     ref = node_variables[EVALUATION_PROCEDURE_CONFIG_VARIABLE]
-    if not isinstance(ref, dict) or "identity_hash" not in ref:
+    if not isinstance(ref, Mapping):
         raise ValueError(
             f"evaluation procedure config reference is malformed: {ref!r}"
         )
-    return str(ref["identity_hash"])
+    schema_name = ref.get("schema_name")
+    if not isinstance(schema_name, str) or not schema_name.strip():
+        raise ValueError(
+            "evaluation procedure config reference schema_name must be "
+            "non-empty"
+        )
+    return require_full_hash(
+        ref.get("identity_hash"),
+        field="evaluation procedure config reference identity_hash",
+    )
 
 
 __all__ = [

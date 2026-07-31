@@ -224,3 +224,50 @@ class TestInjectableHooks:
                 ),
                 logical_call_id="",
             )
+
+
+class TestTransportEvidenceIdentity:
+    def test_rejects_evidence_for_a_foreign_request(self) -> None:
+        request = s.build_request()
+        transport_policy = s.build_transport_policy()
+        policy = s.build_execution_policy(transport_policy=transport_policy)
+
+        def foreign_request_transport(_request):
+            return s.build_evidence(
+                request=s.build_request(content="foreign"),
+                policy=transport_policy,
+                outcome=s.response_outcome(text="ok"),
+            )
+
+        with pytest.raises(ValueError, match="request identity"):
+            run_provider_call(
+                request=request,
+                policy=policy,
+                transport=foreign_request_transport,
+                logical_call_id="lc-foreign-request",
+                clock=s.FakeClock(),
+            )
+
+    def test_rejects_evidence_for_a_foreign_policy(self) -> None:
+        request = s.build_request()
+        transport_policy = s.build_transport_policy()
+        policy = s.build_execution_policy(transport_policy=transport_policy)
+        foreign_policy = s.build_transport_policy(
+            base_url="https://foreign.example/v1"
+        )
+
+        def foreign_policy_transport(invoked_request):
+            return s.build_evidence(
+                request=invoked_request,
+                policy=foreign_policy,
+                outcome=s.response_outcome(text="ok"),
+            )
+
+        with pytest.raises(ValueError, match="policy identity"):
+            run_provider_call(
+                request=request,
+                policy=policy,
+                transport=foreign_policy_transport,
+                logical_call_id="lc-foreign-policy",
+                clock=s.FakeClock(),
+            )

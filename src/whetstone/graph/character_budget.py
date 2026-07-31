@@ -20,6 +20,8 @@ denominator, which is a dr-code concern.
 
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
 # The Graph External Input field through which a concrete Task-derived
@@ -45,8 +47,10 @@ class CharacterBudgetRule(BaseModel):
     def _validate(self) -> CharacterBudgetRule:
         if not self.kind:
             raise ValueError("character budget rule kind must be non-empty")
-        if not (self.ratio > 0):
-            raise ValueError("character budget ratio must be positive")
+        if not math.isfinite(self.ratio) or self.ratio <= 0:
+            raise ValueError(
+                "character budget ratio must be finite and positive"
+            )
         return self
 
     def identity_value(self) -> dict[str, object]:
@@ -64,7 +68,17 @@ def derive_character_bound(
     """
     if task_length < 0:
         raise ValueError("task_length must be non-negative")
-    return int(rule.ratio * task_length)
+    try:
+        scaled = rule.ratio * task_length
+    except OverflowError as error:
+        raise ValueError(
+            "derived character bound exceeds the supported finite range"
+        ) from error
+    if not math.isfinite(scaled):
+        raise ValueError(
+            "derived character bound exceeds the supported finite range"
+        )
+    return int(scaled)
 
 
 __all__ = [

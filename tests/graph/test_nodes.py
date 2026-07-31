@@ -13,8 +13,10 @@ from whetstone.graph.nodes import (
     LLM_CALL_NODE_TYPE,
     PROVIDER_CALL_CONFIG_VARIABLE,
     eval_node_definition,
+    eval_node_procedure_hash,
     eval_variable_assignment,
     llm_call_node_definition,
+    llm_call_variable_assignment,
 )
 
 
@@ -81,3 +83,70 @@ def test_eval_variable_assignment_carries_typed_ref_and_hash() -> None:
     ref = assignment[EVALUATION_PROCEDURE_CONFIG_VARIABLE]
     assert ref["schema_name"] == "dr_code.evaluation_procedure.config"
     assert ref["identity_hash"] == fake_hash("e")
+
+
+@pytest.mark.parametrize(
+    "schema_name",
+    ["", "   "],
+)
+def test_typed_config_references_require_nonempty_schema(
+    schema_name: str,
+) -> None:
+    with pytest.raises(ValueError, match="schema_name must be non-empty"):
+        llm_call_variable_assignment(
+            provider_call_config_schema=schema_name,
+            provider_call_config_hash=fake_hash("a"),
+        )
+
+
+@pytest.mark.parametrize(
+    "identity_hash",
+    ["short", "g" * 64, "A" * 64],
+)
+def test_typed_config_references_require_canonical_hash(
+    identity_hash: str,
+) -> None:
+    with pytest.raises(ValueError, match="lowercase SHA-256"):
+        eval_variable_assignment(
+            evaluation_procedure_config_schema=(
+                "dr_code.evaluation_procedure.config"
+            ),
+            evaluation_procedure_config_hash=identity_hash,
+        )
+
+
+def test_eval_procedure_hash_validates_deserialized_reference() -> None:
+    identity_hash = fake_hash("e")
+    variables = {
+        EVALUATION_PROCEDURE_CONFIG_VARIABLE: {
+            "schema_name": "dr_code.evaluation_procedure.config",
+            "identity_hash": identity_hash,
+        }
+    }
+    assert eval_node_procedure_hash(variables) == identity_hash
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        None,
+        {},
+        {
+            "schema_name": "",
+            "identity_hash": "e" * 64,
+        },
+        {
+            "schema_name": "dr_code.evaluation_procedure.config",
+            "identity_hash": None,
+        },
+        {
+            "schema_name": "dr_code.evaluation_procedure.config",
+            "identity_hash": "E" * 64,
+        },
+    ],
+)
+def test_eval_procedure_hash_rejects_malformed_reference(reference) -> None:
+    with pytest.raises(ValueError):
+        eval_node_procedure_hash(
+            {EVALUATION_PROCEDURE_CONFIG_VARIABLE: reference}
+        )

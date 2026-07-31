@@ -15,7 +15,6 @@ reusable dr-providers transport boundary:
   wrapper and terminal semantic Result.
 * **A pure, DBOS-free attempt-loop driver** (:mod:`whetstone.provider.driver`)
   — bounded, deterministic, with injectable transport, clock, and sleep hooks.
-  The DBOS-durable executor lands in the next stage and wraps this loop.
 """
 
 from __future__ import annotations

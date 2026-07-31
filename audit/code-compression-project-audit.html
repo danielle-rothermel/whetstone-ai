@@ -100,17 +100,17 @@
 <table>
   <thead><tr><th>Surface</th><th>Current evidence</th><th>Report implication</th></tr></thead>
   <tbody>
-    <tr><td>Whetstone core</td><td>8 source files, 576 production lines, 47 passing tests; lint and type checks pass.</td><td>Failure semantics and the LM provider boundary are ready to build on.</td></tr>
+    <tr><td>Whetstone core</td><td>Typed graph, provider-execution, language-model, and evaluation-failure contracts; tests, lint, and type checks pass.</td><td>The retained foundation is ready to support canonical evaluation and optimization.</td></tr>
     <tr><td>Experiment execution</td><td>No sweep runner, experiment graph, persistence layer, or result-publication path remains.</td><td>Implementation progress belongs in the logs below until the first reproducible run exists.</td></tr>
-    <tr><td>COPRO</td><td>The prior optimization subsystem was removed in Whetstone PR&nbsp;#55.</td><td>RES-3 stays empty until a current COPRO execution path is implemented.</td></tr>
+    <tr><td>COPRO</td><td>The canonical COPRO execution path is implemented in the optimization stack.</td><td>Validate its proposal transcript and canonical evaluation evidence before reporting results.</td></tr>
     <tr><td>Visualization</td><td>Unitbench retains the sweep, confidence, compression, pipeline, and heatmap components, currently backed by fixture contracts.</td><td>Result artifacts can reuse those views once a current publication boundary exists.</td></tr>
-    <tr><td>dr-* foundation</td><td><code>dr_code.metrics</code> exists and dr-platform has a staged-work API; Whetstone does not yet compose them into an experiment pipeline.</td><td>The implementation should target current contracts, not restore the deleted design.</td></tr>
+    <tr><td>dr-* foundation</td><td><code>dr_code.metrics</code> and native dr-graph identities provide the evaluation and graph foundations.</td><td>Whetstone composes these contracts through its canonical evaluation path.</td></tr>
   </tbody>
 </table>
 </div>
 
 <p class="callout">
-  Detailed repository evidence remains in <a href="current-state-and-dependencies.html">Whetstone’s current-state and dependency audit</a>. The empty fields below are intentional: they represent results and progress that have not happened yet.
+  The empty fields below are intentional: they represent results and progress that have not happened yet.
 </p>
 
 <div class="section-head" id="sequence"><h2>The four reports follow the experimental decision chain</h2></div>

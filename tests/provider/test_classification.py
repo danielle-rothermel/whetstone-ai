@@ -8,6 +8,7 @@ from dr_providers import (
     ProviderTransportFailure,
     ProviderTransportResponse,
 )
+from pydantic import ValidationError
 
 from tests.provider import support as s
 from whetstone.provider.classification import (
@@ -43,8 +44,18 @@ class TestGenerationAcceptance:
         with pytest.raises(ValueError, match="nonblank"):
             Generation(text="  ", response=s.response_outcome(text="x"))
 
+    def test_generation_text_must_equal_causal_response(self) -> None:
+        with pytest.raises(ValueError, match="causal response text"):
+            Generation(
+                text="projected",
+                response=s.response_outcome(text="different"),
+            )
+
+    def test_transport_response_requires_text(self) -> None:
+        with pytest.raises(ValidationError):
+            ProviderTransportResponse.model_validate({"text": None})
+
     def test_is_blank(self) -> None:
-        assert is_blank(None)
         assert is_blank("")
         assert is_blank("  \n")
         assert not is_blank("x")
