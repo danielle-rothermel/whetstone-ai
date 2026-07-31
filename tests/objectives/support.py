@@ -11,24 +11,25 @@ from whetstone.code_eval.aggregate import (
     RolloutAggregate,
     RowValue,
     TaskRows,
-    average_binary_test_pass_rate,
     mean_compression_ratio,
+    unweighted_task_mean,
 )
 
 GRAPH_A = "a" * 64
 GRAPH_B = "b" * 64
 EVAL_HASH = "c" * 64
 CONTEXT_ID = "ctx-official"
+SELECTION_QUALITY_AGGREGATE_NAME = "selection_quality"
 
 
-def pass_rate_aggregate(
+def quality_aggregate(
     *,
     graph_hash: str = GRAPH_A,
     value: float = 1.0,
     tasks: int = 2,
     repeats: int = 2,
 ) -> RolloutAggregate:
-    """A complete, OK Average Binary Test Pass Rate aggregate.
+    """A complete, OK selection-quality aggregate.
 
     Every planned cell is present with the same value, so the two staged
     reductions produce ``value`` and the pure status is OK.
@@ -41,7 +42,8 @@ def pass_rate_aggregate(
         )
         for t in range(tasks)
     )
-    return average_binary_test_pass_rate(
+    return unweighted_task_mean(
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
         eval_config_hash=EVAL_HASH,
         evaluation_context_id=CONTEXT_ID,
@@ -69,13 +71,13 @@ def compression_aggregate(
     )
 
 
-def incomplete_pass_rate_aggregate(
+def incomplete_quality_aggregate(
     *,
     graph_hash: str = GRAPH_A,
     tasks: int = 2,
     repeats: int = 2,
 ) -> RolloutAggregate:
-    """An incomplete Average Binary Test Pass Rate aggregate (missing rows).
+    """An incomplete selection-quality aggregate with missing rows.
 
     One task is short a repeat, so under the default PROPAGATE policy the pure
     reduction is not OK (MISSING_DATA) — exactly the incomplete evidence
@@ -96,7 +98,8 @@ def incomplete_pass_rate_aggregate(
             for t in range(1, tasks)
         ),
     )
-    return average_binary_test_pass_rate(
+    return unweighted_task_mean(
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
         eval_config_hash=EVAL_HASH,
         evaluation_context_id=CONTEXT_ID,

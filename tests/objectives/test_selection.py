@@ -25,15 +25,16 @@ from whetstone.objectives import (
 from .support import (
     GRAPH_A,
     GRAPH_B,
+    SELECTION_QUALITY_AGGREGATE_NAME,
     compression_aggregate,
-    incomplete_pass_rate_aggregate,
-    pass_rate_aggregate,
+    incomplete_quality_aggregate,
+    quality_aggregate,
 )
 
 SPECS = (
     ObjectiveSpec(
-        objective_name="pass_rate",
-        aggregate_name="average_binary_test_pass_rate",
+        objective_name="quality",
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         direction=Direction.MAXIMIZE,
     ),
     ObjectiveSpec(
@@ -48,15 +49,15 @@ def _candidate(
     *,
     candidate_id: str,
     graph_hash: str,
-    pass_value: float,
+    quality_value: float,
     compression_value: float,
 ) -> SelectionCandidate:
     return SelectionCandidate(
         candidate_id=candidate_id,
         graph_hash=graph_hash,
         aggregates={
-            "average_binary_test_pass_rate": pass_rate_aggregate(
-                graph_hash=graph_hash, value=pass_value
+            SELECTION_QUALITY_AGGREGATE_NAME: quality_aggregate(
+                graph_hash=graph_hash, value=quality_value
             ),
             "mean_compression_ratio": compression_aggregate(
                 graph_hash=graph_hash, value=compression_value
@@ -70,18 +71,18 @@ def test_selection_derives_and_selects_non_dominated() -> None:
         _candidate(
             candidate_id="c0",
             graph_hash=GRAPH_A,
-            pass_value=1.0,
+            quality_value=1.0,
             compression_value=2.0,
         ),
         _candidate(
             candidate_id="c1",
             graph_hash=GRAPH_B,
-            pass_value=0.5,
+            quality_value=0.5,
             compression_value=3.0,
         ),
     ]
     evidence = select_official(candidates, objective_specs=SPECS)
-    # c0 dominates c1 (higher pass, lower compression).
+    # c0 dominates c1 (higher quality, lower compression).
     assert evidence.selected_candidate_id == "c0"
     assert [m.candidate_id for m in evidence.front.members] == ["c0"]
     assert not evidence.selected_by_tie_rule
@@ -92,7 +93,7 @@ def test_selection_persists_derivation_order_tie_selection() -> None:
         _candidate(
             candidate_id="c0",
             graph_hash=GRAPH_A,
-            pass_value=1.0,
+            quality_value=1.0,
             compression_value=2.0,
         ),
     ]
@@ -100,9 +101,10 @@ def test_selection_persists_derivation_order_tie_selection() -> None:
     # Derivation: objective specs preserved; each objective carries lineage.
     assert evidence.objective_specs == SPECS
     vector = evidence.candidate_vectors[0]
-    assert vector.names == ("pass_rate", "compression")
-    assert vector.objectives[0].derivation.source_name == (
-        "average_binary_test_pass_rate"
+    assert vector.names == ("quality", "compression")
+    assert (
+        vector.objectives[0].derivation.source_name
+        == SELECTION_QUALITY_AGGREGATE_NAME
     )
     # Order: candidate order preserved.
     assert evidence.candidate_order == ("c0",)
@@ -120,13 +122,13 @@ def test_selection_is_deterministic() -> None:
         _candidate(
             candidate_id="c0",
             graph_hash=GRAPH_A,
-            pass_value=1.0,
+            quality_value=1.0,
             compression_value=2.0,
         ),
         _candidate(
             candidate_id="c1",
             graph_hash=GRAPH_B,
-            pass_value=0.7,
+            quality_value=0.7,
             compression_value=1.0,
         ),
     ]
@@ -142,13 +144,13 @@ def test_selection_tie_keeps_stable_lowest_index() -> None:
         _candidate(
             candidate_id="c0",
             graph_hash=GRAPH_A,
-            pass_value=0.8,
+            quality_value=0.8,
             compression_value=2.0,
         ),
         _candidate(
             candidate_id="c1",
             graph_hash=GRAPH_B,
-            pass_value=0.8,
+            quality_value=0.8,
             compression_value=2.0,
         ),
     ]
@@ -164,7 +166,7 @@ def test_selection_refuses_missing_aggregate() -> None:
         candidate_id="c0",
         graph_hash=GRAPH_A,
         aggregates={
-            "average_binary_test_pass_rate": pass_rate_aggregate(),
+            SELECTION_QUALITY_AGGREGATE_NAME: quality_aggregate(),
             # mean_compression_ratio deliberately absent.
         },
     )
@@ -173,14 +175,14 @@ def test_selection_refuses_missing_aggregate() -> None:
 
 
 def test_selection_refuses_incomplete_evidence() -> None:
-    incomplete = incomplete_pass_rate_aggregate()
+    incomplete = incomplete_quality_aggregate()
     # Sanity: the aggregate is genuinely not OK.
     assert incomplete.aggregation_output.status is not AggregationStatus.OK
     candidate = SelectionCandidate(
         candidate_id="c0",
         graph_hash=GRAPH_A,
         aggregates={
-            "average_binary_test_pass_rate": incomplete,
+            SELECTION_QUALITY_AGGREGATE_NAME: incomplete,
             "mean_compression_ratio": compression_aggregate(),
         },
     )
@@ -193,13 +195,13 @@ def test_selection_never_names_reward_objective() -> None:
     # refused when the Objective is built during selection.
     reward_spec = ObjectiveSpec(
         objective_name="reward",
-        aggregate_name="average_binary_test_pass_rate",
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         direction=Direction.MAXIMIZE,
     )
     candidate = SelectionCandidate(
         candidate_id="c0",
         graph_hash=GRAPH_A,
-        aggregates={"average_binary_test_pass_rate": pass_rate_aggregate()},
+        aggregates={SELECTION_QUALITY_AGGREGATE_NAME: quality_aggregate()},
     )
     with pytest.raises(ValueError, match="reserved Reward name"):
         select_official([candidate], objective_specs=(reward_spec,))
@@ -209,7 +211,7 @@ def test_selection_rejects_duplicate_candidate_ids() -> None:
     c = _candidate(
         candidate_id="dup",
         graph_hash=GRAPH_A,
-        pass_value=1.0,
+        quality_value=1.0,
         compression_value=2.0,
     )
     with pytest.raises(ValueError, match="duplicate candidate_id"):

@@ -34,10 +34,10 @@ def _obj(name: str, value: float, direction: Direction) -> Objective:
     )
 
 
-def _vector(pass_rate: float, compression: float) -> ObjectiveVector:
+def _vector(quality: float, compression: float) -> ObjectiveVector:
     return ObjectiveVector(
         objectives=(
-            _obj("pass_rate", pass_rate, Direction.MAXIMIZE),
+            _obj("quality", quality, Direction.MAXIMIZE),
             _obj("compression", compression, Direction.MINIMIZE),
         )
     )
@@ -83,18 +83,18 @@ def test_no_reward_derivation_source_exists() -> None:
 
 def test_score_derived_objective_records_lineage() -> None:
     obj = objective_from_score_value(
-        name="pass_rate",
+        name="quality",
         value=0.9,
         direction=Direction.MAXIMIZE,
-        source_name="binary_test_pass_score",
+        source_name="quality_score",
     )
     assert obj.derivation.source is ObjectiveDerivationSource.SCORE
-    assert obj.derivation.source_name == "binary_test_pass_score"
+    assert obj.derivation.source_name == "quality_score"
 
 
 def test_derivation_is_deterministic() -> None:
-    a = _obj("pass_rate", 0.75, Direction.MAXIMIZE)
-    b = _obj("pass_rate", 0.75, Direction.MAXIMIZE)
+    a = _obj("quality", 0.75, Direction.MAXIMIZE)
+    b = _obj("quality", 0.75, Direction.MAXIMIZE)
     assert a == b
 
 
@@ -105,7 +105,7 @@ def test_derivation_is_deterministic() -> None:
 
 def test_objective_vector_preserves_order() -> None:
     vector = _vector(0.8, 3.0)
-    assert vector.names == ("pass_rate", "compression")
+    assert vector.names == ("quality", "compression")
     assert vector.directions == (Direction.MAXIMIZE, Direction.MINIMIZE)
     assert vector.values() == (0.8, 3.0)
 
@@ -131,7 +131,7 @@ def test_objective_vector_requires_at_least_one() -> None:
 
 
 def test_dominance_respects_directions() -> None:
-    # a: higher pass rate AND lower compression -> dominates b.
+    # a: higher quality AND lower compression -> dominates b.
     a = _vector(0.9, 2.0)
     b = _vector(0.8, 3.0)
     assert dominates(a, b)
@@ -139,7 +139,7 @@ def test_dominance_respects_directions() -> None:
 
 
 def test_no_dominance_on_tradeoff() -> None:
-    # a better on pass rate, b better on compression -> neither dominates.
+    # a better on quality, b better on compression -> neither dominates.
     a = _vector(0.9, 3.0)
     b = _vector(0.8, 2.0)
     assert not dominates(a, b)
@@ -156,7 +156,7 @@ def test_equal_vectors_do_not_dominate() -> None:
 def test_dominance_requires_matching_shape() -> None:
     a = _vector(0.8, 3.0)
     other = ObjectiveVector(
-        objectives=(_obj("pass_rate", 0.8, Direction.MAXIMIZE),)
+        objectives=(_obj("quality", 0.8, Direction.MAXIMIZE),)
     )
     with pytest.raises(ValueError, match="identical objective names"):
         dominates(a, other)
@@ -216,7 +216,7 @@ def test_pareto_front_is_deterministic() -> None:
 
 def test_pareto_front_records_direction_per_objective() -> None:
     front = pareto_front([("c0", _vector(0.8, 3.0))])
-    assert front.objective_names == ("pass_rate", "compression")
+    assert front.objective_names == ("quality", "compression")
     assert front.objective_directions == (
         Direction.MAXIMIZE,
         Direction.MINIMIZE,
@@ -229,7 +229,7 @@ def test_pareto_front_requires_matching_shapes() -> None:
         (
             "c1",
             ObjectiveVector(
-                objectives=(_obj("pass_rate", 0.8, Direction.MAXIMIZE),)
+                objectives=(_obj("quality", 0.8, Direction.MAXIMIZE),)
             ),
         ),
     ]

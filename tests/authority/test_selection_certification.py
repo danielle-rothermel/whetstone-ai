@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dr_store import MemoryBackend, ObjectStore
 
+from tests.objectives.support import SELECTION_QUALITY_AGGREGATE_NAME
 from whetstone.authority import (
     EvaluationAuthority,
     PlannedKeyResult,
@@ -23,8 +24,8 @@ from whetstone.code_eval.aggregate import (
     RolloutAggregate,
     RowValue,
     TaskRows,
-    average_binary_test_pass_rate,
     mean_compression_ratio,
+    unweighted_task_mean,
 )
 from whetstone.objectives import (
     Direction,
@@ -40,8 +41,8 @@ CONTEXT_ID = "ctx"
 
 SPECS = (
     ObjectiveSpec(
-        objective_name="pass_rate",
-        aggregate_name="average_binary_test_pass_rate",
+        objective_name="quality",
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         direction=Direction.MAXIMIZE,
     ),
     ObjectiveSpec(
@@ -52,8 +53,9 @@ SPECS = (
 )
 
 
-def _pass_rate(graph_hash: str, value: float) -> RolloutAggregate:
-    return average_binary_test_pass_rate(
+def _quality(graph_hash: str, value: float) -> RolloutAggregate:
+    return unweighted_task_mean(
+        aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
         eval_config_hash=EVAL_HASH,
         evaluation_context_id=CONTEXT_ID,
@@ -85,7 +87,7 @@ def test_selection_evidence_certified_and_persisted() -> None:
             candidate_id="graph-a",
             graph_hash=GRAPH_A,
             aggregates={
-                "average_binary_test_pass_rate": _pass_rate(GRAPH_A, 1.0),
+                SELECTION_QUALITY_AGGREGATE_NAME: _quality(GRAPH_A, 1.0),
                 "mean_compression_ratio": _compression(GRAPH_A, 2.0),
             },
         ),
@@ -93,7 +95,7 @@ def test_selection_evidence_certified_and_persisted() -> None:
             candidate_id="graph-b",
             graph_hash=GRAPH_B,
             aggregates={
-                "average_binary_test_pass_rate": _pass_rate(GRAPH_B, 0.5),
+                SELECTION_QUALITY_AGGREGATE_NAME: _quality(GRAPH_B, 0.5),
                 "mean_compression_ratio": _compression(GRAPH_B, 3.0),
             },
         ),
