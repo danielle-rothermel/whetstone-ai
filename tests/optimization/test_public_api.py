@@ -1,190 +1,21 @@
-"""Generic durable optimization contracts and harness."""
+"""Public optimization package contract."""
 
-from whetstone.optimization.adapters import (
-    AdapterCheckpoint,
-    AdapterOutput,
-    AdapterRegistry,
-    IdentityOptimizerAdapter,
-    MappingAdapterRegistry,
-    OptimizerAdapter,
-)
-from whetstone.optimization.effect_authority import (
-    AcquireOutcome,
-    AcquireResult,
-    EffectAuthority,
-    EffectAuthorityError,
+import whetstone.optimization as optimization
+from whetstone.optimization import (
     EffectAuthoritySchemaMismatchError,
-    EffectLease,
-    EffectRequest,
-    EffectTerminal,
-    LeaseMaintenance,
-    ReplayPolicy,
-    StaleLeaseError,
-    TerminalConflictError,
-    TerminalOutcome,
-)
-from whetstone.optimization.harness import (
-    ADAPTER_CHECKPOINT_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA,
-    EffectBusyError,
-    EffectRecoveryRequiredError,
-    EffectRequestConflictError,
-    EvaluationService,
+    EvaluationBinding,
     IssuedToolCallConflictError,
     OptimizationHarness,
-    OptimizationResultConflictError,
-    OptimizationRunConflictError,
-    StepResultConflictError,
-    ToolExecutor,
-)
-from whetstone.optimization.identity import (
-    ContentHash,
-    FiniteFloat,
-    IdentityHash,
-    IdentityRef,
-    ImmutableJsonObject,
-    ImmutableJsonValue,
-    NonEmptyId,
-    NonNegativeInt,
-    OpaqueKey,
-    TerminalFailure,
-    TypedRef,
-    canonical_json_equal,
-    compute_identity_hash,
-    freeze_json_object,
-    require_full_hash,
-    typed_ref_for_record,
-)
-from whetstone.optimization.mutation import (
-    MUTATION_FIELD,
-    DiffCheckError,
-    ProposalValidationError,
-    candidate_from_draft,
-    diff_check,
-    validate_candidate_template,
-)
-from whetstone.optimization.proposer import (
-    PROPOSER_CONFIG_SCHEMA,
-    PROPOSER_CONFIG_SCHEMA_VERSION,
-    FakeProposerTransport,
-    ProposalDraft,
-    ProposalRequest,
-    ProposerConfig,
-    ProposerTransport,
-)
-from whetstone.optimization.reward import (
-    REWARD_POLICY_SCHEMA,
-    REWARD_POLICY_SCHEMA_VERSION,
-    REWARD_SCHEMA,
-    MissingDataPolicy,
-    OfficialRewardError,
     Reward,
-    RewardInputCitation,
     RewardPolicy,
     RewardRef,
-    RewardTerm,
-    apply_reward_policy,
-    reward_reference,
-)
-from whetstone.optimization.schema import (
-    CANDIDATE_IDENTITY_SCHEMA,
-    CANDIDATE_IDENTITY_SCHEMA_VERSION,
-    CANDIDATE_RECORD_SCHEMA,
-    EVAL_CONFIG_RECORD_SCHEMA,
-    EVALUATION_BINDING_SCHEMA,
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    OPTIMIZATION_RESULT_SCHEMA,
-    OPTIMIZATION_RUN_SCHEMA,
-    OPTIMIZATION_RUN_SCHEMA_VERSION,
-    STEP_REQUEST_SCHEMA,
-    STEP_RESULT_SCHEMA,
-    BudgetDelta,
-    BudgetState,
-    Candidate,
-    CandidateRef,
-    EvalConfigRef,
-    EvaluationBinding,
-    EvaluationIntent,
-    ExecutionEnvironmentFingerprint,
-    IntentOutcome,
-    IntentResolution,
-    OptimizationProposal,
-    OptimizationResult,
-    OptimizationRun,
-    OptimizationRunRef,
-    OptimizationStepRequest,
-    OptimizationStepRequestRef,
-    OptimizationStepResult,
-    OptimizationStepResultRef,
-    OutputContract,
-    ResolutionClass,
-    ResolutionDetail,
-    StepKind,
-    StepMode,
-    StepStatus,
     TemplateRenderContract,
     TemplateRenderKind,
-    ToolEvidence,
-    candidate_reference,
-    eval_config_reference,
-    optimization_result_reference,
-    optimization_run_reference,
-    step_request_reference,
-    step_result_reference,
-)
-from whetstone.optimization.tool_eval import (
-    EvaluatingToolExecutor,
-    ToolEvaluation,
-    ToolEvaluationError,
-    ToolEvaluator,
-    ToolExecutionBusyError,
-    ToolExecutionConflictError,
-    ToolExecutionRecoveryRequiredError,
-    ToolValidationError,
-)
-from whetstone.optimization.tool_store import (
-    TOOL_CALL_ENTRY_SCHEMA,
-    ToolAdmissionAuthority,
     ToolAdmissionSchemaMismatchError,
-    ToolCallState,
-    ToolCallStore,
-    ToolCallStoreConflictError,
-    ToolCallStoreEntry,
     tool_effect_request,
 )
-from whetstone.optimization.tools import (
-    EVAL_CONFIG_SCHEMA,
-    GLOBAL_CAPACITY_SCOPE_ID,
-    RUN_CAPACITY_SUBJECT_SCHEMA,
-    STEP_CAPACITY_SUBJECT_SCHEMA,
-    TOOL_CALL_SCHEMA,
-    TOOL_CONFIG_SCHEMA,
-    TOOL_CONFIG_SCHEMA_VERSION,
-    TOOL_DEFINITION_SCHEMA,
-    TOOL_DEFINITION_SCHEMA_VERSION,
-    TOOL_RESULT_SCHEMA,
-    RefusalClass,
-    RuntimeToolHandle,
-    ToolCall,
-    ToolCallRef,
-    ToolCapacity,
-    ToolCapacityBinding,
-    ToolCapacityScope,
-    ToolConfig,
-    ToolConfigRef,
-    ToolDefinition,
-    ToolDefinitionRef,
-    ToolRefusal,
-    ToolResult,
-    ToolResultRef,
-    tool_call_reference,
-    tool_capacity_binding,
-    tool_config_reference,
-    tool_definition_reference,
-    tool_result_reference,
-)
 
-__all__ = [
+_PUBLIC_API = {
     "ADAPTER_CHECKPOINT_SCHEMA",
     "CANDIDATE_IDENTITY_SCHEMA",
     "CANDIDATE_IDENTITY_SCHEMA_VERSION",
@@ -346,4 +177,31 @@ __all__ = [
     "tool_result_reference",
     "typed_ref_for_record",
     "validate_candidate_template",
-]
+}
+
+_CANONICAL_IMPORTS = {
+    "EffectAuthoritySchemaMismatchError": EffectAuthoritySchemaMismatchError,
+    "EvaluationBinding": EvaluationBinding,
+    "IssuedToolCallConflictError": IssuedToolCallConflictError,
+    "OptimizationHarness": OptimizationHarness,
+    "Reward": Reward,
+    "RewardPolicy": RewardPolicy,
+    "RewardRef": RewardRef,
+    "TemplateRenderContract": TemplateRenderContract,
+    "TemplateRenderKind": TemplateRenderKind,
+    "ToolAdmissionSchemaMismatchError": ToolAdmissionSchemaMismatchError,
+    "tool_effect_request": tool_effect_request,
+}
+
+
+def test_public_api_is_exact_and_unique() -> None:
+    assert set(optimization.__all__) == _PUBLIC_API
+    assert len(optimization.__all__) == len(_PUBLIC_API)
+    assert all(hasattr(optimization, name) for name in _PUBLIC_API)
+
+
+def test_canonical_capabilities_import_from_package() -> None:
+    assert all(
+        getattr(optimization, name) is value
+        for name, value in _CANONICAL_IMPORTS.items()
+    )

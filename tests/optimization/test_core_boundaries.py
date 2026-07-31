@@ -8,6 +8,7 @@ def test_optimization_package_has_only_core_modules() -> None:
     assert {path.name for path in root.glob("*.py")} == {
         "__init__.py",
         "adapters.py",
+        "effect_authority.py",
         "harness.py",
         "identity.py",
         "mutation.py",

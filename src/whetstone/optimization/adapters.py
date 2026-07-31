@@ -7,9 +7,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from whetstone.optimization.identity import TypedRef, reject_non_json
+from whetstone.optimization.identity import (
+    ImmutableJsonObject,
+    OpaqueKey,
+    TerminalFailure,
+    TypedRef,
+)
 from whetstone.optimization.schema import (
     BudgetDelta,
     Candidate,
@@ -19,11 +24,7 @@ from whetstone.optimization.schema import (
     StepMode,
     StepStatus,
 )
-from whetstone.optimization.tools import (
-    RuntimeToolHandle,
-    ToolCall,
-    ToolResult,
-)
+from whetstone.optimization.tools import RuntimeToolHandle
 
 __all__ = [
     "AdapterCheckpoint",
@@ -32,23 +33,7 @@ __all__ = [
     "IdentityOptimizerAdapter",
     "MappingAdapterRegistry",
     "OptimizerAdapter",
-    "ToolCallRecord",
 ]
-
-
-class ToolCallRecord(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    call: ToolCall
-    result: ToolResult
-
-    @model_validator(mode="after")
-    def _validate(self) -> ToolCallRecord:
-        if self.call.call_id != self.result.call_id:
-            raise ValueError("Tool Call and Result call_id must match")
-        if self.call.tool_config_hash != self.result.tool_config_hash:
-            raise ValueError("Tool Call and Result config identity must match")
-        return self
 
 
 class AdapterOutput(BaseModel):
@@ -59,16 +44,34 @@ class AdapterOutput(BaseModel):
     proposed_candidates: tuple[Candidate, ...] = ()
     accepted_candidates: tuple[Candidate, ...] = ()
     evaluation_intents: tuple[EvaluationIntent, ...] = ()
-    tool_call_records: tuple[ToolCallRecord, ...] = ()
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
-    state_delta: dict[str, Any] = Field(default_factory=dict)
-    history_delta: dict[str, Any] = Field(default_factory=dict)
+    terminal_failure: TerminalFailure | None = None
+    state_delta: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    history_delta: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> AdapterOutput:
-        reject_non_json(self.state_delta, field="state_delta")
-        reject_non_json(self.history_delta, field="history_delta")
+        if (self.proposed_status is StepStatus.FAILED) != (
+            self.terminal_failure is not None
+        ):
+            raise ValueError(
+                "a failed Adapter Output requires exactly one shared "
+                "terminal failure"
+            )
+        if self.proposed_status is StepStatus.FAILED:
+            if self.accepted_candidates:
+                raise ValueError(
+                    "a failed Adapter Output claims no accepted candidates"
+                )
+            if self.evaluation_intents:
+                raise ValueError(
+                    "a failed Adapter Output requests no Evaluations"
+                )
         return self
 
     def record_content(self) -> dict[str, Any]:
@@ -81,14 +84,8 @@ class AdapterCheckpoint(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_ref: TypedRef
-    adapter_key: StrictStr
+    adapter_key: OpaqueKey
     output: AdapterOutput
-
-    @model_validator(mode="after")
-    def _validate(self) -> AdapterCheckpoint:
-        if not self.adapter_key:
-            raise ValueError("adapter_key must be non-empty")
-        return self
 
     def record_content(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

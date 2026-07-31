@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from whetstone.graph.rollout import EvaluationRole
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization import (
     MissingDataPolicy,
     OfficialRewardError,
     RewardPolicy,
     RewardTerm,
     apply_reward_policy,
+    typed_ref_for_record,
 )
 
 
@@ -25,12 +26,22 @@ def _policy(missing=MissingDataPolicy.FAIL) -> RewardPolicy:
     )
 
 
+def _evidence_refs():
+    return (
+        typed_ref_for_record(
+            "whetstone.test.evaluation_evidence",
+            {"rollout_id": "rollout-1"},
+        ),
+    )
+
+
 def test_reward_names_its_policy_and_cites_inputs() -> None:
     policy = _policy()
     reward = apply_reward_policy(
         policy,
         aggregates={"pass_rate": 0.8, "compression": 0.4},
         evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
     )
     assert reward.reward_policy_hash == policy.identity_hash()
     assert reward.evidence_role is EvaluationRole.INTERNAL
@@ -41,18 +52,8 @@ def test_reward_names_its_policy_and_cites_inputs() -> None:
 
 
 def test_reward_policy_usable_by_proposal_and_tool_configs() -> None:
-    # Same policy contract, one Identity Hash, referenced by both surfaces.
     policy = _policy()
-    h = policy.identity_hash()
-    # A proposal-only optimizer config would cite `h`; a Tool Config's
-    # reward_policy_ref is exactly this hash.
-    from .support import make_tool_definition_config
-
-    cfg = make_tool_definition_config()
-    # The support Tool Config uses a placeholder reward_policy_ref; prove the
-    # field accepts a real policy Identity Hash of full length.
-    assert len(h) == 64
-    assert len(cfg.reward_policy_ref) == 64
+    assert len(policy.identity_hash()) == 64
 
 
 def test_official_evaluation_computes_no_reward() -> None:
@@ -62,6 +63,7 @@ def test_official_evaluation_computes_no_reward() -> None:
             policy,
             aggregates={"pass_rate": 0.8, "compression": 0.4},
             evidence_role=EvaluationRole.OFFICIAL,
+            evidence_refs=_evidence_refs(),
         )
 
 
@@ -74,13 +76,17 @@ def test_reward_cannot_be_constructed_from_official_role() -> None:
         Reward(
             reward_name="reward",
             value=1.0,
-            reward_policy_hash="a" * 64,
+            reward_policy=RewardPolicy(
+                policy_name="official",
+                terms=(RewardTerm(name="pass_rate", weight=1.0),),
+            ),
             evidence_role=EvaluationRole.OFFICIAL,
             input_citations=(
                 RewardInputCitation(
                     name="pass_rate", value=1.0, contributed=1.0
                 ),
             ),
+            evidence_refs=_evidence_refs(),
         )
 
 
@@ -91,6 +97,7 @@ def test_missing_data_fail_raises() -> None:
             policy,
             aggregates={"pass_rate": 0.8},  # compression missing
             evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=_evidence_refs(),
         )
 
 
@@ -105,7 +112,10 @@ def test_missing_data_worst_substitutes_direction_worst() -> None:
         missing_data=MissingDataPolicy.WORST,
     )
     reward = apply_reward_policy(
-        policy, aggregates={}, evidence_role=EvaluationRole.INTERNAL
+        policy,
+        aggregates={},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
     )
     assert reward.value == 0.0
     assert reward.input_citations[0].was_missing is True
@@ -124,6 +134,7 @@ def test_missing_data_skip_drops_the_term() -> None:
         policy,
         aggregates={"pass_rate": 0.5},
         evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
     )
     assert reward.value == pytest.approx(0.5)
     skipped = [c for c in reward.input_citations if c.was_missing]
@@ -143,3 +154,173 @@ def test_reward_policy_requires_unique_terms() -> None:
                 RewardTerm(name="x", weight=2.0),
             ),
         )
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf")])
+def test_nonfinite_aggregate_obeys_missing_data_policy(invalid) -> None:
+    with pytest.raises(ValueError, match="missing or invalid"):
+        apply_reward_policy(
+            _policy(MissingDataPolicy.FAIL),
+            aggregates={"pass_rate": invalid, "compression": 0.1},
+            evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=_evidence_refs(),
+        )
+    skipped = apply_reward_policy(
+        _policy(MissingDataPolicy.SKIP),
+        aggregates={"pass_rate": invalid, "compression": 0.1},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
+    )
+    citation = next(
+        item for item in skipped.input_citations if item.name == "pass_rate"
+    )
+    assert citation.was_missing is True
+    assert citation.value is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("weight", float("nan")),
+        ("worst_value", float("inf")),
+    ],
+)
+def test_reward_terms_reject_nonfinite_identity_values(field, value) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        if field == "weight":
+            RewardTerm(name="score", weight=value)
+        else:
+            RewardTerm(
+                name="score",
+                weight=1.0,
+                worst_value=value,
+            )
+
+
+def test_reward_rejects_wrong_name_and_nonfinite_value() -> None:
+    from pydantic import ValidationError
+
+    from whetstone.optimization import Reward, RewardInputCitation
+
+    policy = RewardPolicy(
+        policy_name="score/v1",
+        terms=(RewardTerm(name="score", weight=1.0),),
+    )
+    citation = RewardInputCitation(
+        name="score",
+        value=1.0,
+        contributed=1.0,
+    )
+    with pytest.raises(ValidationError, match="name must match"):
+        Reward(
+            reward_name="different",
+            value=1.0,
+            reward_policy=policy,
+            evidence_role=EvaluationRole.INTERNAL,
+            input_citations=(citation,),
+            evidence_refs=_evidence_refs(),
+        )
+    with pytest.raises(ValidationError, match="finite"):
+        Reward(
+            reward_name="reward",
+            value=float("nan"),
+            reward_policy=policy,
+            evidence_role=EvaluationRole.INTERNAL,
+            input_citations=(citation,),
+            evidence_refs=_evidence_refs(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("value", 99.0, "scalarized citation total"),
+        ("contributed", 99.0, "exactly apply"),
+    ],
+)
+def test_hostile_reward_cannot_forge_scalarized_totals(
+    field: str,
+    value: float,
+    message: str,
+) -> None:
+    from pydantic import ValidationError
+
+    from whetstone.optimization import Reward
+
+    reward = apply_reward_policy(
+        _policy(),
+        aggregates={"pass_rate": 0.8, "compression": 0.4},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
+    )
+    payload = reward.model_dump(mode="json")
+    if field == "value":
+        payload["value"] = value
+    else:
+        payload["input_citations"][0]["contributed"] = value
+
+    with pytest.raises(ValidationError, match=message):
+        Reward.model_validate(payload)
+
+
+def test_reward_rejects_citations_that_diverge_from_exact_policy() -> None:
+    from pydantic import ValidationError
+
+    from whetstone.optimization import Reward
+
+    reward = apply_reward_policy(
+        _policy(),
+        aggregates={"pass_rate": 0.8, "compression": 0.4},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
+    )
+    payload = reward.model_dump(mode="json")
+    payload["input_citations"].reverse()
+
+    with pytest.raises(ValidationError, match="term names and order"):
+        Reward.model_validate(payload)
+
+
+def test_internal_reward_requires_ordered_nonempty_exact_evidence() -> None:
+    from pydantic import ValidationError
+
+    from whetstone.optimization import Reward
+
+    reward = apply_reward_policy(
+        _policy(),
+        aggregates={"pass_rate": 0.8, "compression": 0.4},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=_evidence_refs(),
+    )
+    payload = reward.model_dump(mode="json")
+    payload["evidence_refs"] = []
+    with pytest.raises(ValidationError, match="at least one exact evidence"):
+        Reward.model_validate(payload)
+
+    payload["evidence_refs"] = {_evidence_refs()[0]}
+    with pytest.raises(ValidationError, match="ordered tuple or JSON array"):
+        Reward.model_validate(payload)
+
+
+def test_finite_negative_zero_canonicalizes_to_positive_zero() -> None:
+    import math
+
+    positive = RewardTerm(name="score", weight=0.0, worst_value=0.0)
+    hostile = RewardTerm.model_validate(
+        {"name": "score", "weight": -0.0, "worst_value": -0.0}
+    )
+
+    assert hostile == positive
+    assert hostile.identity_payload() == positive.identity_payload()
+    assert math.copysign(1.0, hostile.weight) == 1.0
+    assert math.copysign(1.0, hostile.worst_value) == 1.0
+    assert (
+        RewardPolicy(
+            policy_name="zero/v1",
+            terms=(hostile,),
+        ).identity_hash()
+        == RewardPolicy(
+            policy_name="zero/v1",
+            terms=(positive,),
+        ).identity_hash()
+    )

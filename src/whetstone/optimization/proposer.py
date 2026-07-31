@@ -1,41 +1,23 @@
-"""The proposer route: a Provider Call Config the optimizer owns.
-
-Both proposal-only optimizers (COPRO's Proposal LM, MIPROv2's proposal LM)
-call a model to draft new encoder ``user_prompt_template`` text. That model is
-reached through a **proposer route** — a Provider Call Config reference
-*distinct* from the encoder/decoder routes inside an evaluated Rollout graph.
-
-The load-bearing identity fact, per ``copro-run.html`` / ``miprov2-run.html``
-and the Workstream-7 table: the proposer route lives in the **optimizer Config
-identity**, never in the **graph identity**. A Rollout Variant's ``graph_hash``
-folds the encoder/decoder Provider Call Configs; it MUST NOT fold the proposer
-route, because changing which model *drafts* a template does not change the
-identity of the *materialized* graph that a template is evaluated under. This
-module gives the proposer route its own typed Config so the two identity
-domains stay separate and testable.
-
-A :class:`FakeProposerTransport` is provided for deterministic-harness tests: a
-scripted transport keyed by ``(proposal_mode, request_ordinal)`` that returns
-canned template drafts with no network. It never participates in identity.
-"""
+"""Optimizer-owned proposer route and immutable proposal evidence."""
 
 from __future__ import annotations
 
 from typing import Any, Protocol
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictInt,
-    StrictStr,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from whetstone.optimization.identity import (
+    FiniteFloat,
+    IdentityHash,
+    IdentityRef,
+    ImmutableJsonObject,
+    NonEmptyId,
+    NonNegativeInt,
+    TerminalFailure,
     compute_identity_hash,
-    require_full_hash,
 )
+from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.schema import CandidateRef
 
 __all__ = [
     "PROPOSER_CONFIG_SCHEMA",
@@ -52,44 +34,32 @@ PROPOSER_CONFIG_SCHEMA_VERSION = 1
 
 
 class ProposerConfig(BaseModel):
-    """The optimizer-owned proposer route (a Provider Call Config reference).
-
-    Carries the typed reference and Identity Hash of the **Provider Call
-    Config** the Proposal/proposal LM is reached through, plus the generation
-    temperature the algorithm pins for drafting. It is deliberately a small
-    identity-bearing Config so it can be folded into the **optimizer Config
-    identity** — and only there. It is never folded into a graph identity: the
-    encoder/decoder routes inside the evaluated graph are separate Provider
-    Call Configs with their own hashes.
-    """
+    """Exact proposer Provider Call Config plus finite draft temperature."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # Typed reference + Identity Hash of the proposer's Provider Call Config.
-    provider_call_config_ref: StrictStr
-    provider_call_config_hash: StrictStr
-    # The drafting temperature the algorithm pins (COPRO init_temperature,
-    # MIPROv2 proposal_temperature). Part of the proposer route identity.
-    temperature: float = 1.0
-
-    @model_validator(mode="after")
-    def _validate(self) -> ProposerConfig:
-        if not self.provider_call_config_ref:
-            raise ValueError("provider_call_config_ref must be non-empty")
-        require_full_hash(
-            self.provider_call_config_hash,
-            field="provider_call_config_hash",
-        )
-        return self
+    provider_call_config: IdentityRef
+    temperature: FiniteFloat = FiniteFloat(1.0)
 
     def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity contract: spell every key explicitly and pin the
+        # complete payload plus digest in golden tests.
         return {
-            "provider_call_config_ref": self.provider_call_config_ref,
-            "provider_call_config_hash": self.provider_call_config_hash,
-            "temperature": self.temperature,
+            "provider_call_config": {
+                "record_ref": {
+                    "schema_name": str(
+                        self.provider_call_config.record_ref.schema_name
+                    ),
+                    "content_hash": str(
+                        self.provider_call_config.record_ref.content_hash
+                    ),
+                },
+                "identity_hash": str(self.provider_call_config.identity_hash),
+            },
+            "temperature": float(self.temperature),
         }
 
-    def identity_hash(self) -> str:
+    def identity_hash(self) -> IdentityHash:
         return compute_identity_hash(
             schema=PROPOSER_CONFIG_SCHEMA,
             schema_version=PROPOSER_CONFIG_SCHEMA_VERSION,
@@ -98,66 +68,71 @@ class ProposerConfig(BaseModel):
 
 
 class ProposalRequest(BaseModel):
-    """A single call to the proposer route to draft template text.
-
-    It carries the algorithm's proposal mode/purpose, the ordinal within the
-    run (so a scripted transport can key deterministic responses), the base
-    candidate's current template text, and an opaque, JSON-only ``context``
-    (e.g. the Reward-ranked history summary COPRO conditions on, or the seed
-    instruction MIPROv2 mutates). No runtime handle: strict JSON only.
-    """
+    """One proposer request with exact base and immutable JSON context."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    proposal_mode: StrictStr
-    request_ordinal: StrictInt
-    base_ref: StrictStr
-    base_template: StrictStr = ""
-    context: dict[str, Any] = Field(default_factory=dict)
+    proposal_mode: NonEmptyId
+    request_ordinal: NonNegativeInt
+    base_candidate: CandidateRef
+    context: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
 
     @model_validator(mode="after")
     def _validate(self) -> ProposalRequest:
-        if not self.proposal_mode:
-            raise ValueError("proposal_mode must be non-empty")
-        if self.request_ordinal < 0:
-            raise ValueError("request_ordinal cannot be negative")
+        _ = self.base_template
         return self
+
+    @property
+    def base_template(self) -> str:
+        try:
+            value = self.base_candidate.record.payload[MUTATION_FIELD]
+        except KeyError as error:
+            raise ValueError(
+                "base candidate payload must contain the "
+                f"{MUTATION_FIELD!r} mutation field"
+            ) from error
+        if type(value) is not str:
+            raise ValueError(
+                f"base candidate {MUTATION_FIELD!r} mutation field "
+                "must be a string"
+            )
+        return value
 
 
 class ProposalDraft(BaseModel):
-    """One successful template or one explicitly failed draft slot.
-
-    ``template`` is the mutated ``user_prompt_template`` text. The evidence
-    fields carry the Proposal LM request/response/usage/cost provenance the
-    Step Result records — never a score and never a Reward.
-    """
+    """Exactly one successful draft or one shared terminal failure."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    template: StrictStr = ""
-    failed: bool = False
-    failure_detail: StrictStr | None = None
-    request_evidence: dict[str, Any] = Field(default_factory=dict)
-    response_evidence: dict[str, Any] = Field(default_factory=dict)
-    usage: dict[str, Any] = Field(default_factory=dict)
-    cost: float | None = None
+    template: str = ""
+    terminal_failure: TerminalFailure | None = None
+    request_evidence: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    response_evidence: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    usage: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    cost: FiniteFloat | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> ProposalDraft:
-        if self.failed:
+        if self.terminal_failure is not None:
             if self.template:
                 raise ValueError("a failed ProposalDraft carries no template")
-            if not self.failure_detail:
-                raise ValueError("a failed ProposalDraft requires detail")
         elif not self.template:
             raise ValueError(
                 "a successful ProposalDraft requires a non-empty template"
             )
-        elif self.failure_detail is not None:
-            raise ValueError(
-                "a successful ProposalDraft carries no failure detail"
-            )
         return self
+
+    @property
+    def failed(self) -> bool:
+        return self.terminal_failure is not None
 
     @classmethod
     def failure(
@@ -168,8 +143,10 @@ class ProposalDraft(BaseModel):
         usage: dict[str, Any] | None = None,
     ) -> ProposalDraft:
         return cls(
-            failed=True,
-            failure_detail=detail,
+            terminal_failure=TerminalFailure(
+                code="proposal_failed",
+                message=detail,
+            ),
             request_evidence=request_evidence or {},
             response_evidence={"finish": "failed"},
             usage=usage or {},
@@ -178,12 +155,7 @@ class ProposalDraft(BaseModel):
 
 
 class ProposerTransport(Protocol):
-    """The proposer route transport: draft ``count`` templates for a request.
-
-    A real transport folds the :class:`ProposerConfig`'s Provider Call Config
-    and drives dr-providers; the test double is scripted. Either way it returns
-    exactly ``count`` :class:`ProposalDraft`s and performs no evaluation.
-    """
+    """Draft exactly ``count`` proposals without performing evaluation."""
 
     def draft(
         self, config: ProposerConfig, request: ProposalRequest, count: int
@@ -191,14 +163,7 @@ class ProposerTransport(Protocol):
 
 
 class FakeProposerTransport:
-    """A scripted, deterministic proposer transport for harness tests.
-
-    Responses are keyed by ``(proposal_mode, request_ordinal)`` -> a tuple of
-    template strings; the transport slices/pads to the requested ``count`` and
-    records every drafting call so a test can assert the proposer route (not an
-    encoder/decoder route) produced the templates. It touches no network and is
-    never part of any identity.
-    """
+    """Scripted deterministic proposer transport for contract tests."""
 
     def __init__(
         self,
@@ -208,13 +173,13 @@ class FakeProposerTransport:
     ) -> None:
         self._script = dict(script)
         self._default = default
-        self.calls: list[tuple[str, ProposalRequest, int]] = []
+        self.calls: list[tuple[IdentityHash, ProposalRequest, int]] = []
 
     def draft(
         self, config: ProposerConfig, request: ProposalRequest, count: int
     ) -> tuple[ProposalDraft, ...]:
-        # Record which proposer route was used (by its Identity Hash) so a test
-        # proves the proposer route is distinct from encoder/decoder routes.
+        if type(count) is not int or count < 0:
+            raise ValueError("proposal draft count must be nonnegative")
         self.calls.append((config.identity_hash(), request, count))
         templates = self._script.get(
             (request.proposal_mode, request.request_ordinal), self._default
@@ -229,7 +194,6 @@ class FakeProposerTransport:
             if index < len(templates):
                 text = templates[index]
             else:
-                # Deterministic pad so a short script never underfills.
                 text = (
                     f"{request.base_template}::pad::"
                     f"{request.request_ordinal}:{index}"

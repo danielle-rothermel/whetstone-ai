@@ -2,9 +2,9 @@
 
 Every optimizing run in this system shares one Mutation Surface: the encoder
 ``user_prompt_template`` field only. A proposal is valid iff it changes only
-that field relative to its named base candidate and byte-matches the base
-everywhere else (the "diff check", ``concrete-changes.html`` / the run docs'
-shared harness expectation #3). This module makes that check a small,
+that field relative to its named base candidate and canonical-JSON-matches the
+base everywhere else (the "diff check", ``concrete-changes.html`` / the run
+docs' shared harness expectation #3). This module makes that check a small,
 reusable, testable function so both COPRO and MIPROv2 reject the same way.
 
 The check is applied by the adapter *before* it emits a candidate: an invalid
@@ -17,55 +17,29 @@ attempt cap or fails the Step per its cardinality rule.
 
 from __future__ import annotations
 
-import string
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
-from whetstone.optimization.proposer import ProposalDraft
-from whetstone.optimization.schema import Candidate
+from dr_serialize import canonical_json
+
+if TYPE_CHECKING:
+    from whetstone.optimization.proposer import ProposalDraft
+    from whetstone.optimization.schema import (
+        Candidate,
+        OptimizationRun,
+        OptimizationRunRef,
+    )
 
 __all__ = [
     "MUTATION_FIELD",
-    "POSITIONAL_FIELD_TOKEN",
     "DiffCheckError",
     "ProposalValidationError",
     "candidate_from_draft",
     "diff_check",
-    "invalid_template_placeholders",
-    "template_placeholder_fields",
+    "validate_candidate_template",
 ]
 
 # The single allowed mutation field across every optimizing run here.
 MUTATION_FIELD = "user_prompt_template"
-POSITIONAL_FIELD_TOKEN = "<positional>"
-
-
-def template_placeholder_fields(template: str) -> tuple[str, ...]:
-    fields: list[str] = []
-    for _literal, field_name, _spec, _conv in string.Formatter().parse(
-        template
-    ):
-        if field_name is None:
-            continue
-        if field_name == "":
-            fields.append(POSITIONAL_FIELD_TOKEN)
-            continue
-        head = field_name.replace("[", ".").split(".", 1)[0]
-        fields.append(POSITIONAL_FIELD_TOKEN if head.isdigit() else head)
-    return tuple(fields)
-
-
-def invalid_template_placeholders(
-    template: str, valid_keys: Iterable[str]
-) -> tuple[str, ...]:
-    allowed = set(valid_keys)
-    offending: list[str] = []
-    seen: set[str] = set()
-    for field_name in template_placeholder_fields(template):
-        if field_name in allowed or field_name in seen:
-            continue
-        seen.add(field_name)
-        offending.append(field_name)
-    return tuple(offending)
 
 
 class DiffCheckError(ValueError):
@@ -81,7 +55,7 @@ def candidate_from_draft(
     base: Candidate,
     candidate_id: str,
     draft: ProposalDraft,
-    valid_template_keys: Iterable[str],
+    run: OptimizationRun | OptimizationRunRef,
 ) -> Candidate:
     """The sole draft-to-candidate validation path.
 
@@ -90,60 +64,116 @@ def candidate_from_draft(
     other proposal. There is no base-template fallback.
     """
     if draft.failed:
-        raise ProposalValidationError(
-            draft.failure_detail or "proposer failed without detail"
-        )
-    invalid = invalid_template_placeholders(
-        draft.template, valid_template_keys
+        failure = draft.terminal_failure
+        if failure is None:
+            raise AssertionError(
+                "failed proposal draft lacks terminal failure"
+            )
+        raise ProposalValidationError(failure.message)
+    from whetstone.optimization.schema import (
+        Candidate,
+        OptimizationRun,
+        OptimizationRunRef,
+        candidate_reference,
     )
-    if invalid:
+
+    if type(run) is OptimizationRun:
+        exact_run = run
+    elif type(run) is OptimizationRunRef:
+        exact_run = run.record
+    else:
+        raise TypeError("run must be an exact OptimizationRun or RunRef")
+    try:
+        exact_run.template_render_contract.validate_template(draft.template)
+    except ValueError as error:
         raise ProposalValidationError(
-            "proposal template contains unavailable placeholders: "
-            + ", ".join(invalid)
-        )
+            f"proposal template violates its render contract: {error}"
+        ) from error
+    payload = base.payload.to_json()
+    payload[MUTATION_FIELD] = draft.template
     proposed = Candidate(
         candidate_id=candidate_id,
-        base_ref=base.base_ref,
-        payload={**base.payload, MUTATION_FIELD: draft.template},
+        base_ref=candidate_reference(base).record_ref,
+        payload=payload,
     )
     diff_check(base=base, proposed=proposed)
     return proposed
+
+
+def validate_candidate_template(
+    *,
+    candidate: Candidate,
+    run: OptimizationRun | OptimizationRunRef,
+) -> None:
+    """Validate one candidate template under an exact run's authority."""
+    from whetstone.optimization.schema import (
+        OptimizationRun,
+        OptimizationRunRef,
+    )
+
+    if type(run) is OptimizationRun:
+        exact_run = run
+    elif type(run) is OptimizationRunRef:
+        exact_run = run.record
+    else:
+        raise TypeError("run must be an exact OptimizationRun or RunRef")
+    exact_run.template_render_contract.validate_template(
+        candidate.payload.get(MUTATION_FIELD)
+    )
 
 
 def diff_check(
     *,
     base: Candidate,
     proposed: Candidate,
-    mutation_field: str = MUTATION_FIELD,
 ) -> None:
     """Validate a proposal against its base under the Mutation Surface.
 
     Raises :class:`DiffCheckError` unless the proposal:
 
     * binds the exact same base (``base_ref`` byte-matches),
-    * supplies a non-empty ``mutation_field`` value, and
-    * byte-matches the base on **every** other payload key (no added, dropped,
-      or altered non-surface field).
+    * supplies a non-empty ``MUTATION_FIELD`` value, and
+    * canonical-JSON-matches the base on **every** other payload key (no
+      added, dropped, or altered non-surface field).
     """
-    if proposed.base_ref != base.base_ref:
+    from whetstone.optimization.schema import candidate_reference
+
+    expected_base_ref = candidate_reference(base).record_ref
+    if proposed.base_ref != expected_base_ref:
         raise DiffCheckError(
-            f"proposal binds base {proposed.base_ref!r}, not its named base "
-            f"{base.base_ref!r}"
+            f"proposal binds base {proposed.base_ref!r}, not the exact "
+            f"request candidate {expected_base_ref!r}"
         )
-    value = proposed.payload.get(mutation_field)
-    if not isinstance(value, str) or value == "":
+    value = proposed.payload.get(MUTATION_FIELD)
+    if type(value) is not str or value == "":
         raise DiffCheckError(
-            f"proposal must supply a non-empty {mutation_field!r} template"
+            f"proposal must supply a non-empty {MUTATION_FIELD!r} template"
+        )
+    base_payload = base.model_dump(mode="json")["payload"]
+    proposed_payload = proposed.model_dump(mode="json")["payload"]
+    if MUTATION_FIELD not in base_payload:
+        raise DiffCheckError(
+            f"base candidate must supply the {MUTATION_FIELD!r} mutation field"
+        )
+    base_value = base_payload[MUTATION_FIELD]
+    if type(base_value) is not str:
+        raise DiffCheckError(
+            f"base candidate {MUTATION_FIELD!r} mutation field must be "
+            "a string"
+        )
+    if value == base_value:
+        raise DiffCheckError(
+            f"proposal {MUTATION_FIELD!r} mutation must differ from its base"
         )
     base_others = {
-        k: v for k, v in base.payload.items() if k != mutation_field
+        k: v for k, v in base_payload.items() if k != MUTATION_FIELD
     }
     prop_others = {
-        k: v for k, v in proposed.payload.items() if k != mutation_field
+        k: v for k, v in proposed_payload.items() if k != MUTATION_FIELD
     }
-    if prop_others != base_others:
+    if canonical_json(prop_others) != canonical_json(base_others):
         raise DiffCheckError(
             "proposal changes a field outside the Mutation Surface "
-            f"({mutation_field!r} only): non-surface payload diverged "
+            f"({MUTATION_FIELD!r} only): non-surface payload diverged "
             "from base"
         )

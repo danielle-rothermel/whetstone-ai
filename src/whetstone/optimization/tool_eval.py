@@ -1,242 +1,375 @@
-"""The tool-side evaluation service shared by the tool-using optimizers.
-
-GEPA and Codex both reach measurement through Tool Calls rather than
-Evaluation Intents. Both therefore need the same execution-boundary machinery:
-
-* a :class:`ToolEvaluator` protocol -- Whetstone's internal-role evaluation of
-  one accepted Tool Call: validate, materialize the chosen base + template at
-  the fixed ratio, bind the tool's ordinary Eval Config under the *internal*
-  Evaluation Role, plan/execute the Rollouts the Eval Config sizes, aggregate,
-  and derive the tool's Reward. It returns typed evaluation evidence (Rollout
-  Result references + aggregates); it never manufactures a score and never
-  touches the store.
-
-* :class:`EvaluatingToolExecutor` -- the ``ToolExecutor`` implementation that
-  constructs a :class:`RuntimeToolHandle` **only at the execution boundary**.
-  The handle drives the authoritative Tool Call Store: ``accept_or_refuse``
-  first (so a capacity/budget/validation refusal is a typed non-execution
-  outcome that never masquerades as a measurement), then -- only for an
-  accepted call -- the :class:`ToolEvaluator` produces the internal evaluation,
-  the Reward Policy scalarizes it, and a completed Tool Result is returned.
-  Every Tool Result names its terminal Tool Call Store Entry via the store; the
-  harness records both as Step evidence.
-
-The Reward is produced only through :func:`apply_reward_policy`, so a refused
-call carries no Reward and official evaluation still computes none.
-"""
+"""Validated, admitted, and fenced execution of exact Tool Calls."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from types import MappingProxyType
 from typing import Protocol
+from uuid import uuid4
 
-from whetstone.graph.rollout import EvaluationRole
-from whetstone.optimization.harness import ToolExecutor
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.reward import RewardPolicy, apply_reward_policy
-from whetstone.optimization.tool_store import ToolCallState, ToolCallStore
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.effect_authority import (
+    AcquireOutcome,
+    EffectAuthority,
+    ReplayPolicy,
+)
+from whetstone.optimization.identity import (
+    IdentityHash,
+    ImmutableJsonObject,
+    TerminalFailure,
+    TypedRef,
+)
+from whetstone.optimization.reward import (
+    RewardPolicy,
+    apply_reward_policy,
+    reward_reference,
+)
+from whetstone.optimization.tool_store import (
+    ToolCallState,
+    ToolCallStore,
+    tool_effect_request,
+)
 from whetstone.optimization.tools import (
     RefusalClass,
     RuntimeToolHandle,
     ToolCall,
+    ToolCapacityBinding,
     ToolConfig,
     ToolRefusal,
     ToolResult,
+    tool_call_reference,
 )
 
 __all__ = [
     "EvaluatingToolExecutor",
     "ToolEvaluation",
+    "ToolEvaluationError",
     "ToolEvaluator",
+    "ToolExecutionBusyError",
+    "ToolExecutionConflictError",
+    "ToolExecutionRecoveryRequiredError",
     "ToolValidationError",
 ]
 
 
 class ToolValidationError(ValueError):
-    """A Tool Call's arguments failed validation before any measurement.
+    """Pure pre-admission validation refused one Tool Call."""
 
-    Raised by a :class:`ToolEvaluator` when the call arguments are ill-formed
-    (missing base/template, off-surface field, disallowed Model Route). The
-    executor converts it into a typed VALIDATION Tool Refusal so it can never
-    be mistaken for a measured result.
-    """
+
+class ToolEvaluationError(RuntimeError):
+    """An expected evaluator exhaustion with shared terminal evidence."""
+
+    def __init__(self, failure: TerminalFailure) -> None:
+        self.failure = failure
+        super().__init__(failure.message)
+
+
+class ToolExecutionBusyError(RuntimeError):
+    """Another owner holds the unexpired exact execution lease."""
+
+    def __init__(self, *, busy_expires_at: datetime) -> None:
+        self.busy_expires_at = busy_expires_at
+        super().__init__(
+            "Tool execution is busy until "
+            f"{busy_expires_at.isoformat(timespec='microseconds')}"
+        )
+
+
+class ToolExecutionConflictError(RuntimeError):
+    """The semantic execution key is bound to another exact request."""
+
+
+class ToolExecutionRecoveryRequiredError(RuntimeError):
+    """A non-redrivable expired Tool execution needs operator recovery."""
+
+    def __init__(self, failure: TerminalFailure) -> None:
+        self.failure = failure
+        super().__init__(failure.message)
 
 
 @dataclass(frozen=True, slots=True)
 class ToolEvaluation:
-    """The internal-role evaluation evidence a :class:`ToolEvaluator` returns.
+    """Evaluator output before Reward scalarization and ToolResult creation."""
 
-    * ``rollout_refs`` -- the Rollout Result references the Eval Config sized
-      (internal_task_count times internal_repeat_count for Codex; 3 for a GEPA
-      minibatch; 24 for a GEPA subset). Referenced, never duplicated.
-    * ``aggregates`` -- the named internal aggregate/objective values the
-      Reward Policy scalarizes; a value may be ``None`` to exercise the
-      policy's
-      missing-data rule.
-    * ``objective_values`` -- the per-objective values GEPA compares/frontiers
-      on (a subset of/derived from ``aggregates``); carried for the caller.
-    * ``eval_config_hash`` -- the internal Eval Config identity the evaluation
-      bound; recorded as tool evidence.
-    * ``extra_output`` -- any additional typed output the tool exposes to the
-      caller (e.g. a GEPA bounded Rollout Trace projection ref).
-    """
-
+    output: ImmutableJsonObject
     rollout_refs: tuple[TypedRef, ...]
-    aggregates: dict[str, float | None]
-    eval_config_hash: str
-    objective_values: dict[str, float] = field(default_factory=dict)
-    extra_output: dict[str, object] = field(default_factory=dict)
+    aggregates: Mapping[str, float | None]
+    eval_config_hash: IdentityHash
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "aggregates", MappingProxyType(dict(self.aggregates))
+        )
 
 
 class ToolEvaluator(Protocol):
-    """Whetstone's internal-role evaluation of one accepted Tool Call.
+    """Pure validation followed by internal-role effectful evaluation."""
 
-    Given the accepted :class:`ToolCall` and its :class:`ToolConfig`, resolves
-    the internal evaluation under the Tool Config's ordinary Eval Config bound
-    through the ``internal`` Evaluation Role and returns a
-    :class:`ToolEvaluation`. It is called ONLY after the Tool Call Store
-    accepts
-    the call, so it never debits capacity and never sees a refused call.
-    """
+    def validate(self, call: ToolCall, config: ToolConfig) -> None:
+        """Validate without performing evaluation or consuming capacity."""
 
-    def evaluate(
-        self, call: ToolCall, config: ToolConfig
-    ) -> ToolEvaluation: ...
+    def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
+        """Perform one accepted internal evaluation.
+
+        Expected exhaustion raises :class:`ToolEvaluationError`. Unexpected
+        exceptions represent process/worker failure and intentionally leave
+        the acquired lease unterminated. Lease loss fences authoritative
+        completion, but cannot guarantee cancellation of arbitrary external
+        work already dispatched by an evaluator.
+        """
 
 
-class EvaluatingToolExecutor(ToolExecutor):
-    """A :class:`ToolExecutor` that measures accepted calls, refuses the rest.
-
-    Constructs the :class:`RuntimeToolHandle` at the execution boundary only.
-    The bound callable's order is load-bearing:
-
-    1. ``store.accept_or_refuse(call, config)`` -- the authoritative Tool Call
-       Store decides acceptance/refusal and debits capacity **exactly once** on
-       acceptance. A capacity refusal (or a pre-accept validation refusal)
-       yields a refused Tool Result with NO evaluation evidence and NO Reward.
-    2. only for an accepted call, the :class:`ToolEvaluator` runs the
-       internal-role evaluation and the Reward Policy scalarizes it into the
-       Tool Result's Reward.
-
-    The completed Tool Result is transitioned in the store by the harness
-    (which
-    records the terminal Entry as evidence), so this executor leaves the entry
-    ``accepted`` and returns the result for the harness to complete.
-    """
+class EvaluatingToolExecutor:
+    """One paved path from pure validation to fenced terminal persistence."""
 
     def __init__(
         self,
         evaluator: ToolEvaluator,
         reward_policy: RewardPolicy,
+        effect_authority: EffectAuthority,
+        *,
+        owner_id: str,
+        replay_policy: ReplayPolicy,
+        lease_duration: timedelta = timedelta(minutes=5),
     ) -> None:
+        if not owner_id:
+            raise ValueError("owner_id must be non-empty")
+        if lease_duration <= timedelta(0):
+            raise ValueError("lease_duration must be positive")
         self._evaluator = evaluator
         self._reward_policy = reward_policy
+        self._effect_authority = effect_authority
+        self._owner_id = owner_id
+        self._replay_policy = replay_policy
+        self._lease_duration = lease_duration
 
     def runtime_handle(
-        self, config: ToolConfig, store: ToolCallStore
+        self,
+        config: ToolConfig,
+        store: ToolCallStore,
+        binding: ToolCapacityBinding,
     ) -> RuntimeToolHandle:
-        if config.reward_policy_ref != self._reward_policy.identity_hash():
+        validated_config = ToolConfig.model_validate(
+            config.model_dump(mode="json")
+        )
+        validated_binding = ToolCapacityBinding.model_validate(
+            binding.model_dump(mode="json")
+        )
+        effect_authority = store.effect_authority
+        if effect_authority is not self._effect_authority:
             raise ValueError(
-                "Tool Config reward_policy_ref does not match the executor's "
-                "Reward Policy Identity Hash"
+                "Tool executor and Tool Call Store must share one exact "
+                "EffectAuthority instance"
+            )
+        if (
+            validated_config.reward_policy_hash
+            != self._reward_policy.identity_hash()
+        ):
+            raise ValueError(
+                "Tool Config reward_policy_hash does not match the executor's "
+                "exact Reward Policy Identity Hash"
+            )
+        configured_replay = (
+            ReplayPolicy.IDEMPOTENT
+            if validated_config.idempotent_replay
+            else ReplayPolicy.NO_REDRIVE
+        )
+        if self._replay_policy is not configured_replay:
+            raise ValueError(
+                "explicit ReplayPolicy disagrees with the exact Tool Config"
             )
 
-        def execute(call: ToolCall) -> ToolResult:
-            existing = store.get(call.tool_config_hash, call.call_id)
-            if existing is not None:
-                entry = store.accept_or_refuse(call, config)
-                if entry.state is ToolCallState.COMPLETED:
-                    return store.load_completed_result(entry)
-                if entry.state is ToolCallState.REFUSED:
-                    assert entry.refusal is not None
-                    return _refused_result(call, config, entry.refusal)
-
-            # Pre-acceptance argument validation is a typed VALIDATION refusal
-            # that never spends a capacity slot and never becomes a
-            # measurement. It is recorded durably in the Tool Call Store so the
-            # refusal is inspectable evidence with a refused terminal Entry.
-            try:
-                self._validate_args(call)
-            except ToolValidationError as exc:
-                refusal = ToolRefusal(
-                    refusal_class=RefusalClass.VALIDATION, reason=str(exc)
-                )
-                store.refuse(call, config, refusal=refusal)
-                return _refused_result(call, config, refusal)
-
-            entry = store.accept_or_refuse(call, config)
-            if entry.state is ToolCallState.REFUSED:
-                # Capacity (or store-side) refusal: no evidence, no Reward.
-                assert entry.refusal is not None
-                return ToolResult(
-                    call_id=call.call_id,
-                    tool_config_ref=config.tool_definition_ref,
-                    tool_config_hash=config.identity_hash(),
-                    store_namespace=config.store_namespace,
-                    refusal=entry.refusal,
-                    provenance_ordinal=None,
-                )
-
-            evaluation = self._evaluator.evaluate(call, config)
-            if evaluation.eval_config_hash != config.eval_config_identity_hash:
+        def execute(raw_call: ToolCall) -> ToolResult:
+            call = ToolCall.model_validate(raw_call.model_dump(mode="json"))
+            if call.tool_config.record != validated_config:
                 raise ValueError(
-                    "the tool's internal evaluation bound a different Eval "
-                    "Config than the Tool Config's internal-role Eval Config"
+                    "Tool Call must cite the runtime handle's exact Config"
                 )
+
+            existing = store.get(call)
+            if existing is not None:
+                if existing.state is ToolCallState.REFUSED:
+                    return store.load_terminal_result(existing)
+                entry = existing
+            else:
+                try:
+                    self._evaluator.validate(call, validated_config)
+                except ToolValidationError as exc:
+                    entry = store.refuse(
+                        call,
+                        validated_config,
+                        refusal=ToolRefusal(
+                            refusal_class=RefusalClass.VALIDATION,
+                            reason=str(exc),
+                        ),
+                    )
+                    return store.load_terminal_result(entry)
+                entry = store.admit(call, validated_config)
+                if entry.state is ToolCallState.REFUSED:
+                    return store.load_terminal_result(entry)
+
+            request = tool_effect_request(call)
+            acquisition = effect_authority.acquire(
+                request,
+                owner_id=self._owner_id,
+                attempt_id=uuid4().hex,
+                lease_duration=self._lease_duration,
+            )
+            if acquisition.outcome is AcquireOutcome.SUCCEEDED:
+                terminal = acquisition.terminal
+                if terminal is None or terminal.result_ref is None:
+                    raise RuntimeError(
+                        "succeeded Tool effect has no exact Tool Result ref"
+                    )
+                result = store.load_result(
+                    terminal.result_ref, expected_call=call
+                )
+                if result.terminal_failure is not None:
+                    raise RuntimeError(
+                        "succeeded Tool effect references a failed Tool Result"
+                    )
+                completed = store.complete(
+                    result,
+                    terminal=terminal,
+                )
+                return store.load_terminal_result(completed)
+            if acquisition.outcome is AcquireOutcome.FAILED:
+                terminal = acquisition.terminal
+                if (
+                    terminal is None
+                    or terminal.result_ref is None
+                    or terminal.failure is None
+                ):
+                    raise RuntimeError(
+                        "failed Tool effect has incomplete terminal evidence"
+                    )
+                result = store.load_result(
+                    terminal.result_ref, expected_call=call
+                )
+                if result.terminal_failure != terminal.failure:
+                    raise RuntimeError(
+                        "failed Tool effect and Tool Result disagree"
+                    )
+                completed = store.complete(
+                    result,
+                    terminal=terminal,
+                )
+                return store.load_terminal_result(completed)
+            if acquisition.outcome is AcquireOutcome.BUSY:
+                if acquisition.busy_expires_at is None:
+                    raise RuntimeError("busy Tool effect has no expiration")
+                raise ToolExecutionBusyError(
+                    busy_expires_at=acquisition.busy_expires_at
+                )
+            if acquisition.outcome is AcquireOutcome.REQUEST_CONFLICT:
+                raise ToolExecutionConflictError(
+                    "Tool execution key is bound to another exact request"
+                )
+            if acquisition.outcome is AcquireOutcome.RECOVERY_REQUIRED:
+                terminal = acquisition.terminal
+                if terminal is None or terminal.failure is None:
+                    raise RuntimeError(
+                        "recovery-required Tool effect has no failure"
+                    )
+                raise ToolExecutionRecoveryRequiredError(terminal.failure)
+            lease = acquisition.lease
+            if (
+                acquisition.outcome is not AcquireOutcome.ACQUIRED
+                or lease is None
+            ):
+                raise RuntimeError("unrecognized Tool effect acquisition")
+            entry_ordinal = entry.capacity_debit_ordinal
+            if entry_ordinal is None:
+                raise RuntimeError(
+                    "accepted Tool Call entry has no capacity ordinal"
+                )
+            exact_ordinal = int(entry_ordinal)
+
+            with effect_authority.maintain(
+                lease, lease_duration=self._lease_duration
+            ) as maintenance:
+                try:
+                    evaluation = self._evaluator.evaluate(
+                        call, validated_config
+                    )
+                    result = self._successful_result(
+                        call=call,
+                        entry_ordinal=exact_ordinal,
+                        evaluation=evaluation,
+                        config=validated_config,
+                    )
+                except ToolEvaluationError as exc:
+                    result = ToolResult(
+                        call=tool_call_reference(call),
+                        terminal_failure=exc.failure,
+                        provenance_ordinal=exact_ordinal,
+                    )
+                    result_ref = store.persist_result(result)
+                    terminal_failure = exc.failure
+                else:
+                    result_ref = store.persist_result(result)
+                    terminal_failure = None
+                if terminal_failure is None:
+                    terminal = maintenance.succeed(result_ref=result_ref)
+                else:
+                    terminal = maintenance.fail(
+                        result_ref=result_ref,
+                        failure=terminal_failure,
+                    )
+            completed = store.complete(
+                result,
+                terminal=terminal,
+            )
+            return store.load_terminal_result(completed)
+
+        return RuntimeToolHandle(validated_config, validated_binding, execute)
+
+    def _successful_result(
+        self,
+        *,
+        call: ToolCall,
+        entry_ordinal: int,
+        evaluation: ToolEvaluation,
+        config: ToolConfig,
+    ) -> ToolResult:
+        if evaluation.eval_config_hash != config.eval_config_identity_hash:
+            raise ToolEvaluationError(
+                TerminalFailure(
+                    code="tool_eval_config_mismatch",
+                    message=(
+                        "Tool evaluation bound a different exact Eval Config"
+                    ),
+                    details={
+                        "expected": config.eval_config_identity_hash,
+                        "actual": evaluation.eval_config_hash,
+                    },
+                )
+            )
+        try:
             reward = apply_reward_policy(
                 self._reward_policy,
                 aggregates=evaluation.aggregates,
                 evidence_role=EvaluationRole.INTERNAL,
+                evidence_refs=evaluation.rollout_refs,
+                provenance_ordinal=entry_ordinal,
             )
-            output: dict[str, object] = {
-                "rollout_refs": [
-                    ref.model_dump(mode="json")
-                    for ref in evaluation.rollout_refs
-                ],
-                "rollout_ref_count": len(evaluation.rollout_refs),
-                "objective_values": evaluation.objective_values,
-                "eval_config_hash": evaluation.eval_config_hash,
-                "internal_role": EvaluationRole.INTERNAL.value,
-                **evaluation.extra_output,
-            }
-            result = ToolResult(
-                call_id=call.call_id,
-                tool_config_ref=config.tool_definition_ref,
-                tool_config_hash=config.identity_hash(),
-                store_namespace=config.store_namespace,
-                output=output,
+            return ToolResult(
+                call=tool_call_reference(call),
+                output=evaluation.output,
                 evaluation_evidence_refs=evaluation.rollout_refs,
-                reward=reward.record_content(),
-                provenance_ordinal=entry.capacity_debit_ordinal,
+                reward=reward_reference(reward),
+                provenance_ordinal=entry_ordinal,
             )
-            store.persist_and_complete(result)
-            return result
-
-        return RuntimeToolHandle(config, execute)
-
-    @staticmethod
-    def _validate_args(call: ToolCall) -> None:
-        template = call.args.get("template")
-        if not isinstance(template, str) or template == "":
-            raise ToolValidationError(
-                "evaluate call requires a non-empty encoder 'template'"
-            )
-        route = call.args.get("model_route")
-        if not isinstance(route, str) or route == "":
-            raise ToolValidationError(
-                "evaluate call requires a non-empty 'model_route'"
-            )
-
-
-def _refused_result(
-    call: ToolCall,
-    config: ToolConfig,
-    refusal: ToolRefusal,
-) -> ToolResult:
-    return ToolResult(
-        call_id=call.call_id,
-        tool_config_ref=config.tool_definition_ref,
-        tool_config_hash=config.identity_hash(),
-        store_namespace=config.store_namespace,
-        refusal=refusal,
-    )
+        except ValueError as exc:
+            raise ToolEvaluationError(
+                TerminalFailure(
+                    code="tool_evaluation_contract",
+                    message=(
+                        "Tool evaluation produced invalid deterministic "
+                        "result evidence"
+                    ),
+                    details={"error": str(exc)},
+                )
+            ) from exc

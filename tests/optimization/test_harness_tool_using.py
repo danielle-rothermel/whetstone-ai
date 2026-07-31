@@ -1,17 +1,30 @@
 """Tool-using output checkpoints and terminal evidence."""
 
+from typing import Any, cast
+
 import pytest
 
 from whetstone.optimization import (
     BudgetState,
-    OptimizationHarness,
+    EvaluatingToolExecutor,
+    ReplayPolicy,
     ToolCallState,
+    ToolCapacityScope,
 )
+from whetstone.optimization.effect_authority import EffectAuthority
+from whetstone.optimization.tool_store import (
+    ToolAdmissionAuthority,
+    ToolCallStore,
+)
+from whetstone.optimization.tools import tool_capacity_binding
 
 from .support import (
     RecordingToolExecutor,
     ToolUsingAdapter,
+    internal_reward_policy,
+    make_harness,
     make_store,
+    make_tool_definition_config,
     registry,
     tool_request,
 )
@@ -20,60 +33,104 @@ from .support import (
 def test_tool_results_and_store_entries_are_step_evidence(tmp_path) -> None:
     store = make_store(tmp_path)
     adapter = ToolUsingAdapter(call_ids=("c1",))
-    executor = RecordingToolExecutor()
-    harness = OptimizationHarness(
+    authority = EffectAuthority.memory()
+    executor = RecordingToolExecutor(authority)
+    request = tool_request()
+    harness = make_harness(
         store=store,
         adapter_registry=registry(adapter),
+        run=request.run,
+        effect_authority=authority,
         tool_executor=executor,
     )
-    request = tool_request()
     result, _ = harness.run_step(request)
     evidence = result.tool_evidence[0]
     assert evidence.store_entry.state is ToolCallState.COMPLETED
-    assert evidence.store_entry.tool_result_ref == evidence.tool_result_ref
+    assert evidence.store_entry.tool_result_ref == evidence.result.record_ref
     assert adapter.invocations == 1
     assert executor.handles_built == 1
 
 
-def test_tool_output_checkpoint_prevents_redrive_before_result(
+def test_zero_tool_budget_refuses_before_executor_dispatch(
     tmp_path,
 ) -> None:
     adapter = ToolUsingAdapter(call_ids=("c1",))
-    executor = RecordingToolExecutor()
     request = tool_request().model_copy(
         update={"budget": BudgetState(remaining={"tool_calls": 0})}
     )
     first_store = make_store(tmp_path)
-    first = OptimizationHarness(
+    admission_path = tmp_path / "optimization.sqlite"
+    effect_path = tmp_path / "effects.sqlite"
+    authority = EffectAuthority.sqlite(effect_path)
+    executor = RecordingToolExecutor(authority)
+    tool_store = ToolCallStore(
+        first_store,
+        ToolAdmissionAuthority.sqlite(admission_path),
+        authority,
+    )
+    first = make_harness(
         store=first_store,
         adapter_registry=registry(adapter),
+        run=request.run,
+        tool_store=tool_store,
+        effect_authority=authority,
         tool_executor=executor,
     )
     with pytest.raises(ValueError, match="only 0"):
         first.run_step(request)
     assert adapter.invocations == 1
-    config_hash = request.tool_configs[0].identity_hash()
-    assert first.tool_store.accepted_count(config_hash) == 1
-
-    fresh = OptimizationHarness(
-        store=make_store(tmp_path),
-        adapter_registry=registry(adapter),
-        tool_executor=executor,
+    assert executor.calls == []
+    config = request.tool_configs[0].record
+    binding = tool_capacity_binding(
+        ToolCapacityScope.RUN, request.run.record_ref
     )
-    with pytest.raises(ValueError, match="only 0"):
-        fresh.run_step(request)
-    assert adapter.invocations == 1
-    assert executor.handles_built == 1
-    assert fresh.tool_store.accepted_count(config_hash) == 1
+    assert tool_store.accepted_count(config, binding) == 0
+    assert first.resolve_step_result(request.run_id, 0) is None
 
 
 def test_tool_step_requires_executor_before_invocation(tmp_path) -> None:
     store = make_store(tmp_path)
     adapter = ToolUsingAdapter()
-    harness = OptimizationHarness(
+    request = tool_request()
+    harness = make_harness(
         store=store,
         adapter_registry=registry(adapter),
+        run=request.run,
     )
-    with pytest.raises(ValueError, match="ToolExecutor"):
-        harness.run_step(tool_request())
+    for _attempt in range(2):
+        with pytest.raises(ValueError, match="ToolExecutor"):
+            harness.run_step(request)
+    assert adapter.invocations == 0
+
+
+def test_invalid_tool_replay_policy_repeats_without_adapter_lease(
+    tmp_path,
+) -> None:
+    store = make_store(tmp_path)
+    adapter = ToolUsingAdapter()
+    authority = EffectAuthority.memory()
+    reward_policy = internal_reward_policy()
+    config = make_tool_definition_config().model_copy(
+        update={"reward_policy_hash": reward_policy.identity_hash()}
+    )
+    request = tool_request(config=config)
+    executor = EvaluatingToolExecutor(
+        cast(Any, object()),
+        reward_policy,
+        authority,
+        owner_id="wrong-policy-test",
+        replay_policy=ReplayPolicy.NO_REDRIVE,
+    )
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(adapter),
+        run=request.run,
+        effect_authority=authority,
+        tool_executor=executor,
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(ValueError, match="ReplayPolicy disagrees"):
+            harness.run_step(request)
+
     assert adapter.invocations == 0

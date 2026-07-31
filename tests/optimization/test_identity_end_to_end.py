@@ -5,29 +5,39 @@ import pytest
 from whetstone.optimization import (
     CANDIDATE_RECORD_SCHEMA,
     IdentityOptimizerAdapter,
-    OptimizationHarness,
     RuntimeToolHandle,
     StepStatus,
+    ToolCapacityScope,
     ToolResult,
+    step_result_reference,
+    tool_call_reference,
 )
+from whetstone.optimization.tools import tool_capacity_binding
 
 from .support import (
     candidate,
+    make_harness,
     make_store,
     make_tool_definition_config,
     pure_request,
     registry,
+    tool_run,
 )
 
 
 def test_identity_persists_candidates_and_terminal_result(tmp_path) -> None:
     store = make_store(tmp_path)
-    harness = OptimizationHarness(
+    request = pure_request(candidates=(candidate("A"), candidate("B")))
+    harness = make_harness(
         store=store,
         adapter_registry=registry(),
+        run=request.run,
     )
-    request = pure_request(candidates=(candidate("A"), candidate("B")))
-    step, step_ref = harness.run_step(request)
+    step, _step_ref = harness.run_step(request)
+    persisted_request = store.get(step.request.record_ref.reference)
+    assert isinstance(persisted_request, dict)
+    assert persisted_request == request.model_dump(mode="json")
+    assert persisted_request["run"] == request.run.model_dump(mode="json")
     assert step.status is StepStatus.COMPLETE
     assert step.resolved_intents == ()
     assert step.tool_evidence == ()
@@ -36,8 +46,8 @@ def test_identity_persists_candidates_and_terminal_result(tmp_path) -> None:
         for ref in step.accepted_candidates
     )
     terminal, terminal_ref = harness.terminalize(
-        run_id=request.run_id,
-        step_result_refs=(step_ref,),
+        run=request.run,
+        step_results=(step_result_reference(step),),
     )
     assert [p.candidate.record.candidate_id for p in terminal.proposals] == [
         "A",
@@ -49,9 +59,10 @@ def test_identity_persists_candidates_and_terminal_result(tmp_path) -> None:
 def test_identity_replay_never_invokes_registry_adapter(tmp_path) -> None:
     store = make_store(tmp_path)
     request = pure_request()
-    first = OptimizationHarness(
+    first = make_harness(
         store=store,
         adapter_registry=registry(),
+        run=request.run,
     )
     result_a, ref_a = first.run_step(request)
 
@@ -62,9 +73,10 @@ def test_identity_replay_never_invokes_registry_adapter(tmp_path) -> None:
                 "replay must not resolve or invoke an adapter"
             )
 
-    fresh = OptimizationHarness(
+    fresh = make_harness(
         store=make_store(tmp_path),
         adapter_registry=MissingRegistry(),
+        run=request.run,
     )
     result_b, ref_b = fresh.run_step(request)
     assert (result_b, ref_b) == (result_a, ref_a)
@@ -74,11 +86,11 @@ def test_identity_adapter_refuses_runtime_handles() -> None:
     config = make_tool_definition_config()
     handle = RuntimeToolHandle(
         config,
+        tool_capacity_binding(
+            ToolCapacityScope.RUN, tool_run(config=config).record_ref
+        ),
         lambda call: ToolResult(
-            call_id=call.call_id,
-            tool_config_ref=config.tool_definition_ref,
-            tool_config_hash=config.identity_hash(),
-            store_namespace=config.store_namespace,
+            call=tool_call_reference(call),
             refusal={"refusal_class": "validation", "reason": "unused"},
         ),
     )

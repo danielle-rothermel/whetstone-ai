@@ -1,94 +1,80 @@
-"""The reusable Reward Policy and Reward contract.
-
-A :class:`RewardPolicy` is a reusable, versioned, optimizer-facing rule that
-maps *internal* evaluation evidence — internal Rollout Aggregates or an
-Objective Vector — to a named :class:`Reward`. The same policy contract is
-referenced by proposal-only optimizer Configs and by tool-using Tool Configs;
-it is addressed by its Identity Hash so both paths cite one policy.
-
-Two invariants are load-bearing and tested:
-
-* **Reward names its policy and inputs.** Every produced Reward carries the
-  Reward Policy Identity Hash it was computed under and a citation of the exact
-  internal inputs (the ``(name, value)`` aggregate/objective terms) it
-  scalarized. A Reward can never be inferred from provider cost, a native
-  metric scalar, or an anonymous tool return.
-
-* **Official evaluation computes no Reward.** A Reward may only be produced by
-  applying a Reward Policy to evidence whose Evaluation Role is ``internal``.
-  :func:`apply_reward_policy` refuses any ``official`` role input, and there is
-  no other constructor path for a Reward — the absence of Reward on the
-  official path is enforced here, not merely by convention.
-"""
+"""Reusable finite Reward Policy and exact Reward contracts."""
 
 from __future__ import annotations
 
-from enum import StrEnum
+import math
+from collections.abc import Mapping
+from enum import UNIQUE, StrEnum, verify
 from typing import Any
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     StrictBool,
-    StrictInt,
-    StrictStr,
+    ValidationInfo,
+    field_validator,
     model_validator,
 )
 
-from whetstone.graph.rollout import EvaluationRole
-from whetstone.optimization.identity import compute_identity_hash
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import (
+    FiniteFloat,
+    IdentityHash,
+    NonEmptyId,
+    NonNegativeInt,
+    TypedRef,
+    compute_identity_hash,
+    typed_ref_for_record,
+)
 
 __all__ = [
     "REWARD_POLICY_SCHEMA",
     "REWARD_POLICY_SCHEMA_VERSION",
+    "REWARD_SCHEMA",
     "MissingDataPolicy",
     "OfficialRewardError",
     "Reward",
     "RewardInputCitation",
     "RewardPolicy",
+    "RewardRef",
     "RewardTerm",
     "apply_reward_policy",
+    "reward_reference",
 ]
 
+REWARD_SCHEMA = "whetstone.reward"
 REWARD_POLICY_SCHEMA = "whetstone.reward_policy"
 REWARD_POLICY_SCHEMA_VERSION = 1
 
 
-class MissingDataPolicy(StrEnum):
-    """How a Reward Policy treats a missing or invalid input term."""
+def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
+    """Accept only the deliberate Python representations of a JSON array."""
+    if type(value) not in (list, tuple):
+        raise ValueError(
+            f"{info.field_name} must be an ordered tuple or JSON array"
+        )
+    return value
 
-    # A missing/invalid required term makes the Reward not computable: the
-    # policy raises rather than silently substituting a value.
+
+@verify(UNIQUE)
+class MissingDataPolicy(StrEnum):
     FAIL = "fail"
-    # A missing/invalid term contributes its declared direction-worst value.
     WORST = "worst"
-    # A missing/invalid term is skipped (its weight is dropped).
     SKIP = "skip"
 
 
 class RewardTerm(BaseModel):
-    """One weighted, direction-bearing term of a Reward Policy.
-
-    ``name`` selects one internal Rollout Aggregate or Objective by name;
-    ``maximize`` is its direction; ``weight`` is its scalarization weight. A
-    term is identity-bearing: changing any field changes the policy identity.
-    """
+    """One weighted direction-bearing term."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: StrictStr
-    weight: float
+    name: NonEmptyId
+    weight: FiniteFloat
     maximize: StrictBool = True
-    # The direction-worst value used when the missing-data policy is WORST.
-    worst_value: float = 0.0
-
-    @model_validator(mode="after")
-    def _validate(self) -> RewardTerm:
-        if not self.name:
-            raise ValueError("RewardTerm name must be non-empty")
-        return self
+    worst_value: FiniteFloat = FiniteFloat(0.0)
 
     def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are a pinned wire contract.
         return {
             "name": self.name,
             "weight": self.weight,
@@ -98,27 +84,22 @@ class RewardTerm(BaseModel):
 
 
 class RewardPolicy(BaseModel):
-    """A reusable optimizer-facing scalarization rule.
-
-    Maps named internal aggregate/objective terms to a single scalar Reward by
-    a weighted linear combination (each term negated when it minimizes). It is
-    versioned and addressed by its Identity Hash. The identity excludes nothing
-    that changes the mapping and includes nothing evidence-specific.
-    """
+    """Reusable finite scalarization rule addressed by Identity Hash."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    policy_name: StrictStr
-    reward_name: StrictStr = "reward"
+    policy_name: NonEmptyId
+    reward_name: NonEmptyId = NonEmptyId("reward")
     terms: tuple[RewardTerm, ...]
     missing_data: MissingDataPolicy = MissingDataPolicy.FAIL
 
+    @field_validator("terms", mode="before")
+    @classmethod
+    def _validate_terms_input(cls, value: Any, info: ValidationInfo) -> Any:
+        return _require_ordered_sequence(value, info)
+
     @model_validator(mode="after")
     def _validate(self) -> RewardPolicy:
-        if not self.policy_name:
-            raise ValueError("policy_name must be non-empty")
-        if not self.reward_name:
-            raise ValueError("reward_name must be non-empty")
         if not self.terms:
             raise ValueError("a Reward Policy must have at least one term")
         names = [term.name for term in self.terms]
@@ -127,6 +108,7 @@ class RewardPolicy(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are a pinned wire contract.
         return {
             "policy_name": self.policy_name,
             "reward_name": self.reward_name,
@@ -134,8 +116,7 @@ class RewardPolicy(BaseModel):
             "missing_data": self.missing_data.value,
         }
 
-    def identity_hash(self) -> str:
-        """The Reward Policy Identity Hash (full SHA-256)."""
+    def identity_hash(self) -> IdentityHash:
         return compute_identity_hash(
             schema=REWARD_POLICY_SCHEMA,
             schema_version=REWARD_POLICY_SCHEMA_VERSION,
@@ -144,42 +125,67 @@ class RewardPolicy(BaseModel):
 
 
 class RewardInputCitation(BaseModel):
-    """The exact internal input a Reward scalarized for one policy term."""
+    """The exact finite or missing input used for one policy term."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: StrictStr
-    # None means the term was missing/invalid in the supplied evidence.
-    value: float | None
-    contributed: float
+    name: NonEmptyId
+    value: FiniteFloat | None
+    contributed: FiniteFloat
     was_missing: StrictBool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> RewardInputCitation:
+        if self.was_missing != (self.value is None):
+            raise ValueError(
+                "Reward citation missingness must match its exact value"
+            )
+        return self
+
+
+def _scalarize_term(
+    term: RewardTerm,
+    *,
+    value: FiniteFloat | float | None,
+    was_missing: bool,
+    missing_data: MissingDataPolicy,
+) -> float:
+    if was_missing:
+        if missing_data is MissingDataPolicy.FAIL:
+            raise ValueError(
+                "a FAIL Reward Policy cannot produce a Reward from "
+                "missing input"
+            )
+        if missing_data is MissingDataPolicy.SKIP:
+            return 0.0
+        used = float(term.worst_value)
+    else:
+        assert value is not None
+        used = float(value)
+    signed = used if term.maximize else -used
+    return float(term.weight) * signed
 
 
 class Reward(BaseModel):
-    """A named optimizer-facing value produced by applying a Reward Policy.
-
-    Every Reward names its policy (by Identity Hash), the internal Evaluation
-    Role its inputs carried, and the exact input terms it scalarized. There is
-    no unnamed/anonymous scalar path: the value only exists as this typed,
-    cited record.
-    """
+    """Named finite Reward with exact policy identity and evidence."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    reward_name: StrictStr
-    value: float
-    reward_policy_hash: StrictStr
-    # The Evaluation Role the evidence carried (always ``internal``).
+    reward_name: NonEmptyId
+    value: FiniteFloat
+    reward_policy: RewardPolicy
     evidence_role: EvaluationRole
     input_citations: tuple[RewardInputCitation, ...]
-    # Optional correlation to the internal evaluation evidence that fed it.
-    evidence_ref_content_hash: StrictStr | None = None
-    provenance_ordinal: StrictInt | None = None
+    evidence_refs: tuple[TypedRef, ...]
+    provenance_ordinal: NonNegativeInt | None = None
+
+    @field_validator("input_citations", "evidence_refs", mode="before")
+    @classmethod
+    def _validate_ordered_input(cls, value: Any, info: ValidationInfo) -> Any:
+        return _require_ordered_sequence(value, info)
 
     @model_validator(mode="after")
     def _validate(self) -> Reward:
-        if not self.reward_name:
-            raise ValueError("reward_name must be non-empty")
         if self.evidence_role is not EvaluationRole.INTERNAL:
             raise ValueError(
                 "a Reward may only cite evidence with the internal "
@@ -187,32 +193,102 @@ class Reward(BaseModel):
             )
         if not self.input_citations:
             raise ValueError("a Reward must cite at least one input term")
+        if not self.evidence_refs:
+            raise ValueError(
+                "an internal Reward must cite at least one exact evidence ref"
+            )
+        if self.reward_name != self.reward_policy.reward_name:
+            raise ValueError("Reward name must match its exact Reward Policy")
+        expected_names = tuple(term.name for term in self.reward_policy.terms)
+        actual_names = tuple(
+            citation.name for citation in self.input_citations
+        )
+        if actual_names != expected_names:
+            raise ValueError(
+                "Reward input citations must exactly match Reward Policy "
+                "term names and order"
+            )
+        expected_total = 0.0
+        for term, citation in zip(
+            self.reward_policy.terms,
+            self.input_citations,
+            strict=True,
+        ):
+            expected_contribution = _scalarize_term(
+                term,
+                value=citation.value,
+                was_missing=bool(citation.was_missing),
+                missing_data=self.reward_policy.missing_data,
+            )
+            if citation.contributed != expected_contribution:
+                raise ValueError(
+                    "Reward citation contribution must exactly apply its "
+                    "Reward Policy term"
+                )
+            expected_total += expected_contribution
+        if self.value != expected_total:
+            raise ValueError(
+                "Reward value must equal the exact scalarized citation total"
+            )
         return self
+
+    @property
+    def reward_policy_hash(self) -> IdentityHash:
+        return self.reward_policy.identity_hash()
 
     def record_content(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
+
+
+class RewardRef(BaseModel):
+    """An exact persisted Reward record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record: Reward
+    record_ref: TypedRef
+
+    @model_validator(mode="after")
+    def _validate(self) -> RewardRef:
+        expected = typed_ref_for_record(
+            REWARD_SCHEMA, self.record.record_content()
+        )
+        if self.record_ref != expected:
+            raise ValueError(
+                "Reward record_ref must address the exact Reward record"
+            )
+        return self
+
+
+def reward_reference(reward: Reward) -> RewardRef:
+    return RewardRef(
+        record=reward,
+        record_ref=typed_ref_for_record(
+            REWARD_SCHEMA, reward.record_content()
+        ),
+    )
 
 
 class OfficialRewardError(ValueError):
     """A Reward Policy was applied to official-role evidence."""
 
 
+def _finite_or_missing(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    converted = float(value)
+    return converted if math.isfinite(converted) else None
+
+
 def apply_reward_policy(
     policy: RewardPolicy,
     *,
-    aggregates: dict[str, float | None],
+    aggregates: Mapping[str, float | None],
     evidence_role: EvaluationRole,
-    evidence_ref_content_hash: str | None = None,
+    evidence_refs: tuple[TypedRef, ...],
     provenance_ordinal: int | None = None,
 ) -> Reward:
-    """Apply a Reward Policy to internal evaluation evidence.
-
-    ``aggregates`` maps aggregate/objective names to their measured internal
-    values (``None`` marks a missing/invalid term). ``evidence_role`` MUST be
-    ``internal``: this is the sole Reward constructor, so refusing an official
-    role here is what makes "official evaluation computes no Reward" true by
-    construction rather than by convention.
-    """
+    """Apply missing-data policy to absent, invalid, and non-finite inputs."""
     if evidence_role is not EvaluationRole.INTERNAL:
         raise OfficialRewardError(
             "apply_reward_policy refuses official-role evidence: official "
@@ -222,34 +298,24 @@ def apply_reward_policy(
     total = 0.0
     citations: list[RewardInputCitation] = []
     for term in policy.terms:
-        raw = aggregates.get(term.name)
+        raw = _finite_or_missing(aggregates.get(term.name))
         missing = raw is None
-        if missing:
-            if policy.missing_data is MissingDataPolicy.FAIL:
-                raise ValueError(
-                    f"Reward Policy term {term.name!r} is missing and the "
-                    "missing-data policy is FAIL"
-                )
-            if policy.missing_data is MissingDataPolicy.SKIP:
-                citations.append(
-                    RewardInputCitation(
-                        name=term.name,
-                        value=None,
-                        contributed=0.0,
-                        was_missing=True,
-                    )
-                )
-                continue
-            used = term.worst_value
-        else:
-            used = float(raw)  # type: ignore[arg-type]
-        signed = used if term.maximize else -used
-        contribution = term.weight * signed
+        if missing and policy.missing_data is MissingDataPolicy.FAIL:
+            raise ValueError(
+                f"Reward Policy term {term.name!r} is missing or invalid "
+                "and the missing-data policy is FAIL"
+            )
+        contribution = _scalarize_term(
+            term,
+            value=raw,
+            was_missing=missing,
+            missing_data=policy.missing_data,
+        )
         total += contribution
         citations.append(
             RewardInputCitation(
                 name=term.name,
-                value=None if missing else used,
+                value=None if missing else raw,
                 contributed=contribution,
                 was_missing=missing,
             )
@@ -258,9 +324,9 @@ def apply_reward_policy(
     return Reward(
         reward_name=policy.reward_name,
         value=total,
-        reward_policy_hash=policy.identity_hash(),
+        reward_policy=policy,
         evidence_role=evidence_role,
         input_citations=tuple(citations),
-        evidence_ref_content_hash=evidence_ref_content_hash,
+        evidence_refs=evidence_refs,
         provenance_ordinal=provenance_ordinal,
     )
