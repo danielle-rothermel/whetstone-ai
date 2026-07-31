@@ -7,7 +7,6 @@ import os
 import selectors
 import shutil
 import signal
-import struct
 import subprocess
 import sys
 import tempfile
@@ -46,10 +45,10 @@ _CANCELLATION_GRACE_SECONDS = 0.1
 _DEADLINE_WAIT_CHUNK_SECONDS = 86_400.0
 _GUARDIAN_EXIT_TIMEOUT_SECONDS = 1.0
 _POLL_INTERVAL_SECONDS = 0.005
+_PROCESS_DISPATCH_SCHEMA = "whetstone.execution.process_dispatch/v1"
 _PROCESS_JOB_SCHEMA = "whetstone.execution.process_job/v1"
 _PROCESS_RESULT_SCHEMA = "whetstone.execution.process_result/v1"
 _START_TOKEN = b"\x01"
-_STARTED_AT_STRUCT = struct.Struct("!d")
 _parent_control_fds: set[int] = set()
 _fork_child_control_fds: tuple[int, ...] = ()
 _parent_control_lock = threading.Lock()
@@ -207,6 +206,27 @@ class ProcessJob(BaseModel):
         return _require_finite_json(value, path="payload")
 
 
+class _ProcessDispatchMarker(BaseModel):
+    """Validated worker dispatch evidence crossing the subprocess boundary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_name: StrictStr = _PROCESS_DISPATCH_SCHEMA
+    started_at_monotonic: float = Field(
+        ge=0,
+        allow_inf_nan=False,
+        strict=True,
+    )
+    guardian_pid: int = Field(gt=0, strict=True)
+
+    @field_validator("schema_name")
+    @classmethod
+    def _schema_is_current(cls, value: str) -> str:
+        if value != _PROCESS_DISPATCH_SCHEMA:
+            raise ValueError("unsupported process dispatch schema")
+        return value
+
+
 @verify(UNIQUE)
 class _ProcessResultStatus(StrEnum):
     SUCCESS = "success"
@@ -326,11 +346,12 @@ class _ActiveProcess[K: Hashable, R]:
     directory: Path
     result_path: Path
     stderr_path: Path
-    started_path: Path
+    dispatch_path: Path
     lifetime_writer: int | None
     guardian_reader: int | None
     start_writer: int | None
     started_at: float | None = None
+    guardian_pid: int | None = None
     guardian_error: ProcessCancellationError | None = None
     cleanup_allowed: bool = False
 
@@ -350,11 +371,11 @@ class _ActiveProcess[K: Hashable, R]:
         finally:
             _close_parent_control_fd(descriptor)
 
-    def refresh_started_at(self, *, required: bool) -> float | None:
+    def refresh_dispatch_marker(self, *, required: bool) -> float | None:
         if self.started_at is not None:
             return self.started_at
         try:
-            payload = self.started_path.read_bytes()
+            payload = self.dispatch_path.read_bytes()
         except FileNotFoundError:
             if required:
                 raise ProcessWorkerError(
@@ -366,21 +387,16 @@ class _ActiveProcess[K: Hashable, R]:
             raise ProcessWorkerError(
                 f"could not read dispatch marker for key {self.spec.key!r}"
             ) from error
-        if len(payload) != _STARTED_AT_STRUCT.size:
-            if not required:
-                return None
+        try:
+            marker = _ProcessDispatchMarker.model_validate_json(payload)
+        except ValidationError as error:
             raise ProcessWorkerError(
                 f"worker for key {self.spec.key!r} wrote an invalid "
                 "dispatch marker"
-            )
-        started_at = _STARTED_AT_STRUCT.unpack(payload)[0]
-        if not math.isfinite(started_at) or started_at < 0:
-            raise ProcessWorkerError(
-                f"worker for key {self.spec.key!r} wrote an invalid "
-                "dispatch timestamp"
-            )
-        self.started_at = started_at
-        return started_at
+            ) from error
+        self.started_at = marker.started_at_monotonic
+        self.guardian_pid = marker.guardian_pid
+        return marker.started_at_monotonic
 
     def finish_guardian(self) -> None:
         writer = self.lifetime_writer
@@ -489,7 +505,7 @@ def _spawn[K: Hashable, R](
         job_path = directory / "job.json"
         result_path = directory / "result.json"
         stderr_path = directory / "stderr.log"
-        started_path = directory / "started.bin"
+        dispatch_path = directory / "dispatch.json"
         lifetime_reader, lifetime_writer = _open_parent_control_pipe()
         guardian_reader, guardian_writer = _open_parent_control_pipe()
         start_reader, start_writer = _open_parent_control_pipe()
@@ -512,7 +528,7 @@ def _spawn[K: Hashable, R](
                     "whetstone.execution.process_worker",
                     os.fspath(job_path),
                     os.fspath(result_path),
-                    os.fspath(started_path),
+                    os.fspath(dispatch_path),
                     str(lifetime_reader),
                     str(guardian_writer),
                     str(start_reader),
@@ -561,7 +577,7 @@ def _spawn[K: Hashable, R](
         directory=directory,
         result_path=result_path,
         stderr_path=stderr_path,
-        started_path=started_path,
+        dispatch_path=dispatch_path,
         lifetime_writer=lifetime_writer,
         guardian_reader=guardian_reader,
         start_writer=start_writer,
@@ -678,7 +694,7 @@ def _started_processes[K: Hashable, R](
     return [
         process
         for process in processes
-        if process.refresh_started_at(required=False) is not None
+        if process.refresh_dispatch_marker(required=False) is not None
     ]
 
 
@@ -1045,7 +1061,7 @@ def run_call_pool[K: Hashable, R](
                 started_at = (
                     None
                     if envelope.status is _ProcessResultStatus.NOT_STARTED
-                    else process.refresh_started_at(required=True)
+                    else process.refresh_dispatch_marker(required=True)
                 )
                 harvested.append(
                     _CompletedProcess(
@@ -1157,7 +1173,9 @@ def run_call_pool[K: Hashable, R](
             expired: list[_ActiveProcess[K, R]] = []
             with active_lock:
                 for index, process in list(active.items()):
-                    started_at = process.refresh_started_at(required=False)
+                    started_at = process.refresh_dispatch_marker(
+                        required=False
+                    )
                     if started_at is not None and now >= started_at + float(
                         process.spec.deadline_seconds
                     ):
@@ -1189,7 +1207,11 @@ def run_call_pool[K: Hashable, R](
             started_deadlines = [
                 started_at + float(process.spec.deadline_seconds)
                 for process in active_snapshot
-                if (started_at := process.refresh_started_at(required=False))
+                if (
+                    started_at := process.refresh_dispatch_marker(
+                        required=False
+                    )
+                )
                 is not None
             ]
             if started_deadlines:

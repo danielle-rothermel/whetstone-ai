@@ -7,7 +7,6 @@ import math
 import os
 import selectors
 import signal
-import struct
 import subprocess
 import sys
 import threading
@@ -20,6 +19,7 @@ from pydantic import JsonValue
 
 from whetstone.execution.fanout import (
     ProcessJob,
+    _ProcessDispatchMarker,
     _ProcessResultStatus,
     _ProcessWorkerFailure,
     _ProcessWorkerResult,
@@ -30,7 +30,6 @@ __all__: list[str] = []
 _START_TOKEN = b"\x01"
 _GUARDIAN_READY_TOKEN = b"\x01"
 _GUARDIAN_READY_TIMEOUT_SECONDS = 1.0
-_STARTED_AT_STRUCT = struct.Struct("!d")
 
 
 def _resolve_entrypoint(entrypoint: str) -> Callable[[JsonValue], JsonValue]:
@@ -76,12 +75,20 @@ def _write_result(path: Path, result: _ProcessWorkerResult) -> None:
     )
 
 
-def _write_started(path: Path, started_at: float) -> None:
-    _write_exclusive(
-        path,
-        _STARTED_AT_STRUCT.pack(started_at),
-        label="process dispatch marker",
-    )
+def _write_dispatch_marker(
+    path: Path,
+    marker: _ProcessDispatchMarker,
+) -> None:
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        _write_exclusive(
+            temporary_path,
+            marker.model_dump_json().encode("utf-8"),
+            label="process dispatch marker",
+        )
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def _load_job(path: Path) -> ProcessJob:
@@ -177,13 +184,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len(arguments) != 7:
         sys.stderr.write(
             "usage: python -m whetstone.execution.process_worker "
-            "JOB_PATH RESULT_PATH STARTED_PATH PARENT_FD GUARDIAN_DONE_FD "
+            "JOB_PATH RESULT_PATH DISPATCH_PATH PARENT_FD GUARDIAN_DONE_FD "
             "START_FD OPERATION_DEADLINE\n"
         )
         return 2
     job_path = Path(arguments[0])
     result_path = Path(arguments[1])
-    started_path = Path(arguments[2])
+    dispatch_path = Path(arguments[2])
     parent_reader = int(arguments[3])
     guardian_done_writer = int(arguments[4])
     start_reader = int(arguments[5])
@@ -202,8 +209,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
-    started_at = time.monotonic()
-    _write_started(started_path, started_at)
+    _write_dispatch_marker(
+        dispatch_path,
+        _ProcessDispatchMarker(
+            started_at_monotonic=time.monotonic(),
+            guardian_pid=guardian.pid,
+        ),
+    )
     try:
         job = _load_job(job_path)
         entrypoint = _resolve_entrypoint(job.entrypoint)

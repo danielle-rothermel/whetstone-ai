@@ -148,26 +148,6 @@ def _open_fd_count() -> int:
     return len(tuple(descriptor_directory.iterdir()))
 
 
-def _guardian_pid(worker_pid: int) -> int | None:
-    completed = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,command="],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    for raw_line in completed.stdout.splitlines():
-        columns = raw_line.strip().split(maxsplit=2)
-        if len(columns) != 3:
-            continue
-        pid, parent_pid, command = columns
-        if (
-            int(parent_pid) == worker_pid
-            and "whetstone.execution.process_guardian" in command
-        ):
-            return int(pid)
-    return None
-
-
 def test_process_job_pins_json_contract_and_rejects_nested_entrypoints() -> (
     None
 ):
@@ -199,10 +179,141 @@ def test_process_job_rejects_non_finite_json_recursively(
         _job("return_payload", payload)
 
 
-def test_worker_result_file_is_restrictive(tmp_path: Path) -> None:
+def test_process_dispatch_marker_pins_json_contract_and_validation() -> None:
+    marker = fanout_module._ProcessDispatchMarker(
+        started_at_monotonic=1.25,
+        guardian_pid=123,
+    )
+    assert marker.model_dump(mode="json") == {
+        "schema_name": "whetstone.execution.process_dispatch/v1",
+        "started_at_monotonic": 1.25,
+        "guardian_pid": 123,
+    }
+    with pytest.raises(ValidationError, match="process dispatch schema"):
+        fanout_module._ProcessDispatchMarker(
+            schema_name="whetstone.execution.process_dispatch/v2",
+            started_at_monotonic=1.25,
+            guardian_pid=123,
+        )
+    for started_at in (
+        float("nan"),
+        float("inf"),
+        -1.0,
+        "1.25",
+        True,
+        False,
+    ):
+        with pytest.raises(ValidationError):
+            fanout_module._ProcessDispatchMarker(
+                started_at_monotonic=cast(float, started_at),
+                guardian_pid=123,
+            )
+    with pytest.raises(ValidationError):
+        fanout_module._ProcessDispatchMarker(
+            started_at_monotonic=1.25,
+            guardian_pid=0,
+        )
+
+
+def test_active_worker_rejects_any_visible_invalid_dispatch_marker(
+    tmp_path: Path,
+) -> None:
+    dispatch_path = tmp_path / "dispatch.json"
+    dispatch_path.write_text("{}", encoding="utf-8")
+    process = fanout_module._ActiveProcess(
+        index=0,
+        spec=CallSpec(
+            key="worker",
+            job=_job("return_payload", None),
+            decode=_identity,
+            deadline_seconds=5.0,
+        ),
+        process=cast(subprocess.Popen[bytes], object()),
+        directory=tmp_path,
+        result_path=tmp_path / "result.json",
+        stderr_path=tmp_path / "stderr.log",
+        dispatch_path=dispatch_path,
+        lifetime_writer=None,
+        guardian_reader=None,
+        start_writer=None,
+    )
+
+    with pytest.raises(ProcessWorkerError, match="invalid dispatch marker"):
+        process.refresh_dispatch_marker(required=False)
+
+
+def test_worker_dispatch_marker_follows_start_gate_and_precedes_user_code(
+    tmp_path: Path,
+) -> None:
     job_path = tmp_path / "job.json"
     result_path = tmp_path / "result.json"
-    started_path = tmp_path / "started.bin"
+    dispatch_path = tmp_path / "dispatch.json"
+    event_path = tmp_path / "event"
+    job_path.write_text(
+        _job(
+            "require_path_then_return",
+            {
+                "required_path": os.fspath(dispatch_path),
+                "event_path": os.fspath(event_path),
+                "value": "complete",
+            },
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    parent_reader, parent_writer = os.pipe()
+    guardian_reader, guardian_writer = os.pipe()
+    start_reader, start_writer = os.pipe()
+    worker = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "whetstone.execution.process_worker",
+            os.fspath(job_path),
+            os.fspath(result_path),
+            os.fspath(dispatch_path),
+            str(parent_reader),
+            str(guardian_writer),
+            str(start_reader),
+            "none",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        pass_fds=(parent_reader, guardian_writer, start_reader),
+        start_new_session=True,
+    )
+    os.close(parent_reader)
+    os.close(guardian_writer)
+    os.close(start_reader)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            worker.wait(timeout=0.1)
+        assert not dispatch_path.exists()
+        assert not event_path.exists()
+
+        assert os.write(start_writer, b"\x01") == 1
+        os.close(start_writer)
+        start_writer = -1
+        assert worker.wait(timeout=3.0) == 0
+        assert dispatch_path.exists()
+        assert event_path.read_text(encoding="utf-8") == "observed\n"
+    finally:
+        if start_writer >= 0:
+            os.close(start_writer)
+        if worker.poll() is None:
+            os.killpg(worker.pid, signal.SIGKILL)
+            worker.wait()
+        os.close(parent_writer)
+        assert os.read(guardian_reader, 1) == b""
+        os.close(guardian_reader)
+
+
+def test_worker_boundary_files_are_restrictive_and_validated(
+    tmp_path: Path,
+) -> None:
+    job_path = tmp_path / "job.json"
+    result_path = tmp_path / "result.json"
+    dispatch_path = tmp_path / "dispatch.json"
     job_path.write_text(
         _job("return_payload", {"ok": True}).model_dump_json(),
         encoding="utf-8",
@@ -221,7 +332,7 @@ def test_worker_result_file_is_restrictive(tmp_path: Path) -> None:
                 "whetstone.execution.process_worker",
                 os.fspath(job_path),
                 os.fspath(result_path),
-                os.fspath(started_path),
+                os.fspath(dispatch_path),
                 str(parent_reader),
                 str(guardian_writer),
                 str(start_reader),
@@ -241,7 +352,14 @@ def test_worker_result_file_is_restrictive(tmp_path: Path) -> None:
     os.close(guardian_reader)
     assert completed.returncode == 0, completed.stderr.decode()
     assert completed.stderr == b""
+    assert dispatch_path.stat().st_mode & 0o777 == 0o600
     assert result_path.stat().st_mode & 0o777 == 0o600
+    marker = fanout_module._ProcessDispatchMarker.model_validate_json(
+        dispatch_path.read_bytes()
+    )
+    assert marker.schema_name == "whetstone.execution.process_dispatch/v1"
+    assert marker.started_at_monotonic >= 0
+    assert marker.guardian_pid > 0
     result = json.loads(result_path.read_text(encoding="utf-8"))
     assert {
         "schema_name": result["schema_name"],
@@ -362,18 +480,12 @@ def test_stopped_guardian_on_completion_forces_local_containment(
     scheduler.start()
     _wait_until(lambda: len(spawned) == 1)
     process = spawned[0]
+    _wait_until(
+        lambda: process.refresh_dispatch_marker(required=False) is not None
+    )
+    guardian_pid = process.guardian_pid
+    assert guardian_pid is not None
     _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 1)
-    guardian_pids: list[int] = []
-
-    def capture_guardian() -> bool:
-        guardian_pid = _guardian_pid(process.process.pid)
-        if guardian_pid is None:
-            return False
-        guardian_pids.append(guardian_pid)
-        return True
-
-    _wait_until(capture_guardian)
-    guardian_pid = guardian_pids[0]
     try:
         os.kill(guardian_pid, signal.SIGSTOP)
         release_path.touch()
@@ -454,18 +566,12 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
     scheduler.start()
     _wait_until(lambda: len(spawned) == 1)
     process = spawned[0]
+    _wait_until(
+        lambda: process.refresh_dispatch_marker(required=False) is not None
+    )
+    guardian_pid = process.guardian_pid
+    assert guardian_pid is not None
     _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 1)
-    guardian_pids: list[int] = []
-
-    def capture_guardian() -> bool:
-        guardian_pid = _guardian_pid(process.process.pid)
-        if guardian_pid is None:
-            return False
-        guardian_pids.append(guardian_pid)
-        return True
-
-    _wait_until(capture_guardian)
-    guardian_pid = guardian_pids[0]
 
     def deny_signal(
         candidate: fanout_module._ActiveProcess[str, JsonValue],
@@ -659,6 +765,7 @@ def test_worker_contains_group_when_guardian_and_scheduler_die(
 ) -> None:
     heartbeat_path = tmp_path / "heartbeat"
     worker_pid_path = tmp_path / "worker-pid"
+    guardian_pid_path = tmp_path / "guardian-pid"
     scheduler_script = """
 import os
 import sys
@@ -666,8 +773,9 @@ import sys
 import whetstone.execution.fanout as fanout
 from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
 
-heartbeat_path, worker_pid_path = sys.argv[1:]
+heartbeat_path, worker_pid_path, guardian_pid_path = sys.argv[1:]
 real_spawn = fanout._spawn
+real_refresh_dispatch_marker = fanout._ActiveProcess.refresh_dispatch_marker
 
 def record_spawn(*args, **kwargs):
     process = real_spawn(*args, **kwargs)
@@ -677,7 +785,18 @@ def record_spawn(*args, **kwargs):
         os.fsync(output.fileno())
     return process
 
+def record_dispatch_marker(self, *, required):
+    started_at = real_refresh_dispatch_marker(self, required=required)
+    if started_at is not None and not os.path.exists(guardian_pid_path):
+        assert self.guardian_pid is not None
+        with open(guardian_pid_path, "x", encoding="utf-8") as output:
+            output.write(str(self.guardian_pid))
+            output.flush()
+            os.fsync(output.fileno())
+    return started_at
+
 fanout._spawn = record_spawn
+fanout._ActiveProcess.refresh_dispatch_marker = record_dispatch_marker
 run_call_pool(
     [
         CallSpec(
@@ -701,6 +820,7 @@ run_call_pool(
             scheduler_script,
             os.fspath(heartbeat_path),
             os.fspath(worker_pid_path),
+            os.fspath(guardian_pid_path),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -712,22 +832,12 @@ run_call_pool(
         _wait_until(
             lambda: (
                 worker_pid_path.exists()
+                and guardian_pid_path.exists()
                 and len(_pid_lines(heartbeat_path)) == 2
             )
         )
         worker_pid = int(worker_pid_path.read_text(encoding="utf-8"))
-        guardian_pids: list[int] = []
-
-        def capture_guardian() -> bool:
-            assert worker_pid is not None
-            guardian_pid = _guardian_pid(worker_pid)
-            if guardian_pid is None:
-                return False
-            guardian_pids.append(guardian_pid)
-            return True
-
-        _wait_until(capture_guardian)
-        guardian_pid = guardian_pids[0]
+        guardian_pid = int(guardian_pid_path.read_text(encoding="utf-8"))
         observed_pids = [
             worker_pid,
             guardian_pid,

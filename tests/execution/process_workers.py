@@ -95,6 +95,17 @@ def wait_for_release(payload: JsonValue) -> JsonValue:
     return key
 
 
+def require_path_then_return(payload: JsonValue) -> JsonValue:
+    """Prove a required boundary file exists before user code begins."""
+    body = _mapping(payload)
+    required_path = Path(_string(body, "required_path"))
+    event_path = Path(_string(body, "event_path"))
+    if not required_path.exists():
+        raise AssertionError("required path was absent when user code began")
+    _append(event_path, "observed")
+    return body.get("value")
+
+
 def heartbeat_forever(payload: JsonValue) -> JsonValue:
     """Write from a process tree until the scheduler escalates to KILL."""
     body = _mapping(payload)
