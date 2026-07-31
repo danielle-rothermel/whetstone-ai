@@ -217,7 +217,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
     suffix = uuid4().hex[:10]
     database_url = engine_dsn(pg_engine)
     config: DBOSConfig = {
-        "name": f"whetstone-gepa-parent-{suffix}",
+        "name": f"gepa-parent-{suffix}",
         "system_database_url": database_url,
         "application_database_url": database_url,
         "application_version": f"gepa-parent-{suffix}",
@@ -265,7 +265,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
         assert engine_calls == 1
         assert factory.create_calls == factory.persist_calls == 1
     finally:
-        DBOS.destroy(destroy_registry=True)
+        DBOS.destroy()
 
 
 def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
@@ -310,7 +310,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     suffix = uuid4().hex[:10]
     database_url = engine_dsn(pg_engine)
     config: DBOSConfig = {
-        "name": f"whetstone-gepa-parent-recovery-{suffix}",
+        "name": f"gepa-recovery-{suffix}",
         "system_database_url": database_url,
         "application_database_url": database_url,
         "application_version": f"gepa-parent-recovery-{suffix}",
@@ -461,4 +461,4 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     finally:
         if client is not None:
             client.destroy()
-        DBOS.destroy(destroy_registry=True)
+        DBOS.destroy()

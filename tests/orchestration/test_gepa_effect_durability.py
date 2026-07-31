@@ -464,7 +464,7 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
     suffix = uuid4().hex[:10]
     database_url = engine_dsn(pg_engine)
     config: DBOSConfig = {
-        "name": f"whetstone-gepa-effect-{suffix}",
+        "name": f"gepa-effect-{suffix}",
         "system_database_url": database_url,
         "application_database_url": database_url,
         "application_version": f"gepa-effect-{suffix}",
@@ -532,4 +532,4 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
         assert replay == result
         assert authority.calls == 1
     finally:
-        DBOS.destroy(destroy_registry=True)
+        DBOS.destroy()
