@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
-import time
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
@@ -17,6 +18,7 @@ from dr_providers import (
     openrouter_chat_config,
 )
 
+import whetstone.execution._file_lock as file_lock_module
 from tests.provider import support as s
 from whetstone.execution._file_lock import FileLock
 from whetstone.execution.partials import (
@@ -74,8 +76,9 @@ class _FileTransport:
             os.close(fd)
         if self.started is not None:
             self.started.set()
-        while self.block:
-            time.sleep(0.01)
+        if self.block:
+            signal.pause()
+            raise AssertionError("signal.pause returned without termination")
         return s.build_evidence(
             request=request,
             policy=s.build_transport_policy(),
@@ -92,6 +95,8 @@ def execute_cache_worker(
     *,
     block: bool = False,
     started: Any | None = None,
+    lock_attempted: Any | None = None,
+    lock_acquired: Any | None = None,
     crash_after_publication: bool = False,
     crash_after_pending: bool = False,
     umask_value: int | None = None,
@@ -101,7 +106,9 @@ def execute_cache_worker(
     request = cache_request()
     policy = s.build_execution_policy(max_attempts=1)
     if barrier is not None:
-        barrier.wait()
+        barrier.wait(timeout=30)
+    if lock_attempted is not None and lock_acquired is not None:
+        _observe_lock_boundary(lock_attempted, lock_acquired)
     if crash_after_publication:
         cache = _CrashAfterPublicationCache(root=Path(root))
     elif crash_after_pending:
@@ -148,7 +155,7 @@ def append_partial_worker(
     exit_immediately: bool = False,
 ) -> None:
     if barrier is not None:
-        barrier.wait()
+        barrier.wait(timeout=30)
     PartialLog(path=Path(path)).append(
         PartialCallRecord(
             phase="worker",
@@ -183,8 +190,8 @@ def write_torn_partial_worker(
         finally:
             os.close(fd)
         started.set()
-        while True:
-            time.sleep(0.01)
+        signal.pause()
+        raise AssertionError("signal.pause returned without termination")
 
 
 def hold_partial_lock(
@@ -195,14 +202,18 @@ def hold_partial_lock(
     log = PartialLog(path=Path(path))
     with FileLock(log._lock_path):
         entered.set()
-        release.wait()
+        if not release.wait(timeout=30):
+            raise TimeoutError("partial lock holder was not released")
 
 
 def run_partial_operation(
     path: str,
     operation: str,
     output: Any,
+    attempted: Any,
+    acquired: Any,
 ) -> None:
+    _observe_lock_boundary(attempted, acquired)
     log = PartialLog(path=Path(path))
     if operation == "append":
         log.append(
@@ -221,3 +232,22 @@ def run_partial_operation(
         output.put("deleted")
     else:  # pragma: no cover - test fixture misuse
         raise ValueError(f"unsupported partial operation: {operation}")
+
+
+def _observe_lock_boundary(attempted: Any, acquired: Any) -> None:
+    """Publish the exact before/after boundary around the next flock call."""
+    real_flock = file_lock_module.fcntl.flock
+    observed = False
+
+    def observed_flock(fd: int, operation: int) -> None:
+        nonlocal observed
+        acquiring = operation & (fcntl.LOCK_EX | fcntl.LOCK_SH)
+        if acquiring and not observed:
+            observed = True
+            attempted.set()
+            real_flock(fd, operation)
+            acquired.set()
+            return
+        real_flock(fd, operation)
+
+    setattr(file_lock_module.fcntl, "flock", observed_flock)  # noqa: B010

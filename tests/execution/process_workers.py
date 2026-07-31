@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+import selectors
 import signal
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from pydantic import JsonValue
+
+from tests.execution.process_signals import publish_ready, wait_for_release
 
 
 def _mapping(payload: JsonValue) -> dict[str, JsonValue]:
@@ -23,13 +25,6 @@ def _string(payload: dict[str, JsonValue], key: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{key} must be a string")
     return value
-
-
-def _number(payload: dict[str, JsonValue], key: str) -> float:
-    value = payload[key]
-    if not isinstance(value, int | float):
-        raise TypeError(f"{key} must be a number")
-    return float(value)
 
 
 def _append(path: Path, line: str) -> None:
@@ -47,52 +42,14 @@ def _append(path: Path, line: str) -> None:
         os.close(descriptor)
 
 
-def _started_count(path: Path) -> int:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return 0
-    return sum(line.startswith("start|") for line in lines)
-
-
-def delayed_event(payload: JsonValue) -> JsonValue:
-    """Record start/finish around a delay, optionally failing."""
+def gated_event(payload: JsonValue) -> JsonValue:
+    """Block on a parent-owned gate, optionally failing after release."""
     body = _mapping(payload)
     key = _string(body, "key")
-    event_path = Path(_string(body, "event_path"))
-    _append(event_path, f"start|{key}|{time.monotonic()}")
-    wait_for_started = body.get("wait_for_started")
-    if wait_for_started is not None:
-        if not isinstance(wait_for_started, int):
-            raise TypeError("wait_for_started must be an integer")
-        deadline = time.monotonic() + 5.0
-        while _started_count(event_path) < wait_for_started:
-            if time.monotonic() >= deadline:
-                raise TimeoutError("initial test workers did not all start")
-            time.sleep(0.005)
-    delay = _number(body, "delay")
-    if delay:
-        time.sleep(delay)
-    _append(event_path, f"finish|{key}|{time.monotonic()}")
+    wait_for_release(_string(body, "signal_path"), key)
     if body.get("fail") is True:
         raise RuntimeError(f"requested failure for {key}")
     return body.get("value")
-
-
-def wait_for_release(payload: JsonValue) -> JsonValue:
-    """Record start and block until a test-owned release file appears."""
-    body = _mapping(payload)
-    key = _string(body, "key")
-    event_path = Path(_string(body, "event_path"))
-    release_path = Path(_string(body, "release_path"))
-    _append(event_path, f"start|{key}|{time.monotonic()}")
-    deadline = time.monotonic() + 5.0
-    while not release_path.exists():
-        if time.monotonic() >= deadline:
-            raise TimeoutError("test release file was not created")
-        time.sleep(0.005)
-    _append(event_path, f"finish|{key}|{time.monotonic()}")
-    return key
 
 
 def require_path_then_return(payload: JsonValue) -> JsonValue:
@@ -106,81 +63,85 @@ def require_path_then_return(payload: JsonValue) -> JsonValue:
     return body.get("value")
 
 
-def heartbeat_forever(payload: JsonValue) -> JsonValue:
-    """Write from a process tree until the scheduler escalates to KILL."""
+def block_process_tree(payload: JsonValue) -> JsonValue:
+    """Publish process-tree readiness once, then await scheduler signals."""
     body = _mapping(payload)
-    heartbeat_path = Path(_string(body, "heartbeat_path"))
+    signal_path = _string(body, "signal_path")
+    key = _string(body, "key")
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     descendant_script = """
-import os
 import signal
 import sys
-import time
 
-path = sys.argv[1]
+from tests.execution.process_signals import publish_ready
+
+path, key = sys.argv[1:]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-os.write(descriptor, f"pid|{os.getpid()}\\n".encode())
-while True:
-    os.write(
-        descriptor,
-        f"tick|{os.getpid()}|{time.monotonic()}\\n".encode(),
-    )
-    time.sleep(0.01)
+publish_ready(path, f"{key}-descendant")
+signal.pause()
 """
     subprocess.Popen(
-        [sys.executable, "-c", descendant_script, os.fspath(heartbeat_path)],
+        [sys.executable, "-c", descendant_script, signal_path, key],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    _append(heartbeat_path, f"pid|{os.getpid()}")
-    while True:
-        _append(heartbeat_path, f"tick|{os.getpid()}|{time.monotonic()}")
-        time.sleep(0.01)
+    publish_ready(signal_path, f"{key}-worker")
+    signal.pause()
+    raise AssertionError(
+        "signal.pause returned without terminating the worker"
+    )
 
 
 def spawn_descendant_and_return(payload: JsonValue) -> JsonValue:
     """Leave a same-group descendant running after the worker returns."""
     body = _mapping(payload)
-    heartbeat_path = Path(_string(body, "heartbeat_path"))
+    signal_path = _string(body, "signal_path")
+    ready_reader, ready_writer = os.pipe()
     descendant_script = """
 import os
 import signal
 import sys
-import time
 
-path = sys.argv[1]
+from tests.execution.process_signals import publish_ready
+
+path, ready_writer = sys.argv[1:]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-os.write(descriptor, f"pid|{os.getpid()}\\n".encode())
-while True:
-    os.write(
-        descriptor,
-        f"tick|{os.getpid()}|{time.monotonic()}\\n".encode(),
-    )
-    time.sleep(0.01)
+publish_ready(path, "descendant")
+os.write(int(ready_writer), b"1")
+os.close(int(ready_writer))
+signal.pause()
 """
-    subprocess.Popen(
-        [sys.executable, "-c", descendant_script, os.fspath(heartbeat_path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.monotonic() + 3.0
-    while not _pid_lines_for_worker(heartbeat_path):
-        if time.monotonic() >= deadline:
-            raise TimeoutError("descendant did not publish its pid")
-        time.sleep(0.005)
-    release_path = body.get("release_path")
-    if release_path is not None:
-        if not isinstance(release_path, str):
-            raise TypeError("release_path must be a string")
-        release = Path(release_path)
-        while not release.exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError("test release file was not created")
-            time.sleep(0.005)
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                descendant_script,
+                signal_path,
+                str(ready_writer),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            pass_fds=(ready_writer,),
+        )
+    finally:
+        os.close(ready_writer)
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(ready_reader, selectors.EVENT_READ)
+            if not selector.select(timeout=5.0):
+                raise TimeoutError("descendant did not publish readiness")
+            if os.read(ready_reader, 1) != b"1":
+                raise RuntimeError("descendant readiness pipe closed early")
+    finally:
+        os.close(ready_reader)
+    release_key = body.get("release_key")
+    if release_key is not None:
+        if not isinstance(release_key, str):
+            raise TypeError("release_key must be a string")
+        wait_for_release(signal_path, release_key)
     return body.get("value")
 
 
@@ -195,14 +156,6 @@ def open_file_descriptors(payload: JsonValue) -> JsonValue:
             continue
         descriptors.append(descriptor)
     return descriptors
-
-
-def _pid_lines_for_worker(path: Path) -> list[str]:
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return []
-    return [line for line in lines if line.startswith("pid|")]
 
 
 def return_payload(payload: JsonValue) -> JsonValue:

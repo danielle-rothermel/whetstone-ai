@@ -435,12 +435,17 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
             None,
             owner_output,
         ),
-        kwargs={"block": True, "started": owner_started},
+        kwargs={
+            "block": True,
+            "started": owner_started,
+        },
     )
     owner.start()
     assert owner_started.wait(timeout=10)
 
     waiter_output = context.Queue()
+    waiter_attempted = context.Event()
+    waiter_acquired = context.Event()
     waiter = context.Process(
         target=execute_cache_worker,
         args=(
@@ -450,15 +455,25 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
             None,
             waiter_output,
         ),
+        kwargs={
+            "lock_attempted": waiter_attempted,
+            "lock_acquired": waiter_acquired,
+        },
     )
     waiter.start()
-    waiter.join(timeout=0.2)
-    assert waiter.is_alive()
-
-    owner.terminate()
-    owner.join(timeout=10)
+    try:
+        assert waiter_attempted.wait(timeout=10)
+        assert not waiter_acquired.is_set()
+        owner.terminate()
+        owner.join(timeout=10)
+        assert waiter_acquired.wait(timeout=10)
+        waiter.join(timeout=10)
+    finally:
+        for process in (owner, waiter):
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=10)
     assert owner.exitcode is not None
-    waiter.join(timeout=10)
     assert waiter.exitcode == 0
     report = waiter_output.get(timeout=5)
     assert not report["cache_hit"]

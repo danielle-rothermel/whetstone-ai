@@ -262,9 +262,14 @@ def test_killed_partial_writer_tail_is_recovered_before_next_append(
         args=(str(path), started),
     )
     writer.start()
-    assert started.wait(timeout=10)
-    writer.terminate()
-    writer.join(timeout=10)
+    try:
+        assert started.wait(timeout=10)
+        writer.terminate()
+        writer.join(timeout=10)
+    finally:
+        if writer.is_alive():
+            writer.kill()
+            writer.join(timeout=10)
     assert writer.exitcode is not None
 
     assert [record.unit for record in log.load()] == ["first"]
@@ -337,17 +342,26 @@ def test_separate_instances_serialize_all_operations(
     assert entered.wait(timeout=10)
 
     output = context.Queue()
+    attempted = context.Event()
+    acquired = context.Event()
     operation_process = context.Process(
         target=run_partial_operation,
-        args=(str(path), operation, output),
+        args=(str(path), operation, output, attempted, acquired),
     )
     operation_process.start()
-    operation_process.join(timeout=0.2)
-    assert operation_process.is_alive()
-
-    release.set()
-    holder.join(timeout=10)
-    operation_process.join(timeout=10)
+    try:
+        assert attempted.wait(timeout=10)
+        assert not acquired.is_set()
+        release.set()
+        assert acquired.wait(timeout=10)
+        holder.join(timeout=10)
+        operation_process.join(timeout=10)
+    finally:
+        release.set()
+        for process in (holder, operation_process):
+            if process.is_alive():
+                process.kill()
+                process.join(timeout=10)
     assert holder.exitcode == 0
     assert operation_process.exitcode == 0
     assert output.get(timeout=5) in {"appended", "deleted", 1}

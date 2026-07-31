@@ -54,6 +54,21 @@ _fork_child_control_fds: tuple[int, ...] = ()
 _parent_control_lock = threading.Lock()
 
 
+def _wait_for_operation_deadline(
+    deadline: float,
+    stop: threading.Event,
+    trigger: Callable[[], None],
+) -> None:
+    """Wait for a real deadline and publish it before returning."""
+    while True:
+        delay = deadline - time.monotonic()
+        if delay <= 0:
+            trigger()
+            return
+        if stop.wait(min(delay, _DEADLINE_WAIT_CHUNK_SECONDS)):
+            return
+
+
 def _before_fork() -> None:
     global _fork_child_control_fds
     _parent_control_lock.acquire()
@@ -894,13 +909,13 @@ def run_call_pool[K: Hashable, R](
     def deadline_watch() -> None:
         if operation_deadline is None:
             return
-        while True:
-            delay = operation_deadline - time.monotonic()
-            if delay <= 0:
-                break
-            if wall_stop.wait(min(delay, _DEADLINE_WAIT_CHUNK_SECONDS)):
-                return
-        wall_triggered.set()
+        _wait_for_operation_deadline(
+            operation_deadline,
+            wall_stop,
+            wall_triggered.set,
+        )
+        if not wall_triggered.is_set():
+            return
         claimed: list[_ActiveProcess[K, R]] = []
         with active_lock:
             for index, process in list(active.items()):

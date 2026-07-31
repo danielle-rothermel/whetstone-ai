@@ -5,11 +5,12 @@ from __future__ import annotations
 import errno
 import json
 import os
+import select
+import selectors
 import signal
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +20,7 @@ import pytest
 from pydantic import JsonValue, ValidationError
 
 import whetstone.execution.fanout as fanout_module
+from tests.execution.process_signals import ProcessSignals
 from whetstone.execution.fanout import (
     CallSpec,
     FanoutStatus,
@@ -46,31 +48,26 @@ def _job(function: str, payload: JsonValue) -> ProcessJob:
     )
 
 
-def _delayed_spec(
+def _gated_spec(
     key: str,
     *,
-    event_path: Path,
-    delay: float,
+    signals: ProcessSignals,
     value: JsonValue | None = None,
     deadline: float = 5.0,
     commit: Callable[[JsonValue], None] | None = None,
     fail: bool = False,
-    wait_for_started: int | None = None,
     decode: Callable[[JsonValue], JsonValue] = _identity,
     cancellation_barrier: Callable[[], None] | None = None,
 ) -> CallSpec[str, JsonValue]:
     payload: dict[str, JsonValue] = {
         "key": key,
-        "event_path": os.fspath(event_path),
-        "delay": delay,
+        "signal_path": os.fspath(signals.path),
         "value": key if value is None else value,
         "fail": fail,
     }
-    if wait_for_started is not None:
-        payload["wait_for_started"] = wait_for_started
     return CallSpec(
         key=key,
-        job=_job("delayed_event", payload),
+        job=_job("gated_event", payload),
         decode=decode,
         deadline_seconds=deadline,
         commit=commit,
@@ -78,9 +75,9 @@ def _delayed_spec(
     )
 
 
-def _heartbeat_spec(
+def _blocking_tree_spec(
     key: str,
-    path: Path,
+    signals: ProcessSignals,
     *,
     deadline: float,
     commit: Callable[[JsonValue], None] | None = None,
@@ -89,8 +86,8 @@ def _heartbeat_spec(
     return CallSpec(
         key=key,
         job=_job(
-            "heartbeat_forever",
-            {"heartbeat_path": os.fspath(path)},
+            "block_process_tree",
+            {"signal_path": os.fspath(signals.path), "key": key},
         ),
         decode=_identity,
         deadline_seconds=deadline,
@@ -99,44 +96,79 @@ def _heartbeat_spec(
     )
 
 
-def _wait_until(
-    predicate: Callable[[], bool],
-    *,
-    timeout: float = 3.0,
-) -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            raise AssertionError("condition was not met before timeout")
-        time.sleep(0.005)
-
-
-def _lines(path: Path) -> list[str]:
-    try:
-        return path.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return []
-
-
-def _pid_lines(path: Path) -> list[int]:
-    return [
-        int(line.split("|", maxsplit=1)[1])
-        for line in _lines(path)
-        if line.startswith("pid|")
-    ]
-
-
 def _assert_process_gone(pid: int) -> None:
-    deadline = time.monotonic() + 1.0
-    while True:
+    try:
+        os.kill(pid, 0)
+    except OSError as error:
+        assert error.errno == errno.ESRCH
+        return
+    if hasattr(os, "pidfd_open"):
+        descriptor = os.pidfd_open(pid)
         try:
-            os.kill(pid, 0)
-        except OSError as error:
-            assert error.errno == errno.ESRCH
-            return
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"process {pid} survived scheduler return")
-        time.sleep(0.01)
+            with selectors.DefaultSelector() as selector:
+                selector.register(descriptor, selectors.EVENT_READ)
+                assert selector.select(3.0), (
+                    f"process {pid} survived scheduler return"
+                )
+        finally:
+            os.close(descriptor)
+        return
+    queue = select.kqueue()
+    try:
+        event = select.kevent(
+            pid,
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        observed = queue.control([event], 1, 3.0)
+    finally:
+        queue.close()
+    assert observed, f"process {pid} survived scheduler return"
+    assert observed[0].fflags & select.KQ_NOTE_EXIT
+
+
+def _assert_process_group_absent(process_group_id: int) -> None:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        _assert_process_gone(process_group_id)
+        return
+    raise AssertionError(f"process group {process_group_id} survived return")
+
+
+def _wait_for_eof(descriptor: int, *, timeout: float = 3.0) -> None:
+    with selectors.DefaultSelector() as selector:
+        selector.register(descriptor, selectors.EVENT_READ)
+        assert selector.select(timeout), (
+            "guardian pipe did not become readable"
+        )
+    assert os.read(descriptor, 1) == b""
+
+
+class _ScriptedDeadline:
+    def __init__(self, condition: threading.Event) -> None:
+        self.condition = condition
+        self.triggered = threading.Event()
+        self.errors: list[str] = []
+
+    def __call__(
+        self,
+        _deadline: float,
+        stop: threading.Event,
+        trigger: Callable[[], None],
+    ) -> None:
+        if not self.condition.wait(timeout=10):
+            self.errors.append("deadline trigger condition was not reached")
+        if not stop.is_set():
+            trigger()
+            self.triggered.set()
+
+    def assert_satisfied(self) -> None:
+        assert not self.errors
+        assert self.triggered.is_set()
 
 
 def _open_fd_count() -> int:
@@ -242,6 +274,7 @@ def test_active_worker_rejects_any_visible_invalid_dispatch_marker(
         process.refresh_dispatch_marker(required=False)
 
 
+@pytest.mark.process_integration
 def test_worker_dispatch_marker_follows_start_gate_and_precedes_user_code(
     tmp_path: Path,
 ) -> None:
@@ -263,6 +296,7 @@ def test_worker_dispatch_marker_follows_start_gate_and_precedes_user_code(
     parent_reader, parent_writer = os.pipe()
     guardian_reader, guardian_writer = os.pipe()
     start_reader, start_writer = os.pipe()
+    ready_reader, ready_writer = os.pipe()
     worker = subprocess.Popen(
         [
             sys.executable,
@@ -275,19 +309,29 @@ def test_worker_dispatch_marker_follows_start_gate_and_precedes_user_code(
             str(guardian_writer),
             str(start_reader),
             "none",
+            str(ready_writer),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        pass_fds=(parent_reader, guardian_writer, start_reader),
+        pass_fds=(
+            parent_reader,
+            guardian_writer,
+            start_reader,
+            ready_writer,
+        ),
         start_new_session=True,
     )
     os.close(parent_reader)
     os.close(guardian_writer)
     os.close(start_reader)
+    os.close(ready_writer)
     try:
-        with pytest.raises(subprocess.TimeoutExpired):
-            worker.wait(timeout=0.1)
+        with selectors.DefaultSelector() as selector:
+            selector.register(ready_reader, selectors.EVENT_READ)
+            assert selector.select(3.0), "worker did not reach its start gate"
+        assert os.read(ready_reader, 1) == b"\x01"
+        assert worker.poll() is None
         assert not dispatch_path.exists()
         assert not event_path.exists()
 
@@ -302,12 +346,14 @@ def test_worker_dispatch_marker_follows_start_gate_and_precedes_user_code(
             os.close(start_writer)
         if worker.poll() is None:
             os.killpg(worker.pid, signal.SIGKILL)
-            worker.wait()
+            worker.wait(timeout=3.0)
         os.close(parent_writer)
-        assert os.read(guardian_reader, 1) == b""
+        _wait_for_eof(guardian_reader)
         os.close(guardian_reader)
+        os.close(ready_reader)
 
 
+@pytest.mark.process_integration
 def test_worker_boundary_files_are_restrictive_and_validated(
     tmp_path: Path,
 ) -> None:
@@ -342,13 +388,14 @@ def test_worker_boundary_files_are_restrictive_and_validated(
             capture_output=True,
             pass_fds=(parent_reader, guardian_writer, start_reader),
             start_new_session=True,
+            timeout=10.0,
         )
     finally:
         os.close(parent_reader)
         os.close(guardian_writer)
         os.close(start_reader)
     os.close(parent_writer)
-    assert os.read(guardian_reader, 1) == b""
+    _wait_for_eof(guardian_reader)
     os.close(guardian_reader)
     assert completed.returncode == 0, completed.stderr.decode()
     assert completed.stderr == b""
@@ -375,11 +422,14 @@ def test_worker_boundary_files_are_restrictive_and_validated(
 
 
 @pytest.mark.parametrize("parent_signal", [signal.SIGTERM, signal.SIGKILL])
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_parent_death_kills_fresh_worker_process_group(
     tmp_path: Path,
     parent_signal: int,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
+    del tmp_path
+    signals = ProcessSignals()
     scheduler_script = """
 import os
 import sys
@@ -388,8 +438,8 @@ from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
 
 path = sys.argv[1]
 job = ProcessJob(
-    entrypoint="tests.execution.process_workers:heartbeat_forever",
-    payload={"heartbeat_path": path},
+    entrypoint="tests.execution.process_workers:block_process_tree",
+    payload={"signal_path": path, "key": "worker"},
 )
 run_call_pool(
     [
@@ -405,34 +455,37 @@ run_call_pool(
 )
 """
     scheduler = subprocess.Popen(
-        [sys.executable, "-c", scheduler_script, os.fspath(heartbeat_path)],
+        [sys.executable, "-c", scheduler_script, os.fspath(signals.path)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
     try:
-        _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 2)
+        signals.wait_entered(["worker-worker", "worker-descendant"])
         os.kill(scheduler.pid, parent_signal)
         scheduler.wait(timeout=3.0)
-        pids = _pid_lines(heartbeat_path)
-        for pid in pids:
+        for pid in (
+            signals.pid("worker-worker"),
+            signals.pid("worker-descendant"),
+        ):
             _assert_process_gone(pid)
-        returned_content = heartbeat_path.read_bytes()
-        time.sleep(0.1)
-        assert heartbeat_path.read_bytes() == returned_content
     finally:
         if scheduler.poll() is None:
             scheduler.kill()
-            scheduler.wait()
+            scheduler.wait(timeout=3.0)
+        signals.close()
 
 
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_stopped_guardian_on_completion_forces_local_containment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    release_path = tmp_path / "release"
+    del tmp_path
+    signals = ProcessSignals()
     spawned: list[fanout_module._ActiveProcess[str, JsonValue]] = []
+    spawned_event = threading.Event()
     real_spawn = fanout_module._spawn
 
     def record_spawn(
@@ -447,6 +500,7 @@ def test_stopped_guardian_on_completion_forces_local_containment(
             operation_deadline=operation_deadline,
         )
         spawned.append(process)
+        spawned_event.set()
         return process
 
     monkeypatch.setattr(fanout_module, "_spawn", record_spawn)
@@ -461,8 +515,8 @@ def test_stopped_guardian_on_completion_forces_local_containment(
                         job=_job(
                             "spawn_descendant_and_return",
                             {
-                                "heartbeat_path": os.fspath(heartbeat_path),
-                                "release_path": os.fspath(release_path),
+                                "signal_path": os.fspath(signals.path),
+                                "release_key": "release",
                                 "value": "complete",
                             },
                         ),
@@ -478,17 +532,15 @@ def test_stopped_guardian_on_completion_forces_local_containment(
 
     scheduler = threading.Thread(target=schedule)
     scheduler.start()
-    _wait_until(lambda: len(spawned) == 1)
+    assert spawned_event.wait(timeout=10)
     process = spawned[0]
-    _wait_until(
-        lambda: process.refresh_dispatch_marker(required=False) is not None
-    )
+    signals.wait_entered(["descendant", "release"])
+    process.refresh_dispatch_marker(required=True)
     guardian_pid = process.guardian_pid
     assert guardian_pid is not None
-    _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 1)
     try:
         os.kill(guardian_pid, signal.SIGSTOP)
-        release_path.touch()
+        signals.release("release")
         scheduler.join(timeout=3.0)
         assert not scheduler.is_alive()
         assert len(failures) == 1
@@ -497,28 +549,33 @@ def test_stopped_guardian_on_completion_forces_local_containment(
         for pid in (
             process.process.pid,
             guardian_pid,
-            *_pid_lines(heartbeat_path),
+            signals.pid("descendant"),
         ):
             _assert_process_gone(pid)
-        returned_content = heartbeat_path.read_bytes()
-        time.sleep(0.1)
-        assert heartbeat_path.read_bytes() == returned_content
         assert not process.directory.exists()
         assert fanout_module._parent_control_fds == set()
     finally:
-        release_path.touch(exist_ok=True)
+        if "release" in signals.entered_keys:
+            try:
+                signals.release("release")
+            except (AssertionError, BrokenPipeError, EOFError, OSError):
+                pass
         if scheduler.is_alive():
             os.killpg(process.process_group_id, signal.SIGKILL)
             scheduler.join(timeout=3.0)
+        signals.close()
 
 
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_harvest_retains_state_when_fallback_cannot_prove_containment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    release_path = tmp_path / "release"
+    del tmp_path
+    signals = ProcessSignals()
     spawned: list[fanout_module._ActiveProcess[str, JsonValue]] = []
+    spawned_event = threading.Event()
     real_spawn = fanout_module._spawn
     real_group_exists = fanout_module._process_group_exists
 
@@ -534,6 +591,7 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
             operation_deadline=operation_deadline,
         )
         spawned.append(process)
+        spawned_event.set()
         return process
 
     monkeypatch.setattr(fanout_module, "_spawn", record_spawn)
@@ -548,8 +606,8 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
                         job=_job(
                             "spawn_descendant_and_return",
                             {
-                                "heartbeat_path": os.fspath(heartbeat_path),
-                                "release_path": os.fspath(release_path),
+                                "signal_path": os.fspath(signals.path),
+                                "release_key": "release",
                                 "value": "complete",
                             },
                         ),
@@ -564,14 +622,12 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
 
     scheduler = threading.Thread(target=schedule)
     scheduler.start()
-    _wait_until(lambda: len(spawned) == 1)
+    assert spawned_event.wait(timeout=10)
     process = spawned[0]
-    _wait_until(
-        lambda: process.refresh_dispatch_marker(required=False) is not None
-    )
+    signals.wait_entered(["descendant", "release"])
+    process.refresh_dispatch_marker(required=True)
     guardian_pid = process.guardian_pid
     assert guardian_pid is not None
-    _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 1)
 
     def deny_signal(
         candidate: fanout_module._ActiveProcess[str, JsonValue],
@@ -600,7 +656,7 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
             "_process_group_exists",
             retain_group,
         )
-        release_path.touch()
+        signals.release("release")
         scheduler.join(timeout=5.0)
         assert not scheduler.is_alive()
         assert len(failures) == 1
@@ -616,7 +672,11 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
         os.killpg(process.process_group_id, 0)
     finally:
         monkeypatch.undo()
-        release_path.touch(exist_ok=True)
+        if "release" in signals.entered_keys:
+            try:
+                signals.release("release")
+            except (AssertionError, BrokenPipeError, EOFError, OSError):
+                pass
         try:
             os.kill(guardian_pid, signal.SIGCONT)
         except ProcessLookupError:
@@ -626,25 +686,28 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
         except ProcessLookupError:
             pass
         process.process.wait(timeout=3.0)
-        _wait_until(lambda: not real_group_exists(process))
+        assert not fanout_module._wait_for_process_group_absence([process])
         process.cleanup_allowed = True
         process.release_guardian_after_containment()
         process.cleanup()
         scheduler.join(timeout=3.0)
+        signals.close()
 
 
 @pytest.mark.parametrize(
     "failure_site",
     ["unit-expiration", "wall-watcher", "outer-exception"],
 )
+@pytest.mark.process_integration
 def test_cancellation_failure_retains_uncontained_process_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure_site: str,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    event_path = tmp_path / "events"
+    del tmp_path
+    signals = ProcessSignals()
     target: list[fanout_module._ActiveProcess[str, JsonValue]] = []
+    target_spawned = threading.Event()
     failure_enabled = threading.Event()
     real_spawn = fanout_module._spawn
     real_signal = fanout_module._signal_process_group
@@ -663,6 +726,7 @@ def test_cancellation_failure_retains_uncontained_process_state(
         )
         if spec.key == "target":
             target.append(process)
+            target_spawned.set()
         return process
 
     def controlled_signal(
@@ -692,9 +756,9 @@ def test_cancellation_failure_retains_uncontained_process_state(
         controlled_group_exists,
     )
     specs = [
-        _heartbeat_spec(
+        _blocking_tree_spec(
             "target",
-            heartbeat_path,
+            signals,
             deadline=(0.2 if failure_site == "unit-expiration" else 5.0),
         )
     ]
@@ -703,12 +767,19 @@ def test_cancellation_failure_retains_uncontained_process_state(
         max_wall_seconds = 0.2
     elif failure_site == "outer-exception":
         specs.append(
-            _delayed_spec(
+            _gated_spec(
                 "failed",
-                event_path=event_path,
-                delay=0.3,
+                signals=signals,
                 fail=True,
             )
+        )
+    scripted_deadline: _ScriptedDeadline | None = None
+    if failure_site == "wall-watcher":
+        scripted_deadline = _ScriptedDeadline(failure_enabled)
+        monkeypatch.setattr(
+            fanout_module,
+            "_wait_for_operation_deadline",
+            scripted_deadline,
         )
 
     failures: list[BaseException] = []
@@ -726,9 +797,13 @@ def test_cancellation_failure_retains_uncontained_process_state(
 
     scheduler = threading.Thread(target=schedule)
     scheduler.start()
-    _wait_until(lambda: len(target) == 1 and bool(_pid_lines(heartbeat_path)))
+    assert target_spawned.wait(timeout=10)
+    signals.wait_entered(["target-worker", "target-descendant"])
     process = target[0]
     failure_enabled.set()
+    if failure_site == "outer-exception":
+        signals.wait_entered(["failed"])
+        signals.release("failed")
     try:
         scheduler.join(timeout=5.0)
         assert not scheduler.is_alive()
@@ -745,6 +820,8 @@ def test_cancellation_failure_retains_uncontained_process_state(
         assert process.lifetime_writer in fanout_module._parent_control_fds
         assert process.guardian_reader in fanout_module._parent_control_fds
         assert not process.cleanup_allowed
+        if scripted_deadline is not None:
+            scripted_deadline.assert_satisfied()
     finally:
         failure_enabled.clear()
         monkeypatch.undo()
@@ -753,57 +830,54 @@ def test_cancellation_failure_retains_uncontained_process_state(
         except ProcessLookupError:
             pass
         process.process.wait(timeout=3.0)
-        _wait_until(lambda: not real_group_exists(process))
+        assert not fanout_module._wait_for_process_group_absence([process])
         process.cleanup_allowed = True
         process.release_guardian_after_containment()
         process.cleanup()
         scheduler.join(timeout=3.0)
+        signals.close()
 
 
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_worker_contains_group_when_guardian_and_scheduler_die(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    worker_pid_path = tmp_path / "worker-pid"
-    guardian_pid_path = tmp_path / "guardian-pid"
+    del tmp_path
+    signals = ProcessSignals()
     scheduler_script = """
 import os
 import sys
 
 import whetstone.execution.fanout as fanout
 from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
+from tests.execution.process_signals import publish_ready
 
-heartbeat_path, worker_pid_path, guardian_pid_path = sys.argv[1:]
-real_spawn = fanout._spawn
+signal_path = sys.argv[1]
 real_refresh_dispatch_marker = fanout._ActiveProcess.refresh_dispatch_marker
-
-def record_spawn(*args, **kwargs):
-    process = real_spawn(*args, **kwargs)
-    with open(worker_pid_path, "w", encoding="utf-8") as output:
-        output.write(str(process.process.pid))
-        output.flush()
-        os.fsync(output.fileno())
-    return process
+published_guardian = False
 
 def record_dispatch_marker(self, *, required):
+    global published_guardian
     started_at = real_refresh_dispatch_marker(self, required=required)
-    if started_at is not None and not os.path.exists(guardian_pid_path):
+    if (
+        started_at is not None
+        and self.guardian_pid is not None
+        and not published_guardian
+    ):
+        published_guardian = True
         assert self.guardian_pid is not None
-        with open(guardian_pid_path, "x", encoding="utf-8") as output:
-            output.write(str(self.guardian_pid))
-            output.flush()
-            os.fsync(output.fileno())
+        publish_ready(signal_path, "guardian")
     return started_at
 
-fanout._spawn = record_spawn
 fanout._ActiveProcess.refresh_dispatch_marker = record_dispatch_marker
 run_call_pool(
     [
         CallSpec(
             key="worker",
             job=ProcessJob(
-                entrypoint="tests.execution.process_workers:heartbeat_forever",
-                payload={"heartbeat_path": heartbeat_path},
+                entrypoint="tests.execution.process_workers:block_process_tree",
+                payload={"signal_path": signal_path, "key": "worker"},
             ),
             decode=lambda value: value,
             deadline_seconds=30.0,
@@ -818,48 +892,39 @@ run_call_pool(
             sys.executable,
             "-c",
             scheduler_script,
-            os.fspath(heartbeat_path),
-            os.fspath(worker_pid_path),
-            os.fspath(guardian_pid_path),
+            os.fspath(signals.path),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
-    worker_pid: int | None = None
     observed_pids: list[int] = []
     try:
-        _wait_until(
-            lambda: (
-                worker_pid_path.exists()
-                and guardian_pid_path.exists()
-                and len(_pid_lines(heartbeat_path)) == 2
-            )
+        signals.wait_entered(
+            ["worker-worker", "worker-descendant", "guardian"]
         )
-        worker_pid = int(worker_pid_path.read_text(encoding="utf-8"))
-        guardian_pid = int(guardian_pid_path.read_text(encoding="utf-8"))
+        worker_pid = signals.pid("worker-worker")
+        guardian_pid = signals.pid("guardian")
         observed_pids = [
             worker_pid,
             guardian_pid,
-            *_pid_lines(heartbeat_path),
+            signals.pid("worker-descendant"),
         ]
         os.kill(guardian_pid, signal.SIGKILL)
         os.kill(scheduler.pid, signal.SIGKILL)
         scheduler.wait(timeout=3.0)
         for pid in observed_pids:
             _assert_process_gone(pid)
-        returned_content = heartbeat_path.read_bytes()
-        time.sleep(0.1)
-        assert heartbeat_path.read_bytes() == returned_content
     finally:
         if scheduler.poll() is None:
             scheduler.kill()
-            scheduler.wait()
-        if worker_pid is not None:
+            scheduler.wait(timeout=3.0)
+        if observed_pids:
             try:
-                os.killpg(worker_pid, signal.SIGKILL)
-            except ProcessLookupError:
+                os.killpg(observed_pids[0], signal.SIGKILL)
+            except (PermissionError, ProcessLookupError):
                 pass
+        signals.close()
         for pid in observed_pids:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -868,28 +933,27 @@ run_call_pool(
 
 
 @pytest.mark.parametrize("guardian_behavior", ["exit", "hang"])
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_guardian_pre_ready_failure_hard_contains_group(
     tmp_path: Path,
     guardian_behavior: str,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
+    ready_reader, ready_writer = os.pipe()
     fake_guardian_path = tmp_path / "fake_guardian.py"
     fake_guardian_path.write_text(
         """
 import os
 import signal
 import sys
-import time
 
-path, behavior = sys.argv[1:]
+ready_writer, behavior = sys.argv[1:]
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
-descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-os.write(descriptor, f"pid|{os.getpid()}\\n".encode())
+os.write(int(ready_writer), f"{os.getpid()}\\n".encode())
+os.close(int(ready_writer))
 if behavior == "exit":
     raise SystemExit(2)
-while True:
-    os.write(descriptor, f"tick|{time.monotonic()}\\n".encode())
-    time.sleep(0.01)
+signal.pause()
 """,
         encoding="utf-8",
     )
@@ -900,16 +964,16 @@ import sys
 
 import whetstone.execution.process_worker as worker
 
-fake_guardian_path, heartbeat_path, behavior = sys.argv[1:]
+fake_guardian_path, ready_writer, behavior = sys.argv[1:]
 real_popen = subprocess.Popen
 
 def fake_popen(*args, **kwargs):
     return real_popen(
-        [sys.executable, fake_guardian_path, heartbeat_path, behavior],
+        [sys.executable, fake_guardian_path, ready_writer, behavior],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        pass_fds=kwargs["pass_fds"],
+        pass_fds=(*kwargs["pass_fds"], int(ready_writer)),
     )
 
 worker.subprocess.Popen = fake_popen
@@ -917,59 +981,64 @@ lifetime_reader, lifetime_writer = os.pipe()
 done_reader, done_writer = os.pipe()
 worker._start_guardian(lifetime_reader, done_writer)
 """
-    started_at = time.monotonic()
     starter = subprocess.Popen(
         [
             sys.executable,
             "-c",
             starter_script,
             os.fspath(fake_guardian_path),
-            os.fspath(heartbeat_path),
+            str(ready_writer),
             guardian_behavior,
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         start_new_session=True,
+        pass_fds=(ready_writer,),
     )
+    os.close(ready_writer)
+    ready_writer = -1
     child_pids: list[int] = []
     try:
-        _wait_until(lambda: len(_pid_lines(heartbeat_path)) == 1)
-        child_pids = _pid_lines(heartbeat_path)
+        with selectors.DefaultSelector() as selector:
+            selector.register(ready_reader, selectors.EVENT_READ)
+            assert selector.select(3.0), "fake guardian did not publish ready"
+        child_pids = [int(os.read(ready_reader, 32).strip())]
         starter.wait(timeout=3.0)
-        assert time.monotonic() - started_at < 2.0
         assert starter.returncode == -signal.SIGKILL
         for pid in child_pids:
             _assert_process_gone(pid)
-        returned_content = heartbeat_path.read_bytes()
-        time.sleep(0.1)
-        assert heartbeat_path.read_bytes() == returned_content
     finally:
         if starter.poll() is None:
             os.killpg(starter.pid, signal.SIGKILL)
-            starter.wait()
+            starter.wait(timeout=3.0)
         for pid in child_pids:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        if ready_writer >= 0:
+            os.close(ready_writer)
+        os.close(ready_reader)
 
 
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_forked_scheduler_sibling_cannot_keep_worker_group_alive(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    sibling_pid_path = tmp_path / "sibling-pid"
+    del tmp_path
+    signals = ProcessSignals()
     scheduler_script = """
 import os
 import signal
 import sys
-import time
 
 import whetstone.execution.fanout as fanout
 from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
+from tests.execution.process_signals import publish_ready
 
-heartbeat_path, sibling_pid_path = sys.argv[1:]
+signal_path = sys.argv[1]
 real_spawn = fanout._spawn
 
 def fork_after_spawn(*args, **kwargs):
@@ -977,12 +1046,8 @@ def fork_after_spawn(*args, **kwargs):
     sibling_pid = os.fork()
     if sibling_pid == 0:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        with open(sibling_pid_path, "w", encoding="utf-8") as output:
-            output.write(str(os.getpid()))
-            output.flush()
-            os.fsync(output.fileno())
-        while True:
-            time.sleep(1.0)
+        publish_ready(signal_path, "scheduler-sibling")
+        signal.pause()
     return process
 
 fanout._spawn = fork_after_spawn
@@ -991,8 +1056,8 @@ run_call_pool(
         CallSpec(
             key="worker",
             job=ProcessJob(
-                entrypoint="tests.execution.process_workers:heartbeat_forever",
-                payload={"heartbeat_path": heartbeat_path},
+                entrypoint="tests.execution.process_workers:block_process_tree",
+                payload={"signal_path": signal_path, "key": "worker"},
             ),
             decode=lambda value: value,
             deadline_seconds=30.0,
@@ -1007,8 +1072,7 @@ run_call_pool(
             sys.executable,
             "-c",
             scheduler_script,
-            os.fspath(heartbeat_path),
-            os.fspath(sibling_pid_path),
+            os.fspath(signals.path),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -1017,14 +1081,14 @@ run_call_pool(
     sibling_pid: int | None = None
     worker_pids: list[int] = []
     try:
-        _wait_until(
-            lambda: (
-                sibling_pid_path.exists()
-                and len(_pid_lines(heartbeat_path)) == 2
-            )
+        signals.wait_entered(
+            ["scheduler-sibling", "worker-worker", "worker-descendant"]
         )
-        sibling_pid = int(sibling_pid_path.read_text(encoding="utf-8"))
-        worker_pids = _pid_lines(heartbeat_path)
+        sibling_pid = signals.pid("scheduler-sibling")
+        worker_pids = [
+            signals.pid("worker-worker"),
+            signals.pid("worker-descendant"),
+        ]
         os.kill(scheduler.pid, signal.SIGKILL)
         scheduler.wait(timeout=3.0)
         for pid in worker_pids:
@@ -1033,12 +1097,13 @@ run_call_pool(
     finally:
         if scheduler.poll() is None:
             scheduler.kill()
-            scheduler.wait()
+            scheduler.wait(timeout=3.0)
         if sibling_pid is not None:
             try:
                 os.kill(sibling_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        signals.close()
         for pid in worker_pids:
             try:
                 os.kill(pid, signal.SIGKILL)
@@ -1046,29 +1111,28 @@ run_call_pool(
                 pass
 
 
+@pytest.mark.process_integration
+@pytest.mark.process_guardian
 def test_scheduler_death_after_worker_return_kills_left_descendant(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    harvest_path = tmp_path / "harvest-entered"
+    del tmp_path
+    signals = ProcessSignals()
     scheduler_script = """
 import os
+import signal
 import sys
-import time
 
 import whetstone.execution.fanout as fanout
 from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
+from tests.execution.process_signals import publish_ready
 
-heartbeat_path, harvest_path = sys.argv[1:]
+signal_path = sys.argv[1]
 real_read_worker_result = fanout._read_worker_result
 
 def block_harvest(process):
-    with open(harvest_path, "wb") as output:
-        output.write(b"entered")
-        output.flush()
-        os.fsync(output.fileno())
-    while True:
-        time.sleep(1.0)
+    publish_ready(signal_path, "harvest")
+    signal.pause()
 
 fanout._read_worker_result = block_harvest
 run_call_pool(
@@ -1081,7 +1145,7 @@ run_call_pool(
                     "spawn_descendant_and_return"
                 ),
                 payload={
-                    "heartbeat_path": heartbeat_path,
+                    "signal_path": signal_path,
                     "value": "complete",
                 },
             ),
@@ -1098,8 +1162,7 @@ run_call_pool(
             sys.executable,
             "-c",
             scheduler_script,
-            os.fspath(heartbeat_path),
-            os.fspath(harvest_path),
+            os.fspath(signals.path),
         ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -1107,12 +1170,8 @@ run_call_pool(
     )
     descendant_pids: list[int] = []
     try:
-        _wait_until(
-            lambda: (
-                harvest_path.exists() and len(_pid_lines(heartbeat_path)) == 1
-            )
-        )
-        descendant_pids = _pid_lines(heartbeat_path)
+        signals.wait_entered(["harvest", "descendant"])
+        descendant_pids = [signals.pid("descendant")]
         os.kill(scheduler.pid, signal.SIGKILL)
         scheduler.wait(timeout=3.0)
         for pid in descendant_pids:
@@ -1120,46 +1179,47 @@ run_call_pool(
     finally:
         if scheduler.poll() is None:
             scheduler.kill()
-            scheduler.wait()
+            scheduler.wait(timeout=3.0)
         for pid in descendant_pids:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+        signals.close()
 
 
+@pytest.mark.process_integration
 def test_normal_completion_stops_left_descendant_before_acceptance(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    outcome = run_call_pool(
-        [
-            CallSpec(
-                key="worker",
-                job=_job(
-                    "spawn_descendant_and_return",
-                    {
-                        "heartbeat_path": os.fspath(heartbeat_path),
-                        "value": "complete",
-                    },
-                ),
-                decode=_identity,
-                deadline_seconds=5.0,
-            )
-        ],
-        is_rate_limited=_never_rate_limited,
-    )
+    del tmp_path
+    signals = ProcessSignals()
+    try:
+        outcome = run_call_pool(
+            [
+                CallSpec(
+                    key="worker",
+                    job=_job(
+                        "spawn_descendant_and_return",
+                        {
+                            "signal_path": os.fspath(signals.path),
+                            "value": "complete",
+                        },
+                    ),
+                    decode=_identity,
+                    deadline_seconds=5.0,
+                )
+            ],
+            is_rate_limited=_never_rate_limited,
+        )
+    finally:
+        signals.close()
     assert outcome.results[0].status is FanoutStatus.COMPLETED
     assert outcome.results[0].value == "complete"
-    pids = _pid_lines(heartbeat_path)
-    assert len(pids) == 1
-    for pid in pids:
-        _assert_process_gone(pid)
-    returned_content = heartbeat_path.read_bytes()
-    time.sleep(0.1)
-    assert heartbeat_path.read_bytes() == returned_content
+    _assert_process_gone(signals.pid("descendant"))
 
 
+@pytest.mark.process_integration
 def test_control_descriptors_close_before_user_code_and_do_not_leak() -> None:
     baseline = _open_fd_count()
     for index in range(12):
@@ -1309,29 +1369,34 @@ def test_control_pipe_inherit_failure_closes_both_descriptors(
     assert _open_fd_count() <= baseline_descriptors
 
 
+@pytest.mark.process_integration
 def test_repeated_completed_process_trees_are_clean(tmp_path: Path) -> None:
+    del tmp_path
     all_pids: list[int] = []
     for index in range(5):
-        heartbeat_path = tmp_path / f"heartbeat-{index}"
-        outcome = run_call_pool(
-            [
-                CallSpec(
-                    key=str(index),
-                    job=_job(
-                        "spawn_descendant_and_return",
-                        {
-                            "heartbeat_path": os.fspath(heartbeat_path),
-                            "value": index,
-                        },
-                    ),
-                    decode=_identity,
-                    deadline_seconds=5.0,
-                )
-            ],
-            is_rate_limited=_never_rate_limited,
-        )
+        signals = ProcessSignals()
+        try:
+            outcome = run_call_pool(
+                [
+                    CallSpec(
+                        key=str(index),
+                        job=_job(
+                            "spawn_descendant_and_return",
+                            {
+                                "signal_path": os.fspath(signals.path),
+                                "value": index,
+                            },
+                        ),
+                        decode=_identity,
+                        deadline_seconds=5.0,
+                    )
+                ],
+                is_rate_limited=_never_rate_limited,
+            )
+            all_pids.append(signals.pid("descendant"))
+        finally:
+            signals.close()
         assert outcome.results[0].status is FanoutStatus.COMPLETED
-        all_pids.extend(_pid_lines(heartbeat_path))
     assert len(all_pids) == 5
     for pid in all_pids:
         _assert_process_gone(pid)
@@ -1340,17 +1405,17 @@ def test_repeated_completed_process_trees_are_clean(tmp_path: Path) -> None:
 def test_lazy_dispatch_never_starts_more_than_current_capacity(
     tmp_path: Path,
 ) -> None:
-    event_path = tmp_path / "events"
-    release_path = tmp_path / "release"
+    del tmp_path
+    signals = ProcessSignals()
     specs = [
         CallSpec(
             key=str(index),
             job=_job(
-                "wait_for_release",
+                "gated_event",
                 {
                     "key": str(index),
-                    "event_path": os.fspath(event_path),
-                    "release_path": os.fspath(release_path),
+                    "signal_path": os.fspath(signals.path),
+                    "value": str(index),
                 },
             ),
             decode=_identity,
@@ -1376,19 +1441,15 @@ def test_lazy_dispatch_never_starts_more_than_current_capacity(
     scheduler = threading.Thread(target=schedule)
     scheduler.start()
     try:
-        _wait_until(
-            lambda: (
-                sum(line.startswith("start|") for line in _lines(event_path))
-                == 2
-            )
-        )
-        time.sleep(0.05)
-        assert (
-            sum(line.startswith("start|") for line in _lines(event_path)) == 2
-        )
+        signals.wait_entered(["0", "1"])
+        assert signals.entered_keys == {"0", "1"}
+        for index in range(6):
+            key = str(index)
+            signals.wait_entered([key])
+            signals.release(key)
     finally:
-        release_path.touch()
         scheduler.join(timeout=5.0)
+        signals.close()
     assert not scheduler.is_alive()
     assert not failure
     assert len(outcome) == 1
@@ -1399,8 +1460,8 @@ def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
     tmp_path: Path,
     failure_stage: str,
 ) -> None:
-    event_path = tmp_path / "events"
-    heartbeat_path = tmp_path / "heartbeat"
+    del tmp_path
+    signals = ProcessSignals()
     barriers: list[str] = []
 
     def fail(stage: str) -> None:
@@ -1418,62 +1479,112 @@ def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
     def commit(_value: JsonValue) -> None:
         fail("commit")
 
-    with pytest.raises(RuntimeError, match=f"{failure_stage} failed"):
-        run_call_pool(
-            [
-                _delayed_spec(
-                    "accepted",
-                    event_path=event_path,
-                    delay=0.01,
-                    decode=decode,
-                    commit=commit,
-                    cancellation_barrier=lambda: barriers.append("accepted"),
-                ),
-                _heartbeat_spec(
-                    "sibling",
-                    heartbeat_path,
-                    deadline=5.0,
-                    cancellation_barrier=lambda: barriers.append("sibling"),
-                ),
-            ],
-            concurrency=2,
-            is_rate_limited=predicate,
+    failures: list[BaseException] = []
+
+    def schedule() -> None:
+        try:
+            run_call_pool(
+                [
+                    _gated_spec(
+                        "accepted",
+                        signals=signals,
+                        decode=decode,
+                        commit=commit,
+                        cancellation_barrier=lambda: barriers.append(
+                            "accepted"
+                        ),
+                    ),
+                    _blocking_tree_spec(
+                        "sibling",
+                        signals,
+                        deadline=5.0,
+                        cancellation_barrier=lambda: barriers.append(
+                            "sibling"
+                        ),
+                    ),
+                ],
+                concurrency=2,
+                is_rate_limited=predicate,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(
+            ["accepted", "sibling-worker", "sibling-descendant"]
         )
+        signals.release("accepted")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], RuntimeError)
+    assert str(failures[0]) == f"{failure_stage} failed"
     assert barriers == ["sibling"]
-    for pid in _pid_lines(heartbeat_path):
+    for pid in (
+        signals.pid("sibling-worker"),
+        signals.pid("sibling-descendant"),
+    ):
         _assert_process_gone(pid)
 
 
 def test_completion_order_drives_commits_but_results_preserve_input_order(
     tmp_path: Path,
 ) -> None:
-    event_path = tmp_path / "events"
+    del tmp_path
+    signals = ProcessSignals()
     commits: list[JsonValue] = []
+    committed = {key: threading.Event() for key in ("slow", "fast", "middle")}
+
+    def record_commit(value: JsonValue) -> None:
+        commits.append(value)
+        assert isinstance(value, str)
+        committed[value].set()
+
     specs = [
-        _delayed_spec(
+        _gated_spec(
             "slow",
-            event_path=event_path,
-            delay=0.15,
-            commit=commits.append,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec(
+        _gated_spec(
             "fast",
-            event_path=event_path,
-            delay=0.01,
-            commit=commits.append,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec(
+        _gated_spec(
             "middle",
-            event_path=event_path,
-            delay=0.07,
-            commit=commits.append,
+            signals=signals,
+            commit=record_commit,
         ),
     ]
-    outcome = run_call_pool(
-        specs,
-        concurrency=3,
-        is_rate_limited=_never_rate_limited,
-    )
+    outcomes: list[object] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                specs,
+                concurrency=3,
+                is_rate_limited=_never_rate_limited,
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(["slow", "fast", "middle"])
+        for key in ("fast", "middle", "slow"):
+            signals.release(key)
+            assert committed[key].wait(timeout=10)
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(outcomes) == 1
+    outcome = cast(fanout_module.PoolOutcome[str, JsonValue], outcomes[0])
     assert commits == ["fast", "middle", "slow"]
     assert [result.key for result in outcome.results] == [
         "slow",
@@ -1490,142 +1601,208 @@ def test_completion_order_drives_commits_but_results_preserve_input_order(
 def test_rate_feedback_reduces_capacity_before_filling_it(
     tmp_path: Path,
 ) -> None:
-    event_path = tmp_path / "events"
+    del tmp_path
+    signals = ProcessSignals()
+    committed = {
+        key: threading.Event()
+        for key in ("slow", "limited", "middle-1", "middle-2", "queued")
+    }
+
+    def record_commit(value: JsonValue) -> None:
+        assert isinstance(value, str)
+        committed[value].set()
+
     specs = [
-        _delayed_spec(
+        _gated_spec(
             "slow",
-            event_path=event_path,
-            delay=0.25,
-            wait_for_started=4,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec(
+        _gated_spec(
             "limited",
-            event_path=event_path,
-            delay=0.01,
-            wait_for_started=4,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec(
+        _gated_spec(
             "middle-1",
-            event_path=event_path,
-            delay=0.08,
-            wait_for_started=4,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec(
+        _gated_spec(
             "middle-2",
-            event_path=event_path,
-            delay=0.15,
-            wait_for_started=4,
+            signals=signals,
+            commit=record_commit,
         ),
-        _delayed_spec("queued", event_path=event_path, delay=0.01),
+        _gated_spec("queued", signals=signals, commit=record_commit),
     ]
-    outcome = run_call_pool(
-        specs,
-        concurrency=4,
-        is_rate_limited=lambda value: value == "limited",
-    )
-    events = _lines(event_path)
-    queued_start = next(
-        index
-        for index, event in enumerate(events)
-        if event.startswith("start|queued|")
-    )
-    second_middle_finish = next(
-        index
-        for index, event in enumerate(events)
-        if event.startswith("finish|middle-2|")
-    )
-    assert queued_start > second_middle_finish
+    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                specs,
+                concurrency=4,
+                is_rate_limited=lambda value: value == "limited",
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        initial = ["slow", "limited", "middle-1", "middle-2"]
+        signals.wait_entered(initial)
+        assert signals.entered_keys == set(initial)
+        signals.release("limited")
+        assert committed["limited"].wait(timeout=10)
+        signals.release("middle-1")
+        assert committed["middle-1"].wait(timeout=10)
+        assert "queued" not in signals.entered_keys
+        signals.release("middle-2")
+        assert committed["middle-2"].wait(timeout=10)
+        signals.wait_entered(["queued"])
+        signals.release("queued")
+        signals.release("slow")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
     assert outcome.concurrency_halved
     assert outcome.effective_concurrency == 2
 
 
+@pytest.mark.process_integration
 def test_unit_deadline_starts_when_each_child_starts(
     tmp_path: Path,
 ) -> None:
-    event_path = tmp_path / "events"
-    outcome = run_call_pool(
-        [
-            _delayed_spec(
-                "first",
-                event_path=event_path,
-                delay=0.4,
-                deadline=1.5,
-            ),
-            _delayed_spec(
-                "second",
-                event_path=event_path,
-                delay=0.03,
-                deadline=0.35,
-            ),
-        ],
-        concurrency=1,
-        is_rate_limited=_never_rate_limited,
-    )
+    del tmp_path
+    signals = ProcessSignals()
+    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                [
+                    _blocking_tree_spec("first", signals, deadline=0.2),
+                    _gated_spec("second", signals=signals, deadline=0.2),
+                ],
+                concurrency=1,
+                is_rate_limited=_never_rate_limited,
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(["first-worker", "first-descendant"])
+        signals.wait_entered(["second"])
+        signals.release("second")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
     assert [result.status for result in outcome.results] == [
-        FanoutStatus.COMPLETED,
+        FanoutStatus.UNIT_TIMEOUT,
         FanoutStatus.COMPLETED,
     ]
 
 
+@pytest.mark.process_integration
 def test_unit_timeout_kills_process_and_prevents_late_commit(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
+    del tmp_path
+    signals = ProcessSignals()
     commits: list[JsonValue] = []
     barriers: list[str] = []
-    started_at = time.monotonic()
-    outcome = run_call_pool(
-        [
-            _heartbeat_spec(
-                "hung",
-                heartbeat_path,
-                deadline=0.3,
-                commit=commits.append,
-                cancellation_barrier=lambda: barriers.append("terminal"),
-            )
-        ],
-        concurrency=1,
-        is_rate_limited=_never_rate_limited,
-    )
-    elapsed = time.monotonic() - started_at
-    assert elapsed < 1.0
+    try:
+        outcome = run_call_pool(
+            [
+                _blocking_tree_spec(
+                    "hung",
+                    signals,
+                    deadline=0.3,
+                    commit=commits.append,
+                    cancellation_barrier=lambda: barriers.append("terminal"),
+                )
+            ],
+            concurrency=1,
+            is_rate_limited=_never_rate_limited,
+        )
+    finally:
+        signals.close()
     assert outcome.results[0].status is FanoutStatus.UNIT_TIMEOUT
     assert outcome.guard_timeouts == 1
     assert commits == []
     assert barriers == ["terminal"]
-    pids = _pid_lines(heartbeat_path)
-    assert len(pids) == 2
-    for pid in pids:
+    for pid in (
+        signals.pid("hung-worker"),
+        signals.pid("hung-descendant"),
+    ):
         _assert_process_gone(pid)
-    returned_content = heartbeat_path.read_bytes()
-    time.sleep(0.1)
-    assert heartbeat_path.read_bytes() == returned_content
 
 
+@pytest.mark.process_integration
 def test_operation_deadline_kills_active_and_never_dispatches_queue(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    queued_events = tmp_path / "queued-events"
-    outcome = run_call_pool(
-        [
-            _heartbeat_spec("active-1", heartbeat_path, deadline=5.0),
-            _heartbeat_spec("active-2", heartbeat_path, deadline=5.0),
-            _delayed_spec(
-                "queued-1",
-                event_path=queued_events,
-                delay=0.0,
-            ),
-            _delayed_spec(
-                "queued-2",
-                event_path=queued_events,
-                delay=0.0,
-            ),
-        ],
-        concurrency=2,
-        max_wall_seconds=0.75,
-        is_rate_limited=_never_rate_limited,
-    )
+    del tmp_path
+    signals = ProcessSignals()
+    commits: list[JsonValue] = []
+    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                [
+                    _blocking_tree_spec(
+                        "active-1",
+                        signals,
+                        deadline=5.0,
+                        commit=commits.append,
+                    ),
+                    _blocking_tree_spec(
+                        "active-2",
+                        signals,
+                        deadline=5.0,
+                        commit=commits.append,
+                    ),
+                    _gated_spec(
+                        "queued-1",
+                        signals=signals,
+                        commit=commits.append,
+                    ),
+                    _gated_spec(
+                        "queued-2",
+                        signals=signals,
+                        commit=commits.append,
+                    ),
+                ],
+                concurrency=2,
+                max_wall_seconds=2.0,
+                is_rate_limited=_never_rate_limited,
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        active_keys = [
+            "active-1-worker",
+            "active-1-descendant",
+            "active-2-worker",
+            "active-2-descendant",
+        ]
+        signals.wait_entered(active_keys)
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
     assert [result.status for result in outcome.results] == [
         FanoutStatus.OPERATION_DEADLINE,
         FanoutStatus.OPERATION_DEADLINE,
@@ -1634,58 +1811,98 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
     ]
     assert outcome.deadline_reached
     assert outcome.not_dispatched == ["queued-1", "queued-2"]
-    assert not queued_events.exists()
-    returned_content = heartbeat_path.read_bytes()
-    for pid in _pid_lines(heartbeat_path):
+    assert commits == []
+    assert not {"queued-1", "queued-2"} & signals.entered_keys
+    for key in active_keys:
+        pid = signals.pid(key)
         _assert_process_gone(pid)
-    time.sleep(0.1)
-    assert heartbeat_path.read_bytes() == returned_content
+    for key in ("active-1-worker", "active-2-worker"):
+        _assert_process_group_absent(signals.pid(key))
 
 
 def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event_path = tmp_path / "events"
-    heartbeat_path = tmp_path / "heartbeat"
+    del tmp_path
+    signals = ProcessSignals()
+    decode_entered = threading.Event()
+    scripted_deadline = _ScriptedDeadline(decode_entered)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
+    )
     sibling_stopped_during_decode: list[bool] = []
+    sibling_terminal = threading.Event()
 
-    def slow_decode(value: JsonValue) -> JsonValue:
-        time.sleep(0.65)
-        before = heartbeat_path.read_bytes()
-        time.sleep(0.1)
-        sibling_stopped_during_decode.append(
-            heartbeat_path.read_bytes() == before
-        )
+    def blocking_decode(value: JsonValue) -> JsonValue:
+        decode_entered.set()
+        assert scripted_deadline.triggered.wait(timeout=10)
+        assert sibling_terminal.wait(timeout=10)
+        for key in ("sibling-worker", "sibling-descendant"):
+            _assert_process_gone(signals.pid(key))
+        sibling_stopped_during_decode.append(True)
         return value
 
-    outcome = run_call_pool(
-        [
-            _delayed_spec(
-                "completed",
-                event_path=event_path,
-                delay=0.0,
-                decode=slow_decode,
-            ),
-            _heartbeat_spec("sibling", heartbeat_path, deadline=5.0),
-        ],
-        concurrency=2,
-        max_wall_seconds=0.5,
-        is_rate_limited=_never_rate_limited,
-    )
+    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                [
+                    _gated_spec(
+                        "completed",
+                        signals=signals,
+                        decode=blocking_decode,
+                    ),
+                    _blocking_tree_spec(
+                        "sibling",
+                        signals,
+                        deadline=5.0,
+                        cancellation_barrier=sibling_terminal.set,
+                    ),
+                ],
+                concurrency=2,
+                max_wall_seconds=60.0,
+                is_rate_limited=_never_rate_limited,
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(
+            ["completed", "sibling-worker", "sibling-descendant"]
+        )
+        signals.release("completed")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    scripted_deadline.assert_satisfied()
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
     assert sibling_stopped_during_decode == [True]
     assert [result.status for result in outcome.results] == [
         FanoutStatus.OPERATION_DEADLINE,
         FanoutStatus.OPERATION_DEADLINE,
     ]
-    for pid in _pid_lines(heartbeat_path):
-        _assert_process_gone(pid)
 
 
 def test_slow_spawn_cannot_release_worker_after_wall(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event_path = tmp_path / "events"
+    del tmp_path
+    signals = ProcessSignals()
+    popen_entered = threading.Event()
+    scripted_deadline = _ScriptedDeadline(popen_entered)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
+    )
     real_popen = subprocess.Popen
 
     def slow_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
@@ -1693,94 +1910,144 @@ def test_slow_spawn_cannot_release_worker_after_wall(
             "subprocess.Popen[bytes]",
             real_popen(*args, **kwargs),  # ty: ignore[no-matching-overload]
         )
-        time.sleep(0.1)
+        popen_entered.set()
+        assert scripted_deadline.triggered.wait(timeout=10)
         return process
 
     monkeypatch.setattr(fanout_module.subprocess, "Popen", slow_popen)
     outcome = run_call_pool(
-        [_delayed_spec("queued", event_path=event_path, delay=0.0)],
+        [_gated_spec("queued", signals=signals)],
         concurrency=1,
-        max_wall_seconds=0.03,
+        max_wall_seconds=60.0,
         is_rate_limited=_never_rate_limited,
     )
     assert outcome.results[0].status is FanoutStatus.NOT_DISPATCHED
-    assert not event_path.exists()
+    scripted_deadline.assert_satisfied()
+    assert "queued" not in signals.entered_keys
+    signals.close()
 
 
 def test_slow_serialization_stops_before_spawn_after_wall(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event_path = tmp_path / "events"
+    del tmp_path
+    signals = ProcessSignals()
+    serialization_entered = threading.Event()
+    scripted_deadline = _ScriptedDeadline(serialization_entered)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
+    )
     real_write_job = fanout_module._write_job
 
     def slow_write_job(path: Path, job: ProcessJob) -> None:
         real_write_job(path, job)
-        time.sleep(0.06)
+        serialization_entered.set()
+        assert scripted_deadline.triggered.wait(timeout=10)
 
     monkeypatch.setattr(fanout_module, "_write_job", slow_write_job)
     outcome = run_call_pool(
-        [_delayed_spec("queued", event_path=event_path, delay=0.0)],
+        [_gated_spec("queued", signals=signals)],
         concurrency=1,
-        max_wall_seconds=0.02,
+        max_wall_seconds=60.0,
         is_rate_limited=_never_rate_limited,
     )
     assert outcome.results[0].status is FanoutStatus.NOT_DISPATCHED
-    assert not event_path.exists()
+    scripted_deadline.assert_satisfied()
+    assert "queued" not in signals.entered_keys
+    signals.close()
 
 
 def test_slow_commit_may_finish_but_wall_stops_later_dispatch(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event_path = tmp_path / "events"
-    queued_path = tmp_path / "queued"
-
-    def slow_commit(_value: JsonValue) -> None:
-        time.sleep(0.55)
-
-    outcome = run_call_pool(
-        [
-            _delayed_spec(
-                "committed",
-                event_path=event_path,
-                delay=0.0,
-                commit=slow_commit,
-            ),
-            _delayed_spec("queued", event_path=queued_path, delay=0.0),
-        ],
-        concurrency=1,
-        max_wall_seconds=0.4,
-        is_rate_limited=_never_rate_limited,
+    del tmp_path
+    signals = ProcessSignals()
+    commit_entered = threading.Event()
+    scripted_deadline = _ScriptedDeadline(commit_entered)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
     )
+
+    def blocking_commit(_value: JsonValue) -> None:
+        commit_entered.set()
+        assert scripted_deadline.triggered.wait(timeout=10)
+
+    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+    def schedule() -> None:
+        outcomes.append(
+            run_call_pool(
+                [
+                    _gated_spec(
+                        "committed",
+                        signals=signals,
+                        commit=blocking_commit,
+                    ),
+                    _gated_spec("queued", signals=signals),
+                ],
+                concurrency=1,
+                max_wall_seconds=60.0,
+                is_rate_limited=_never_rate_limited,
+            )
+        )
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(["committed"])
+        signals.release("committed")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    scripted_deadline.assert_satisfied()
+    assert len(outcomes) == 1
+    outcome = outcomes[0]
     assert [result.status for result in outcome.results] == [
         FanoutStatus.COMPLETED,
         FanoutStatus.NOT_DISPATCHED,
     ]
     assert outcome.deadline_reached
-    assert not queued_path.exists()
+    assert "queued" not in signals.entered_keys
 
 
+@pytest.mark.process_integration
 def test_wall_crossing_during_cancellation_never_dispatches_queue(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    queued_path = tmp_path / "queued"
+    del tmp_path
+    signals = ProcessSignals()
+    barrier_entered = threading.Event()
+    scripted_deadline = _ScriptedDeadline(barrier_entered)
+    monkeypatch.setattr(
+        fanout_module,
+        "_wait_for_operation_deadline",
+        scripted_deadline,
+    )
 
-    def slow_barrier() -> None:
-        time.sleep(0.35)
+    def blocking_barrier() -> None:
+        barrier_entered.set()
+        assert scripted_deadline.triggered.wait(timeout=10)
 
     outcome = run_call_pool(
         [
-            _heartbeat_spec(
+            _blocking_tree_spec(
                 "timeout",
-                heartbeat_path,
+                signals,
                 deadline=0.2,
-                cancellation_barrier=slow_barrier,
+                cancellation_barrier=blocking_barrier,
             ),
-            _delayed_spec("queued", event_path=queued_path, delay=0.0),
+            _gated_spec("queued", signals=signals),
         ],
         concurrency=1,
-        max_wall_seconds=0.45,
+        max_wall_seconds=60.0,
         is_rate_limited=_never_rate_limited,
     )
     assert [result.status for result in outcome.results] == [
@@ -1788,38 +2055,55 @@ def test_wall_crossing_during_cancellation_never_dispatches_queue(
         FanoutStatus.NOT_DISPATCHED,
     ]
     assert outcome.deadline_reached
-    assert not queued_path.exists()
+    scripted_deadline.assert_satisfied()
+    assert "queued" not in signals.entered_keys
+    signals.close()
 
 
+@pytest.mark.process_integration
 def test_unexpected_child_failure_cancels_siblings_before_raise(
     tmp_path: Path,
 ) -> None:
-    heartbeat_path = tmp_path / "heartbeat"
-    event_path = tmp_path / "events"
-    with pytest.raises(
-        ProcessWorkerError,
-        match="requested failure for failed",
-    ):
-        run_call_pool(
-            [
-                _heartbeat_spec("sibling", heartbeat_path, deadline=5.0),
-                _delayed_spec(
-                    "failed",
-                    event_path=event_path,
-                    delay=0.05,
-                    fail=True,
-                ),
-            ],
-            concurrency=2,
-            is_rate_limited=_never_rate_limited,
+    del tmp_path
+    signals = ProcessSignals()
+    failures: list[BaseException] = []
+
+    def schedule() -> None:
+        try:
+            run_call_pool(
+                [
+                    _blocking_tree_spec("sibling", signals, deadline=5.0),
+                    _gated_spec(
+                        "failed",
+                        signals=signals,
+                        fail=True,
+                    ),
+                ],
+                concurrency=2,
+                is_rate_limited=_never_rate_limited,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    scheduler = threading.Thread(target=schedule)
+    scheduler.start()
+    try:
+        signals.wait_entered(
+            ["sibling-worker", "sibling-descendant", "failed"]
         )
-    pids = _pid_lines(heartbeat_path)
-    assert len(pids) == 2
-    for pid in pids:
+        signals.release("failed")
+        scheduler.join(timeout=10)
+    finally:
+        signals.close()
+    assert not scheduler.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], ProcessWorkerError)
+    assert "requested failure for failed" in str(failures[0])
+    for pid in (
+        signals.pid("sibling-worker"),
+        signals.pid("sibling-descendant"),
+    ):
         _assert_process_gone(pid)
-    returned_content = heartbeat_path.read_bytes()
-    time.sleep(0.1)
-    assert heartbeat_path.read_bytes() == returned_content
 
 
 @pytest.mark.parametrize(
@@ -1868,11 +2152,11 @@ def test_invalid_unit_deadline_fails_before_dispatch(
     tmp_path: Path,
     duration: object,
 ) -> None:
-    event_path = tmp_path / "events"
-    spec = _delayed_spec(
+    del tmp_path
+    signals = ProcessSignals()
+    spec = _gated_spec(
         "invalid",
-        event_path=event_path,
-        delay=0.0,
+        signals=signals,
         deadline=cast(float, duration),
     )
     with pytest.raises(ValueError, match="finite nonnegative real"):
@@ -1880,7 +2164,8 @@ def test_invalid_unit_deadline_fails_before_dispatch(
             [spec],
             is_rate_limited=_never_rate_limited,
         )
-    assert not event_path.exists()
+    assert "invalid" not in signals.entered_keys
+    signals.close()
 
 
 @pytest.mark.parametrize("nested", [False, True])

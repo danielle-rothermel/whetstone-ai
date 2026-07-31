@@ -46,6 +46,10 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "process_integration: exercises real spawned process and process-group boundaries",
+    "process_guardian: exercises guardian and parent-death containment",
+]
 
 [tool.pyright]
 venvPath = "."
@@ -53,6 +57,12 @@ venv = ".venv"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "RUF"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"time.sleep" = { msg = "tests must use synchronization primitives or controlled clocks" }
+"asyncio.sleep" = { msg = "tests must use synchronization primitives or controlled clocks" }
+"anyio.sleep" = { msg = "tests must use synchronization primitives or controlled clocks" }
+"trio.sleep" = { msg = "tests must use synchronization primitives or controlled clocks" }
 
 [tool.ruff.lint.isort]
 known-first-party = ["whetstone"]

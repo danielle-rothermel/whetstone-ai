@@ -30,6 +30,7 @@ __all__: list[str] = []
 _START_TOKEN = b"\x01"
 _GUARDIAN_READY_TOKEN = b"\x01"
 _GUARDIAN_READY_TIMEOUT_SECONDS = 1.0
+_PRE_GATE_READY_TOKEN = b"\x01"
 
 
 def _resolve_entrypoint(entrypoint: str) -> Callable[[JsonValue], JsonValue]:
@@ -178,14 +179,26 @@ def _wait_for_start(start_reader: int) -> bool:
         os.close(start_reader)
 
 
+def _publish_pre_gate_ready(writer: int | None) -> None:
+    if writer is None:
+        return
+    try:
+        if os.write(writer, _PRE_GATE_READY_TOKEN) != len(
+            _PRE_GATE_READY_TOKEN
+        ):
+            raise OSError("short write while publishing pre-gate readiness")
+    finally:
+        os.close(writer)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Execute one gated job and publish one typed result envelope."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if len(arguments) != 7:
+    if len(arguments) not in {7, 8}:
         sys.stderr.write(
             "usage: python -m whetstone.execution.process_worker "
             "JOB_PATH RESULT_PATH DISPATCH_PATH PARENT_FD GUARDIAN_DONE_FD "
-            "START_FD OPERATION_DEADLINE\n"
+            "START_FD OPERATION_DEADLINE [PRE_GATE_READY_FD]\n"
         )
         return 2
     job_path = Path(arguments[0])
@@ -195,7 +208,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     guardian_done_writer = int(arguments[4])
     start_reader = int(arguments[5])
     deadline = _operation_deadline(arguments[6])
+    pre_gate_ready_writer = int(arguments[7]) if len(arguments) == 8 else None
     guardian = _start_guardian(parent_reader, guardian_done_writer)
+    _publish_pre_gate_ready(pre_gate_ready_writer)
 
     if not _wait_for_start(start_reader) or (
         deadline is not None and time.monotonic() >= deadline
