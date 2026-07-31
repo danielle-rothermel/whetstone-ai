@@ -386,9 +386,58 @@ class SnapshotAdapter:
             proposed_candidates=(proposed,),
             accepted_candidates=(proposed,),
             proposed_status=StepStatus.COMPLETE,
-            state_delta={"state": 1},
-            history_delta={"history": 1},
+            state_delta={
+                "optimizer": {
+                    "round": 2,
+                    "frontier": [
+                        {"candidate_id": "candidate-a", "score": 0.75},
+                        {"candidate_id": "candidate-b", "score": None},
+                    ],
+                }
+            },
+            history_delta={
+                "events": [
+                    {
+                        "kind": "proposal",
+                        "metadata": {"accepted": True, "tags": ["best"]},
+                    }
+                ]
+            },
         )
+
+
+def test_nested_immutable_snapshots_persist_as_exact_strict_json(
+    tmp_path,
+) -> None:
+    store = make_store(tmp_path)
+    request = proposal_request()
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(SnapshotAdapter()),
+        run=request.run,
+    )
+
+    result, _ = harness.run_step(request)
+
+    assert result.state_ref is not None
+    assert store.get(result.state_ref.reference) == {
+        "optimizer": {
+            "round": 2,
+            "frontier": [
+                {"candidate_id": "candidate-a", "score": 0.75},
+                {"candidate_id": "candidate-b", "score": None},
+            ],
+        }
+    }
+    assert result.history_ref is not None
+    assert store.get(result.history_ref.reference) == {
+        "events": [
+            {
+                "kind": "proposal",
+                "metadata": {"accepted": True, "tags": ["best"]},
+            }
+        ]
+    }
 
 
 def test_terminal_recovery_uses_ledger_without_second_executor_call(

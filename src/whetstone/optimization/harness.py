@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
 from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any, Protocol
@@ -28,6 +27,7 @@ from whetstone.optimization.effect_authority import (
     ReplayPolicy,
 )
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     NonNegativeInt,
     OpaqueKey,
     TerminalFailure,
@@ -1005,11 +1005,11 @@ class OptimizationHarness:
             )
 
     def _persist_snapshot(
-        self, schema: str, delta: Mapping[str, Any]
+        self, schema: str, delta: ImmutableJsonObject
     ) -> TypedRef | None:
         if not delta:
             return None
-        content = dict(delta)
+        content = delta.to_json()
         expected = typed_ref_for_record(schema, content)
         persisted = self._put(schema, content)
         if persisted != expected:
